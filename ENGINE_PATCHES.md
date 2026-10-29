@@ -23,8 +23,20 @@ invoked: NOTelapsed-clock/scheduler proof; gravity meaning source-inspected,
 not a measured native move. FullNoDeploySS/menu0/2oldCSF333/zeroNEW, gravity14/
 mom23/reader949-0; same527REC167VIEW entirepathsbytesdiagnostics328faultyREC/
 7faultyVIEW/zero introduced, NOTfaultfree. No authored BSP/native mover/prediction/
-freshfinishedrecord/rank/human proof. Independent reviews/deployment pending.
-See tools/p1127-claim.md.
+freshfinishedrecord/rank/human proof. Review1caught P2recipientprose, review2had
+repeatedwrongsourceclaim; fixedONLYprose/originalreportsretained, bothfinaladdenda
+explicitlyresolve/withdraw/noissues. RuntimeQCca8fc04a unchanged undercorrected
+QCcc0641ad, engineDOC49e144c09 exactpublished. ParentGitprovenancequalified;
+aliasedactor/target is NOTroutingdiscriminator. Normalbuild0NEW/BOTHWindows6+prev/
+originalpreprevrollback/PiQW0538e2c302b3/CSfa9bb6d39634+prev/rollback/12freshsame-native/
+healthy12/empty verified2026-10-29 21:10:23.663152UTC, nonforce. All16347/142Windows+
+35168Pi protectedpathsbytesunchanged/none missing/zero newPi, backendfiles/unit/AI/
+native/config unchanged. No native/backend/config/Build/release action. Frozen6/
+rollback retained; unchangedCS/MENU/native/clientsource priorserved/drawnchain
+reused NOTnewGUI/wire/move/elapsedclock/distincttarget/finishedrecord/rank/humanproof.
+ZIP113ownedfilesverified,ONLY9files/oneNoDeployroot retired/104minimalrigretained+
+archived/zeroowngames/links/gates. Exactowncanonicalclaim retired originalhash/
+publishednumberguard/originalretained. See tools/p1127-claim.md.
 
 ## Patch 1126 — retain reversal/catapult activation through value use
 
