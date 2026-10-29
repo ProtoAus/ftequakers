@@ -1,5 +1,31 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1128 — skip immediate status for unchanged speed modifiers
+
+**Problem:** ModifySpeed marks inherited status even for equal/neutral effective
+scalar values, including default0to1, although later changed-cap use has its own
+source check. An expired neutral input can manufacture practice without an effect.
+
+**Change:** QC-only immediate own-value gate. Preserve input normalization,
+unconditional source replacement/scalar write, recipient selection and P1121
+actual changed-cap gate/math. No early-return/no-value source retention or body
+cleansing. No new VM/captured fields/common policy/format/flag/tier/native pin/
+backend/Build/release; not full property/body/logical/multisource closure.
+
+**Verified:**16paired public scheduled-QC-input/fullPreThink units, same factors/
+caps/capturedsource/IDs/targetvalues/IO, only7immediate and6final no-value status
+removals. Equal2x still prices oldsource at real520cap use; atbase0 itdoesnot.
+Changed/removal/sticky/current/world/nonplayer and distinct actor/target controls
+ACT: ModifySpeed playeractivator priority is tested, not inferred from aliases.
+Initial fixture compile correctly refused9TOTALsprintfargs, warning retained,
+telemetry split to<=8TOTALinclformat BEFOREnativebaseline/implementation; first
+nativebaseline/subject pass unchanged. FullNoDeploySS/menu0/2oldCSF333/zeroNEW,
+speed10 andinput26/5cashouts regressions/reader949-0; same527REC167VIEW entire
+pathsbytesdiagnostics328faultyREC7faultyVIEW/zero introduced NOTfaultfree. Stored
+futurecallbacks invokedBEFOREdeadline, NOTelapsedclock/scheduler/nativeMove/BSP/
+prediction/freshfinishedrecord/rank/human/fullbank proof. Reviews/deploy pending.
+See tools/p1128-claim.md.
+
 ## Patch 1127 — price immediate gravity/carrier inputs by actual value
 
 **Problem:** Three immediate I/O writer sites mark existing run status before
