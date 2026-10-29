@@ -1,5 +1,39 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1123 — retain speed-delivery activation through body-phase use
+
+**Problem:** Set-speed/alias and conveyor delivery did not recheck the source
+of their retained activation. Monolith's later body phase outlives the pad cause.
+
+**Change:** QC-only. Capture effective activation in non-callback class slots,
+world0 without active context; preserve no-op Enable. Freeze before reentrant
+touch outputs, price actual changed velocity/nonzero carrier contribution with
+the unchanged common policy. Dedicated three-slot BODY-phase metadata preserves
+one Monolith activation across reapplication/exit and clears on existing reset,
+not an alias of callbacks/basevel/multiplier causes. Existing movement arithmetic
+unchanged, including cancellation/interval/filter/jump/ghost behavior. Direct
+P732 fixture calls explicitly pass world cause via a test-only adapter. No new
+capture/format/flag/tier/native pin/backend/Build/release change or context join.
+
+**Verified:** SAME qualified native/compiler/fixture23paired production-I/O and
+numeric writer/carrier/profile units ACT; all value outputs/IO/phase/identities
+match, only11 intended inherited cases gain3/8388609/notice1. Explicit clean first
+phase before expiry, CURRENTforeign/world/independent replacement/no-value/nondue/
+filter controls clean. P73260/0, push15/full-PreThink10 regressions ACT/pass.
+Initial aggregation suffix/schema error AFTER both23passes corrected read-only;
+first P732 world-self cleanup/timestamp-parser failure retained, not passed.
+Same fixture's actual owned-unit caller and prefix/error guards fixed;60/0exit0.
+No native geometry/contact/cashout/socket/grant/finish/rank/human/full-bank claim.
+Full NoDeploySS/menu0warnings/2oldCSF333/zeroNEW, reader949/0. Fresh SAME527REC/
+167VIEW full-domain published/current byte-identical reader pairs exactinputs/
+diagnostics328faultyREC7faultyVIEW/zerointroduced, NOTfault-free. Prior504domain
+changed:499same,5oldfaultyunpairedabsent/28newREC5faulted (alladditionspreprobe);
+aggregate+23 is data churn, notsame504PASS. Attributionunknown, nodatarestore/
+delete; BACKLOGfollow-up. Timeout/old-domain guard retained, only incompletesweep
+resumed and explicit-reader seam providesactualfreshcontrol. Independent reviews
+and delivery pending. See tools/p1123-claim.md.
+Broader transitive logical/config/body/world/own-phase/multi-source bank OPEN.
+
 ## Patch 1121 — retain persistent speed-effect source until actual cap use
 
 **Problem:** ModifySpeed charges its input once, but its persistent multiplier
