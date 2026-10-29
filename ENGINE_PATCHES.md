@@ -18,8 +18,17 @@ and production pending-cashout positive act. Push15/activation23 regressions pas
 NoDeploySS/menu0warnings,2oldCSF333/zeroNEW; reader949/0. Same527REC/167VIEW whole
 paths/bytes/diagnostics equal,328faultyREC7faultyVIEW/zero introduced, not faultfree.
 Initial formatter warning/path-aggregation failure and corrected carrier
-prediction retained. Reviews/deployment pending; no native move/rank/human claim.
-See tools/p1124-claim.md.
+prediction retained. Both fresh read-only reviews noissues; exactruntimeQC065b254e/
+engineDOCe0c175247 published, Git-less child provenance explicitly qualified.
+Normalbuild0NEW; BOTHWindows6DAT/LNO+prev, PiQW9403daf4f595/CSfa9bb6d39634+prev,
+12freshsame-native/healthy12/empty readback2026-10-29 18:46:13.502096UTC, nonforce.
+All16347/142Windows+35076Pi oldprotectedpathsbytesunchanged/nomissing/zero newPi;
+native/config/backendfiles+unit/AI unchanged. Rollback/frozen6retained; unchanged
+CS/MENU/native/client source reuses previous served/drawn proof, not new GUI/wire/
+move/rank/human acceptance. ZIP85ownedfiles verified; only9files/oneNoDeployroot
+retired,76minimalrigfiles retained+archived,0owngames/links/gates. Exact ownCFG
+reservation retired with originalhash/publicnumber proof, original preserved.
+No native/backend/config/Build/release action. See tools/p1124-claim.md.
 
 ## Patch 1123 — retain speed-delivery activation through body-phase use
 
