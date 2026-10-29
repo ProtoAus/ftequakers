@@ -1,5 +1,31 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1127 — price immediate gravity/carrier inputs by actual value
+
+**Problem:** Three immediate I/O writer sites mark existing run status before
+checking whether their own effective gravity or stored carrier value changed.
+Repeating an equal setting or a rounded-away addition can manufacture practice.
+
+**Change:** QC-only own-value gates. Gravity compares effective0=1 but preserves
+raw stored0. AddOutput compares after unchanged impulse scaling; additive speed
+compares after unchanged sum. Original parsing/float order/counters/dispatch/
+filter/early return and existing bank policy retained. No new VM/captured fields,
+format/flag/tier/native pin/backend/Build/release. Not persistent/full-bank closure.
+
+**Verified:** Final26 paired scheduled-public-QC-input units, same actual values/
+IDs/IO/counters and5QCcashouts, only10 intended no-value status removals. Actual
+changes/removals/cancellation/sticky-repeat/currentforeign/world/zero-direction
+and positive-rounded-away controls ACT. Two initial baseline fixture failures
+retained: wrong WORLD identity/raw0/scale assumptions; full writer reread and
+actual-world priming replace fixture float imitation BEFORE implementation.
+First actual subject passed unchanged. Stored future callbacks deliberately
+invoked: NOTelapsed-clock/scheduler proof; gravity meaning source-inspected,
+not a measured native move. FullNoDeploySS/menu0/2oldCSF333/zeroNEW, gravity14/
+mom23/reader949-0; same527REC167VIEW entirepathsbytesdiagnostics328faultyREC/
+7faultyVIEW/zero introduced, NOTfaultfree. No authored BSP/native mover/prediction/
+freshfinishedrecord/rank/human proof. Independent reviews/deployment pending.
+See tools/p1127-claim.md.
+
 ## Patch 1126 — retain reversal/catapult activation through value use
 
 **Problem:** Direct Momentum reversal/catapult activation can outlive admission
