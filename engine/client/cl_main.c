@@ -213,6 +213,7 @@ cvar_t  cl_gunanglez			= CVAR("cl_gunanglez", "0");
 
 cvar_t	cl_proxyaddr			= CVAR("cl_proxyaddr", "");
 cvar_t	cl_sendguid				= CVARD("cl_sendguid", "", "Send a randomly generated 'globally unique' id to servers, which can be used by servers for score rankings and stuff. Different servers will see different guids. Delete the 'qkey' file in order to appear as a different user.\nIf set to 2, all servers will see the same guid. Be warned that this can show other people the guid that you're using.");
+cvar_t	cl_download_threaded	= CVARFD("cl_download_threaded", "1", CVAR_NOTFROMSERVER|CVAR_ARCHIVE, "FTESurf Patch 1114: map and file downloads run on a download thread rather than being polled each frame (whose DNS lookup and TLS handshake could stall a frame). 0 polls them as before.");
 cvar_t	cl_downloads			= CVARAFD("cl_downloads", "1", /*q3*/"cl_allowDownload", CVAR_NOTFROMSERVER|CVAR_ARCHIVE, "Allows you to block all automatic downloads.");
 cvar_t	cl_download_csprogs		= CVARFD("cl_download_csprogs", "1", CVAR_NOTFROMSERVER|CVAR_ARCHIVE, "Download updated client gamecode if available. Warning: If you clear this to avoid downloading vm code, you should also clear cl_download_packages.");
 //ftesurf (P282): two halves of "why did my HUD vanish".  Both default OFF so a
@@ -6243,6 +6244,7 @@ void CL_Init (void)
 	Cvar_Register (&r_drawflame, "Item effects");
 
 	Cvar_Register (&cl_downloads, cl_controlgroup);
+	Cvar_Register (&cl_download_threaded, cl_controlgroup);	//FTESurf Patch 1114
 	Cvar_Register (&cl_download_csprogs, cl_controlgroup);
 	Cvar_Register (&csqc_warnfail, cl_controlgroup);				//ftesurf (P282)
 	Cvar_Register (&cl_download_csprogs_selfheal, cl_controlgroup);	//ftesurf (P282)

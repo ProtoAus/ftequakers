@@ -1,5 +1,30 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1114 -- Map and file downloads run on a download thread (client, http)
+
+A download cl_parse.c starts with HTTP_CL_Get (a map from the menu's Download button, a map or
+file a server asks for) was polled by HTTP_CL_Think each frame, so its DNS lookup, connect and
+TLS handshake ran on the main thread. Measured on one HTTPS map download from play.proto.bar:
+496.5 ms of main-thread polling over 4530 frames, the longest single poll 62.6 ms; threaded,
+0.0 ms (the download prints its own figure at DL_Close with developer / log_developer 1).
+
+- HTTP_CL_Thread opens the download's .tmp on the calling thread -- creating a file adds to the
+  fs hash with no lock (fs_win32.c:478) -- and hands the transfer to DL_CreateThread. The
+  completion callback (CL_WebDownloadFinished: rename, CL_DownloadFinished) still runs on the
+  main thread from HTTP_CL_Think -> DL_Close.
+- HTTP_Wake_Think still reaps (a blocking COM_WorkerPartialSync on an http image waits on it --
+  review 1 caught the first cut hanging there), but not while HTTP code is already on the stack
+  (HTTP_CL_Think, a DL_Close callback), and never a threaded map download (reaponframe): its
+  callback renames and reloads, so the frame's HTTP_CL_Think reaps it, not whichever
+  main-queue drain the wake lands in.
+- Review 1 also: a download closed while ACTIVE (quit) no longer starts the next queued map; the
+  function builds without MULTITHREAD; a map stays polled when all four download threads are
+  busy; a stale .tmp is removed before it is opened (Windows' "w+b" kept its tail); off the
+  main thread CertLog_ConnectOkay refuses an untrusted or expired cert instead of prompting
+  (uri_get downloads included).
+- cl_download_threaded 0 polls as before. package/ (DLLF_NONGAME) downloads stay polled: they
+  write their real name, not the .tmp.
+
 ## Patch 1103 -- Preserve closing-clock refusal diagnostics (native verifier)
 
 **Problem:** Recorder 12--14 can legitimately close with sampled, pending or kept

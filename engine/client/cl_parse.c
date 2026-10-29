@@ -301,6 +301,7 @@ static const char *svc_nqstrings[] =
 #endif
 
 extern cvar_t requiredownloads, mod_precache, snd_precache, cl_standardchat, msg_filter, msg_filter_frags, msg_filter_pickups, cl_countpendingpl, cl_download_mapsrc;
+extern cvar_t cl_download_threaded;
 int	oldparsecountmod;
 int	parsecountmod;
 double	parsecounttime;
@@ -766,7 +767,10 @@ static void CL_WebDownloadFinished(struct dl_download *dl)
 	  CL_DownloadFinished does not chain, and every other caller of
 	  CL_RequestNextDownload sits on a connection path, so a second queued map would
 	  sit there forever after the first finished. Harmless when connected: the call
-	  returns immediately while cls.download is still set.*/
+	  returns immediately while cls.download is still set.
+	  FTESurf Patch 1114: only after a download that ended. One closed while ACTIVE was
+	  cancelled (HTTP_CL_Terminate at quit) and must not start the next on its way out.*/
+	if (dl->status == DL_FINISHED || dl->status == DL_FAILED)
 	if (cls.state < ca_connected && !cl.sendprespawn)
 		CL_RequestNextDownload();
 }
@@ -826,6 +830,11 @@ static void CL_SendDownloadStartRequest(downloadlist_t *pending)
 					Con_DPrintf ("Downloading %s to %s...\n", wdl->url, wdl->localname);
 			}
 			wdl->qdownload.flags = flags;
+			//FTESurf Patch 1114: the transfer on a download thread, once every field it reads is
+			//set: polled per frame, its DNS lookup, connect and TLS handshake stalled frames.
+			//NONGAME (package/) stays polled: it writes its real name, not webtmp.
+			if (cl_download_threaded.ival && !(flags & DLLF_NONGAME))
+				HTTP_CL_Thread(wdl);
 
 			CL_DisenqueDownload(filename);
 

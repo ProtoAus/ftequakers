@@ -771,6 +771,10 @@ qboolean CertLog_ConnectOkay(const char *hostname, void *cert, size_t certsize, 
 
 	if (certlog_curprompt)
 		return false;
+	//FTESurf Patch 1114: a download thread (threaded map downloads, uri_get) refuses an
+	//untrusted or expired cert rather than write knowncerts.txt or prompt off the main thread.
+	if (!Sys_IsMainThread())
+		return false;
 	COM_AssertMainThread("CertLog_ConnectOkay");
 
 	if (!certlog_inited)

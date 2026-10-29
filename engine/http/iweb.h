@@ -139,6 +139,11 @@ struct dl_download
 	struct dl_download *next;
 	qboolean (*notifystarted) (struct dl_download *dl, char *mimetype);	//mime can be null for some protocols, read dl->totalsize for size. false if the mime just isn't acceptable.
 	void (*notifycomplete) (struct dl_download *dl);	//lets the requester know that the download context is complete and the handle is no longer valid.
+
+	//FTESurf Patch 1114: time its frame polls took on the main thread (printed at DL_Close, developer).
+	double mainpolltime, mainpollmax;
+	unsigned int mainpolls;
+	qboolean reaponframe;	//threaded by HTTP_CL_Thread: reaped by the frame's HTTP_CL_Think only
 };
 
 vfsfile_t *VFSPIPE_Open(int refs, qboolean seekable);	//refs should be 1 or 2, to say how many times it must be closed before its actually closed, so both ends can close separately
@@ -151,6 +156,7 @@ struct dl_download *HTTP_CL_Put(const char *url, const char *mime, const char *d
 
 struct dl_download *DL_Create(const char *url);
 qboolean DL_CreateThread(struct dl_download *dl, vfsfile_t *file, void (*NotifyFunction)(struct dl_download *dl));
+qboolean HTTP_CL_Thread(struct dl_download *dl);	//FTESurf Patch 1114
 void DL_Close(struct dl_download *dl);
 void DL_DeThread(void);
 

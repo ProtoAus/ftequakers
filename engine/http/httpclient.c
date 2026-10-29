@@ -1219,14 +1219,25 @@ qboolean DL_Decide(struct dl_download *dl)
 }
 #endif	/*!defined(FTE_TARGET_WEB)*/
 
+static int http_reaping;		//FTESurf Patch 1114: inside HTTP_CL_Think, or a DL_Close callback
+static qboolean http_fromwake;	//...and that HTTP_CL_Think is HTTP_Wake_Think's
 #ifdef MULTITHREAD
 static unsigned int dlthreads = 0;
 #define MAXDOWNLOADTHREADS 4
-#if defined(LOADERTHREAD) 
+#if defined(LOADERTHREAD)
 static void HTTP_Wake_Think(void *ctx, void *data, size_t a, size_t b)
 {
+	//FTESurf Patch 1114: reaped from here as before -- a blocking COM_WorkerPartialSync on an
+	//http image waits for exactly this -- but not inside HTTP code already running, and not a
+	//threaded map download (reaponframe), whose callback renames and reloads: the frame's
+	//HTTP_CL_Think reaps that one, not whichever main-queue drain this lands in.
 	dlthreads--;
-	HTTP_CL_Think(NULL, NULL);
+	if (!http_reaping)
+	{
+		http_fromwake = true;
+		HTTP_CL_Think(NULL, NULL);
+		http_fromwake = false;
+	}
 }
 #endif
 static int DL_Thread_Work(void *arg)
@@ -1293,6 +1304,39 @@ qboolean DL_CreateThread(struct dl_download *dl, vfsfile_t *file, void (*NotifyF
 }
 #endif
 
+/*FTESurf Patch 1114: a frame-polled download (HTTP_CL_Get) moved onto a download thread, its
+  file opened HERE, on the calling thread: creating one adds to the fs hash unlocked
+  (fs_win32.c:478), so the worker must only write to an open handle. FALSE: it stays polled,
+  as it does when the download threads are all busy (a map should not queue behind them).*/
+qboolean HTTP_CL_Thread(struct dl_download *dl)
+{
+#ifdef MULTITHREAD
+#if defined(LOADERTHREAD)
+	if (dlthreads >= MAXDOWNLOADTHREADS)
+	{
+		Con_DPrintf("http: %s on the main thread (download threads busy)\n", dl->url);
+		return false;
+	}
+#endif
+	if (!dl->file && *dl->localname)
+	{
+		FS_Remove(dl->localname, dl->fsroot);	//Windows' "w+b" keeps a stale .tmp's tail (fs_win32.c:457)
+		FS_CreatePath(dl->localname, dl->fsroot);
+		dl->file = FS_OpenVFS(dl->localname, "w+b", dl->fsroot);
+	}
+	dl->reaponframe = true;		//before the thread can finish
+	if (dl->file && DL_CreateThread(dl, NULL, NULL))
+	{
+		Con_DPrintf("http: %s threaded\n", dl->url);
+		return true;
+	}
+	dl->reaponframe = false;
+	dl->threadenable = false;
+#endif
+	Con_DPrintf("http: %s on the main thread\n", dl->url);
+	return false;
+}
+
 /*create a standalone download context*/
 struct dl_download *DL_Create(const char *url)
 {
@@ -1339,6 +1383,9 @@ void DL_Close(struct dl_download *dl)
 	if (cls.download == &dl->qdownload)
 		cls.download = NULL;
 #endif
+	if (dl->mainpolls > 1 || dl->reaponframe)	//FTESurf Patch 1114: the frame-polled ones, and the threaded maps
+		Con_DPrintf("http: %s closed: %.1f ms on the main thread over %u frame polls, the longest %.1f ms\n",
+		            dl->url, dl->mainpolltime * 1000, dl->mainpolls, dl->mainpollmax * 1000);
 
 #ifdef MULTITHREAD
 	dl->threadenable = false;
@@ -1350,8 +1397,10 @@ void DL_Close(struct dl_download *dl)
 #endif
 	if (dl->file && dl->file->seekstyle < SS_PIPE)
 		VFS_SEEK(dl->file, 0);
+	http_reaping++;		//FTESurf Patch 1114: its renames drain the main queue: no nested reap
 	if (dl->notifycomplete)
 		dl->notifycomplete(dl);
+	http_reaping--;
 	if (dl->abort)
 		dl->abort(dl);
 	if (dl->file)
@@ -1443,11 +1492,13 @@ void HTTP_CL_Think(const char **curname, float *curpercent)
 	struct dl_download **link = NULL;
 #ifndef SERVERONLY
 	float currenttime;
+	size_t total;
 	if (!activedownloads)
 		return;
 	currenttime = Sys_DoubleTime();
 #endif
 
+	http_reaping++;		//FTESurf Patch 1114: see HTTP_Wake_Think
 	link = &activedownloads;
 	while (*link)
 	{
@@ -1455,7 +1506,7 @@ void HTTP_CL_Think(const char **curname, float *curpercent)
 #ifdef MULTITHREAD
 		if (dl->threadctx)
 		{
-			if (dl->status == DL_FINISHED || dl->status == DL_FAILED)
+			if ((dl->status == DL_FINISHED || dl->status == DL_FAILED) && !(http_fromwake && dl->reaponframe))
 			{
 				Sys_WaitOnThread(dl->threadctx);
 				dl->threadctx = NULL;
@@ -1479,7 +1530,8 @@ void HTTP_CL_Think(const char **curname, float *curpercent)
 			//FTESurf Patch 983: one poll is one socket read (about 32 KB through TLS),
 			//so a frame-polled download ran at a read per frame: 3.2 MB/s at 100 fps
 			//against curl's ~10 MB/s from R2. Drain what has arrived, up to 2 ms.
-			double until = Sys_DoubleTime() + 0.002;
+			double started = Sys_DoubleTime();
+			double until = started + 0.002;
 			size_t before;
 			qboolean alive;
 			do
@@ -1487,6 +1539,11 @@ void HTTP_CL_Think(const char **curname, float *curpercent)
 				before = dl->completed;
 				alive = dl->poll(dl);
 			} while (alive && dl->status == DL_ACTIVE && dl->completed != before && Sys_DoubleTime() < until);
+			started = Sys_DoubleTime() - started;	//FTESurf Patch 1114
+			dl->mainpolltime += started;
+			if (started > dl->mainpollmax)
+				dl->mainpollmax = started;
+			dl->mainpolls++;
 			if (!alive)
 			{
 				*link = dl->next;
@@ -1533,13 +1590,13 @@ void HTTP_CL_Think(const char **curname, float *curpercent)
 			dl->qdownload.percent = 100;
 		else if (dl->status != DL_ACTIVE)
 			dl->qdownload.percent = 0;
-		else if (dl->totalsize <= 0)
+		else if ((total = dl->totalsize) <= 0)	//FTESurf Patch 1114: read once, a worker may reset it
 		{
 			dl->qdownload.sizeunknown = true;
 			dl->qdownload.percent = 50;
 		}
 		else
-			dl->qdownload.percent = dl->completed*100.0f/dl->totalsize;
+			dl->qdownload.percent = dl->completed*100.0f/total;
 		dl->qdownload.completedbytes = dl->completed;
 
 		if (dl->qdownload.ratetime < currenttime)
@@ -1550,6 +1607,7 @@ void HTTP_CL_Think(const char **curname, float *curpercent)
 		}
 #endif
 	}
+	http_reaping--;
 }
 
 void HTTP_CL_Terminate(void)
