@@ -1,5 +1,26 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1124 — retain teleport activation through actual body-value use
+
+**Problem:** Teleport activation could outlive its source admission without a
+cause check when its later use changes the recipient's body values.
+
+**Change:** QC-only ordinary/Momentum-alias/relative activation cause; freeze
+before reentrant outputs, snapshot body after them. Reuse existing policy before
+all warp-record exits only for changed pose/ground/carrier, including pending
+unarmed cashout. No movement arithmetic, collection/format/flag/tier/native pin,
+Build or release change. Logical/phase/config/multisource bank remains open.
+
+**Verified:** Same native/compiler/fixture22 paired actual-I/O/numeric units;
+values and identities identical, only11 intended cases gain existing status.
+Current/world/replacement/rejected/no-value controls clean, armed-zero negative
+and production pending-cashout positive act. Push15/activation23 regressions pass.
+NoDeploySS/menu0warnings,2oldCSF333/zeroNEW; reader949/0. Same527REC/167VIEW whole
+paths/bytes/diagnostics equal,328faultyREC7faultyVIEW/zero introduced, not faultfree.
+Initial formatter warning/path-aggregation failure and corrected carrier
+prediction retained. Reviews/deployment pending; no native move/rank/human claim.
+See tools/p1124-claim.md.
+
 ## Patch 1123 — retain speed-delivery activation through body-phase use
 
 **Problem:** Set-speed/alias and conveyor delivery did not recheck the source
