@@ -30,8 +30,18 @@ diagnostics328faultyREC7faultyVIEW/zerointroduced, NOTfault-free. Prior504domain
 changed:499same,5oldfaultyunpairedabsent/28newREC5faulted (alladditionspreprobe);
 aggregate+23 is data churn, notsame504PASS. Attributionunknown, nodatarestore/
 delete; BACKLOGfollow-up. Timeout/old-domain guard retained, only incompletesweep
-resumed and explicit-reader seam providesactualfreshcontrol. Independent reviews
-and delivery pending. See tools/p1123-claim.md.
+resumed and explicit-reader seam providesactualfreshcontrol. BOTHindependentreviews
+PASS/noissues; publishedruntimeQC904572cfefc1/ledger3152a272c77f. Normalbuild same
+0NEW, BOTHWindows6DAT/LNO+.prev, PiQWace36faca814/CSfa9bb6d39634 exact+.prev,
+12freshsame-native/healthy12/empty verified2026-10-29 17:52:46.953918UTC. Nonforce
+normalPi; config/native/backendfiles+unit/AIunchanged. ALL16347/142Windows and
+35043Pi oldprotectedbytesunchanged/nomissing,6newPipathspreserved: this boundary
+PASSED, older corpuschurn is a different interval. CS/MENU/native/source match
+priorlive drawcohort, reusedacceptance notnewGUI/wire/rank/feel. Originalrollback/
+frozen6bundle retained;75ownedfilesZIPverified,9files/oneNoDeployroot retired,
+66minimalrigretained+archived,0owngames/links/gates. ExactowncanonicalCFGreservation
+retiredafterhash+publishednumberproof, notsameblobasMarkdown; peers/indexuntouched.
+No native/backend/Build/release action. See tools/p1123-claim.md.
 Broader transitive logical/config/body/world/own-phase/multi-source bank OPEN.
 
 ## Patch 1121 — retain persistent speed-effect source until actual cap use
