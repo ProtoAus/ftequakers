@@ -25,6 +25,33 @@ parent, and endpoint admission has acting negative/positive controls. No physica
 owner signing, human UI/feel, verified time or production deployment is inferred.
 Independent final review and deployment pending; human checks remain in lextest.md.
 
+## Patch 1142 — finish held collector and linked-account refresh work (backend only)
+
+**Problem:** The unpublished P1117 collector branch retained useful retry,
+rotation and account-PB work, but could not simply replace current main or the
+live guarded generation. Fresh review also exposed invalid-main promotion,
+map-list cursor drift and an omitted runtime dependency.
+
+**Change:** Integrate its complete history with current schema24. Keep login
+queue-only and imports in their existing external/cache tiers. Separate retry
+parks, bound shared Momentum work and reserve progress under small budgets.
+Skip malformed numeric PB rows, use bounded dates, retain invalid KSF semantic
+markers, and durably bind each stage cursor to that walk/style's ordered map AND
+zone identities. Older offsets without a snapshot restart safely. Ship the
+flat fetcher with its unconditional msml dependency; test real installed imports.
+No native/QC interface, movement, evidence format/flag/tier or binary pin changes.
+
+**Verification/delivery boundary:** Local synthetic collector/profile/account,
+board/web and completion controls pass; concrete fresh-review falsifiers were
+acted before repair and retained. The current-main schema24 and P984 donated-zone
+contracts replace seven stale expected results, not failed product controls.
+Two unrelated admin amplification/snapshot expectations also fail the unchanged
+published control and remain recorded. The product notes retain remaining
+DNS-deadline and human-acceptance limits. Source publication is not live delivery:
+the existing exact81-file guarded runtime excludes new momprofile.py and requires
+a verified closure extension and rollback-preserving successor. No live backend
+mutation, account impersonation, external sweep, native build or lobby restart.
+
 ## Patch 1139 — retain eligible gravity status through stock ground takeoff
 
 **Problem:** The bounded earlier-use observer refuses every grounded entry,
@@ -46,7 +73,26 @@ preserves all raw/profile/input/relative and total motion/status outputs. Origin
 and unavailable-API controls are unchanged evidence reuse, not fresh runs. Initial
 fixture/prediction and retired-input wrapper failures remain retained. No genuine
 ground socket, human, ranked-finish or complete bank acceptance is claimed.
-Clean pinned artifact qualification, independent reviews and deployment pending.
+Clean tagged version `git-8024-patch-1139-0-geb1f494fa` passes those same checks.
+Two fresh whole-feature reviews found no supported-scope issues; the parent held
+all 3,994 tracked source files, refs/index and 18 frozen artifacts unchanged.
+Exact native `eb1f494fa` and QC declaration `76634e03` are published.
+
+**Delivery (30 Oct 2026 UTC):** Both Windows installs verified all 22 generated
+and native destinations plus paired `.prev` at 19:40:13; 16,761 protected entries
+were unchanged. At 19:53:33 all 12 empty lobbies received the frozen paired files
+with one ordinary restart each, no force. Their new PID/birth/native/plugin-inode
+pairs and all 35,714 old protected entries matched; configs/backend stayed put.
+Before restarting, all four current part files (1,426,033 bytes, no open part FDs)
+were archived against the prepared inventory and independently read back off-box.
+No file was presumed disposable or complete. This new strict postflight passes;
+it does NOT waive or recover P1136's historical three-file preservation failure.
+The 20:00:44 post-cold check retained those same actors and old bytes, preserving
+six new files. A fresh client fetched exact served CSQC, drew the board and exited
+without QC errors; the inspected image is an empty board with unaccepted terms,
+not human feel or ranked-run acceptance. No Build/release or backend-generation
+change. Reader tests pass; the actual corpus now has one additional malformed
+legacy input already present before deployment, not a claimed fault-free sweep.
 
 ## Patch 1136 — retain eligible gravity status with finite vertical air carriers
 
