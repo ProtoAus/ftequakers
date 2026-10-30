@@ -1,5 +1,28 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1130 — finish the stats-kind switches; WOS-only map completion
+
+**QC/backend only; no native or plugin change.** Continues Claude's P1122:
+Surf/Bhop/All on home figures and tier bars, one matching full-stats switch,
+and Show all off at launch without forgetting its choice during navigation.
+Reopening cached Full stats now refreshes records for the home kind/source.
+Switch knobs start at their actual selection; home switches fit narrow cards.
+
+Lex's final completion decision: only an exact-build clean WOS main finish
+paints Complete! and contributes to completed-first sorting. Imported times
+remain visible. `/api/board?completed=...&source=wos` supplies that sort;
+omitted source retains the legacy all-source union, and the menu validates the
+explicit source echo. Session-only `ui_showall` replaces obsolete fixture cvar setters.
+
+**Evidence:** task `C:/FTESurf-worktrees/uiresume-20261030T041556Z`, artifacts:
+`build-r4.log` all three VMs zero warnings with compiler c24ede65;
+`ui-r2` actual click/row controls, two launches and inspected screenshots;
+`ui-cache-control.log` catches an intentionally removed cached-row refresh.
+32 map-card assertions, 9 profile-filter tests, completion-pool 46 checks,
+map-tier, zone-index and mappool suites pass. Two bounded independent reviews
+and cross-examination resolved the per-navigation Show all reset. No deliberately
+reordered HTTP-response race or comprehensive viewport-coverage claim.
+
 ## Patch 1129 — attribute retained airborne gravity use to its source
 
 **Problem:** A persistent player gravity profile can outlive its admission;
