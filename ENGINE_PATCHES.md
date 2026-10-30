@@ -1,6 +1,6 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
-## Patch 1132 — bounded native legal-start TAS verification CLI
+## Patch 1134 — bounded native legal-start TAS verification CLI
 
 **Problem:** The TAS editor can replay a project, but no isolated operator path
 joins admitted legal-start inputs to a fresh native finish. Headless rendering's
@@ -17,18 +17,50 @@ and both peers' output. Signals notify rather than throw into ownership cleanup.
 No movement, recording format, human admission, queue, board or Build change;
 trusted queue approval is still required for TAS promotion. See tools/tasverify.md.
 
-**Verified:** 33 Pi tests include producer limits, both post-spawn failures,
-.edo appearance and SIGTERM arriving while two live children are being reaped.
-Native GL/server/HL2 builds have no new warnings (five baseline server unused
-functions); QC has SSQC/menu zero and two untouched CSQC F333 property227 warnings.
-Fresh CLI PASS342 on one real map with private fixture zones; acting unfinished,
-shifted-start, moved-END and after-binding cancellation all HOLD/reap. An owned
-outside-binary plugin executes normally but not in confined mode, with positive
-native policy ACK. Default-100/registered-zero throttle control preserves defaults.
-Reader949 passes; unchanged-reader 527-REC corpus retains 328 existing fault files,
-not fault-free or human proof. R2 receipt lens clear; isolated cancellation/plugin
-fix re-review, clean publication and deployment pending at this checkpoint. No
-production TAS board, map-corpus qualification or unsupported tick-rate claim.
+**Verified (pre-integration candidate):** 39 Pi tests (Windows39/eight Linux skips),
+independent receipt/ownership/plugin/asset/deadline reviews clear, and acting resource,
+cancellation, late-match/cleanup and case-alias HOLD/reap controls. Fresh native
+PASS342/5130ms on one real map with private fixture zones. Normal plugin lookup acts
+while binary-confined startup refuses the same outside plugin; native ACK and
+registered-zero/default100 pacing controls act. Candidate Windows FULL build has
+75 warning messages identical to qualified P1131; SSQC/menu zero and two unchanged
+CSQC warnings. Windows/ARM33 P1131 +58 P1129 and older native checks pass; all60
+physics rows per platform equal qualified predecessors. Declared historical QW
+pin2(4418/4418) and P813 pin7(9194/9192) pass both; the known boreas18-physent HOLD
+is preserved, not pin1 coverage. Reader949 and unchanged 527-REC/328-fault baseline
+are reused, not fault-free/human proof. This candidate was qualified before the
+concurrent published P1133 merge; combined native builds/gates and deployment are
+still pending. Reservation1132 retired before publication; one final feature1134.
+No production TAS board, canonical-zone finish, all-map/dynamic-object or unsupported
+tick-rate qualification is claimed.
+
+## Patch 1133 — retain eligible airborne gravity status with jump input
+
+**Problem:** The bounded earlier-air observer refused every jump button, including
+an already airborne command whose actual jump check cannot jump or change velocity.
+The accepted displacement could still use the existing nondefault gravity input.
+
+**Change:** Remove only that redundant input exclusion. The existing dry-air entry
+requires no ground, and the actual jump check cannot jump or change velocity on
+this path. Its existing input latch updates identically for the same default
+command. Genuine grounded jumps and other unsupported contexts remain excluded. Keep the same accepted-movement/default-trajectory proof and existing
+use bit, source/cache admission and status; no new captured field, format, flag,
+tier, gameplay step or numerical movement change. Add acting air-refusal and
+normal grounded-jump native controls; refine the old any-button negative to the
+still-excluded genuine grounded-jump context.
+
+**Verified:** Isolated Windows and ARM64 candidate builds: zero new warnings,
+9 new native controls, 33 earlier-air controls (including the refined genuine-jump
+negative), 58 prior gravity controls and all older checks pass. Both platforms'
+60 named physics rows exactly match qualified P1131, with acting prop/wrapped-hull
+controls. The same compiled QC fixture across original, candidate and unavailable-
+API images acts in all six socket comparisons: actual input/airborne/admission
+controls pass; all raw/cache/movement/lateral outputs remain identical. Only the
+two intended held-input statuses change; default cases and unavailable-API refusal
+remain. Reader 949/0 and fixed-corpus evidence are reused without reader or recorded-
+body changes; no new sweep or fault-free-corpus claim. Fresh whole-feature reviews,
+clean committed builds and publication/promotion are separate gates. No human,
+finished/ranked-run or complete bank/consumer acceptance is claimed.
 
 ## Patch 1131 — retain gravity-source status through earlier accepted air motion
 
@@ -58,6 +90,14 @@ excluded rather than claimed no-use. Reader 949/0; the fixed 527-recording and
 167-paired-view corpus retains identical bytes and diagnostics, no introduced
 faults. Independent reviews and clean publication/promotion remain separate gates;
 no human, finished/ranked-run or complete bank/consumer acceptance is claimed.
+
+**Deployed:** Reviewed native `4bddca067` / QC `e0eb0aa8`, `patch-1131`, exact
+frozen artifacts to both Windows installs and all 12 lobbies on 30 Oct 2026.
+Live 08:52:35 UTC: all 12 new native/plugin epochs and versions match; destination
+and `.prev` hashes match, original protected data/config bytes remain intact.
+No force was needed; backend generation/unit/master unchanged. A fresh isolated
+client downloaded the exact served CSQC and drew the board without QC errors;
+the empty/no-zone, unaccepted-terms screen is not human or ranked-run acceptance.
 
 ## Patch 1130 — finish the stats-kind switches; WOS-only map completion
 
