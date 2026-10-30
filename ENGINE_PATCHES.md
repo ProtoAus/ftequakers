@@ -1,5 +1,34 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1131 — retain gravity-source status through earlier accepted air motion
+
+**Problem:** The late gravity half can converge to the default result after an
+existing nondefault input already changed accepted airborne displacement. The
+finish-only observer deliberately did not cover that earlier work.
+
+**Change:** Extend the existing begin/end use bit for a bounded dry, ungrounded,
+linear air path. An optional stack result identifies the first actual fully
+accepted movement trace; the default-only path must also pass its sweep,
+endpoint retest and ground/quadrant checks. Query only when the late observer has
+not already established use. Exclude discontinuities, assists and unsupported
+contexts rather than infer their result. Existing source/cache/admission checks
+and status policy remain; no new captured fields, formats, flags or tiers, no
+second gameplay step or changed movement arithmetic. This is partial consumer
+coverage, not a complete body/bank or ranked-run verification claim.
+
+**Verified:** Isolated Windows and ARM64 candidate builds: zero new warnings,
+33 new native checks plus all 58 previous gravity checks and older checks pass;
+60 normalized physics rows per platform exactly match their qualified predecessor,
+including acting prop and wrapped-hull controls. A Windows real-socket 20-arm
+counterpart reuses one compiled QC fixture across old, current and unavailable-API
+images: all measured raw/cache/movement outputs remain identical; only the two
+established earlier-use cases gain the existing status. Grounded/held/default and
+projected-tail negatives remain, and a blocked default path is conservatively
+excluded rather than claimed no-use. Reader 949/0; the fixed 527-recording and
+167-paired-view corpus retains identical bytes and diagnostics, no introduced
+faults. Independent reviews and clean publication/promotion remain separate gates;
+no human, finished/ranked-run or complete bank/consumer acceptance is claimed.
+
 ## Patch 1130 — finish the stats-kind switches; WOS-only map completion
 
 **QC/backend only; no native or plugin change.** Continues Claude's P1122:

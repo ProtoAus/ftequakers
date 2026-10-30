@@ -661,11 +661,25 @@ static void PMSrc_FinishGravity (void)
 	PMSrc_CheckVelocity ();
 }
 
+// Shadow only: the velocity half of CheckVelocity, without touching the body.
+static void PMSrc_BankGravitySanitize(vec3_t velocity)
+{
+	float maxvel = movevars.maxvelocity;
+	int i;
+	if (maxvel <= 0) maxvel = 3500;
+	for (i = 0; i < 3; ++i)
+	{
+		if (velocity[i] != velocity[i]) velocity[i] = 0;
+		if (velocity[i] > maxvel) velocity[i] = maxvel;
+		else if (velocity[i] < -maxvel) velocity[i] = -maxvel;
+	}
+}
+
 // P1129: compare only the undiscarded full-walk finish, not speculative probes.
 static qboolean PMSrc_BankGravityFinishChanged(const vec3_t before, const vec3_t after, const vec3_t projection)
 {
 	vec3_t normal;
-	float maxvel, d;
+	float d;
 	int i;
 	if (!pms_bankgravity_observe || pmove.onground ||
 		(pms_slidetick & PMSLIDE_NOGRAVITY) || pmove.waterjumptime ||
@@ -674,14 +688,7 @@ static qboolean PMSrc_BankGravityFinishChanged(const vec3_t before, const vec3_t
 	// Shadow only: match FinishGravity, CheckVelocity and the accepted tail.
 	VectorCopy(before, normal);
 	normal[2] -= (1.0f * movevars.gravity * pms_frametime * 0.5f);
-	maxvel = movevars.maxvelocity;
-	if (maxvel <= 0) maxvel = 3500;
-	for (i = 0; i < 3; ++i)
-	{
-		if (normal[i] != normal[i]) normal[i] = 0;
-		if (normal[i] > maxvel) normal[i] = maxvel;
-		else if (normal[i] < -maxvel) normal[i] = -maxvel;
-	}
+	PMSrc_BankGravitySanitize(normal);
 	if (projection)
 	{
 		d = DotProduct(normal, projection);
@@ -1032,7 +1039,7 @@ push, which Momentum applies unconditionally.  Same reason as Patch 176: 0 has
 to be exactly the previous build or the cvar is not a bisection.
 ==================
 */
-static int PMSrc_TryPlayerMove (vec3_t firstdest, trace_t *firsttrace)
+static int PMSrc_TryPlayerMoveCore (vec3_t firstdest, trace_t *firsttrace, qboolean *firstclear)
 {
 	int			bumpcount;
 	vec3_t		dir;
@@ -1055,6 +1062,7 @@ static int PMSrc_TryPlayerMove (vec3_t firstdest, trace_t *firsttrace)
 	qboolean	stuck_on_ramp = false;		/* assume we are not stuck yet */
 	qboolean	has_valid_plane = false;	/* no plane information gathered yet */
 
+	if (firstclear) *firstclear = false;
 	numplanes = 0;
 	VectorCopy (pmove.velocity, original_velocity);
 	VectorCopy (pmove.velocity, primal_velocity);
@@ -1379,7 +1387,13 @@ static int PMSrc_TryPlayerMove (vec3_t firstdest, trace_t *firsttrace)
 		}
 
 		if (pm.fraction == 1)
+		{
+			// P1131: only the first actual, endpoint-validated whole move.
+			if (firstclear && !bumpcount && !pm.startsolid && !pm.allsolid &&
+				!pms_portalcrossed && VectorCompare(pm.endpos, end))
+				*firstclear = true;
 			break;		/* moved the entire distance */
+		}
 
 		if (pm.entnum > 0)
 			PM_AddTouchedEnt (pm.entnum);
@@ -1580,6 +1594,11 @@ static int PMSrc_TryPlayerMove (vec3_t firstdest, trace_t *firsttrace)
 	}
 
 	return blocked;
+}
+
+static int PMSrc_TryPlayerMove (vec3_t firstdest, trace_t *firsttrace)
+{
+	return PMSrc_TryPlayerMoveCore(firstdest, firsttrace, NULL);
 }
 
 /*
@@ -3108,7 +3127,7 @@ static void PMSrc_WalkMove (void)
 PMSrc_AirMove   (cpp:1764)
 ==================
 */
-static void PMSrc_AirMove (void)
+static void PMSrc_AirMove (qboolean *firstclear)
 {
 	vec3_t wishdir;
 	float wishspeed;
@@ -3118,7 +3137,7 @@ static void PMSrc_AirMove (void)
 	PMSrc_AirAccelerate (wishdir, wishspeed, movevars.airaccelerate);
 
 	VectorAdd (pmove.velocity, pmove.basevelocity, pmove.velocity);
-	PMSrc_TryPlayerMove (NULL, NULL);
+	PMSrc_TryPlayerMoveCore (NULL, NULL, firstclear);
 	VectorSubtract (pmove.velocity, pmove.basevelocity, pmove.velocity);
 }
 
@@ -3249,13 +3268,110 @@ PMSrc_FullWalkMove   (cpp:2036)
 The order here IS the physics.  Do not reorder.
 ==================
 */
+// P1131: a bounded default-only start, not evidence that its result was used.
+static qboolean PMSrc_BankGravityStartDefault(vec3_t normal)
+{
+	int i;
+	if (!pms_bankgravity_observe || pms_bankgravity_used ||
+		movevars.sourceversion < 11 || pmove.pm_type != PM_NORMAL ||
+		pmove.onground || pmove.waterlevel || pmove.waterjumptime ||
+		pmove.waterjumpremaining || (pmove.cmd.buttons & BUTTON_JUMP) ||
+		pms_haveportals || pms_anyslide || pms_slidetick || pms_momslide ||
+		!movevars.entgravity || movevars.entgravity == 1 ||
+		!isfinite(pms_frametime) || pms_frametime <= 0)
+		return false;
+	for (i = 0; i < 3; ++i)
+		if (pmove.basevelocity[i] || !isfinite(pmove.origin[i]) || !isfinite(pmove.velocity[i]))
+			return false;
+	PMSrc_NextTickVelocity(pmove.velocity, pms_frametime, movevars.gravity, 1, normal);
+	normal[2] += pmove.basevelocity[2] * pms_frametime;
+	PMSrc_BankGravitySanitize(normal);
+	return true;
+}
+
+static qboolean PMSrc_BankGravityTraceClear(const trace_t *tr, const vec3_t end)
+{
+	return tr->fraction == 1 && !tr->startsolid && !tr->allsolid && VectorCompare(tr->endpos, end);
+}
+
+// Require every ground query clear, not a guessed alternative landing/snap.
+static qboolean PMSrc_BankGravityGroundClear(vec3_t origin)
+{
+	vec3_t point, mins, maxs;
+	trace_t tr;
+	float halfx, halfy;
+	qboolean clear = true;
+	int q, i;
+	VectorCopy(origin, point);
+	point[2] -= PMSrc_GroundTraceDist();
+	if (!isfinite(point[2])) return false;
+	tr = PMSrc_TraceHull(origin, point);
+	if (!PMSrc_BankGravityTraceClear(&tr, point)) return false;
+	if (!movevars.groundquadrants) return true;
+	VectorCopy(pmove.player_mins, mins);
+	VectorCopy(pmove.player_maxs, maxs);
+	halfx = (maxs[0] - mins[0]) * 0.5f;
+	halfy = (maxs[1] - mins[1]) * 0.5f;
+	for (q = 0; q < 4; ++q)
+	{
+		VectorCopy(mins, pmove.player_mins);
+		VectorCopy(maxs, pmove.player_maxs);
+		if (q & 1) pmove.player_mins[0] += halfx; else pmove.player_maxs[0] -= halfx;
+		if (q & 2) pmove.player_mins[1] += halfy; else pmove.player_maxs[1] -= halfy;
+		for (i = 0; i < 3; ++i)
+			if (!isfinite(pmove.player_mins[i]) || !isfinite(pmove.player_maxs[i])) clear = false;
+		if (!clear) break;
+		tr = PMSrc_TraceHull(origin, point);
+		if (!PMSrc_BankGravityTraceClear(&tr, point))
+		{
+			clear = false;
+			break;
+		}
+	}
+	VectorCopy(mins, pmove.player_mins);
+	VectorCopy(maxs, pmove.player_maxs);
+	return clear;
+}
+
+static qboolean PMSrc_BankGravityAirChanged(const vec3_t origin, const vec3_t accepted,
+	const vec3_t velocity, float normalz)
+{
+	vec3_t from, linear, normalvel, normalend;
+	trace_t tr;
+	int i;
+	if (!isfinite(normalz)) return false;
+	for (i = 0; i < 3; ++i)
+		if (!isfinite(origin[i]) || !isfinite(accepted[i]) || !isfinite(velocity[i]) ||
+			!isfinite(pmove.player_mins[i]) || !isfinite(pmove.player_maxs[i]) ||
+			pmove.player_mins[i] > pmove.player_maxs[i]) return false;
+	VectorMA(origin, pms_frametime, velocity, linear);
+	if (!VectorCompare(linear, accepted)) return false;
+	VectorCopy(velocity, normalvel);
+	normalvel[2] = normalz;
+	VectorMA(origin, pms_frametime, normalvel, normalend);
+	for (i = 0; i < 3; ++i)
+		if (!isfinite(normalend[i])) return false;
+	if (VectorCompare(normalend, accepted)) return false;
+	// No portal transforms or gameplay replay. Match the real endpoint retest too.
+	VectorCopy(origin, from);
+	tr = PMSrc_TraceHull(from, normalend);
+	if (!PMSrc_BankGravityTraceClear(&tr, normalend)) return false;
+	tr = PMSrc_TraceHull(normalend, normalend);
+	if (!PMSrc_BankGravityTraceClear(&tr, normalend)) return false;
+	if (normalz <= PMSRC_NON_JUMP_VELOCITY && !PMSrc_BankGravityGroundClear(normalend)) return false;
+	return true;
+}
+
 static void PMSrc_FullWalkMove (void)
 {
-	qboolean wasonground = pmove.onground, bankfinish_projected = false;
+	qboolean wasonground = pmove.onground, bankfinish_projected = false, bankairclear = false;
 	vec3_t bankfinish_before, bankfinish_plane;
+	vec3_t bankstart_default, bankstart_origin, bankstart_airend, bankstart_airvel;
+	qboolean bankstart = PMSrc_BankGravityStartDefault(bankstart_default);
 
 	if (pmove.waterlevel < 2)
 		PMSrc_StartGravity ();
+	if (bankstart && VectorCompare(bankstart_default, pmove.velocity)) bankstart = false;
 
 	if (movevars.sourceversion >= 11)
 	{
@@ -3310,9 +3426,20 @@ static void PMSrc_FullWalkMove (void)
 	PMSrc_CheckVelocity ();
 
 	if (pmove.onground)
+	{
+		bankstart = false;
 		PMSrc_WalkMove ();
+	}
 	else
-		PMSrc_AirMove ();
+	{
+		if (bankstart) VectorCopy(pmove.origin, bankstart_origin);
+		PMSrc_AirMove (bankstart ? &bankairclear : NULL);
+		if (bankstart)
+		{
+			VectorCopy(pmove.origin, bankstart_airend);
+			VectorCopy(pmove.velocity, bankstart_airvel);
+		}
+	}
 
 	PMSrc_CategorizePosition ();
 	PMSrc_CheckVelocity ();
@@ -3351,6 +3478,12 @@ static void PMSrc_FullWalkMove (void)
 		bankfinish_projected = PMSrc_StuckGround (bankfinish_plane);
 	if (pmove.waterlevel < 2 && PMSrc_BankGravityFinishChanged(bankfinish_before, pmove.velocity,
 		bankfinish_projected ? bankfinish_plane : NULL))
+		pms_bankgravity_used = true;
+	// Lazy: the usual late use needs no alternative geometry queries.
+	if (bankstart && bankairclear && !pms_bankgravity_used && !pmove.onground &&
+		!pmove.waterlevel && !pms_slidetick && !pms_portalcrossed &&
+		VectorCompare(pmove.origin, bankstart_airend) &&
+		PMSrc_BankGravityAirChanged(bankstart_origin, bankstart_airend, bankstart_airvel, bankstart_default[2]))
 		pms_bankgravity_used = true;
 }
 
@@ -4401,6 +4534,136 @@ static void PMSrc_TestBankGravity(void)
 	pmove.waterjumptime = wjt;
 	pmove.onground = ground;
 	pms_slidetick = slide;
+	pms_bankgravity_observe = observe;
+	pms_bankgravity_used = used;
+}
+
+static void PMSrc_TestBankStartGravity(void)
+{
+	playermove_t *saved = BZ_Malloc(sizeof(pmove));
+	movevars_t mv = movevars;
+	float ft = pms_frametime;
+	int slide = pms_slidetick, momslide = pms_momslide;
+	qboolean portals = pms_haveportals, anyslide = pms_anyslide;
+	qboolean crossed = pms_portalcrossed, surfed = pms_surfed;
+	qboolean observe = pms_bankgravity_observe, used = pms_bankgravity_used;
+	qboolean clear, changed;
+	vec3_t normal, begin, accepted, velocity, mins, maxs, dest;
+	trace_t hit;
+	memcpy(saved, &pmove, sizeof(pmove));
+	memset(&pmove, 0, sizeof(pmove));
+	pmove.pm_type = PM_NORMAL;
+	pmove.skipent = -1;
+	VectorSet(pmove.player_mins, -16, -16, 0);
+	VectorSet(pmove.player_maxs, 16, 16, 72);
+	VectorCopy(pmove.player_mins, mins);
+	VectorCopy(pmove.player_maxs, maxs);
+	movevars.sourceversion = 13;
+	movevars.entgravity = INFINITY;
+	movevars.gravity = 800;
+	movevars.maxvelocity = 3500;
+	movevars.groundtracedist = 2;
+	movevars.groundquadrants = 1;
+	movevars.fixrampbugs = 0;
+	movevars.bumpcount = 4;
+	pms_frametime = .015f;
+	pms_slidetick = pms_momslide = 0;
+	pms_anyslide = pms_haveportals = false;
+	VectorSet(pmove.origin, 0, 0, 128);
+	PMSrc_BankGravityBegin(true);
+	PMSrc_Check("P1131 default start admitted", PMSrc_BankGravityStartDefault(normal), 1, 0);
+	PMSrc_Check("P1131 default start half", normal[2], -6, 0);
+	PMSrc_StartGravity();
+	PMSrc_Check("P1131 actual start saturated", pmove.velocity[2], -3500, 0);
+	VectorCopy(pmove.origin, begin);
+	PMSrc_TryPlayerMoveCore(NULL, NULL, &clear);
+	PMSrc_Check("P1131 actual first clear trace", clear, 1, 0);
+	PMSrc_Check("P1131 actual displacement acted", pmove.origin[2], 75.5f, 0);
+	VectorCopy(pmove.origin, accepted);
+	VectorCopy(pmove.velocity, velocity);
+	PMSrc_FinishGravity();
+	PMSrc_Check("P1131 local same finish remains no-use",
+		PMSrc_BankGravityFinishChanged(velocity, pmove.velocity, NULL), 0, 0);
+	changed = PMSrc_BankGravityAirChanged(begin, accepted, velocity, normal[2]);
+	PMSrc_Check("P1131 earlier accepted displacement used", changed, 1, 0);
+	PMSrc_Check("P1131 shadow preserves body origin", VectorCompare(pmove.origin, accepted), 1, 0);
+	PMSrc_Check("P1131 shadow preserves velocity", VectorCompare(pmove.velocity, velocity), 1, 0);
+	PMSrc_Check("P1131 quadrants restore mins", VectorCompare(pmove.player_mins, mins), 1, 0);
+	PMSrc_Check("P1131 quadrants restore maxs", VectorCompare(pmove.player_maxs, maxs), 1, 0);
+	if (changed) pms_bankgravity_used = true;
+	PMSrc_Check("P1131 existing command use delivery", PMSrc_BankGravityEnd(), 1, 0);
+	PMSrc_Check("P1131 command use reset", PMSrc_BankGravityEnd(), 0, 0);
+	PMSrc_BankGravityBegin(true);
+	movevars.entgravity = 0;
+	PMSrc_Check("P1131 zero default excluded", PMSrc_BankGravityStartDefault(normal), 0, 0);
+	movevars.entgravity = 1;
+	PMSrc_Check("P1131 one default excluded", PMSrc_BankGravityStartDefault(normal), 0, 0);
+	movevars.entgravity = INFINITY;
+	pmove.onground = true;
+	PMSrc_Check("P1131 grounded overwrite excluded", PMSrc_BankGravityStartDefault(normal), 0, 0);
+	pmove.onground = false;
+	pms_haveportals = true;
+	PMSrc_Check("P1131 portal map excluded", PMSrc_BankGravityStartDefault(normal), 0, 0);
+	pms_haveportals = false;
+	pmove.basevelocity[0] = 1;
+	PMSrc_Check("P1131 base velocity excluded", PMSrc_BankGravityStartDefault(normal), 0, 0);
+	pmove.basevelocity[0] = 0;
+	pmove.waterjumpremaining = 1;
+	PMSrc_Check("P1131 waterjump excluded", PMSrc_BankGravityStartDefault(normal), 0, 0);
+	pmove.waterjumpremaining = 0;
+	pmove.cmd.buttons = BUTTON_JUMP;
+	PMSrc_Check("P1131 jump command excluded", PMSrc_BankGravityStartDefault(normal), 0, 0);
+	pmove.cmd.buttons = 0;
+	PMSrc_BankGravityBegin(false);
+	PMSrc_Check("P1131 unarmed excluded", PMSrc_BankGravityStartDefault(normal), 0, 0);
+	VectorClear(pmove.velocity);
+	PMSrc_TryPlayerMoveCore(NULL, NULL, &clear);
+	PMSrc_Check("P1131 no trace is not first clear", clear, 0, 0);
+	VectorSet(pmove.origin, 0, 0, 128);
+	VectorSet(pmove.velocity, 0, 0, -1);
+	VectorMA(pmove.origin, pms_frametime, pmove.velocity, dest);
+	memset(&hit, 0, sizeof(hit));
+	hit.entnum = -1;
+	hit.plane.normal[2] = 1;
+	VectorCopy(pmove.origin, hit.endpos);
+	PMSrc_TryPlayerMoveCore(dest, &hit, &clear);
+	PMSrc_Check("P1131 clipped trace is not first clear", clear, 0, 0);
+	PMSrc_Check("P1131 clipped trace actually stopped body", pmove.velocity[2], 0, 0);
+	pmove.numphysent = 1;
+	pmove.physents[0].info = 1;
+	pmove.physents[0].scale = 1;
+	VectorSet(pmove.physents[0].mins, -256, -256, -16);
+	VectorSet(pmove.physents[0].maxs, 256, 256, 0);
+	VectorSet(pmove.physents[0].origin, 0, 0, 127);
+	PMSrc_Check("P1131 default ground hit excluded", PMSrc_BankGravityGroundClear(pmove.origin), 0, 0);
+	PMSrc_Check("P1131 ground refusal restores mins", VectorCompare(pmove.player_mins, mins), 1, 0);
+	PMSrc_Check("P1131 ground refusal restores maxs", VectorCompare(pmove.player_maxs, maxs), 1, 0);
+	memset(&hit, 0, sizeof(hit));
+	hit.fraction = 1;
+	VectorCopy(accepted, hit.endpos);
+	PMSrc_Check("P1131 exact clear trace accepted", PMSrc_BankGravityTraceClear(&hit, accepted), 1, 0);
+	hit.fraction = NAN;
+	PMSrc_Check("P1131 NaN trace fraction refused", PMSrc_BankGravityTraceClear(&hit, accepted), 0, 0);
+	hit.fraction = INFINITY;
+	PMSrc_Check("P1131 infinite trace fraction refused", PMSrc_BankGravityTraceClear(&hit, accepted), 0, 0);
+	hit.fraction = 1.01f;
+	PMSrc_Check("P1131 over-one trace fraction refused", PMSrc_BankGravityTraceClear(&hit, accepted), 0, 0);
+	hit.fraction = 1;
+	hit.startsolid = true;
+	PMSrc_Check("P1131 startsolid trace refused", PMSrc_BankGravityTraceClear(&hit, accepted), 0, 0);
+	hit.startsolid = false;
+	hit.endpos[2] += 1;
+	PMSrc_Check("P1131 wrong trace endpoint refused", PMSrc_BankGravityTraceClear(&hit, accepted), 0, 0);
+	memcpy(&pmove, saved, sizeof(pmove));
+	BZ_Free(saved);
+	movevars = mv;
+	pms_frametime = ft;
+	pms_slidetick = slide;
+	pms_momslide = momslide;
+	pms_anyslide = anyslide;
+	pms_haveportals = portals;
+	pms_portalcrossed = crossed;
+	pms_surfed = surfed;
 	pms_bankgravity_observe = observe;
 	pms_bankgravity_used = used;
 }
@@ -5879,6 +6142,7 @@ static void PMSrc_SelfTest_f (void)
 	}
 
 	PMSrc_TestBankGravity();
+	PMSrc_TestBankStartGravity();
 
 	/* --- restore -------------------------------------------------------- */
 	movevars = savemv;
