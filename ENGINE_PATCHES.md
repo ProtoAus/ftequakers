@@ -27,6 +27,35 @@ the existing exact81-file guarded runtime excludes new momprofile.py and require
 a verified closure extension and rollback-preserving successor. No live backend
 mutation, account impersonation, external sweep, native build or lobby restart.
 
+## Patch 1141 — retain eligible gravity status through normalized ground takeoff
+
+**Problem:** The bounded standing-takeoff observer still refuses normalized
+jumps, including accepted displacements whose carried-gravity effect survives
+although the late half has converged.
+
+**Change:** Share the existing standing eligibility without weakening the stock
+entry's exclusion. Add a finite normalized-mode entry; mirror the actual positive
+inbound undo, impulse addition and skipped inner half before the common sanitizer.
+Keep the actual accepted-jump, airborne, clear/default-geometry and late-use proof.
+Only the existing derived status changes: no movement arithmetic, recorded field,
+API, format, flag or tier changes. Other consumers remain partial.
+
+**Verified:** Before implementation, the unchanged production mover with only
+new tests acts in all six coupled worlds: 35 new controls pass and three missing
+extension requirements fail as predicted. The bounded change passes all 48 new
+Windows/ARM64 controls, 209 recent and all older checks. The 461 older printed
+Windows rows exactly match that baseline; observer-on/off body and tail agree.
+Positive/negative inbound, fallback impulse, finite-mode admission, nonfinite-mode
+refusal, default, blocked-default and held-button counterparts act. Each platform's
+60 full-content physics rows exactly match the qualified predecessor and each
+other, with zero new warnings. The same compiled eight-arm Windows socket/cache/
+admission regression preserves raw/profile/input/relative and total motion/status
+outputs; original/unavailable-API evidence is unchanged reuse. Reader tests pass
+949 checks; the intended current runs corpus remains 528 inputs/336 existing
+faults with all bytes unchanged, not a fault-free or saved-prefix sweep. No new
+genuine-ground socket, human, ranked-finish or complete bank acceptance. Clean
+pinned artifacts, two fresh independent reviews and deployment remain pending.
+
 ## Patch 1139 — retain eligible gravity status through stock ground takeoff
 
 **Problem:** The bounded earlier-use observer refuses every grounded entry,
