@@ -1,5 +1,28 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1139 — retain eligible gravity status through stock ground takeoff
+
+**Problem:** The bounded earlier-use observer refuses every grounded entry,
+including ordinary accepted stock jumps whose first displacement still depends
+on the carried gravity after the late half converges.
+
+**Change:** Derive the neutral stock takeoff from the same existing start step,
+accepted impulse, inner half-gravity and sanitization. Require the actual jump
+and retained clear-path/default-geometry proof; reject unsupported jump styles
+and contexts. Only the existing derived use status changes: no movement math,
+captured field, API, format, flag or tier changes. Other consumers remain partial.
+
+**Verified:** Candidate Windows/ARM64 native exit-zero runs pass 53 new controls,
+156 recent and all older checks. Actual coupled ground/jump/body/finish controls
+include observation-off, default, changed, blocked-default and held-refusal arms.
+Each platform's 60 full-content physics rows exactly match qualified P1136;
+zero new warnings. The same compiled eight-arm socket/cache/admission regression
+preserves all raw/profile/input/relative and total motion/status outputs. Original
+and unavailable-API controls are unchanged evidence reuse, not fresh runs. Initial
+fixture/prediction and retired-input wrapper failures remain retained. No genuine
+ground socket, human, ranked-finish or complete bank acceptance is claimed.
+Clean pinned artifact qualification, independent reviews and deployment pending.
+
 ## Patch 1136 — retain eligible gravity status with finite vertical air carriers
 
 **Problem:** The bounded earlier-air observer still refuses vertical carriers,
