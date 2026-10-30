@@ -15,7 +15,7 @@
 
 #include <ctype.h>
 #if defined(_WIN32)
-#include <windows.h>
+#include "winquake.h"
 #elif defined(__unix__) || defined(__APPLE__)
 #include <errno.h>
 #include <sys/stat.h>
@@ -3785,19 +3785,30 @@ void QCBUILTIN PF_fremove (pubprogfuncs_t *prinst, struct globalvars_s *pr_globa
  * reservation: callers must exclude external writers for their transaction. */
 void QCBUILTIN PF_fwritepathstatus (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
 {
+	extern qboolean com_homepathenabled;
 	const char *name = PR_GetStringOfs(prinst, OFS_PARM0), *fallback;
 	char path[MAX_OSPATH];
 	G_FLOAT(OFS_RETURN) = -1;
+	// Home-enabled writes can fall back to base: one inspected root cannot
+	// prove absence. The default FTESurf manifest disables home already.
+	if (com_homepathenabled)
+		return;
 	if (!QC_FixFileName(name, &name, &fallback) || QC_CfgChangeDenied(prinst, name)
 	    || QC_TasprojDenied(prinst, name, false) || !FS_SystemPath(name, FS_GAMEONLY, path, sizeof(path)))
 		return;
 #if defined(_WIN32)
 	{
-		wchar_t wide[MAX_OSPATH];
 		DWORD attributes, error;
-		if (!widen(wide, sizeof(wide), path))
-			return;
-		attributes = GetFileAttributesW(wide);
+		// Match VFSOS_Open: dedicated argv/paths are ANSI; NT clients use UTF8.
+#ifndef FTE_SDL
+		if (!WinNT)
+			attributes = GetFileAttributesA(path);
+		else
+#endif
+		{
+			wchar_t wide[MAX_OSPATH];
+			attributes = GetFileAttributesW(widen(wide, sizeof(wide), path));
+		}
 		if (attributes != INVALID_FILE_ATTRIBUTES)
 			G_FLOAT(OFS_RETURN) = 1;
 		else

@@ -15,8 +15,12 @@ command for deferred load. Cancel slot-owned work at teardown. Protect final,
 staged and recovery paths with SSQC-only named builtin fwritepathstatus: uncached
 metadata in the actual write path returns0 confirmed absent,1 occupied,-1 error.
 Keep filename/TAS sandboxing and conservative mounted-path/census checks; Windows
-attributes/POSIX lstat distinguish access errors from absence. Old engines refuse
-Open before writing. Gate retained finals/recovery stages before download and
+attributes/POSIX lstat distinguish access errors from absence. Home-enabled writes
+can fall back to another root, so the primitive deliberately returns unknown for
+explicit home overrides; the default FTESurf manifest disables home. Windows
+metadata follows the writer's same WinNT/FTE_SDL ANSI-or-UTF8/wide path selection.
+Neither owner home settings nor dedicated-server encoding are changed. Old engines
+refuse Open before writing. Gate retained finals/recovery stages before download and
 handoff: reuse a readable retained final, otherwise require both paths absent.
 This is not atomic reservation: exclude external writers across import/load.
 Other legacy replace-capable retention callers are unchanged. Restrict transport
@@ -44,7 +48,16 @@ to tick30. Observer failures (wrong zone fixture, guessed refusal and a rate-lim
 early command) and initial missing native dependency failure remain retained.
 Mandatory reader suite:949 checks/0 failed. These bounded arms do not claim a
 symlink/type matrix, concurrent-writer, crash-durability or all-map qualification.
-Repair review and deployment pending; human checks remain in lextest.md.
+QC/lifetime repair review cleared with the documented non-transactional limits.
+Further native review exposed home fallback and Windows dedicated ANSI/wide
+namespace mismatches. Actual native controls ACT stage destruction in both;
+corrected source preserves the base recovery behind a read-only explicit home,
+and preserves the hidden stage under a non-ASCII ANSI basedir while still
+installing/retaining/loading a byte-exact positive to tick30. Windows ANSI1252,
+actual list denial and write capability were measured; own modes/ACLs restored
+and all probe handles stopped. The ACL Unicode pipe and home-log/constructor
+observer failures remain retained, not feature passes. Native namespace review
+and delivery status are recorded separately; human checks remain in lextest.md.
 
 ## Patch 1142 — finish held collector and linked-account refresh work (backend only)
 
