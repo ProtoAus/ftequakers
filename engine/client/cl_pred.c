@@ -1230,6 +1230,14 @@ static void CL_SourcePracticeEntry(const vec3_t origin, const vec3_t gravity,
 	VectorMA(origin, -stair, gravity, out);
 }
 
+static float CL_SourcePracticeDelay(float tick, float scale)
+{
+	/* Whole physics poses arrive on real packet boundaries. At e.g. .75,
+	   a nominal20ms step can need a30ms packet gap: reserve one packet tick
+	   too, rather than clamping at the newest pose until the next arrives. */
+	return tick / scale + tick;
+}
+
 static qboolean CL_SourcePracticeSaveEpochChanged(float oldseq, float oldop,
 	float seq, float op)
 {
@@ -1348,7 +1356,7 @@ static void CL_UpdateSourcePracticeView(int seat, playerview_t *pv, qboolean nop
 		memset(s, 0, sizeof(*s));
 	}
 	interval = tick / scale;
-	target = cl.servertime - interval;
+	target = cl.servertime - CL_SourcePracticeDelay(tick, scale);
 	pack = &cl.inframes[sequence & UPDATE_MASK].packet_entities;
 	time = pack->servertime;
 	if (!(time >= 0 && time < 1e9f && target > -1e9f && target < 1e9f))

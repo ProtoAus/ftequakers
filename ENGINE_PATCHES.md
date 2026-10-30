@@ -8,7 +8,8 @@ captures repeat position in44.5% of moving samples; ordinary interpolation cvars
 do not remove the hold/rush pattern.
 
 **Change:** A bounded per-seat completed-pose ring supplies a camera-only delta,
-one scaled physics tick behind the packet clock, without future simulation.
+one scaled physics tick plus one real packet tick behind the packet clock,
+without future simulation.
 Preserve shared body/velocity and command globals; default predicted HUD/trail
 samples keep their pair (view-based fallback/projection and cursor rays follow
 the camera). Match the spherical teleport bound, preserve idle endpoints and
@@ -17,9 +18,11 @@ eye at its own position through the existing prop-inclusive collision query.
 `cl_source_practice_lerp 0` restores the classic camera. The existing nopred
 diagnostic now tolerates its absent replay command. No eligibility/physics change.
 
-**Verified/pending:** Seven literal-source groups and actual-header GCC syntax
-pass; retained earlier sources expose idle-resume, diagonal-warp and stair-dip
-failures. Roof arithmetic uses a controlled trace response, not a native geometry
+**Verified/pending:** Eight literal-source groups and actual-header GCC syntax
+pass; retained earlier sources expose idle-resume, diagonal-warp, stair-dip and
+packet-quantization freezes. The first camera-only socket check passed normal,
+0.1/0.25/0.5 but failed0.75; its actual target regression fails before the added
+packet guard and passes after. Roof arithmetic uses a controlled trace response, not a native geometry
 scene. Both independent source-review lineages retained; cancelled/rejected builds
 are not qualified. Final full build and same-image native camera/flag checks are
 pending; nothing deployed. Mode-change and short-zone-reset continuity remain
