@@ -12773,6 +12773,8 @@ static BuiltinList_t BuiltinList[] = {				//nq	qw		h2		ebfs
 	{"fs_randomhex",	PF_fs_randomhex,	0,		0,		0,		0,		D("string(float bytes)",	"FTESurf: `bytes` of OS entropy as lowercase hex, or \"\" if the OS refused. 1..64.")},
 	{"fs_randomf",		PF_fs_randomf,		0,		0,		0,		0,		D("float()",				"FTESurf: a uniform float in [0,1) from OS entropy, or -1 if the OS refused.")},
 	{"fexists",			PF_fexists,			0,		0,		0,		653,	D("float(string fname)",	"Returns true if it exists inside the default writable path. Use whichpack for greater portability.")},
+	{"fwritepathstatus", PF_fwritepathstatus, 0, 0, 0, 0, D("float(string fname)", "FTESurf: uncached write-path status: 0 confirmed absent, 1 occupied, -1 error. Not an atomic reservation; exclude external writers.")},
+
 	{"rmtree",			PF_rmtree,			0,		0,		0,		654,	D("float(string path)",		"Dangerous, but sandboxed to data/")},
 	{"walkmovedist",	PF_walkmovedist,	0,		0,		0,		655,	D("DEP float(float yaw, float dist, optional float settraceglobals)", "Attempt to walk the entity at a given angle for a given distance.\nif settraceglobals is set, the trace_* globals will be set, showing the results of the movement.\nThis function will trigger touch events."), true},
 	{"timescale",		PF_Fixme,			0,		0,		0,		656,	"DEP void(float f)" STUB},

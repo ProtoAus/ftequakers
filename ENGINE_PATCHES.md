@@ -5,14 +5,23 @@
 **Problem:** The revision service had no in-game collaboration consumer. Local
 projects needed explicit public sharing, current-map discovery and a safe path
 back into the TAS editor without confusing contributions with human-run evidence.
+Final review also found replace-capable automatic retention and Linux enumeration
+errors being mistaken for absence; neither permits replacing closed recovery bytes.
 
 **Change:** Add a Shared tab, explicit saved/retained-v3 upload, existing statements
 before body, bounded informational credit view and protected new-name download.
 Validate canonical hash/map/profile before install; use the ordinary client
 command for deferred load. Cancel slot-owned work at teardown. Protect final,
-staged and recovery paths using metadata plus fresh exact enumeration. Restrict
-transport to the fixed public origin or a bounded loopback test listener. Native
-pin, physics, receipt formats, human admission and Build number are unchanged.
+staged and recovery paths with SSQC-only named builtin fwritepathstatus: uncached
+metadata in the actual write path returns0 confirmed absent,1 occupied,-1 error.
+Keep filename/TAS sandboxing and conservative mounted-path/census checks; Windows
+attributes/POSIX lstat distinguish access errors from absence. Old engines refuse
+Open before writing. Gate retained finals/recovery stages before download and
+handoff: reuse a readable retained final, otherwise require both paths absent.
+This is not atomic reservation: exclude external writers across import/load.
+Other legacy replace-capable retention callers are unchanged. Restrict transport
+to the fixed public origin or a bounded loopback test listener. Native pin/tag now
+required; physics, receipt formats, human admission and Build remain unchanged.
 
 **Verified:** QuakeC builds with zero new warnings (two unchanged client F333).
 Real isolated native HTTP controls prove byte-exact POST/download and tape load
@@ -23,7 +32,19 @@ wrong-hash and nonportable bodies are refused; actual teardown prevents late
 install/next upload. Credit bounds retain Open, retained child uploads report its
 parent, and endpoint admission has acting negative/positive controls. No physical
 owner signing, human UI/feel, verified time or production deployment is inferred.
-Independent final review and deployment pending; human checks remain in lextest.md.
+Final filesystem review ACTED both Windows retention counterexamples in the
+frozen code. Repaired full native/QC preview has zero new Windows warning
+fingerprints against P1134; Linux gl/server/plugin Full preview completes after
+restoring its last-working read-only dependency input. Windows subject preserves
+recovery stage/unreadable retained final and still loads/retains an exact positive
+to tick30. New QC on old native refuses before writes. POSIX control ACTS hidden
+stage consumption under proved list denial/write permission/cache1; new native
+preserves it, refuses traversal-denial errors and loads/retains an exact positive
+to tick30. Observer failures (wrong zone fixture, guessed refusal and a rate-limited
+early command) and initial missing native dependency failure remain retained.
+Mandatory reader suite:949 checks/0 failed. These bounded arms do not claim a
+symlink/type matrix, concurrent-writer, crash-durability or all-map qualification.
+Repair review and deployment pending; human checks remain in lextest.md.
 
 ## Patch 1142 — finish held collector and linked-account refresh work (backend only)
 
