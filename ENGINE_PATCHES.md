@@ -1,5 +1,41 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1129 — attribute retained airborne gravity use to its source
+
+**Problem:** A persistent player gravity profile can outlive its admission;
+current QC values alone do not identify the native cached input actually used.
+
+**Change:** Native runtime-only property/cache provenance and an optional trusted
+VM bridge. Observe only demonstrably changed, undiscarded airborne full-walk
+finish-gravity output after the final accepted slide projection. Compare matching
+three-component default-gravity output through the same velocity checks and
+accepted plane; movement arithmetic and order stay unchanged. Exceptional values
+follow the same sanitization/comparison rather than a categorical exclusion;
+identical exceptional outputs do not manufacture use.
+Apply the existing eligibility policy to the selected source before frame end.
+Explicit equal-value reauthoring replaces provenance, never earned body debt.
+Pair native TAS memory checkpoints and invalidate lost provenance. No new QC
+entity/evidence fields, file/network formats, flags, tiers or movement arithmetic.
+This is partial consumer coverage, not full gravity/body/config/world closure.
+
+**Verified:** Local Windows/ARM native builds, 58 new/all prior selftests and
+all60 named physics rows equal to the qualified predecessor on each platform,
+including acting prop/wrapped branches. Identical-QC dedicated-socket controls
+cover current/expired/frozen-bad/unknown sources, stale caches, sticky debt,
+native TAS restore and no-use/release. Same-QC exceptional-value controls distinguish
+surviving sanitized/cache-overflow output from held or identically clamped output.
+An original-observer slide control exposed
+a projected-away false charge; corrected status stays clean with identical motion
+and an acting retained-effect counterpart. Historical qualified-world pin2/pin7
+verifiers PASS; all58 clock-input cases match expected verdicts/reasons on both
+platforms. Reader949 and the complete527REC/167VIEW corpus introduce no faults;
+pre-existing faults remain explicit. Two original whole-feature reviews blocked
+the slide fault; a subsequent review blocked the exceptional-value exclusion.
+Both are corrected; source is gated on two fresh whole-feature reviews
+and clean publication/promotion. These are local qualifications, not claims of
+current-world legacy, full consumer-bank, human-proof, Build or release coverage.
+Delivery provenance is recorded separately. See QC tools/p1129-claim.md.
+
 ## Patch 1128 — skip immediate status for unchanged speed modifiers
 
 **Problem:** ModifySpeed marks inherited status even for equal/neutral effective

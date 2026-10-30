@@ -389,6 +389,9 @@ void PM_AddTouchedEnt (int num);
 //Dispatched from the top of PM_PlayerMove when movevars.physicsmode is
 //PHYSMODE_SOURCE; QuakeWorld's path is otherwise untouched.
 void PMSrc_PlayerMove (float gamespeed);
+// P1129: command-local observer, not carried/captured movement state.
+void PMSrc_BankGravityBegin(qboolean enabled);
+qboolean PMSrc_BankGravityEnd(void);
 float PMSrc_MaxSpeedForInputs (int pm_type, int buttons, float stamina);
 void PMSrc_Init (void);		//registers the pm_selftest command
 

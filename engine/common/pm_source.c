@@ -184,6 +184,22 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
    movevars.ticrate -- named for symmetry with pmove.c's `frametime`. */
 static float pms_frametime;
 
+// P1129: armed only around a real server move; never saved or exposed as input.
+static qboolean pms_bankgravity_observe, pms_bankgravity_used;
+
+void PMSrc_BankGravityBegin(qboolean enabled)
+{
+	pms_bankgravity_observe = enabled;
+	pms_bankgravity_used = false;
+}
+
+qboolean PMSrc_BankGravityEnd(void)
+{
+	qboolean used = pms_bankgravity_used;
+	pms_bankgravity_observe = pms_bankgravity_used = false;
+	return used;
+}
+
 static vec3_t pms_forward, pms_right, pms_up;
 
 /* The STANDING hull, captured from the entity on entry.  The duck hull is
@@ -643,6 +659,39 @@ static void PMSrc_FinishGravity (void)
 	pmove.velocity[2] -= (ent_gravity * movevars.gravity * pms_frametime * 0.5f);
 
 	PMSrc_CheckVelocity ();
+}
+
+// P1129: compare only the undiscarded full-walk finish, not speculative probes.
+static qboolean PMSrc_BankGravityFinishChanged(const vec3_t before, const vec3_t after, const vec3_t projection)
+{
+	vec3_t normal;
+	float maxvel, d;
+	int i;
+	if (!pms_bankgravity_observe || pmove.onground ||
+		(pms_slidetick & PMSLIDE_NOGRAVITY) || pmove.waterjumptime ||
+		!movevars.entgravity || movevars.entgravity == 1 || pms_frametime <= 0)
+		return false;
+	// Shadow only: match FinishGravity, CheckVelocity and the accepted tail.
+	VectorCopy(before, normal);
+	normal[2] -= (1.0f * movevars.gravity * pms_frametime * 0.5f);
+	maxvel = movevars.maxvelocity;
+	if (maxvel <= 0) maxvel = 3500;
+	for (i = 0; i < 3; ++i)
+	{
+		if (normal[i] != normal[i]) normal[i] = 0;
+		if (normal[i] > maxvel) normal[i] = maxvel;
+		else if (normal[i] < -maxvel) normal[i] = -maxvel;
+	}
+	if (projection)
+	{
+		d = DotProduct(normal, projection);
+		VectorMA(normal, -d, projection, normal);
+	}
+	// Matched exceptional outputs are not a surviving difference either.
+	for (i = 0; i < 3; ++i)
+		if (normal[i] != after[i] && !(isnan(normal[i]) && isnan(after[i])))
+			return true;
+	return false;
 }
 
 /* ------------------------------------------------------- accel / friction */
@@ -1601,7 +1650,7 @@ pm_ticrate 0.015 can open at most 52.5 units of gap.
 */
 #define PMSRC_SLIDE_STICK_DIST	64.0f
 
-static void PMSrc_StuckGround (void)
+static qboolean PMSrc_StuckGround (vec3_t bankplane)
 {
 	trace_t	tr;
 	vec3_t	end;
@@ -1611,13 +1660,15 @@ static void PMSrc_StuckGround (void)
 	end[2] -= PMSRC_SLIDE_STICK_DIST;
 	tr = PMSrc_TraceHull (pmove.origin, end);
 	if (tr.fraction >= 1.0f || tr.startsolid || !(PMSrc_SlideFlagsOfTrace (&tr) & PMSLIDE_STAYON))
-		return;
+		return false;
 
 	/* cpp:2286-2291: onto the surface, reject the velocity normal to it, seat. */
 	VectorCopy (tr.endpos, pmove.origin);
 	d = DotProduct (pmove.velocity, tr.plane.normal);
 	VectorMA (pmove.velocity, -d, tr.plane.normal, pmove.velocity);
 	PMSrc_StayOnGround ();
+	VectorCopy(tr.plane.normal, bankplane);
+	return true;
 }
 
 /*
@@ -3200,7 +3251,8 @@ The order here IS the physics.  Do not reorder.
 */
 static void PMSrc_FullWalkMove (void)
 {
-	qboolean wasonground = pmove.onground;
+	qboolean wasonground = pmove.onground, bankfinish_projected = false;
+	vec3_t bankfinish_before, bankfinish_plane;
 
 	if (pmove.waterlevel < 2)
 		PMSrc_StartGravity ();
@@ -3274,6 +3326,7 @@ static void PMSrc_FullWalkMove (void)
 		PMSrc_StaminaSpend (movevars.staminalandcost > 0 ?
 			movevars.staminalandcost : PMSRC_STAMINA_LAND_COST);
 
+	VectorCopy(pmove.velocity, bankfinish_before);
 	if (pmove.waterlevel < 2)
 		PMSrc_FinishGravity ();
 
@@ -3295,7 +3348,10 @@ static void PMSrc_FullWalkMove (void)
 	/* FTESurf Patch 280, cpp:2125-2129: stayonslide.  Not after a portal, for
 	   the reason StayOnGround is not (Patch 203). */
 	if ((pms_slidetick & PMSLIDE_STAYON) && !pms_portalcrossed)
-		PMSrc_StuckGround ();
+		bankfinish_projected = PMSrc_StuckGround (bankfinish_plane);
+	if (pmove.waterlevel < 2 && PMSrc_BankGravityFinishChanged(bankfinish_before, pmove.velocity,
+		bankfinish_projected ? bankfinish_plane : NULL))
+		pms_bankgravity_used = true;
 }
 
 /* ------------------------------------------------------------ stuck check */
@@ -4195,6 +4251,158 @@ static float PMSrc_TestJumpHeight (float drift)
 {
 	float v = drift + movevars.gravity * 0.5f * pms_frametime;
 	return (v * v) / (2 * movevars.gravity);
+}
+
+static void PMSrc_TestBankGravity(void)
+{
+	static const struct
+	{
+		const char *name;
+		float profile, gravity, dt, before;
+		int gate;
+		qboolean changed;
+	} cases[] = {
+		{"P1129 half finish used", .5f, 800, .015f, 0, 0, true},
+		{"P1129 zero means default", 0, 800, .015f, 0, 0, false},
+		{"P1129 one is default", 1, 800, .015f, 0, 0, false},
+		{"P1129 zero base has no property work", .5f, 0, .015f, 17, 0, false},
+		{"P1129 zero dt has no work", .5f, 800, 0, 17, 0, false},
+		{"P1129 rounded away", 1.00000011920928955f, 800, .015f, 3000, 0, false},
+		{"P1129 velocity clamp discards work", .5f, 800, .015f, -3500, 0, false},
+		{"P1129 grounded overwrite discards work", .5f, 800, .015f, 0, 1, false},
+		{"P1129 disabled gravity", .5f, 800, .015f, 0, 2, false},
+		{"P1129 waterjump skip", .5f, 800, .015f, 0, 4, false},
+		{"P1129 unarmed observer", .5f, 800, .015f, 0, 8, false},
+		{"P1129 double finish used", 2, 800, .015f, 0, 0, true}
+	};
+	static const struct
+	{
+		const char *name;
+		float profile, gravity, before, result;
+		qboolean changed;
+	} exceptional[] = {
+		{"NaN surviving finish", NAN, 800, 0, 0, true},
+		{"positive infinity surviving finish", INFINITY, 800, 0, -3500, true},
+		{"negative infinity surviving finish", -INFINITY, 800, 0, 3500, true},
+		{"NaN identical sanitized finish", NAN, 800, 6, 0, false},
+		{"infinity identical saturation", INFINITY, 800, -3500, -3500, false},
+		{"zero world NaN surviving finish", NAN, 0, 5, 0, true},
+		{"zero world infinity surviving finish", INFINITY, 0, 5, 0, true},
+		{"zero world infinity identical finish", INFINITY, 0, 0, 0, false},
+		{"NaN world identical finish", .5f, NAN, 5, 0, false},
+		{"infinite world identical saturation", .5f, INFINITY, 0, -3500, false},
+		{"opposite infinite world finish", -.5f, INFINITY, 0, 3500, true}
+	};
+	vec3_t velocity, origin, probe, bankbefore;
+	movevars_t mv = movevars;
+	float ft = pms_frametime, wjt = pmove.waterjumptime;
+	int slide = pms_slidetick, i;
+	qboolean ground = pmove.onground;
+	qboolean observe = pms_bankgravity_observe, used = pms_bankgravity_used;
+	VectorCopy(pmove.velocity, velocity);
+	VectorCopy(pmove.origin, origin);
+	for (i = 0; i < countof(cases); ++i)
+	{
+		movevars.entgravity = cases[i].profile;
+		movevars.gravity = cases[i].gravity;
+		movevars.maxvelocity = 3500;
+		pms_frametime = cases[i].dt;
+		pmove.onground = !!(cases[i].gate & 1);
+		pms_slidetick = (cases[i].gate & 2) ? PMSLIDE_NOGRAVITY : 0;
+		pmove.waterjumptime = (cases[i].gate & 4) ? 1 : 0;
+		VectorSet(pmove.velocity, 0, 0, cases[i].before);
+		VectorCopy(pmove.velocity, bankbefore);
+		PMSrc_BankGravityBegin(!(cases[i].gate & 8));
+		PMSrc_FinishGravity();
+		if (pmove.onground) pmove.velocity[2] = 0;
+		if (PMSrc_BankGravityFinishChanged(bankbefore, pmove.velocity, NULL))
+			pms_bankgravity_used = true;
+		PMSrc_Check(cases[i].name, PMSrc_BankGravityEnd(), cases[i].changed, 0);
+		PMSrc_Check("P1129 end clears command observation", PMSrc_BankGravityEnd(), 0, 0);
+	}
+	PMSrc_BankGravityBegin(true);
+	PMSrc_Check("P1129 no actual tick", PMSrc_BankGravityEnd(), 0, 0);
+	PMSrc_BankGravityBegin(true);
+	VectorSet(probe, 0, 0, 0);
+	PMSrc_NextTickVelocity(probe, .015f, 800, .5f, probe);
+	PMSrc_Check("P1129 probe actually computes gravity", probe[2], -3, .0001f);
+	PMSrc_Check("P1129 probe is not real use", PMSrc_BankGravityEnd(), 0, 0);
+	for (i = 0; i < countof(exceptional); ++i)
+	{
+		char name[128];
+		movevars.entgravity = exceptional[i].profile;
+		movevars.gravity = exceptional[i].gravity;
+		movevars.maxvelocity = 3500;
+		pms_frametime = .015f;
+		pmove.onground = false;
+		pmove.waterjumptime = 0;
+		pms_slidetick = 0;
+		VectorSet(pmove.velocity, 0, 0, exceptional[i].before);
+		VectorCopy(pmove.velocity, bankbefore);
+		PMSrc_BankGravityBegin(true);
+		PMSrc_FinishGravity();
+		Q_snprintfz(name, sizeof(name), "P1129 %s output", exceptional[i].name);
+		PMSrc_Check(name, pmove.velocity[2], exceptional[i].result, 0);
+		if (PMSrc_BankGravityFinishChanged(bankbefore, pmove.velocity, NULL))
+			pms_bankgravity_used = true;
+		Q_snprintfz(name, sizeof(name), "P1129 %s used", exceptional[i].name);
+		PMSrc_Check(name, PMSrc_BankGravityEnd(), exceptional[i].changed, 0);
+	}
+	{
+		float source = -3e38f, selected;
+		movevars.gravity = 800;
+		selected = source * movevars.gravity;
+		PMSrc_Check("P1129 finite property overflows selection", isfinite(source) && !isfinite(selected), 1, 0);
+		movevars.entgravity = selected / movevars.gravity;
+		VectorSet(pmove.velocity, 0, 0, 0);
+		VectorCopy(pmove.velocity, bankbefore);
+		PMSrc_BankGravityBegin(true);
+		PMSrc_FinishGravity();
+		PMSrc_Check("P1129 overflowed selection actual output", pmove.velocity[2], 3500, 0);
+		if (PMSrc_BankGravityFinishChanged(bankbefore, pmove.velocity, NULL))
+			pms_bankgravity_used = true;
+		PMSrc_Check("P1129 overflowed selection surviving finish", PMSrc_BankGravityEnd(), 1, 0);
+	}
+	// Numeric tail seam: real finish plus the existing accepted projection.
+	// No world/trace is supplied by this selftest.
+	for (i = 0; i < 3; ++i)
+	{
+		float d;
+		movevars.entgravity = .5f;
+		movevars.gravity = 800;
+		movevars.maxvelocity = 3500;
+		if (i == 2) movevars.gravity = movevars.maxvelocity = INFINITY;
+		pms_frametime = .015f;
+		pmove.onground = false;
+		pmove.waterjumptime = 0;
+		pms_slidetick = 0;
+		VectorSet(probe, i == 1 ? .6f : 0, 0, i == 1 ? .8f : 1);
+		VectorSet(pmove.velocity, 100, 0, 0);
+		VectorCopy(pmove.velocity, bankbefore);
+		PMSrc_BankGravityBegin(true);
+		PMSrc_FinishGravity();
+		d = DotProduct(pmove.velocity, probe);
+		VectorMA(pmove.velocity, -d, probe, pmove.velocity);
+		if (i == 2)
+			PMSrc_Check("P1129 exceptional projection actually acted",
+				isnan(pmove.velocity[0]) && isnan(pmove.velocity[1]) && isnan(pmove.velocity[2]), 1, 0);
+		else PMSrc_Check(i ? "P1129 slope projection actually acted" : "P1129 flat projection actually acted",
+			pmove.velocity[2], i ? -49.0800018f : 0, .0001f);
+		if (PMSrc_BankGravityFinishChanged(bankbefore, pmove.velocity, probe))
+			pms_bankgravity_used = true;
+		PMSrc_Check(i == 2 ? "P1129 identical exceptional projection discarded" :
+			(i ? "P1129 projected tangent finish retained" : "P1129 projected flat finish discarded"),
+			PMSrc_BankGravityEnd(), i == 1 ? 1 : 0, 0);
+	}
+	movevars = mv;
+	VectorCopy(velocity, pmove.velocity);
+	VectorCopy(origin, pmove.origin);
+	pms_frametime = ft;
+	pmove.waterjumptime = wjt;
+	pmove.onground = ground;
+	pms_slidetick = slide;
+	pms_bankgravity_observe = observe;
+	pms_bankgravity_used = used;
 }
 
 static void PMSrc_SelfTest_f (void)
@@ -5669,6 +5877,8 @@ static void PMSrc_SelfTest_f (void)
 		VectorCopy(oldforward, pms_forward);
 		pms_haveportals = oldportals;
 	}
+
+	PMSrc_TestBankGravity();
 
 	/* --- restore -------------------------------------------------------- */
 	movevars = savemv;

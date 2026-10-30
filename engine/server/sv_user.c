@@ -82,6 +82,7 @@ static void SV_TASInvalidate(client_t *cl);
 
 void SV_FS_ResetFieldCaches(void)
 {
+	SV_BankGravityClear();
 	SV_TASRewindClear();
 	memset(evalc_tas, 0, sizeof(evalc_tas));
 	memset(&evalc_lpdob,     0, sizeof(evalc_lpdob));		//FTESurf Patch 802
@@ -2601,6 +2602,7 @@ void SVQW_Spawn_f (void)
 			if (split->spawned)	//minimal setup
 			{
 				split->entgravity = ent->xv->gravity;
+				SV_BankGravitySelect(split);
 				split->maxspeed = ent->xv->maxspeed;
 #ifdef HEXEN2
 				split->playerclass = ent->xv->playerclass;
@@ -6466,6 +6468,8 @@ void SV_SetUpClientEdict (client_t *cl, edict_t *ent)
 
 
 	ent->xv->gravity = cl->entgravity = 1.0;
+	SV_BankGravityBind(ent, 0, 0, 0);
+	SV_BankGravitySelect(cl);
 	ent->xv->maxspeed = cl->maxspeed = sv_maxspeed.value;
 	ent->v->movetype = MOVETYPE_NOCLIP;
 
@@ -6960,6 +6964,7 @@ static void SVNQ_Spawn_f (void)
 	else if (host_client->istobeloaded)	//minimal setup
 	{
 		host_client->entgravity = ent->xv->gravity*sv_gravity.value;
+		SV_BankGravitySelect(host_client);
 		host_client->maxspeed = ent->xv->maxspeed;
 	}
 	else
@@ -8470,6 +8475,7 @@ static void SV_PublishCmdContext(const usercmd_t *ucmd, int kind, float totalmse
 	if (g->input_cmd_offset_msec) *g->input_cmd_offset_msec = kind ? offsetmsec : 0;
 }
 
+#include "sv_bankgravity.inc"
 #include "sv_tas_rewind.inc"
 #include "sv_tas_plan.inc"
 
@@ -9204,8 +9210,11 @@ if (sv_player->v->health > 0 && before && !after )
 }
 #else
 	SV_HeldSourceBoundary(host_client, HELD_MOVER_ENTER);
+	PMSrc_BankGravityBegin(!held && movevars.physicsmode == PHYSMODE_SOURCE && SV_BankGravityEnabled());
 	PM_PlayerMove (sv.gamespeed);
 	SV_HeldSourceBoundary(host_client, HELD_MOVER_EXIT);
+	if (PMSrc_BankGravityEnd())
+		SV_BankGravityUsed(host_client);
 #endif
 	if (tas_step)
 	{

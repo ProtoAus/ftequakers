@@ -15,6 +15,7 @@ typedef struct
 	qboolean jumpheld;
 	vec3_t origin, oldorigin, velocity, angles, viewangles, mins, maxs, viewofs, gravitydir, basevelocity;
 	float teleporttime, gravity, entgravity, waterlevel, watertype;
+	sv_bankgravity_source_t gravitybank_property, gravitybank_cached;
 	float forceduck, momlimit, momcool, momslide;
 	int flags, pmflags;
 	sv_tas_input_t input; // immutable availability; not a historical live-counter key
@@ -139,6 +140,8 @@ float SV_TASRewind(edict_t *e, unsigned int slot, unsigned int token, unsigned i
 		s->pmflags = (int)e->xv->pmove_flags & (PMF_DUCKED | PMF_LADDER);
 		s->teleporttime = max(0, e->v->teleport_time - sv.time);
 		s->gravity = e->xv->gravity; s->entgravity = cl->entgravity;
+		s->gravitybank_property = cl->gravitybank_property;
+		s->gravitybank_cached = cl->gravitybank_cached;
 		s->waterlevel = e->v->waterlevel; s->watertype = e->v->watertype;
 		f = SV_TASRewindField(e, "run_basevelocity", ev_vector);
 		if (f) VectorCopy(f->_vector, s->basevelocity);
@@ -182,6 +185,8 @@ float SV_TASRewind(edict_t *e, unsigned int slot, unsigned int token, unsigned i
 	e->xv->pmove_flags = ((int)e->xv->pmove_flags & ~(PMF_DUCKED | PMF_LADDER)) | s->pmflags;
 	e->v->teleport_time = s->teleporttime > 0 ? sv.time + s->teleporttime : 0;
 	e->xv->gravity = s->gravity; cl->entgravity = s->entgravity;
+	cl->gravitybank_property = s->gravitybank_property;
+	cl->gravitybank_cached = s->gravitybank_cached;
 	e->v->waterlevel = s->waterlevel; e->v->watertype = s->watertype;
 	f = SV_TASRewindField(e, "run_basevelocity", ev_vector);
 	if (f) VectorCopy(s->basevelocity, f->_vector);

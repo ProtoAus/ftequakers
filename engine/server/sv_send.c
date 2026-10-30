@@ -3209,6 +3209,7 @@ void SV_UpdateToReliableMessages (void)
 					}
 					host_client->entgravity = curgrav;
 				}
+				SV_BankGravitySelect(host_client);
 
 				if (host_client->maxspeed != curspeed)
 				{	//MSVC can really suck at times (optimiser bug)

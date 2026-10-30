@@ -462,6 +462,15 @@ enum serverprotocols_e
 
 #include "sv_held_coverage.h"
 
+// P1129: working provenance only. Never a network/entity/save/record field.
+typedef struct
+{
+	int player, attempt;
+	float bad;
+	int userid, spawncount;
+	float value; // raw property value, or the exact selected absolute cache value
+} sv_bankgravity_source_t;
+
 typedef struct client_s
 {
 	client_conn_state_t	state;
@@ -500,6 +509,7 @@ typedef struct client_s
 
 	float			maxspeed;			// localized maxspeed
 	float			entgravity;			// localized ent gravity
+	sv_bankgravity_source_t gravitybank_property, gravitybank_cached;
 
 	int viewent;		//fake the entity positioning.
 	int clientcamera;	//cache for dp_sv_clientcamera.
@@ -1476,6 +1486,9 @@ void SV_PostRunCmd(void);
 void SV_HeldFrameBoundary(held_boundary_t boundary);
 void SV_HeldEffectAll(void);
 void SV_RunCmdCleanup(void);
+void SV_BankGravityClear(void);
+void SV_BankGravityBind(edict_t *body, int player, int attempt, float bad);
+void SV_BankGravitySelect(client_t *client);
 void SV_TASRewindClear(void);
 float SV_TASRewind(edict_t *e, unsigned int slot, unsigned int token, unsigned int op);
 void SV_TASInput(edict_t *e, unsigned int slot, unsigned int token, unsigned int field, vec3_t out);

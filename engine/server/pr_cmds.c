@@ -11547,6 +11547,14 @@ static void QCBUILTIN PF_fs_randomf (pubprogfuncs_t *prinst, struct globalvars_s
 	G_FLOAT(OFS_RETURN) = (float)(v >> 8) / 16777216.0f;
 }
 
+// P1129: trusted VM working metadata, no network/file/evidence transport.
+static void QCBUILTIN PF_bank_gravity_source(pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
+{
+	if (prinst != svprogfuncs || prinst->callargc != 4) return;
+	SV_BankGravityBind(G_EDICT(prinst, OFS_PARM0), G_INT(OFS_PARM1),
+		G_INT(OFS_PARM2), G_FLOAT(OFS_PARM3));
+}
+
 // P1061: bounded VM-only handles, not a string/file checkpoint parser.
 static void QCBUILTIN PF_tas_rewind(pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
 {
@@ -11589,6 +11597,7 @@ static BuiltinList_t BuiltinList[] = {				//nq	qw		h2		ebfs
 	{"tas_input", PF_tas_input, 0, 0, 0, 0, D("vector(entity player, float slot, float token, float field)", "TAS checkpoint input: availability0, moves1, signed angle words2, compact jump/duck/walk mask3. Not hardware evidence or file import.")},
 	{"tas_tape", PF_tas_tape, 0, 0, 0, 0, D("float(entity player, float op, float a, float b, vector moves, vector angles, float buttons)", "TAS-only movement authoring: cancel0, validate1, preflight2, begin3, put4, arm5, status6, plan-cap8, plan-set9. Native owns presets; no transport/world restore or human eligibility.")},
 	{"tas_rewind", PF_tas_rewind, 0, 0, 0, 0, D("float(entity player, float slot, float token, float op)", "TAS-only bounded native movement checkpoints: capture0, probe1, apply2. Transient map/connection-bound handles; no world/counter or human-proof restore.")},
+	{"bank_gravity_source", PF_bank_gravity_source, 0, 0, 0, 0, D("void(entity player, entity source, int attempt, float bad)", "Server VM runtime gravity provenance. No entity fields, file persistence or evidence transport.")},
 	{"fixme",			PF_Fixme,			0,		0,		0,		0,	D("void()", "Some builtin that should never be called. Ends the game with some weird message.")},
 
 #ifndef SERVERONLY
