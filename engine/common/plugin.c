@@ -375,6 +375,7 @@ static plugin_t *Plug_Load(const char *file)
 	plugin_t *newplug;
 	int nlen = strlen(file);
 	qboolean success = false;
+	qboolean binaryonly = (COM_CheckParm("-pluginrootonly") != 0);
 	qboolean (QDECL *initfunction)(plugcorefuncs_t*);
 	dllfunction_t funcs[] =
 	{
@@ -403,6 +404,9 @@ static plugin_t *Plug_Load(const char *file)
 	//[basedir|binroot]fteplug_%s[_cpu][.so]
 	for (i = 0; i < countof(prefixes) && !newplug->lib; i++)
 	{
+		// P1132: apply before any dlopen, including startup/internal fallbacks.
+		if (binaryonly && prefixes[i] != FS_BINARYPATH)
+			continue;
 		//if the name matches a postfix then just go with that
 		for (j = 0; j < countof(postfixes); j++)
 		{
@@ -1485,9 +1489,12 @@ static void Plug_Load_f(void)
 void Plug_Initialise(qboolean fromgamedir)
 {
 	char sys[MAX_OSPATH], disp[MAX_OSPATH];
+	qboolean binaryonly = (COM_CheckParm("-pluginrootonly") != 0);
 
 	if (!plugfuncs)
 	{
+		if (binaryonly)
+			Con_Printf("Plugin search: binary-directory only\n");
 		Cvar_Register(&plug_sbar, "plugins");
 		Cvar_Register(&plug_loaddefault, "plugins");
 
@@ -1514,7 +1521,7 @@ void Plug_Initialise(qboolean fromgamedir)
 				Con_DPrintf("Loading plugins from \"%s\"\n", disp);
 				Sys_EnumerateFiles(sys, PLUGINPREFIX"*" ARCH_CPU_POSTFIX ARCH_DL_POSTFIX, Plug_EnumeratedRoot, NULL, NULL);
 			}
-			if (FS_DisplayPath("", FS_LIBRARYPATH, disp, sizeof(disp)) && FS_SystemPath("", FS_BINARYPATH, sys, sizeof(sys)))
+			if (!binaryonly && FS_DisplayPath("", FS_LIBRARYPATH, disp, sizeof(disp)) && FS_SystemPath("", FS_BINARYPATH, sys, sizeof(sys)))
 			{
 				Con_DPrintf("Loading plugins from \"%s\"\n", disp);
 				Sys_EnumerateFiles(sys, PLUGINPREFIX"*" ARCH_CPU_POSTFIX ARCH_DL_POSTFIX, Plug_EnumeratedRoot, NULL, NULL);
@@ -1528,7 +1535,8 @@ void Plug_Initialise(qboolean fromgamedir)
 		{
 			Plug_Load(staticplugins[u].name);
 		}
-		PM_EnumeratePlugins(Plug_Load_Update);
+		if (!binaryonly)
+			PM_EnumeratePlugins(Plug_Load_Update);
 	}
 }
 

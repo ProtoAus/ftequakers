@@ -6,30 +6,29 @@
 joins admitted legal-start inputs to a fresh native finish. Headless rendering's
 fixed 100 ms sleep also prevents normal-rate TAS replay within its wall allowance.
 
-**Change:** Add a bounded 0..1000 ms headless sleep cvar, retaining default 100.
-The opt-in verifier uses normal frame limits at zero. New operator-only aarch64
-CLI freezes project/runtime bytes, uses fresh exclusive VFS roots and colocated
-native images, verifies the actual mapped HL2 plugin, and joins SSQC's developer-
-log reader/placement binding to the recording's native track/leg and mover clock.
-Preserve real mode/map rules, entity fixes and model-side collision absence pins.
-Require the exact consumed inputs and a natural closed finish; ignore claimed
-checkpoint/time and unused tail. Bound native memory/files and both peers' output;
-register ownership immediately and reap on failure/cancellation. No movement,
-recording format, human admission, queue, board writer or Build-number change.
-The standalone receipt requires later trusted queue approval for TAS promotion.
+**Change:** Add opt-in bounded headless pacing (default still 100 ms) and native
+`-pluginrootonly`, enforcing binary-directory-only FTE plugin loads from startup.
+An operator-only aarch64 CLI freezes admitted bytes into exclusive VFS roots,
+checks effective images and joins SSQC's reader/placement binding to the closed
+recording's track/leg, consecutive mover clock and exact consumed input prefix.
+Preserve real rules, entity fixes, .ent/.edo and model collision absence pins;
+claimed states/times and unused tail are not authority. Bound native memory/files
+and both peers' output. Signals notify rather than throw into ownership cleanup.
+No movement, recording format, human admission, queue, board or Build change;
+trusted queue approval is still required for TAS promotion. See tools/tasverify.md.
 
-**Verified:** 30 focused tests on Pi, including actual producer file limits and
-post-spawn failure controls. Native GL/server/HL2 builds; zero new QC warnings
-(SSQC/menu zero, two existing untouched CSQC F333 property-227 warnings). Corrected
-CLI and actual QC produce a fresh 342-tick native finish on one real map with
-private fixture zones. Acting unfinished, shifted-start and moved-END controls
-HOLD; SIGTERM after native binding HOLDs and reaps both peers. Default-100 versus
-registered-zero throttle control retains ordinary sleeping behavior. Reader949
-regression and unchanged-reader 527-REC corpus retain the existing 328 fault files;
-not a fault-free corpus or human-proof claim. Independent fix re-review and clean
-publication/deployment remain pending at this checkpoint. No production TAS board,
-map-corpus qualification or unsupported tick-rate claim. See tools/tasverify.md
-in the QC repository for the operator contract.
+**Verified:** 33 Pi tests include producer limits, both post-spawn failures,
+.edo appearance and SIGTERM arriving while two live children are being reaped.
+Native GL/server/HL2 builds have no new warnings (five baseline server unused
+functions); QC has SSQC/menu zero and two untouched CSQC F333 property227 warnings.
+Fresh CLI PASS342 on one real map with private fixture zones; acting unfinished,
+shifted-start, moved-END and after-binding cancellation all HOLD/reap. An owned
+outside-binary plugin executes normally but not in confined mode, with positive
+native policy ACK. Default-100/registered-zero throttle control preserves defaults.
+Reader949 passes; unchanged-reader 527-REC corpus retains 328 existing fault files,
+not fault-free or human proof. R2 receipt lens clear; isolated cancellation/plugin
+fix re-review, clean publication and deployment pending at this checkpoint. No
+production TAS board, map-corpus qualification or unsupported tick-rate claim.
 
 ## Patch 1131 — retain gravity-source status through earlier accepted air motion
 
