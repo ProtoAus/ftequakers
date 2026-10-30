@@ -1217,10 +1217,26 @@ typedef struct
 	qboolean blocked;
 	unsigned int sequence, effects;
 	const void *world;
-	float scale, tick, packettime, warpack, saveseq;
+	float scale, tick, packettime, saveop, saveseq;
 } sourcepracticelerp_t;
 
 static sourcepracticelerp_t sourcepractice[MAX_SPLITS];
+
+static void CL_SourcePracticeEntry(const vec3_t origin, const vec3_t gravity,
+	float stair, vec3_t out)
+{
+	/* Enter from the already presented feet, including the legacy stair
+	   correction that the interpolated view will no longer apply again. */
+	VectorMA(origin, -stair, gravity, out);
+}
+
+static qboolean CL_SourcePracticeSaveEpochChanged(float oldseq, float oldop,
+	float seq, float op)
+{
+	/* Existing STAT_FS_SLOP: SLOP_SAVED=1 is metadata, not a body warp.
+	   WOPACK also advances for refused/non-spatial requests: do not use it. */
+	return (oldseq != seq || oldop != op) && op != 1;
+}
 
 /* Kept separate from the native adapter so the exact source can be exercised
    without simulating a second mover or rebuilding an interpolation model. */
@@ -1316,9 +1332,10 @@ static void CL_UpdateSourcePracticeView(int seat, playerview_t *pv, qboolean nop
 	sourcepracticelerp_t *s = &sourcepractice[seat];
 	packet_entities_t *pack;
 	entity_state_t *ent = NULL;
-	vec3_t velocity, delta, sampled;
+	vec3_t velocity, delta, sampled, anchor;
 	float scale = pv->statsf[STAT_FS_TIMESCALE];
 	float tick = movevars.ticrate, time, target, interval;
+	float saveop = floor(pv->statsf[STAT_FS_SLOP] / 1000); /* Existing FS_SLOP_RADIX. */
 	unsigned int sequence = cl.validsequence;
 	int i;
 
@@ -1351,8 +1368,8 @@ static void CL_UpdateSourcePracticeView(int seat, playerview_t *pv, qboolean nop
 		time - s->packettime > interval * 4 ||
 		((s->effects ^ ent->effects) & EF_TELEPORT_BIT) ||
 		s->modelindex != ent->modelindex || s->solidsize != ent->solidsize ||
-		s->warpack != pv->statsf[STAT_FS_WOPACK] ||
-		s->saveseq != pv->statsf[STAT_FS_SLSEQ]))
+		CL_SourcePracticeSaveEpochChanged(s->saveseq, s->saveop,
+			pv->statsf[STAT_FS_SLSEQ], saveop)))
 		goto discontinuity;
 	if (s->count)
 	{
@@ -1362,8 +1379,9 @@ static void CL_UpdateSourcePracticeView(int seat, playerview_t *pv, qboolean nop
 	}
 	if (!s->count)
 	{
-		/* Enter from the point already being presented, not a backward snap. */
-		if (target >= time || !CL_SourcePracticePush(s, target, pv->simorg, pv->simvel, interval))
+		/* Keep entry continuous even if a classic stair correction is active. */
+		CL_SourcePracticeEntry(pv->simorg, pv->gravitydir, pv->crouch, anchor);
+		if (target >= time || !CL_SourcePracticePush(s, target, anchor, pv->simvel, interval))
 			goto reset;
 	}
 	s->owner = pv->viewentity;
@@ -1373,7 +1391,7 @@ static void CL_UpdateSourcePracticeView(int seat, playerview_t *pv, qboolean nop
 	s->sequence = sequence; s->packettime = time;
 	s->effects = ent->effects;
 	s->modelindex = ent->modelindex; s->solidsize = ent->solidsize;
-	s->warpack = pv->statsf[STAT_FS_WOPACK]; s->saveseq = pv->statsf[STAT_FS_SLSEQ];
+	s->saveop = saveop; s->saveseq = pv->statsf[STAT_FS_SLSEQ];
 	if (!CL_SourcePracticePush(s, time, ent->origin, velocity, interval) ||
 		!CL_SourcePracticeSample(s, target, sampled))
 		goto reset;
@@ -2136,7 +2154,6 @@ void CL_PredictMovePNum (int seat)
 				VectorCopy(to.state->velocity, pv->simvel);
 		}
 	}
-	CL_UpdateSourcePracticeView(seat, pv, nopred);
 	/*FTESurf Patch 269: the dump.  Everything above is final by here -- simorg
 	  and simvel are what CSQC will be handed as pmove_org/pmove_vel.*/
 	if (cl_predtrace.ival != 0 && seat == 0)
@@ -2305,6 +2322,9 @@ void CL_PredictMovePNum (int seat)
 		VectorSet(pmove.gravitydir, 0, 0, -1);
 	else
 		VectorCopy(pmove.gravitydir, pv->gravitydir);
+
+	/* P1138: entry must see this frame's final classic stair correction. */
+	CL_UpdateSourcePracticeView(seat, pv, nopred);
 
 	if (cl.intermissionmode != IM_NONE && le)
 	{

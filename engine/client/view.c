@@ -1712,6 +1712,7 @@ void V_CalcRefdef (playerview_t *pv)
 	float		bob;
 	float		viewheight;
 	vec3_t		practiceoffset;
+	qboolean	practiceview;
 
 	if (r_refdef.fixedview)
 	{
@@ -1746,7 +1747,8 @@ void V_CalcRefdef (playerview_t *pv)
 	VectorCopy (pv->simorg, r_refdef.vieworg);
 	/* P1138: interpolate the camera, not the shared body/input/HUD state.
 	   Apply before the gun, portal, chase-camera and skyroom calculations. */
-	if (CL_GetSourcePracticeViewOffset(pv, practiceoffset))
+	practiceview = CL_GetSourcePracticeViewOffset(pv, practiceoffset);
+	if (practiceview)
 		VectorAdd(r_refdef.vieworg, practiceoffset, r_refdef.vieworg);
 
 	r_refdef.useperspective = true;
@@ -1786,7 +1788,9 @@ void V_CalcRefdef (playerview_t *pv)
 		// v_viewheight only affects the view if the player is alive
 		viewheight += bob;
 	}
-	viewheight += pv->crouch;
+	/* The historical feet already blend a stair rise. Applying the current
+	   body's correction to them produces a downward kick before the step. */
+	viewheight += practiceview ? 0 : pv->crouch;
 
 	VectorMA(r_refdef.vieworg, -viewheight, pv->gravitydir, r_refdef.vieworg);
 	if (!pv->spectator && (pv->portalpmtype == PM_NORMAL || pv->portalpmtype == PM_DEAD))
