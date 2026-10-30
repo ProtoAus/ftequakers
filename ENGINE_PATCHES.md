@@ -17,20 +17,22 @@ and both peers' output. Signals notify rather than throw into ownership cleanup.
 No movement, recording format, human admission, queue, board or Build change;
 trusted queue approval is still required for TAS promotion. See tools/tasverify.md.
 
-**Verified (pre-integration candidate):** 39 Pi tests (Windows39/eight Linux skips),
+**Verified:** 39 Pi unit tests (Windows run has eight Linux-specific skips),
 independent receipt/ownership/plugin/asset/deadline reviews clear, and acting resource,
-cancellation, late-match/cleanup and case-alias HOLD/reap controls. Fresh native
-PASS342/5130ms on one real map with private fixture zones. Normal plugin lookup acts
-while binary-confined startup refuses the same outside plugin; native ACK and
-registered-zero/default100 pacing controls act. Candidate Windows FULL build has
-75 warning messages identical to qualified P1131; SSQC/menu zero and two unchanged
-CSQC warnings. Windows/ARM33 P1131 +58 P1129 and older native checks pass; all60
-physics rows per platform equal qualified predecessors. Declared historical QW
-pin2(4418/4418) and P813 pin7(9194/9192) pass both; the known boreas18-physent HOLD
-is preserved, not pin1 coverage. Reader949 and unchanged 527-REC/328-fault baseline
-are reused, not fault-free/human proof. This candidate was qualified before the
-concurrent published P1133 merge; combined native builds/gates and deployment are
-still pending. Reservation1132 retired before publication; one final feature1134.
+cancellation, late-match/cleanup and case-alias HOLD/reap controls. Normal plugin
+lookup acts while binary-confined startup refuses the same outside plugin; native
+ACK and registered-zero/default100 pacing controls act. Fresh committed composite
+`cd7efdd93` / QC `bf21d774` preserves published P1133. Both FULL platform builds have
+zero new warnings: Windows retains 75 compiler and two QC messages; SSQC/menu zero.
+Both exact native images pass 9 P1133 +33 P1131 +58 P1129 and all older checks;
+all60 physics rows per platform exactly equal qualified predecessors. Declared
+historical QW pin2(4418/4418) and P813 pin7(9194/9192) pass both; the known boreas
+18-physent HOLD is preserved, not pin1 coverage. Fresh composite native PASS342/
+5130ms uses one real map with private fixture zones, actual new native/plugin/progs
+hashes, a 6.133 s replay under its 45 s limit and reaped peers. Earlier acting controls
+remain applicable to the unchanged CLI/loader code. Reader949 and unchanged
+527-REC/328-fault baseline are reused, not fault-free/human proof. Reservation1132
+retired before publication; one final feature1134. Deployment is a separate step.
 No production TAS board, canonical-zone finish, all-map/dynamic-object or unsupported
 tick-rate qualification is claimed.
 
