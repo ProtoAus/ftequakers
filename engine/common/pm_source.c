@@ -3271,14 +3271,12 @@ The order here IS the physics.  Do not reorder.
 ==================
 */
 // P1131: a bounded default-only start, not evidence that its result was used.
-static qboolean PMSrc_BankGravityStartDefault(vec3_t normal)
+static qboolean PMSrc_BankGravityDefaultStart(vec3_t normal, qboolean groundjump)
 {
 	int i;
-	/* This entry is already airborne: CheckJumpButton cannot jump or change
-	 * velocity. Its input latch is identical for the same default command. */
 	if (!pms_bankgravity_observe || pms_bankgravity_used ||
 		movevars.sourceversion < 11 || pmove.pm_type != PM_NORMAL ||
-		pmove.onground || pmove.waterlevel || pmove.waterjumptime ||
+		(pmove.onground && !groundjump) || pmove.waterlevel || pmove.waterjumptime ||
 		pmove.waterjumpremaining ||
 		pms_haveportals || pms_anyslide || pms_slidetick || pms_momslide ||
 		!movevars.entgravity || movevars.entgravity == 1 ||
@@ -3291,6 +3289,36 @@ static qboolean PMSrc_BankGravityStartDefault(vec3_t normal)
 	normal[2] += pmove.basevelocity[2] * pms_frametime;
 	PMSrc_BankGravitySanitize(normal);
 	return true;
+}
+
+// Airborne input cannot enter the genuine-jump branch; retain that contract.
+static qboolean PMSrc_BankGravityStartDefault(vec3_t normal)
+{
+	return PMSrc_BankGravityDefaultStart(normal, false);
+}
+
+static qboolean PMSrc_BankGravityGroundStartDefault(vec3_t normal)
+{
+	// Only the standing stock ADD branch; all other jump phases remain explicit.
+	if (!pmove.onground || !(pmove.cmd.buttons & BUTTON_JUMP) ||
+		movevars.normalizejump || movevars.jumpaddrise || movevars.ktjump ||
+		PMSrc_StaminaEnabled() || movevars.jumpzoffset ||
+		pmove.ducked || pmove.ducking ||
+		!isfinite(movevars.entgravity) || !isfinite(movevars.gravity) ||
+		!isfinite(movevars.jumpvelocity) || !isfinite(movevars.maxvelocity))
+		return false;
+	return PMSrc_BankGravityDefaultStart(normal, true);
+}
+
+static qboolean PMSrc_BankGravityJumpDefault(vec3_t normal)
+{
+	float impulse = movevars.jumpvelocity;
+	if (impulse <= 0) impulse = 268.3281572999747f;
+	// CheckJumpButton's stock ADD, its own FinishGravity, then CheckVelocity.
+	normal[2] += impulse;
+	normal[2] -= (1.0f * movevars.gravity * pms_frametime * 0.5f);
+	PMSrc_BankGravitySanitize(normal);
+	return isfinite(normal[2]);
 }
 
 static qboolean PMSrc_BankGravityTraceClear(const trace_t *tr, const vec3_t end)
@@ -3369,13 +3397,15 @@ static qboolean PMSrc_BankGravityAirChanged(const vec3_t origin, const vec3_t ac
 static void PMSrc_FullWalkMove (void)
 {
 	qboolean wasonground = pmove.onground, bankfinish_projected = false, bankairclear = false;
+	qboolean bankgroundjump = false;
 	vec3_t bankfinish_before, bankfinish_plane;
 	vec3_t bankstart_default, bankstart_origin, bankstart_airend, bankstart_airvel;
-	qboolean bankstart = PMSrc_BankGravityStartDefault(bankstart_default);
+	qboolean bankstart = wasonground ? PMSrc_BankGravityGroundStartDefault(bankstart_default) :
+		PMSrc_BankGravityStartDefault(bankstart_default);
 
 	if (pmove.waterlevel < 2)
 		PMSrc_StartGravity ();
-	if (bankstart && VectorCompare(bankstart_default, pmove.velocity)) bankstart = false;
+	if (bankstart && !wasonground && VectorCompare(bankstart_default, pmove.velocity)) bankstart = false;
 
 	if (movevars.sourceversion >= 11)
 	{
@@ -3412,9 +3442,12 @@ static void PMSrc_FullWalkMove (void)
 		   re-categorize first so the jump test sees the ground the slide
 		   otherwise hides.  PMSrc_SlideAllowsJumpNow inside CategorizePosition
 		   is what lets it ground on this call and not on the others. */
+		qboolean jumped;
 		if ((pms_slidetick & PMSLIDE_ALLOWJUMP) && !(pms_slidetick & PMSLIDE_STAYON))
 			PMSrc_CategorizePosition ();
-		PMSrc_CheckJumpButton ();
+		jumped = PMSrc_CheckJumpButton ();
+		if (bankstart && wasonground && jumped)
+			bankgroundjump = PMSrc_BankGravityJumpDefault(bankstart_default);
 	}
 	else
 		pmove.oldbuttons &= ~BUTTON_JUMP;
@@ -3428,6 +3461,8 @@ static void PMSrc_FullWalkMove (void)
 	}
 
 	PMSrc_CheckVelocity ();
+	if (bankstart && wasonground && (!bankgroundjump || VectorCompare(bankstart_default, pmove.velocity)))
+		bankstart = false;
 
 	if (pmove.onground)
 	{
@@ -4784,6 +4819,132 @@ static void PMSrc_TestBankStartGravity(void)
 	hit.startsolid = false;
 	hit.endpos[2] += 1;
 	PMSrc_Check("P1131 wrong trace endpoint refused", PMSrc_BankGravityTraceClear(&hit, accepted), 0, 0);
+	{
+		int i;
+		float forwardmove = pms_forwardmove, sidemove = pms_sidemove;
+		vec3_t unobserved_origin, unobserved_velocity;
+		pms_forwardmove = pms_sidemove = 0;
+		pms_maxspeed = 260;
+		movevars.normalizejump = movevars.jumpaddrise = movevars.ktjump = 0;
+		movevars.stamina = movevars.jumpzoffset = movevars.autobunny = 0;
+		movevars.gravity = 1048576;
+		movevars.jumpvelocity = 16000;
+		pms_frametime = 1.0f / 64;
+		for (i = 0; i < 6; ++i)
+		{
+			memset(&pmove, 0, sizeof(pmove));
+			pmove.pm_type = PM_NORMAL;
+			pmove.skipent = -1;
+			VectorCopy(mins, pmove.player_mins);
+			VectorCopy(maxs, pmove.player_maxs);
+			VectorSet(pmove.origin, 0, 0, 128);
+			pmove.surfacefriction = 1;
+			pmove.numphysent = 1;
+			pmove.physents[0].info = 1;
+			pmove.physents[0].scale = 1;
+			VectorSet(pmove.physents[0].mins, -256, -256, -16);
+			VectorSet(pmove.physents[0].maxs, 256, 256, 0);
+			pmove.physents[0].origin[2] = 128;
+			if (i == 3)
+			{
+				pmove.numphysent = 2;
+				pmove.physents[1].info = 2;
+				pmove.physents[1].scale = 1;
+				VectorSet(pmove.physents[1].mins, -256, -256, 0);
+				VectorSet(pmove.physents[1].maxs, 256, 256, 16);
+				pmove.physents[1].origin[2] = 220;
+			}
+			movevars.entgravity = (i == 0 || i == 4) ? 1 : 1.5f;
+			PMSrc_CategorizePosition();
+			Q_snprintfz(name, sizeof(name), "P1139 groundjump %i actual contact", i);
+			PMSrc_Check(name, pmove.onground, 1, 0);
+			pmove.cmd.buttons = BUTTON_JUMP;
+			if (i == 5)
+			{
+				pmove.jump_held = true;
+				pmove.oldbuttons = BUTTON_JUMP;
+			}
+			PMSrc_BankGravityBegin(i >= 2);
+			if (i == 2)
+			{
+				PMSrc_Check("P1139 ground default admitted", PMSrc_BankGravityGroundStartDefault(normal), 1, 0);
+				PMSrc_Check("P1139 ground default first clamp", normal[2], -3500, 0);
+				movevars.normalizejump = 1;
+				PMSrc_Check("P1139 normalized jump excluded", PMSrc_BankGravityGroundStartDefault(normal), 0, 0);
+				movevars.normalizejump = 0;
+				movevars.jumpaddrise = 1;
+				PMSrc_Check("P1139 alternate rise excluded", PMSrc_BankGravityGroundStartDefault(normal), 0, 0);
+				movevars.jumpaddrise = 0;
+				movevars.ktjump = 1;
+				PMSrc_Check("P1139 KT jump excluded", PMSrc_BankGravityGroundStartDefault(normal), 0, 0);
+				movevars.ktjump = 0;
+				movevars.stamina = 1;
+				PMSrc_Check("P1139 stamina jump excluded", PMSrc_BankGravityGroundStartDefault(normal), 0, 0);
+				movevars.stamina = 0;
+				movevars.jumpzoffset = 1;
+				PMSrc_Check("P1139 offset jump excluded", PMSrc_BankGravityGroundStartDefault(normal), 0, 0);
+				movevars.jumpzoffset = 0;
+				pmove.ducked = true;
+				PMSrc_Check("P1139 ducked jump excluded", PMSrc_BankGravityGroundStartDefault(normal), 0, 0);
+				pmove.ducked = false;
+				pmove.ducking = true;
+				PMSrc_Check("P1139 ducking jump excluded", PMSrc_BankGravityGroundStartDefault(normal), 0, 0);
+				pmove.ducking = false;
+				pmove.basevelocity[2] = INFINITY;
+				PMSrc_Check("P1139 nonfinite ground carrier excluded", PMSrc_BankGravityGroundStartDefault(normal), 0, 0);
+				pmove.basevelocity[2] = 0;
+				pmove.cmd.buttons = 0;
+				PMSrc_Check("P1139 missing jump excluded", PMSrc_BankGravityGroundStartDefault(normal), 0, 0);
+				pmove.cmd.buttons = BUTTON_JUMP;
+				movevars.entgravity = INFINITY;
+				PMSrc_Check("P1139 nonfinite ground property excluded", PMSrc_BankGravityGroundStartDefault(normal), 0, 0);
+				movevars.entgravity = 1.5f;
+				movevars.jumpvelocity = NAN;
+				PMSrc_Check("P1139 nonfinite impulse excluded", PMSrc_BankGravityGroundStartDefault(normal), 0, 0);
+				movevars.jumpvelocity = 16000;
+				movevars.gravity = INFINITY;
+				PMSrc_Check("P1139 nonfinite world gravity excluded", PMSrc_BankGravityGroundStartDefault(normal), 0, 0);
+				movevars.gravity = 1048576;
+				movevars.maxvelocity = INFINITY;
+				PMSrc_Check("P1139 nonfinite maximum excluded", PMSrc_BankGravityGroundStartDefault(normal), 0, 0);
+				movevars.maxvelocity = 3500;
+				movevars.gravity = 800;
+				movevars.jumpvelocity = 0;
+				VectorClear(normal);
+				PMSrc_Check("P1139 zero impulse default acts", PMSrc_BankGravityJumpDefault(normal), 1, 0);
+				PMSrc_Check("P1139 zero impulse stock fallback", normal[2], 268.3281572999747f - 6.25f, 0);
+				movevars.jumpvelocity = -1;
+				VectorClear(normal);
+				PMSrc_Check("P1139 negative impulse default acts", PMSrc_BankGravityJumpDefault(normal), 1, 0);
+				PMSrc_Check("P1139 negative impulse stock fallback", normal[2], 268.3281572999747f - 6.25f, 0);
+				movevars.gravity = 1048576;
+				movevars.jumpvelocity = 16000;
+			}
+			PMSrc_FullWalkMove();
+			Q_snprintfz(name, sizeof(name), "P1139 groundjump %i jump phase acted", i);
+			PMSrc_Check(name, i == 5 ? pmove.onground :
+				(pmove.jump_held && (pmove.oldbuttons & BUTTON_JUMP) && !pmove.onground), 1, 0);
+			Q_snprintfz(name, sizeof(name), "P1139 groundjump %i accepted rise", i);
+			PMSrc_Check(name, pmove.origin[2], i == 5 ? 128 :
+				((i == 0 || i == 4) ? 182.6875f : 131.3125f), 0);
+			Q_snprintfz(name, sizeof(name), "P1139 groundjump %i accepted tail", i);
+			PMSrc_Check(name, pmove.velocity[2], i == 5 ? 0 : -3500, 0);
+			if (i == 1)
+			{
+				VectorCopy(pmove.origin, unobserved_origin);
+				VectorCopy(pmove.velocity, unobserved_velocity);
+			}
+			if (i == 2 || i == 3)
+			{
+				PMSrc_Check("P1139 groundjump observer preserves origin", VectorCompare(pmove.origin, unobserved_origin), 1, 0);
+				PMSrc_Check("P1139 groundjump observer preserves velocity", VectorCompare(pmove.velocity, unobserved_velocity), 1, 0);
+			}
+			Q_snprintfz(name, sizeof(name), "P1139 groundjump %i accepted use", i);
+			PMSrc_Check(name, PMSrc_BankGravityEnd(), i == 2, 0);
+		}
+		pms_forwardmove = forwardmove;
+		pms_sidemove = sidemove;
+	}
 	memcpy(&pmove, saved, sizeof(pmove));
 	BZ_Free(saved);
 	movevars = mv;
