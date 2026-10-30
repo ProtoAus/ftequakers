@@ -4,6 +4,8 @@
 #include "gl_draw.h"
 #include "shader.h"
 
+static cvar_t vid_headless_sleep = CVARD("vid_headless_sleep", "100", "Headless renderer sleep in milliseconds (0..1000). Zero lets the normal frame limits govern an active replay; default remains 10 Hz.");
+
 #ifdef _WIN32
 #include "winquake.h"
 #include "resource.h"
@@ -88,6 +90,7 @@ LRESULT CALLBACK HeadlessWndProc(HWND wnd, UINT msg, WPARAM wparam, LPARAM lpara
 
 static qboolean Headless_VID_Init				(rendererstate_t *info, unsigned char *palette)
 {
+	Cvar_Register(&vid_headless_sleep, "Headless renderer");
 	memset(&sh_config, 0, sizeof(sh_config));
 
 #ifdef FTE_SDL
@@ -205,6 +208,8 @@ static char	*Headless_VID_GetRGBInfo			(int *bytestride, int *truevidwidth, int 
 }
 static qboolean	Headless_SCR_UpdateScreen			(void)
 {
+	unsigned int milliseconds;
+
 	// A NULL RENDERER, NOT A NULL CLIENT FRAME.  Packet-entity transition is
 	// client state rather than drawing, and cl.lerpents - along with the
 	// cl.maxlerpents that bounds it - is populated ONLY by CL_TransitionEntities.
@@ -229,14 +234,15 @@ static qboolean	Headless_SCR_UpdateScreen			(void)
 	if (cls.state == ca_active)
 		CL_TransitionEntities();
 
-	if (!cls.timedemo)
+	milliseconds = bound(0, vid_headless_sleep.ival, 1000);
+	if (!cls.timedemo && milliseconds)
 	{
 #ifdef FTE_SDL
-		SDL_Delay(100);		
+		SDL_Delay(milliseconds);
 #elif defined(_WIN32)
-		Sleep(100);
+		Sleep(milliseconds);
 #else
-		usleep(100*1000);
+		usleep(milliseconds*1000);
 #endif
 	}
 	return true;

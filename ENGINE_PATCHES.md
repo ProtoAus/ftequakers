@@ -1,5 +1,36 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1132 — bounded native legal-start TAS verification CLI
+
+**Problem:** The TAS editor can replay a project, but no isolated operator path
+joins admitted legal-start inputs to a fresh native finish. Headless rendering's
+fixed 100 ms sleep also prevents normal-rate TAS replay within its wall allowance.
+
+**Change:** Add a bounded 0..1000 ms headless sleep cvar, retaining default 100.
+The opt-in verifier uses normal frame limits at zero. New operator-only aarch64
+CLI freezes project/runtime bytes, uses fresh exclusive VFS roots and colocated
+native images, verifies the actual mapped HL2 plugin, and joins SSQC's developer-
+log reader/placement binding to the recording's native track/leg and mover clock.
+Preserve real mode/map rules, entity fixes and model-side collision absence pins.
+Require the exact consumed inputs and a natural closed finish; ignore claimed
+checkpoint/time and unused tail. Bound native memory/files and both peers' output;
+register ownership immediately and reap on failure/cancellation. No movement,
+recording format, human admission, queue, board writer or Build-number change.
+The standalone receipt requires later trusted queue approval for TAS promotion.
+
+**Verified:** 30 focused tests on Pi, including actual producer file limits and
+post-spawn failure controls. Native GL/server/HL2 builds; zero new QC warnings
+(SSQC/menu zero, two existing untouched CSQC F333 property-227 warnings). Corrected
+CLI and actual QC produce a fresh 342-tick native finish on one real map with
+private fixture zones. Acting unfinished, shifted-start and moved-END controls
+HOLD; SIGTERM after native binding HOLDs and reaps both peers. Default-100 versus
+registered-zero throttle control retains ordinary sleeping behavior. Reader949
+regression and unchanged-reader 527-REC corpus retain the existing 328 fault files;
+not a fault-free corpus or human-proof claim. Independent fix re-review and clean
+publication/deployment remain pending at this checkpoint. No production TAS board,
+map-corpus qualification or unsupported tick-rate claim. See tools/tasverify.md
+in the QC repository for the operator contract.
+
 ## Patch 1131 — retain gravity-source status through earlier accepted air motion
 
 **Problem:** The late gravity half can converge to the default result after an
