@@ -29,6 +29,14 @@ excluded rather than claimed no-use. Reader 949/0; the fixed 527-recording and
 faults. Independent reviews and clean publication/promotion remain separate gates;
 no human, finished/ranked-run or complete bank/consumer acceptance is claimed.
 
+**Deployed:** Reviewed native `4bddca067` / QC `e0eb0aa8`, `patch-1131`, exact
+frozen artifacts to both Windows installs and all 12 lobbies on 30 Oct 2026.
+Live 08:52:35 UTC: all 12 new native/plugin epochs and versions match; destination
+and `.prev` hashes match, original protected data/config bytes remain intact.
+No force was needed; backend generation/unit/master unchanged. A fresh isolated
+client downloaded the exact served CSQC and drew the board without QC errors;
+the empty/no-zone, unaccepted-terms screen is not human or ranked-run acceptance.
+
 ## Patch 1130 — finish the stats-kind switches; WOS-only map completion
 
 **QC/backend only; no native or plugin change.** Continues Claude's P1122:
