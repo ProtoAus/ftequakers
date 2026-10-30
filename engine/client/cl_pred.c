@@ -1204,7 +1204,7 @@ CL_PredictMove
 
 typedef struct
 {
-	float time;
+	double time; /* Existing native realtime, not the packet-clamped game clock. */
 	vec3_t origin, velocity;
 } sourcepracticepose_t;
 
@@ -1248,7 +1248,7 @@ static qboolean CL_SourcePracticeSaveEpochChanged(float oldseq, float oldop,
 
 /* Kept separate from the native adapter so the exact source can be exercised
    without simulating a second mover or rebuilding an interpolation model. */
-static qboolean CL_SourcePracticePush(sourcepracticelerp_t *s, float time,
+static qboolean CL_SourcePracticePush(sourcepracticelerp_t *s, double time,
 	const vec3_t origin, const vec3_t velocity, float interval)
 {
 	sourcepracticepose_t *p;
@@ -1289,7 +1289,7 @@ static qboolean CL_SourcePracticePush(sourcepracticelerp_t *s, float time,
 	return true;
 }
 
-static qboolean CL_SourcePracticeSample(const sourcepracticelerp_t *s, float time, vec3_t out)
+static qboolean CL_SourcePracticeSample(const sourcepracticelerp_t *s, double time, vec3_t out)
 {
 	const sourcepracticepose_t *a, *b;
 	float f;
@@ -1342,7 +1342,8 @@ static void CL_UpdateSourcePracticeView(int seat, playerview_t *pv, qboolean nop
 	entity_state_t *ent = NULL;
 	vec3_t velocity, delta, sampled, anchor;
 	float scale = pv->statsf[STAT_FS_TIMESCALE];
-	float tick = movevars.ticrate, time, target, interval;
+	float tick = movevars.ticrate, interval;
+	double time, target;
 	float saveop = floor(pv->statsf[STAT_FS_SLOP] / 1000); /* Existing FS_SLOP_RADIX. */
 	unsigned int sequence = cl.validsequence;
 	int i;
@@ -1356,9 +1357,13 @@ static void CL_UpdateSourcePracticeView(int seat, playerview_t *pv, qboolean nop
 		memset(s, 0, sizeof(*s));
 	}
 	interval = tick / scale;
-	target = cl.servertime - CL_SourcePracticeDelay(tick, scale);
+	/* CL_CalcClientTime can hold cl.servertime at the newest packet. A
+	   delayed sample of that clock still freezes even inside a known segment.
+	   Timestamp received completed poses with the existing render realtime;
+	   packet time remains only a discontinuity check. No game clock changes. */
+	time = realtime;
+	target = time - CL_SourcePracticeDelay(tick, scale);
 	pack = &cl.inframes[sequence & UPDATE_MASK].packet_entities;
-	time = pack->servertime;
 	if (!(time >= 0 && time < 1e9f && target > -1e9f && target < 1e9f))
 		goto reset;
 	for (i = 0; i < pack->num_entities; i++)
@@ -1372,8 +1377,8 @@ static void CL_UpdateSourcePracticeView(int seat, playerview_t *pv, qboolean nop
 	VectorScale(ent->u.q1.velocity, 1/8.0f, velocity);
 	if (s->count && (s->owner != pv->viewentity || s->world != cl.worldmodel ||
 		s->servercount != cl.servercount || s->scale != scale || s->tick != tick ||
-		sequence - s->sequence > 0x7fffffffu || time < s->packettime ||
-		time - s->packettime > interval * 4 ||
+		sequence - s->sequence > 0x7fffffffu || pack->servertime < s->packettime ||
+		pack->servertime - s->packettime > interval * 4 ||
 		((s->effects ^ ent->effects) & EF_TELEPORT_BIT) ||
 		s->modelindex != ent->modelindex || s->solidsize != ent->solidsize ||
 		/* Eye/roof height belongs to the captured pose domain too. Never
@@ -1399,7 +1404,7 @@ static void CL_UpdateSourcePracticeView(int seat, playerview_t *pv, qboolean nop
 	s->world = cl.worldmodel;
 	s->servercount = cl.servercount;
 	s->scale = scale; s->tick = tick;
-	s->sequence = sequence; s->packettime = time;
+	s->sequence = sequence; s->packettime = pack->servertime;
 	s->effects = ent->effects;
 	s->modelindex = ent->modelindex; s->solidsize = ent->solidsize;
 	s->saveop = saveop; s->saveseq = pv->statsf[STAT_FS_SLSEQ];

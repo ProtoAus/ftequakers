@@ -33,9 +33,15 @@ scene; point traces do not prove general embedded/start-solid safety. Human
 movement/stair/roof acceptance and known scale-switch/short-zone-reset continuity
 follow-ups remain open. This is not broad captured-data equivalence or a security audit.
 
-**Forward integration:** the already-delivered P1139 source is retained verbatim;
-combined-cohort rebuild/runtime qualification pending. The P1139 Windows native
-pair was restored from verified pre-promotion backups while this is qualified.
+**Forward integration / clock correction:** the already-delivered P1139 source
+is retained verbatim. First combined FULL build passed, but actual0.25 camera
+froze16.97%: the native game clock itself clamps at the newest packet, so even
+an interior delayed sample can hold. Keep game/packet clocks unchanged; stamp
+received completed poses and sample them using existing native render realtime,
+with double stamps for long-uptime precision. Nine literal-source groups pass;
+the exact predecessor compiles then fails the new held-clock control. Combined
+native rebuild/runtime qualification is pending. The P1139 Windows native pair
+was restored from verified pre-promotion backups while this is qualified.
 
 ## Patch 1139 — retain eligible gravity status through stock ground takeoff
 
