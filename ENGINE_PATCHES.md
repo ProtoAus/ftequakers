@@ -1,5 +1,33 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1133 — retain eligible airborne gravity status with jump input
+
+**Problem:** The bounded earlier-air observer refused every jump button, including
+an already airborne command whose actual jump check cannot jump or change velocity.
+The accepted displacement could still use the existing nondefault gravity input.
+
+**Change:** Remove only that redundant input exclusion. The existing dry-air entry
+requires no ground, and the actual jump check cannot jump or change velocity on
+this path. Its existing input latch updates identically for the same default
+command. Genuine grounded jumps and other unsupported contexts remain excluded. Keep the same accepted-movement/default-trajectory proof and existing
+use bit, source/cache admission and status; no new captured field, format, flag,
+tier, gameplay step or numerical movement change. Add acting air-refusal and
+normal grounded-jump native controls; refine the old any-button negative to the
+still-excluded genuine grounded-jump context.
+
+**Verified:** Isolated Windows and ARM64 candidate builds: zero new warnings,
+9 new native controls, 33 earlier-air controls (including the refined genuine-jump
+negative), 58 prior gravity controls and all older checks pass. Both platforms'
+60 named physics rows exactly match qualified P1131, with acting prop/wrapped-hull
+controls. The same compiled QC fixture across original, candidate and unavailable-
+API images acts in all six socket comparisons: actual input/airborne/admission
+controls pass; all raw/cache/movement/lateral outputs remain identical. Only the
+two intended held-input statuses change; default cases and unavailable-API refusal
+remain. Reader 949/0 and fixed-corpus evidence are reused without reader or recorded-
+body changes; no new sweep or fault-free-corpus claim. Fresh whole-feature reviews,
+clean committed builds and publication/promotion are separate gates. No human,
+finished/ranked-run or complete bank/consumer acceptance is claimed.
+
 ## Patch 1131 — retain gravity-source status through earlier accepted air motion
 
 **Problem:** The late gravity half can converge to the default result after an

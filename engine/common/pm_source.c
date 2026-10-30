@@ -3272,10 +3272,12 @@ The order here IS the physics.  Do not reorder.
 static qboolean PMSrc_BankGravityStartDefault(vec3_t normal)
 {
 	int i;
+	/* This entry is already airborne: CheckJumpButton cannot jump or change
+	 * velocity. Its input latch is identical for the same default command. */
 	if (!pms_bankgravity_observe || pms_bankgravity_used ||
 		movevars.sourceversion < 11 || pmove.pm_type != PM_NORMAL ||
 		pmove.onground || pmove.waterlevel || pmove.waterjumptime ||
-		pmove.waterjumpremaining || (pmove.cmd.buttons & BUTTON_JUMP) ||
+		pmove.waterjumpremaining ||
 		pms_haveportals || pms_anyslide || pms_slidetick || pms_momslide ||
 		!movevars.entgravity || movevars.entgravity == 1 ||
 		!isfinite(pms_frametime) || pms_frametime <= 0)
@@ -4612,8 +4614,30 @@ static void PMSrc_TestBankStartGravity(void)
 	PMSrc_Check("P1131 waterjump excluded", PMSrc_BankGravityStartDefault(normal), 0, 0);
 	pmove.waterjumpremaining = 0;
 	pmove.cmd.buttons = BUTTON_JUMP;
-	PMSrc_Check("P1131 jump command excluded", PMSrc_BankGravityStartDefault(normal), 0, 0);
-	pmove.cmd.buttons = 0;
+	VectorClear(pmove.velocity);
+	VectorCopy(pmove.velocity, velocity);
+	PMSrc_Check("P1133 airborne button admitted", PMSrc_BankGravityStartDefault(normal), 1, 0);
+	PMSrc_Check("P1133 airborne jump refused", PMSrc_CheckJumpButton(), 0, 0);
+	PMSrc_Check("P1133 air refusal latches input", (pmove.oldbuttons & BUTTON_JUMP) != 0, 1, 0);
+	PMSrc_Check("P1133 air refusal preserves velocity", VectorCompare(pmove.velocity, velocity), 1, 0);
+	pmove.oldbuttons = BUTTON_JUMP;
+	PMSrc_Check("P1133 held airborne button admitted", PMSrc_BankGravityStartDefault(normal), 1, 0);
+	PMSrc_Check("P1133 held airborne jump refused", PMSrc_CheckJumpButton(), 0, 0);
+	movevars.entgravity = 1;
+	PMSrc_Check("P1133 held default input excluded", PMSrc_BankGravityStartDefault(normal), 0, 0);
+	movevars.entgravity = INFINITY;
+	pmove.onground = true;
+	PMSrc_Check("P1131 grounded jump context excluded", PMSrc_BankGravityStartDefault(normal), 0, 0);
+	pmove.oldbuttons = 0;
+	pmove.velocity[2] = -6;
+	movevars.entgravity = 1;
+	movevars.normalizejump = 0;
+	movevars.jumpvelocity = 268.3281572999747f;
+	PMSrc_Check("P1133 actual grounded jump acts", PMSrc_CheckJumpButton(), 1, 0);
+	PMSrc_Check("P1133 grounded jump rises finitely", isfinite(pmove.velocity[2]) && pmove.velocity[2] > 0, 1, 0);
+	pmove.onground = false;
+	pmove.oldbuttons = pmove.cmd.buttons = 0;
+	movevars.entgravity = INFINITY;
 	PMSrc_BankGravityBegin(false);
 	PMSrc_Check("P1131 unarmed excluded", PMSrc_BankGravityStartDefault(normal), 0, 0);
 	VectorClear(pmove.velocity);
