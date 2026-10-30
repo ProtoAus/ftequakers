@@ -18,15 +18,20 @@ eye at its own position through the existing prop-inclusive collision query.
 `cl_source_practice_lerp 0` restores the classic camera. The existing nopred
 diagnostic now tolerates its absent replay command. No eligibility/physics change.
 
-**Verified/pending:** Eight literal-source groups and actual-header GCC syntax
-pass; retained earlier sources expose idle-resume, diagonal-warp, stair-dip and
-packet-quantization freezes. The first camera-only socket check passed normal,
-0.1/0.25/0.5 but failed0.75; its actual target regression fails before the added
-packet guard and passes after. Roof arithmetic uses a controlled trace response, not a native geometry
-scene. Both independent source-review lineages retained; cancelled/rejected builds
-are not qualified. Final full build and same-image native camera/flag checks are
-pending; nothing deployed. Mode-change and short-zone-reset continuity remain
-explicit follow-ups. Human movement/stair/roof acceptance is still required.
+**Verified/limits:** Native `525bd78ab`/tag1138 FULL build and eight literal-source
+groups pass; actual-header syntax and both independent review lineages pass.
+Retained earlier sources expose idle/resume, diagonal-warp, stair-dip and packet
+quantization failures. Exact-image socket camera freeze: half-speed OFF39.2%,
+ON0%;0.1=0.28%,0.25=0%,0.75=1.10%, normal/restored1=0%. Real attempts retain
+practice status across restore1/reset, then a confirmed fresh connection clears
+it. The same transaction retains predecessor failures and fixture repairs; the
+body's scheduling-sensitive repeat ratio is not an equivalence comparator.
+Both Windows installs rehash to the qualified native/official VM cohort,224
+protected configs unchanged; exact QC pair reached all12 empty guarded Pi lobbies.
+No Pi native replacement. Roof tests use a controlled hit, not an actual geometry
+scene; point traces do not prove general embedded/start-solid safety. Human
+movement/stair/roof acceptance and known scale-switch/short-zone-reset continuity
+follow-ups remain open. This is not broad captured-data equivalence or a security audit.
 
 ## Patch 1136 — retain eligible gravity status with finite vertical air carriers
 
