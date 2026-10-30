@@ -1217,7 +1217,7 @@ typedef struct
 	qboolean blocked;
 	unsigned int sequence, effects;
 	const void *world;
-	float scale, tick, packettime, saveop, saveseq;
+	float scale, tick, packettime, saveop, saveseq, viewheight;
 } sourcepracticelerp_t;
 
 static sourcepracticelerp_t sourcepractice[MAX_SPLITS];
@@ -1368,6 +1368,9 @@ static void CL_UpdateSourcePracticeView(int seat, playerview_t *pv, qboolean nop
 		time - s->packettime > interval * 4 ||
 		((s->effects ^ ent->effects) & EF_TELEPORT_BIT) ||
 		s->modelindex != ent->modelindex || s->solidsize != ent->solidsize ||
+		/* Eye/roof height belongs to the captured pose domain too. Never
+		   combine old feet under a roof with a newer standing eye height. */
+		s->viewheight != pv->viewheight ||
 		CL_SourcePracticeSaveEpochChanged(s->saveseq, s->saveop,
 			pv->statsf[STAT_FS_SLSEQ], saveop)))
 		goto discontinuity;
@@ -1392,6 +1395,7 @@ static void CL_UpdateSourcePracticeView(int seat, playerview_t *pv, qboolean nop
 	s->effects = ent->effects;
 	s->modelindex = ent->modelindex; s->solidsize = ent->solidsize;
 	s->saveop = saveop; s->saveseq = pv->statsf[STAT_FS_SLSEQ];
+	s->viewheight = pv->viewheight;
 	if (!CL_SourcePracticePush(s, time, ent->origin, velocity, interval) ||
 		!CL_SourcePracticeSample(s, target, sampled))
 		goto reset;
