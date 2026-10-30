@@ -3284,7 +3284,6 @@ static qboolean PMSrc_BankGravityStartDefault(vec3_t normal)
 		!movevars.entgravity || movevars.entgravity == 1 ||
 		!isfinite(pms_frametime) || pms_frametime <= 0)
 		return false;
-	if (pmove.basevelocity[2]) return false;
 	for (i = 0; i < 3; ++i)
 		if (!isfinite(pmove.basevelocity[i]) || !isfinite(pmove.origin[i]) || !isfinite(pmove.velocity[i]))
 			return false;
@@ -4612,8 +4611,8 @@ static void PMSrc_TestBankStartGravity(void)
 	pms_haveportals = true;
 	PMSrc_Check("P1131 portal map excluded", PMSrc_BankGravityStartDefault(normal), 0, 0);
 	pms_haveportals = false;
-	pmove.basevelocity[2] = 1;
-	PMSrc_Check("P1131 vertical base velocity excluded", PMSrc_BankGravityStartDefault(normal), 0, 0);
+	pmove.basevelocity[2] = INFINITY;
+	PMSrc_Check("P1131 nonfinite Z carrier excluded", PMSrc_BankGravityStartDefault(normal), 0, 0);
 	pmove.basevelocity[2] = 0;
 	pmove.waterjumpremaining = 1;
 	PMSrc_Check("P1131 waterjump excluded", PMSrc_BankGravityStartDefault(normal), 0, 0);
@@ -4679,6 +4678,59 @@ static void PMSrc_TestBankStartGravity(void)
 	}
 	PMSrc_BankGravityBegin(true);
 	VectorClear(pmove.basevelocity);
+	{
+		int i;
+		float forwardmove = pms_forwardmove, sidemove = pms_sidemove;
+		vec3_t finishbefore, linear;
+		qboolean admitted, firstclear;
+		pms_forwardmove = pms_sidemove = 0;
+		for (i = 0; i < 4; ++i)
+		{
+			memset(&pmove, 0, sizeof(pmove));
+			pmove.pm_type = PM_NORMAL;
+			pmove.skipent = -1;
+			VectorCopy(mins, pmove.player_mins);
+			VectorCopy(maxs, pmove.player_maxs);
+			pmove.surfacefriction = 1;
+			pmove.velocity[0] = 80;
+			pmove.velocity[2] = -3490;
+			pmove.basevelocity[2] = (i & 1) ? -100 : 100;
+			if (i >= 2) pmove.basevelocity[i - 2] = 100;
+			movevars.entgravity = 16;
+			pms_bankgravity_used = false;
+			VectorCopy(pmove.origin, begin);
+			VectorClear(normal);
+			admitted = PMSrc_BankGravityStartDefault(normal);
+			Q_snprintfz(name, sizeof(name), "P1136 carrier %i finite Z admitted", i);
+			PMSrc_Check(name, admitted, 1, 0);
+			Q_snprintfz(name, sizeof(name), "P1136 carrier %i default Z includes carry", i);
+			PMSrc_Check(name, normal[2], (i & 1) ? -3497.5f : -3494.5f, 0);
+			PMSrc_StartGravity();
+			Q_snprintfz(name, sizeof(name), "P1136 carrier %i Z consumed once", i);
+			PMSrc_Check(name, pmove.basevelocity[2], 0, 0);
+			firstclear = false;
+			PMSrc_AirMove(&firstclear, velocity);
+			VectorCopy(pmove.origin, accepted);
+			Q_snprintfz(name, sizeof(name), "P1136 carrier %i first clear acts", i);
+			PMSrc_Check(name, firstclear, 1, 0);
+			VectorMA(begin, pms_frametime, velocity, linear);
+			Q_snprintfz(name, sizeof(name), "P1136 carrier %i total accepted path", i);
+			PMSrc_Check(name, VectorCompare(linear, accepted), 1, 0);
+			VectorCopy(pmove.velocity, finishbefore);
+			PMSrc_FinishGravity();
+			Q_snprintfz(name, sizeof(name), "P1136 carrier %i late clamp converges", i);
+			PMSrc_Check(name, PMSrc_BankGravityFinishChanged(finishbefore, pmove.velocity, NULL), 0, 0);
+			changed = admitted && firstclear && PMSrc_BankGravityAirChanged(begin, accepted, velocity, normal[2]);
+			Q_snprintfz(name, sizeof(name), "P1136 carrier %i earlier path used", i);
+			PMSrc_Check(name, changed, 1, 0);
+			Q_snprintfz(name, sizeof(name), "P1136 carrier %i relative X retained", i);
+			PMSrc_Check(name, pmove.velocity[0], 80, 0);
+			Q_snprintfz(name, sizeof(name), "P1136 carrier %i relative Y retained", i);
+			PMSrc_Check(name, pmove.velocity[1], 0, 0);
+		}
+		pms_forwardmove = forwardmove;
+		pms_sidemove = sidemove;
+	}
 	pmove.basevelocity[0] = NAN;
 	PMSrc_Check("P1135 NaN horizontal carrier refused", PMSrc_BankGravityStartDefault(normal), 0, 0);
 	pmove.basevelocity[0] = INFINITY;

@@ -1,5 +1,28 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1136 — retain eligible gravity status with finite vertical air carriers
+
+**Problem:** The bounded earlier-air observer still refuses vertical carriers,
+although its existing default start already applies the same vertical carry and
+sanitization as the actual gravity step before that carry is cleared.
+
+**Change:** Remove only that blanket refusal; retain the finite-component,
+accepted-total-path, same-input default geometry and unsupported-context guards.
+No movement arithmetic, query budget, captured field, API, flag or tier changes.
+Refine the earlier negative to nonfinite vertical carry; add signed vertical and
+mixed-carrier phase, clamp-convergence and accepted-path controls.
+
+**Verified:** Isolated full Windows/ARM64 candidates have zero new warnings.
+36 new controls, 20 horizontal, 9 jump-input, 33 earlier-air and 58 earlier-gravity
+checks plus all older checks pass with native exit zero. Each platform's 60 acting
+physics rows exactly match qualified predecessors. One compiled eight-arm socket
+fixture across original/current/unavailable-API images proves actual vertical
+read-and-clear and default body response. All raw/cache/profile/input/relative and
+total displacement outputs match; only four intended statuses change. Reader and
+fixed-corpus evidence is reused unchanged, not a fresh or fault-free sweep.
+Clean committed builds, fresh whole-feature reviews and promotion remain separate
+gates. No human, finished/ranked-run or complete bank acceptance is claimed.
+
 ## Patch 1135 — retain eligible gravity status with horizontal air carriers
 
 **Problem:** The bounded earlier-air observer refuses all base velocity. Its
