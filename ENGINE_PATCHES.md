@@ -112,8 +112,26 @@ admission regression preserves raw/profile/input/relative and total motion/statu
 outputs; original/unavailable-API evidence is unchanged reuse. Reader tests pass
 949 checks; the intended current runs corpus remains 528 inputs/336 existing
 faults with all bytes unchanged, not a fault-free or saved-prefix sweep. No new
-genuine-ground socket, human, ranked-finish or complete bank acceptance. Clean
-pinned artifacts, two fresh independent reviews and deployment remain pending.
+genuine-ground socket, human, ranked-finish or complete bank acceptance.
+Clean tagged version `git-8027-patch-1141-0-g85e13a4ca` passes the same gates.
+Two fresh independent whole-feature reviews found no supported-scope issues;
+the parent verified all 3,999 tracked source files, refs/index/tag and frozen
+artifacts unchanged before and after review. Exact native `85e13a4ca` and QC
+pin declaration `ce44c35c` are published; the higher project patch stays 1142.
+
+**Delivery (30 Oct 2026 UTC):** Both Windows installs verified all 22 destinations
+and paired `.prev` at 22:27:23; all 16,963 old protected entries were unchanged.
+At 22:37:29 the 12 empty lobbies received the frozen paired files with one ordinary
+restart each, no force. All four current part files (1,426,033 bytes, no open part
+FDs) were archived and independently read back off-box BEFORE any restart.
+Strict postflight verified new native/plugin epochs, all 35,774 old protected
+entries, configs/backend and released sweep lock. This does NOT recover or waive
+P1136's historical three-file preservation failure. A fresh installed client
+fetched exact served CSQC, drew the board and exited without QC errors; the image
+shows an empty board and unaccepted terms, not human or ranked-run acceptance.
+At 22:45:42 the same 12 new actors and every old protected entry/part still matched;
+nine new files were preserved. The later Windows check also retained all old
+protected bytes. No extra healthy restart, backend generation, Build or release.
 
 ## Patch 1139 — retain eligible gravity status through stock ground takeoff
 
