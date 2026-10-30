@@ -23,7 +23,8 @@ fixed-corpus evidence is reused unchanged, not a fresh or fault-free sweep.
 Two fresh independent whole-feature reviews are clear. No human,
 finished/ranked-run or complete bank acceptance is claimed.
 
-**Partial deployment:** Published native `b6390513f` / `patch-1136` and QC
+**Deployed; preservation acceptance partial:** Published native `b6390513f` /
+`patch-1136` and QC
 `151bc58a1`. On 30 Oct2026 15:40:04 UTC all12 lobbies run the exact frozen native
 and HL2 images: original new process births, mapped plugin inodes, twelve actual
 version replies, paired file/previous hashes, heartbeats and backend/config/unit
@@ -37,9 +38,24 @@ save/resume/receipt domain. Later gameplay changed a save set separately. The
 three prior payloads/open-handle states were not captured: their usual volatile
 lifecycle does not prove their exact contents were unfinished, especially after
 a failed final rename. No blanket exclusion or all-data-preserved claim; original
-failure and read-only evidence retained. Windows remains on P1135 while the owner
-client is active; Windows promotion and isolated live-client cold smoke pending.
-No rebuild, pin/tag/Build bump or release accompanied this status record.
+failure and read-only evidence retained. A bounded 8-file / 9.1 MB search of
+added/changed recordings found no exact before-hash prefix at the tested line/
+4 KiB/end boundaries; this does not prove irreversible loss or absence of another
+backup. Do not restore player data or waive the original failed receipt.
+
+After the owner closed the client, both Windows installs received all22 frozen
+targets through the existing deploy function, retaining exact paired previous
+images and original/prior-previous backups. All16,759 old protected Windows paths
+matched immediately and after cold smoke. Both current CS caches are exact at
+`18cd7a05`; other cached versions retained, no temporary-cache deletion.
+Fresh isolated installed-client smoke exited zero, fetched exact served CSQC,
+drew the nine-column/type14 board without QC errors, and produced an inspected
+screenshot. It shows the empty/no-zone-times board on surf_kitsune with terms
+unaccepted, not human feel or a finished/ranked run. Final16:13:59 UTC readback
+confirms the original twelve new Pi epochs/plugins, paired previous images,
+backend/config/unit and health; actual15:40 version replies are valid reuse,
+not re-sent or re-dated measurements. No rebuild, pin/tag/Build bump or release
+accompanied these status records.
 
 ## Patch 1135 — retain eligible gravity status with horizontal air carriers
 
