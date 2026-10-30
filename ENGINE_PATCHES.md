@@ -1,5 +1,23 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1138 — blend completed Source ticks during slow practice
+
+**Problem:** P954's authoritative slow-practice path blends adjacent packets,
+although several can repeat one completed Source pose. Native half-speed air
+captures repeat position in44.5% of moving samples; ordinary interpolation cvars
+do not remove the hold/rush pattern.
+
+**Change:** Bound a per-seat completed-pose ring and sample one scaled physics
+tick behind the normal packet clock. Scope to the own non-predicted Source player;
+reset at mode/owner/warp/teleport/epoch changes. No future simulation, command,
+physics, timer or eligibility change. `cl_source_practice_lerp 0` restores the old
+path. Also make the existing nopred diagnostic tolerate its absent replay command.
+
+**Verified:** Exact-source ring/math controls pass, including duplicate holds,
+idle restart, continuous entry, finite/backward refusal, endpoint bounds and wrap.
+Actual-header GCC syntax check passes with `-Werror`. Full native build and
+same-image socket on/off qualification are pending; no deployment claim yet.
+
 ## Patch 1136 — retain eligible gravity status with finite vertical air carriers
 
 **Problem:** The bounded earlier-air observer still refuses vertical carriers,

@@ -1048,7 +1048,11 @@ STAT_H2_OBJECTIVE1,	//integer
 STAT_H2_OBJECTIVE2,	//integer
 #endif
 
+STAT_FS_SLSEQ                              = 65,  //FTESurf: existing save/warp presentation epoch
+STAT_FS_WOPACK                             = 177, //FTESurf: existing authoritative warp-operation ack
 STAT_FS_SOURCEPHASE                        = 179, //FTESurf P924: atomic owner/command/native phase string
+STAT_FS_TIMESCALE                          = 181, //FTESurf P954: per-player practice duration scale
+STAT_FS_TASPAUSE                           = 187, //FTESurf P1055: authoritative movement-only pause
 STAT_MOVEVARS_AIRACCEL_QW_STRETCHFACTOR		= 220, // DP
 STAT_MOVEVARS_AIRCONTROL_PENALTY			= 221, // DP
 STAT_MOVEVARS_AIRSPEEDLIMIT_NONQW 			= 222, // DP

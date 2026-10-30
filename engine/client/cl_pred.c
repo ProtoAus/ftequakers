@@ -26,6 +26,7 @@ cvar_t	cl_lerp_smooth = CVARD("cl_lerp_smooth", "2", "If 2, will act as 1 when p
 static cvar_t	cl_lerp_driftbias = CVARD("cl_lerp_driftbias", "0", "Additional bias, can be set to a negative value to hold interpolation in the past.");
 static cvar_t	cl_lerp_driftfrac = CVARD("cl_lerp_driftfrac", "0", "Proportion of the latest time vs the older time to favour drifting towards.");
 cvar_t	cl_nopred = CVARD("cl_nopred","0", "Disables clientside movement prediction.");
+static cvar_t cl_source_practice_lerp = CVARD("cl_source_practice_lerp", "1", "Blend completed authoritative Source poses during per-player slow practice, with one scaled physics tick of presentation delay. Does not predict or change movement, inputs, timers or eligibility. 0 restores adjacent-packet interpolation.");
 /*FTESurf Patch 269.  The instrument that found the standing-still velocity
   flicker.  CSQC's hud_veltrace can see that pmove_vel moves between rendered
   frames while pmove_org does not, but it cannot see WHY, because everything
@@ -1195,6 +1196,189 @@ qboolean CSQC_GetSSQCEntityOrigin(unsigned int ssqcent, float *out);
 CL_PredictMove
 ==============
 */
+/* P1138: slow practice is server-authoritative. Its completed Source ticks are
+   farther apart than network packets. Blend completed poses, not duplicate
+   packets, with one scaled-tick presentation delay. No mover/input/clock state
+   is changed, and the known endpoints bound the result during packet gaps. */
+#define SOURCE_PRACTICE_POSES 32
+
+typedef struct
+{
+	float time;
+	vec3_t origin, velocity;
+} sourcepracticepose_t;
+
+typedef struct
+{
+	sourcepracticepose_t pose[SOURCE_PRACTICE_POSES];
+	int next, count, owner, servercount, modelindex, solidsize;
+	qboolean blocked;
+	unsigned int sequence, effects;
+	const void *world;
+	float scale, tick, packettime, warpack, saveseq;
+} sourcepracticelerp_t;
+
+static sourcepracticelerp_t sourcepractice[MAX_SPLITS];
+
+/* Kept separate from the native adapter so the exact source can be exercised
+   without simulating a second mover or rebuilding an interpolation model. */
+static qboolean CL_SourcePracticePush(sourcepracticelerp_t *s, float time,
+	const vec3_t origin, const vec3_t velocity, float interval)
+{
+	sourcepracticepose_t *p;
+	int i;
+	if (!(time > -1e9f && time < 1e9f && interval > 0 && interval <= 1))
+		return false;
+	for (i = 0; i < 3; i++)
+		if (IS_NAN(origin[i]) || IS_NAN(velocity[i]))
+			return false;
+	if (s->count)
+	{
+		p = &s->pose[(s->next + SOURCE_PRACTICE_POSES - 1) % SOURCE_PRACTICE_POSES];
+		if (time < p->time)
+			return false;
+		if (VectorCompare(origin, p->origin) && VectorCompare(velocity, p->velocity))
+			return true; /* No new completed motion tick. Keep its first stamp. */
+		if (time == p->time)
+			return false;
+		/* Do not spread an idle->motion edge over an arbitrarily long idle. */
+		if (VectorCompare(p->velocity, vec3_origin) && time - p->time > interval)
+			p->time = time - interval;
+	}
+	p = &s->pose[s->next];
+	p->time = time;
+	VectorCopy(origin, p->origin);
+	VectorCopy(velocity, p->velocity);
+	s->next = (s->next + 1) % SOURCE_PRACTICE_POSES;
+	if (s->count < SOURCE_PRACTICE_POSES)
+		s->count++;
+	return true;
+}
+
+static qboolean CL_SourcePracticeSample(const sourcepracticelerp_t *s, float time, vec3_t out)
+{
+	const sourcepracticepose_t *a, *b;
+	float f;
+	int i, n;
+	if (!s->count || !(time > -1e9f && time < 1e9f))
+		return false;
+
+	n = (s->next + SOURCE_PRACTICE_POSES - 1) % SOURCE_PRACTICE_POSES;
+	b = &s->pose[n];
+	if (time >= b->time)
+	{
+		VectorCopy(b->origin, out); /* Never extrapolate unknown movement. */
+		return true;
+	}
+	for (i = 1; i < s->count; i++)
+	{
+		n = (n + SOURCE_PRACTICE_POSES - 1) % SOURCE_PRACTICE_POSES;
+		a = &s->pose[n];
+		if (time >= a->time)
+		{
+			f = bound(0, (time - a->time) / (b->time - a->time), 1);
+			VectorInterpolate(a->origin, f, b->origin, out);
+			return true;
+		}
+		b = a;
+	}
+	VectorCopy(b->origin, out);
+	return true;
+}
+
+static qboolean CL_SourcePracticeContext(playerview_t *pv)
+{
+	return cl_source_practice_lerp.ival && cls.state == ca_active && cl.validsequence &&
+		!cls.demoplayback && cl.intermissionmode == IM_NONE && !cl.paused &&
+		!pv->spectator && pv->cam_state == CAM_FREECAM &&
+		pv->viewentity == pv->playernum + 1 && cl.worldmodel &&
+		cl.worldmodel->loadstate == MLS_LOADED &&
+		(cls.fteprotocolextensions2 & PEXT2_REPLACEMENTDELTAS) &&
+		movevars.physicsmode == PHYSMODE_SOURCE &&
+		!strcmp(InfoBuf_ValueForKey(&cl.serverinfo, "fs_sourcephase"), "1") &&
+		pv->statsf[STAT_FS_TIMESCALE] >= 0.1f && pv->statsf[STAT_FS_TIMESCALE] < 1 &&
+		movevars.ticrate >= 0.001f && movevars.ticrate <= 0.1f &&
+		pv->statsf[STAT_FS_TASPAUSE] == 0;
+}
+
+static void CL_SourcePracticeLerp(int seat, playerview_t *pv, qboolean nopred)
+{
+	sourcepracticelerp_t *s = &sourcepractice[seat];
+	packet_entities_t *pack;
+	entity_state_t *ent = NULL;
+	vec3_t velocity, delta;
+	float scale = pv->statsf[STAT_FS_TIMESCALE];
+	float tick = movevars.ticrate, time, target, interval;
+	unsigned int sequence = cl.validsequence;
+	int i;
+
+	if (!nopred || !CL_SourcePracticeContext(pv))
+		goto reset;
+	if (s->blocked)
+	{
+		if (sequence == s->sequence)
+			return; /* Let the classic path consume the discontinuity packet. */
+		memset(s, 0, sizeof(*s));
+	}
+	interval = tick / scale;
+	target = cl.servertime - interval;
+	pack = &cl.inframes[sequence & UPDATE_MASK].packet_entities;
+	time = pack->servertime;
+	if (!(time >= 0 && time < 1e9f && target > -1e9f && target < 1e9f))
+		goto reset;
+	for (i = 0; i < pack->num_entities; i++)
+		if (pack->entities[i].number == pv->viewentity)
+		{
+			ent = &pack->entities[i];
+			break;
+		}
+	if (!ent || (ent->u.q1.pmovetype & 0x3f) != MOVETYPE_WALK)
+		goto reset;
+	VectorScale(ent->u.q1.velocity, 1/8.0f, velocity);
+	if (s->count && (s->owner != pv->viewentity || s->world != cl.worldmodel ||
+		s->servercount != cl.servercount || s->scale != scale || s->tick != tick ||
+		sequence - s->sequence > 0x7fffffffu || time < s->packettime ||
+		time - s->packettime > interval * 4 ||
+		((s->effects ^ ent->effects) & EF_TELEPORT_BIT) ||
+		s->modelindex != ent->modelindex || s->solidsize != ent->solidsize ||
+		s->warpack != pv->statsf[STAT_FS_WOPACK] ||
+		s->saveseq != pv->statsf[STAT_FS_SLSEQ]))
+		goto discontinuity;
+	if (s->count)
+	{
+		VectorSubtract(ent->origin, s->pose[(s->next + SOURCE_PRACTICE_POSES - 1) % SOURCE_PRACTICE_POSES].origin, delta);
+		for (i = 0; i < 3; i++)
+			if (delta[i] > 128 || delta[i] < -128)
+				goto discontinuity; /* Existing own-player teleport bound. */
+	}
+	if (!s->count)
+	{
+		/* Enter from the point already being presented, not a backward snap. */
+		if (target >= time || !CL_SourcePracticePush(s, target, pv->simorg, pv->simvel, interval))
+			goto reset;
+	}
+	s->owner = pv->viewentity;
+	s->world = cl.worldmodel;
+	s->servercount = cl.servercount;
+	s->scale = scale; s->tick = tick;
+	s->sequence = sequence; s->packettime = time;
+	s->effects = ent->effects;
+	s->modelindex = ent->modelindex; s->solidsize = ent->solidsize;
+	s->warpack = pv->statsf[STAT_FS_WOPACK]; s->saveseq = pv->statsf[STAT_FS_SLSEQ];
+	if (!CL_SourcePracticePush(s, time, ent->origin, velocity, interval) ||
+		!CL_SourcePracticeSample(s, target, pv->simorg))
+		goto reset;
+	/* simvel/onground/command buffers/authoritative states remain untouched. */
+	return;
+discontinuity:
+	memset(s, 0, sizeof(*s));
+	s->blocked = true;
+	s->sequence = sequence;
+	return;
+reset:
+	memset(s, 0, sizeof(*s));
+}
+
 void CL_PredictMovePNum (int seat)
 {
 	//when this is called, the entity states have been interpolated.
@@ -1230,6 +1414,9 @@ void CL_PredictMovePNum (int seat)
 	qboolean	source_eye_clipped = false;
 	float		source_eye_raw = 0, source_eye_limit = 0;
 
+	/* Clear even on the early-return paths (disconnect/demo/pause/seat swap). */
+	if (!CL_SourcePracticeContext(pv))
+		memset(&sourcepractice[seat], 0, sizeof(sourcepractice[seat]));
 	simtime = CL_GetPredictionRealtime(pv);
 
 	pv->nolocalplayer = !!(cls.fteprotocolextensions2 & PEXT2_REPLACEMENTDELTAS) || (cls.protocol != CP_QUAKEWORLD);
@@ -1920,6 +2107,7 @@ void CL_PredictMovePNum (int seat)
 				VectorCopy(to.state->velocity, pv->simvel);
 		}
 	}
+	CL_SourcePracticeLerp(seat, pv, nopred);
 	/*FTESurf Patch 269: the dump.  Everything above is final by here -- simorg
 	  and simvel are what CSQC will be handed as pmove_org/pmove_vel.*/
 	if (cl_predtrace.ival != 0 && seat == 0)
@@ -1946,11 +2134,12 @@ void CL_PredictMovePNum (int seat)
 			pt_recs[n].extrap = pt_extrap;
 			pt_recs[n].msec = pt_msec;
 			pt_recs[n].f = pt_f;
-			pt_recs[n].cmdf = to.cmd->forwardmove;
-			pt_recs[n].cmds = to.cmd->sidemove;
-			pt_recs[n].cmdu = to.cmd->upmove;
-			pt_recs[n].btn = to.cmd->buttons;
-			pt_recs[n].cmdmsec = to.cmd->msec;
+			/* P1138: nopred has real states but no replay command. */
+			pt_recs[n].cmdf = to.cmd ? to.cmd->forwardmove : 0;
+			pt_recs[n].cmds = to.cmd ? to.cmd->sidemove : 0;
+			pt_recs[n].cmdu = to.cmd ? to.cmd->upmove : 0;
+			pt_recs[n].btn = to.cmd ? to.cmd->buttons : 0;
+			pt_recs[n].cmdmsec = to.cmd ? to.cmd->msec : 0;
 			VectorCopy(from.state->velocity, pt_recs[n].fromvel);
 			VectorCopy(to.state->velocity, pt_recs[n].tovel);
 			VectorCopy(pv->simvel, pt_recs[n].simvel);
@@ -2160,6 +2349,7 @@ void CL_InitPrediction (void)
 	extern char cl_predictiongroup[];
 	Cvar_Register (&cl_pushlatency, cl_predictiongroup);
 	Cvar_Register (&cl_nopred,	cl_predictiongroup);
+	Cvar_Register (&cl_source_practice_lerp, cl_predictiongroup);
 	Cvar_Register (&cl_predtrace,	cl_predictiongroup);	//FTESurf Patch 269
 	Cvar_Register (&cl_predict_velblend,	cl_predictiongroup);	//FTESurf Patch 269
 	Cvar_Register (&cl_predict_freshtype,	cl_predictiongroup);	//FTESurf Patch 243
