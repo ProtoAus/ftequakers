@@ -3127,7 +3127,7 @@ static void PMSrc_WalkMove (void)
 PMSrc_AirMove   (cpp:1764)
 ==================
 */
-static void PMSrc_AirMove (qboolean *firstclear)
+static void PMSrc_AirMove (qboolean *firstclear, vec3_t firstvelocity)
 {
 	vec3_t wishdir;
 	float wishspeed;
@@ -3138,6 +3138,8 @@ static void PMSrc_AirMove (qboolean *firstclear)
 
 	VectorAdd (pmove.velocity, pmove.basevelocity, pmove.velocity);
 	PMSrc_TryPlayerMoveCore (NULL, NULL, firstclear);
+	// Observer-only stack copy: the accepted path includes the carrier.
+	if (firstvelocity) VectorCopy(pmove.velocity, firstvelocity);
 	VectorSubtract (pmove.velocity, pmove.basevelocity, pmove.velocity);
 }
 
@@ -3282,8 +3284,9 @@ static qboolean PMSrc_BankGravityStartDefault(vec3_t normal)
 		!movevars.entgravity || movevars.entgravity == 1 ||
 		!isfinite(pms_frametime) || pms_frametime <= 0)
 		return false;
+	if (pmove.basevelocity[2]) return false;
 	for (i = 0; i < 3; ++i)
-		if (pmove.basevelocity[i] || !isfinite(pmove.origin[i]) || !isfinite(pmove.velocity[i]))
+		if (!isfinite(pmove.basevelocity[i]) || !isfinite(pmove.origin[i]) || !isfinite(pmove.velocity[i]))
 			return false;
 	PMSrc_NextTickVelocity(pmove.velocity, pms_frametime, movevars.gravity, 1, normal);
 	normal[2] += pmove.basevelocity[2] * pms_frametime;
@@ -3435,12 +3438,8 @@ static void PMSrc_FullWalkMove (void)
 	else
 	{
 		if (bankstart) VectorCopy(pmove.origin, bankstart_origin);
-		PMSrc_AirMove (bankstart ? &bankairclear : NULL);
-		if (bankstart)
-		{
-			VectorCopy(pmove.origin, bankstart_airend);
-			VectorCopy(pmove.velocity, bankstart_airvel);
-		}
+		PMSrc_AirMove (bankstart ? &bankairclear : NULL, bankstart ? bankstart_airvel : NULL);
+		if (bankstart) VectorCopy(pmove.origin, bankstart_airend);
 	}
 
 	PMSrc_CategorizePosition ();
@@ -4550,8 +4549,14 @@ static void PMSrc_TestBankStartGravity(void)
 	qboolean crossed = pms_portalcrossed, surfed = pms_surfed;
 	qboolean observe = pms_bankgravity_observe, used = pms_bankgravity_used;
 	qboolean clear, changed;
-	vec3_t normal, begin, accepted, velocity, mins, maxs, dest;
+	vec3_t normal, begin, accepted, velocity, relative, mins, maxs, dest;
+	vec3_t savedforward, savedright;
+	float maxspeed = pms_maxspeed;
+	int axis;
+	char name[96];
 	trace_t hit;
+	VectorCopy(pms_forward, savedforward);
+	VectorCopy(pms_right, savedright);
 	memcpy(saved, &pmove, sizeof(pmove));
 	memset(&pmove, 0, sizeof(pmove));
 	pmove.pm_type = PM_NORMAL;
@@ -4607,9 +4612,9 @@ static void PMSrc_TestBankStartGravity(void)
 	pms_haveportals = true;
 	PMSrc_Check("P1131 portal map excluded", PMSrc_BankGravityStartDefault(normal), 0, 0);
 	pms_haveportals = false;
-	pmove.basevelocity[0] = 1;
-	PMSrc_Check("P1131 base velocity excluded", PMSrc_BankGravityStartDefault(normal), 0, 0);
-	pmove.basevelocity[0] = 0;
+	pmove.basevelocity[2] = 1;
+	PMSrc_Check("P1131 vertical base velocity excluded", PMSrc_BankGravityStartDefault(normal), 0, 0);
+	pmove.basevelocity[2] = 0;
 	pmove.waterjumpremaining = 1;
 	PMSrc_Check("P1131 waterjump excluded", PMSrc_BankGravityStartDefault(normal), 0, 0);
 	pmove.waterjumpremaining = 0;
@@ -4637,6 +4642,55 @@ static void PMSrc_TestBankStartGravity(void)
 	PMSrc_Check("P1133 grounded jump rises finitely", isfinite(pmove.velocity[2]) && pmove.velocity[2] > 0, 1, 0);
 	pmove.onground = false;
 	pmove.oldbuttons = pmove.cmd.buttons = 0;
+	movevars.entgravity = INFINITY;
+	VectorSet(pms_forward, 1, 0, 0);
+	VectorSet(pms_right, 0, 1, 0);
+	pms_maxspeed = 320;
+	for (axis = 0; axis < 2; ++axis)
+	{
+		VectorSet(pmove.origin, 0, 0, 128);
+		VectorClear(pmove.velocity);
+		VectorClear(pmove.basevelocity);
+		pmove.basevelocity[axis] = 100;
+		PMSrc_BankGravityBegin(true);
+		Q_snprintfz(name, sizeof(name), "P1135 carrier %c admitted", axis ? 'Y' : 'X');
+		PMSrc_Check(name, PMSrc_BankGravityStartDefault(normal), 1, 0);
+		PMSrc_StartGravity();
+		VectorCopy(pmove.origin, begin);
+		PMSrc_AirMove(&clear, velocity);
+		Q_snprintfz(name, sizeof(name), "P1135 carrier %c first clear", axis ? 'Y' : 'X');
+		PMSrc_Check(name, clear, 1, 0);
+		Q_snprintfz(name, sizeof(name), "P1135 carrier %c path acts", axis ? 'Y' : 'X');
+		PMSrc_Check(name, velocity[axis] == 100 && pmove.velocity[axis] == 0 && pmove.origin[axis] == 1.5f, 1, 0);
+		VectorCopy(pmove.origin, accepted);
+		VectorCopy(pmove.velocity, relative);
+		changed = PMSrc_BankGravityAirChanged(begin, accepted, velocity, normal[2]);
+		Q_snprintfz(name, sizeof(name), "P1135 carrier %c total path used", axis ? 'Y' : 'X');
+		PMSrc_Check(name, changed, 1, 0);
+		Q_snprintfz(name, sizeof(name), "P1135 carrier %c relative path refused", axis ? 'Y' : 'X');
+		PMSrc_Check(name, PMSrc_BankGravityAirChanged(begin, accepted, relative, normal[2]), 0, 0);
+		Q_snprintfz(name, sizeof(name), "P1135 carrier %c observer preserves origin", axis ? 'Y' : 'X');
+		PMSrc_Check(name, VectorCompare(pmove.origin, accepted), 1, 0);
+		Q_snprintfz(name, sizeof(name), "P1135 carrier %c observer preserves relative velocity", axis ? 'Y' : 'X');
+		PMSrc_Check(name, VectorCompare(pmove.velocity, relative), 1, 0);
+		if (changed) pms_bankgravity_used = true;
+		Q_snprintfz(name, sizeof(name), "P1135 carrier %c command use delivered", axis ? 'Y' : 'X');
+		PMSrc_Check(name, PMSrc_BankGravityEnd(), 1, 0);
+	}
+	PMSrc_BankGravityBegin(true);
+	VectorClear(pmove.basevelocity);
+	pmove.basevelocity[0] = NAN;
+	PMSrc_Check("P1135 NaN horizontal carrier refused", PMSrc_BankGravityStartDefault(normal), 0, 0);
+	pmove.basevelocity[0] = INFINITY;
+	PMSrc_Check("P1135 infinite X carrier refused", PMSrc_BankGravityStartDefault(normal), 0, 0);
+	pmove.basevelocity[0] = 0;
+	pmove.basevelocity[1] = -INFINITY;
+	PMSrc_Check("P1135 infinite Y carrier refused", PMSrc_BankGravityStartDefault(normal), 0, 0);
+	pmove.basevelocity[1] = 0;
+	pmove.basevelocity[0] = 100;
+	movevars.entgravity = 1;
+	PMSrc_Check("P1135 default gravity carrier excluded", PMSrc_BankGravityStartDefault(normal), 0, 0);
+	VectorClear(pmove.basevelocity);
 	movevars.entgravity = INFINITY;
 	PMSrc_BankGravityBegin(false);
 	PMSrc_Check("P1131 unarmed excluded", PMSrc_BankGravityStartDefault(normal), 0, 0);
@@ -4690,6 +4744,9 @@ static void PMSrc_TestBankStartGravity(void)
 	pms_surfed = surfed;
 	pms_bankgravity_observe = observe;
 	pms_bankgravity_used = used;
+	VectorCopy(savedforward, pms_forward);
+	VectorCopy(savedright, pms_right);
+	pms_maxspeed = maxspeed;
 }
 
 static void PMSrc_SelfTest_f (void)

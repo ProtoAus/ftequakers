@@ -1,5 +1,31 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1135 — retain eligible gravity status with horizontal air carriers
+
+**Problem:** The bounded earlier-air observer refuses all base velocity. Its
+returned local velocity excludes the carrier, although the accepted movement
+trace includes it, so simply admitting that input would not prove the used path.
+
+**Change:** Keep a stack-only copy of the actual post-trace total velocity before
+its existing carrier subtraction; use that copy for the same accepted/default
+trajectory proof. Admit only finite horizontal carriers, retain the vertical and
+other unsupported-context refusals and existing query budget. No new recorded
+field, API, flag, tier, gameplay step or movement arithmetic. Refine the earlier
+carrier negative to the still-excluded vertical case; add native controls.
+
+**Verified:** Windows/ARM64 isolated candidate builds have zero new warnings.
+20 new controls, 9 prior jump-input controls, 33 prior air controls (including the
+refined vertical-carrier negative), 58 earlier gravity checks and all older
+checks pass with native exit zero. Each platform's 60 acting physics rows exactly
+match qualified predecessors. One compiled eight-arm socket fixture across the
+original, candidate and unavailable-API images proves read-and-clear handoff,
+source/cache/admission and actual carrier displacement. All raw/cache/input/
+relative velocity/total displacement outputs match; only the four intended
+horizontal-carrier statuses change. Default and unavailable-API controls act.
+Unchanged reader/fixed-corpus evidence is reused, not a fresh or fault-free sweep.
+Clean committed builds, fresh whole-feature reviews and promotion remain separate
+gates. No human, finished/ranked-run or complete bank acceptance is claimed.
+
 ## Patch 1134 — bounded native legal-start TAS verification CLI
 
 **Problem:** The TAS editor can replay a project, but no isolated operator path
