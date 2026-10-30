@@ -1,5 +1,30 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1140 — share and open portable TAS revisions in the game
+
+**Problem:** The revision service had no in-game collaboration consumer. Local
+projects needed explicit public sharing, current-map discovery and a safe path
+back into the TAS editor without confusing contributions with human-run evidence.
+
+**Change:** Add a Shared tab, explicit saved/retained-v3 upload, existing statements
+before body, bounded informational credit view and protected new-name download.
+Validate canonical hash/map/profile before install; use the ordinary client
+command for deferred load. Cancel slot-owned work at teardown. Protect final,
+staged and recovery paths using metadata plus fresh exact enumeration. Restrict
+transport to the fixed public origin or a bounded loopback test listener. Native
+pin, physics, receipt formats, human admission and Build number are unchanged.
+
+**Verified:** QuakeC builds with zero new warnings (two unchanged client F333).
+Real isolated native HTTP controls prove byte-exact POST/download and tape load
+to the requested head, statement ordering and no linked credit for an unlinked
+fixture key. Preseeded/late unreadable files and recovery bytes survive; cached-only
+control reaches failed rename, fresh census refuses before staging. Malformed,
+wrong-hash and nonportable bodies are refused; actual teardown prevents late
+install/next upload. Credit bounds retain Open, retained child uploads report its
+parent, and endpoint admission has acting negative/positive controls. No physical
+owner signing, human UI/feel, verified time or production deployment is inferred.
+Independent final review and deployment pending; human checks remain in lextest.md.
+
 ## Patch 1139 — retain eligible gravity status through stock ground takeoff
 
 **Problem:** The bounded earlier-use observer refuses every grounded entry,
