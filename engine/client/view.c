@@ -1711,6 +1711,7 @@ void V_CalcRefdef (playerview_t *pv)
 {
 	float		bob;
 	float		viewheight;
+	vec3_t		practiceoffset;
 
 	if (r_refdef.fixedview)
 	{
@@ -1743,6 +1744,10 @@ void V_CalcRefdef (playerview_t *pv)
 
 // refresh position from simulated origin
 	VectorCopy (pv->simorg, r_refdef.vieworg);
+	/* P1138: interpolate the camera, not the shared body/input/HUD state.
+	   Apply before the gun, portal, chase-camera and skyroom calculations. */
+	if (CL_GetSourcePracticeViewOffset(pv, practiceoffset))
+		VectorAdd(r_refdef.vieworg, practiceoffset, r_refdef.vieworg);
 
 	r_refdef.useperspective = true;
 	r_refdef.mindist = bound(0.1, gl_mindist.value, 4);

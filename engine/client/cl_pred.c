@@ -26,7 +26,7 @@ cvar_t	cl_lerp_smooth = CVARD("cl_lerp_smooth", "2", "If 2, will act as 1 when p
 static cvar_t	cl_lerp_driftbias = CVARD("cl_lerp_driftbias", "0", "Additional bias, can be set to a negative value to hold interpolation in the past.");
 static cvar_t	cl_lerp_driftfrac = CVARD("cl_lerp_driftfrac", "0", "Proportion of the latest time vs the older time to favour drifting towards.");
 cvar_t	cl_nopred = CVARD("cl_nopred","0", "Disables clientside movement prediction.");
-static cvar_t cl_source_practice_lerp = CVARD("cl_source_practice_lerp", "1", "Blend completed authoritative Source poses during per-player slow practice, with one scaled physics tick of presentation delay. Does not predict or change movement, inputs, timers or eligibility. 0 restores adjacent-packet interpolation.");
+static cvar_t cl_source_practice_lerp = CVARD("cl_source_practice_lerp", "1", "Blend the slow-practice camera across completed authoritative Source poses, with one scaled physics tick of presentation delay. Leaves shared body state, physics, timers and eligibility unchanged. 0 restores the classic view.");
 /*FTESurf Patch 269.  The instrument that found the standing-still velocity
   flicker.  CSQC's hud_veltrace can see that pmove_vel moves between rendered
   frames while pmove_org does not, but it cannot see WHY, because everything
@@ -1211,6 +1211,8 @@ typedef struct
 typedef struct
 {
 	sourcepracticepose_t pose[SOURCE_PRACTICE_POSES];
+	vec3_t viewoffset;
+	float rendertime;
 	int next, count, owner, servercount, modelindex, solidsize;
 	qboolean blocked;
 	unsigned int sequence, effects;
@@ -1241,9 +1243,17 @@ static qboolean CL_SourcePracticePush(sourcepracticelerp_t *s, float time,
 			return true; /* No new completed motion tick. Keep its first stamp. */
 		if (time == p->time)
 			return false;
-		/* Do not spread an idle->motion edge over an arbitrarily long idle. */
+		/* Keep the old stop endpoint: retiming it replays earlier movement.
+		   Add a second stationary point before the new motion instead. */
 		if (VectorCompare(p->velocity, vec3_origin) && time - p->time > interval)
-			p->time = time - interval;
+		{
+			sourcepracticepose_t hold = *p;
+			hold.time = time - interval;
+			s->pose[s->next] = hold;
+			s->next = (s->next + 1) % SOURCE_PRACTICE_POSES;
+			if (s->count < SOURCE_PRACTICE_POSES)
+				s->count++;
+		}
 	}
 	p = &s->pose[s->next];
 	p->time = time;
@@ -1286,7 +1296,7 @@ static qboolean CL_SourcePracticeSample(const sourcepracticelerp_t *s, float tim
 	return true;
 }
 
-static qboolean CL_SourcePracticeContext(playerview_t *pv)
+static qboolean CL_SourcePracticeContext(const playerview_t *pv)
 {
 	return cl_source_practice_lerp.ival && cls.state == ca_active && cl.validsequence &&
 		!cls.demoplayback && cl.intermissionmode == IM_NONE && !cl.paused &&
@@ -1301,12 +1311,12 @@ static qboolean CL_SourcePracticeContext(playerview_t *pv)
 		pv->statsf[STAT_FS_TASPAUSE] == 0;
 }
 
-static void CL_SourcePracticeLerp(int seat, playerview_t *pv, qboolean nopred)
+static void CL_UpdateSourcePracticeView(int seat, playerview_t *pv, qboolean nopred)
 {
 	sourcepracticelerp_t *s = &sourcepractice[seat];
 	packet_entities_t *pack;
 	entity_state_t *ent = NULL;
-	vec3_t velocity, delta;
+	vec3_t velocity, delta, sampled;
 	float scale = pv->statsf[STAT_FS_TIMESCALE];
 	float tick = movevars.ticrate, time, target, interval;
 	unsigned int sequence = cl.validsequence;
@@ -1347,9 +1357,8 @@ static void CL_SourcePracticeLerp(int seat, playerview_t *pv, qboolean nopred)
 	if (s->count)
 	{
 		VectorSubtract(ent->origin, s->pose[(s->next + SOURCE_PRACTICE_POSES - 1) % SOURCE_PRACTICE_POSES].origin, delta);
-		for (i = 0; i < 3; i++)
-			if (delta[i] > 128 || delta[i] < -128)
-				goto discontinuity; /* Existing own-player teleport bound. */
+		if (DotProduct(delta, delta) > 128 * 128)
+			goto discontinuity; /* Same spherical bound as the nopred path. */
 	}
 	if (!s->count)
 	{
@@ -1366,9 +1375,12 @@ static void CL_SourcePracticeLerp(int seat, playerview_t *pv, qboolean nopred)
 	s->modelindex = ent->modelindex; s->solidsize = ent->solidsize;
 	s->warpack = pv->statsf[STAT_FS_WOPACK]; s->saveseq = pv->statsf[STAT_FS_SLSEQ];
 	if (!CL_SourcePracticePush(s, time, ent->origin, velocity, interval) ||
-		!CL_SourcePracticeSample(s, target, pv->simorg))
+		!CL_SourcePracticeSample(s, target, sampled))
 		goto reset;
-	/* simvel/onground/command buffers/authoritative states remain untouched. */
+	VectorSubtract(sampled, pv->simorg, s->viewoffset);
+	s->rendertime = cl.servertime;
+	/* Only V_CalcRefdef consumes this delta. Keep the shared body pair,
+	   input callbacks, HUD/trail state and command buffers on their old path. */
 	return;
 discontinuity:
 	memset(s, 0, sizeof(*s));
@@ -1377,6 +1389,23 @@ discontinuity:
 	return;
 reset:
 	memset(s, 0, sizeof(*s));
+}
+
+qboolean CL_GetSourcePracticeViewOffset(const playerview_t *pv, vec3_t out)
+{
+	const sourcepracticelerp_t *s;
+	int seat;
+	for (seat = 0; seat < MAX_SPLITS; seat++)
+		if (pv == &cl.playerview[seat])
+			break;
+	if (seat == MAX_SPLITS || !CL_SourcePracticeContext(pv))
+		return false;
+	s = &sourcepractice[seat];
+	if (!s->count || s->blocked || s->sequence != (unsigned int)cl.validsequence ||
+		s->rendertime != (float)cl.servertime)
+		return false;
+	VectorCopy(s->viewoffset, out);
+	return true;
 }
 
 void CL_PredictMovePNum (int seat)
@@ -2107,7 +2136,7 @@ void CL_PredictMovePNum (int seat)
 				VectorCopy(to.state->velocity, pv->simvel);
 		}
 	}
-	CL_SourcePracticeLerp(seat, pv, nopred);
+	CL_UpdateSourcePracticeView(seat, pv, nopred);
 	/*FTESurf Patch 269: the dump.  Everything above is final by here -- simorg
 	  and simvel are what CSQC will be handed as pmove_org/pmove_vel.*/
 	if (cl_predtrace.ival != 0 && seat == 0)

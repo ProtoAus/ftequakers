@@ -8,15 +8,27 @@ captures repeat position in44.5% of moving samples; ordinary interpolation cvars
 do not remove the hold/rush pattern.
 
 **Change:** Bound a per-seat completed-pose ring and sample one scaled physics
-tick behind the normal packet clock. Scope to the own non-predicted Source player;
-reset at mode/owner/warp/teleport/epoch changes. No future simulation, command,
-physics, timer or eligibility change. `cl_source_practice_lerp 0` restores the old
-path. Also make the existing nopred diagnostic tolerate its absent replay command.
+tick behind the normal packet clock. Apply its delta only in `V_CalcRefdef`, before
+gun/portal/chase/skyroom view calculations. The shared body position/velocity,
+input callback globals, HUD/trail pair, physics, timers and eligibility retain
+their existing paths. Scope to the own non-predicted Source player and reset at
+mode/owner/warp/teleport/epoch changes. No future simulation. Native cursor rays
+follow the resulting view as usual; this is not an engine-wide claim of identical
+outbound data. `cl_source_practice_lerp 0` restores the classic camera. Also make
+the existing nopred diagnostic tolerate its absent replay command.
 
-**Verified:** Exact-source ring/math controls pass, including duplicate holds,
-idle restart, continuous entry, finite/backward refusal, endpoint bounds and wrap.
-Actual-header GCC syntax check passes with `-Werror`. Full native build and
-same-image socket on/off qualification are pending; no deployment claim yet.
+**Review corrections:** The first local candidate incorrectly retimed a stopped
+endpoint and used a per-axis teleport bound; retain a separate stationary point
+and match the nopred spherical128-unit bound instead. Its shared-origin write also
+mixed historical position with current velocity for HUD/trail consumers: the
+revised producer changes the view only. Initial code/build and failed audit-tool
+receipt remain retained, not promoted.
+
+**Verified/pending:** Retained first-candidate source fails both new idle-resume
+and diagonal-teleport controls; revised exact-source tests pass all three groups.
+Current `cl_pred.c` and `view.c` pass actual-header GCC `-Werror` syntax checks
+without stale PCH. Fresh full native/header build, re-review and same-image
+socket on/off camera qualification are still required. No deployment claim yet.
 
 ## Patch 1136 — retain eligible gravity status with finite vertical air carriers
 
