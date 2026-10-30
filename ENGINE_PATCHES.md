@@ -13,7 +13,7 @@ other unsupported-context refusals and existing query budget. No new recorded
 field, API, flag, tier, gameplay step or movement arithmetic. Refine the earlier
 carrier negative to the still-excluded vertical case; add native controls.
 
-**Verified:** Windows/ARM64 isolated candidate builds have zero new warnings.
+**Verified:** Clean committed Windows/ARM64 builds have zero new warnings.
 20 new controls, 9 prior jump-input controls, 33 prior air controls (including the
 refined vertical-carrier negative), 58 earlier gravity checks and all older
 checks pass with native exit zero. Each platform's 60 acting physics rows exactly
@@ -23,8 +23,18 @@ source/cache/admission and actual carrier displacement. All raw/cache/input/
 relative velocity/total displacement outputs match; only the four intended
 horizontal-carrier statuses change. Default and unavailable-API controls act.
 Unchanged reader/fixed-corpus evidence is reused, not a fresh or fault-free sweep.
-Clean committed builds, fresh whole-feature reviews and promotion remain separate
-gates. No human, finished/ranked-run or complete bank acceptance is claimed.
+Two fresh independent whole-feature reviews are clear. No human,
+finished/ranked-run or complete bank acceptance is claimed.
+
+**Deployed:** 30 Oct2026 13:26:39 UTC, exact reviewed tag `patch-1135` /
+native `235a192a2` and QC `ef70f9af` frozen artifacts on both Windows installs
+and all12 lobbies. All22 Windows and four Pi destinations/previous hashes match;
+original new native epochs, plugin inodes, versions and heartbeats verified after
+an isolated cold-client check. Served CSQC and drawn board pass without QC errors.
+Backend generation/configuration and existing protected data are unchanged;
+rollback bytes retained. No forced drop, rebuild after review, Build bump or
+release. Empty-board/terms-unaccepted smoke is not human feel or finished-run
+ranking acceptance. Full bank and unsupported consumers remain open.
 
 ## Patch 1134 — bounded native legal-start TAS verification CLI
 
