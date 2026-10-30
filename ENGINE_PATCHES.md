@@ -21,7 +21,26 @@ preserves all raw/profile/input/relative and total motion/status outputs. Origin
 and unavailable-API controls are unchanged evidence reuse, not fresh runs. Initial
 fixture/prediction and retired-input wrapper failures remain retained. No genuine
 ground socket, human, ranked-finish or complete bank acceptance is claimed.
-Clean pinned artifact qualification, independent reviews and deployment pending.
+Clean tagged version `git-8024-patch-1139-0-geb1f494fa` passes those same checks.
+Two fresh whole-feature reviews found no supported-scope issues; the parent held
+all 3,994 tracked source files, refs/index and 18 frozen artifacts unchanged.
+Exact native `eb1f494fa` and QC declaration `76634e03` are published.
+
+**Delivery (30 Oct 2026 UTC):** Both Windows installs verified all 22 generated
+and native destinations plus paired `.prev` at 19:40:13; 16,761 protected entries
+were unchanged. At 19:53:33 all 12 empty lobbies received the frozen paired files
+with one ordinary restart each, no force. Their new PID/birth/native/plugin-inode
+pairs and all 35,714 old protected entries matched; configs/backend stayed put.
+Before restarting, all four current part files (1,426,033 bytes, no open part FDs)
+were archived against the prepared inventory and independently read back off-box.
+No file was presumed disposable or complete. This new strict postflight passes;
+it does NOT waive or recover P1136's historical three-file preservation failure.
+The 20:00:44 post-cold check retained those same actors and old bytes, preserving
+six new files. A fresh client fetched exact served CSQC, drew the board and exited
+without QC errors; the inspected image is an empty board with unaccepted terms,
+not human feel or ranked-run acceptance. No Build/release or backend-generation
+change. Reader tests pass; the actual corpus now has one additional malformed
+legacy input already present before deployment, not a claimed fault-free sweep.
 
 ## Patch 1136 — retain eligible gravity status with finite vertical air carriers
 
