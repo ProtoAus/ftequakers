@@ -43,8 +43,9 @@ The accepted displacement could still use the existing nondefault gravity input.
 **Change:** Remove only that redundant input exclusion. The existing dry-air entry
 requires no ground, and the actual jump check cannot jump or change velocity on
 this path. Its existing input latch updates identically for the same default
-command. Genuine grounded jumps and other unsupported contexts remain excluded. Keep the same accepted-movement/default-trajectory proof and existing
-use bit, source/cache admission and status; no new captured field, format, flag,
+command. Genuine grounded jumps and other unsupported contexts remain excluded.
+Keep the same accepted-movement/default-trajectory proof and existing use bit,
+source/cache admission and status; no new captured field, format, flag,
 tier, gameplay step or numerical movement change. Add acting air-refusal and
 normal grounded-jump native controls; refine the old any-button negative to the
 still-excluded genuine grounded-jump context.
@@ -61,6 +62,20 @@ remain. Reader 949/0 and fixed-corpus evidence are reused without reader or reco
 body changes; no new sweep or fault-free-corpus claim. Fresh whole-feature reviews,
 clean committed builds and publication/promotion are separate gates. No human,
 finished/ranked-run or complete bank/consumer acceptance is claimed.
+
+**Deployed:** Two fresh independent whole-feature reviews found no issues. Clean
+native `64e0191ca` / QC `31690324`, `patch-1133`, exact frozen artifacts reached
+both Windows installs and all 12 lobbies on 30 Oct 2026. Public QC merge
+`c050bd01` additionally preserves committed release-only changes; it was not
+rebuilt or substituted for the recorded runtime source. Live 11:19:31 UTC:
+all 12 original new native/plugin epochs and versions match; destination and
+`.prev` hashes match. All 16,475 protected Windows paths and 35,095 protected
+lobby paths retain their old bytes; configs/backend files/unit/master remain
+unchanged. No force or repeat swap/restart was needed. A fresh isolated client
+downloaded the exact served CSQC and drew the empty board without QC errors;
+screenshot inspected, terms unaccepted, no human/feel/finished/ranked-run pass.
+The bank and remaining consumers stay partial/open. Engine pin/tag and Build 89
+are unchanged by this delivery-only documentation.
 
 ## Patch 1131 — retain gravity-source status through earlier accepted air motion
 
