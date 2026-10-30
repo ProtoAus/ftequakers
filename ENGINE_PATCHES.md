@@ -1,5 +1,32 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1142 — finish held collector and linked-account refresh work (backend only)
+
+**Problem:** The unpublished P1117 collector branch retained useful retry,
+rotation and account-PB work, but could not simply replace current main or the
+live guarded generation. Fresh review also exposed invalid-main promotion,
+map-list cursor drift and an omitted runtime dependency.
+
+**Change:** Integrate its complete history with current schema24. Keep login
+queue-only and imports in their existing external/cache tiers. Separate retry
+parks, bound shared Momentum work and reserve progress under small budgets.
+Skip malformed numeric PB rows, use bounded dates, retain invalid KSF semantic
+markers, and durably bind each stage cursor to that walk/style's ordered map AND
+zone identities. Older offsets without a snapshot restart safely. Ship the
+flat fetcher with its unconditional msml dependency; test real installed imports.
+No native/QC interface, movement, evidence format/flag/tier or binary pin changes.
+
+**Verification/delivery boundary:** Local synthetic collector/profile/account,
+board/web and completion controls pass; concrete fresh-review falsifiers were
+acted before repair and retained. The current-main schema24 and P984 donated-zone
+contracts replace seven stale expected results, not failed product controls.
+Two unrelated admin amplification/snapshot expectations also fail the unchanged
+published control and remain recorded. The product notes retain remaining
+DNS-deadline and human-acceptance limits. Source publication is not live delivery:
+the existing exact81-file guarded runtime excludes new momprofile.py and requires
+a verified closure extension and rollback-preserving successor. No live backend
+mutation, account impersonation, external sweep, native build or lobby restart.
+
 ## Patch 1139 — retain eligible gravity status through stock ground takeoff
 
 **Problem:** The bounded earlier-use observer refuses every grounded entry,
