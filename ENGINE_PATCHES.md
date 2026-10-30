@@ -12,7 +12,7 @@ No movement arithmetic, query budget, captured field, API, flag or tier changes.
 Refine the earlier negative to nonfinite vertical carry; add signed vertical and
 mixed-carrier phase, clamp-convergence and accepted-path controls.
 
-**Verified:** Isolated full Windows/ARM64 candidates have zero new warnings.
+**Verified:** Clean committed full Windows/ARM64 builds have zero new warnings.
 36 new controls, 20 horizontal, 9 jump-input, 33 earlier-air and 58 earlier-gravity
 checks plus all older checks pass with native exit zero. Each platform's 60 acting
 physics rows exactly match qualified predecessors. One compiled eight-arm socket
@@ -20,8 +20,26 @@ fixture across original/current/unavailable-API images proves actual vertical
 read-and-clear and default body response. All raw/cache/profile/input/relative and
 total displacement outputs match; only four intended statuses change. Reader and
 fixed-corpus evidence is reused unchanged, not a fresh or fault-free sweep.
-Clean committed builds, fresh whole-feature reviews and promotion remain separate
-gates. No human, finished/ranked-run or complete bank acceptance is claimed.
+Two fresh independent whole-feature reviews are clear. No human,
+finished/ranked-run or complete bank acceptance is claimed.
+
+**Partial deployment:** Published native `b6390513f` / `patch-1136` and QC
+`151bc58a1`. On 30 Oct2026 15:40:04 UTC all12 lobbies run the exact frozen native
+and HL2 images: original new process births, mapped plugin inodes, twelve actual
+version replies, paired file/previous hashes, heartbeats and backend/config/unit
+checks match. Preapproved explicit `-PiForce` observed three connected clients;
+each lobby restarted once. No repeated swap, healthy restart or downgrade.
+
+The strict preservation postflight remains FAILED over three pre-existing files
+in the live `data/parts` area (two absent, one changed). All other 35,423 old
+entries matched at that original snapshot, including the 4,297-entry completed/
+save/resume/receipt domain. Later gameplay changed a save set separately. The
+three prior payloads/open-handle states were not captured: their usual volatile
+lifecycle does not prove their exact contents were unfinished, especially after
+a failed final rename. No blanket exclusion or all-data-preserved claim; original
+failure and read-only evidence retained. Windows remains on P1135 while the owner
+client is active; Windows promotion and isolated live-client cold smoke pending.
+No rebuild, pin/tag/Build bump or release accompanied this status record.
 
 ## Patch 1135 — retain eligible gravity status with horizontal air carriers
 
