@@ -32,9 +32,21 @@ historical QW pin2(4418/4418) and P813 pin7(9194/9192) pass both; the known bore
 hashes, a 6.133 s replay under its 45 s limit and reaped peers. Earlier acting controls
 remain applicable to the unchanged CLI/loader code. Reader949 and unchanged
 527-REC/328-fault baseline are reused, not fault-free/human proof. Reservation1132
-retired before publication; one final feature1134. Deployment is a separate step.
+retired before publication; one final feature1134.
 No production TAS board, canonical-zone finish, all-map/dynamic-object or unsupported
 tick-rate qualification is claimed.
+
+**Deployed:** Exact committed-source images/progs reached both Windows installs
+(22 destinations, predecessor bytes retained) and all12 lobbies on 30 Oct2026.
+Live11:48UTC readback matches all12 new native epochs, version1134, mapped HL2
+inodes and destination/.prev hashes. The activation preserves all35113 protected
+lobby paths; Windows preserves16477 protected paths. Configs/backend generation,
+stubs, unit and master are unchanged. No force, owner-process kill or repeated
+restart. A fresh isolated client downloads the exact served CSQC, draws the board
+(9cols/type14), exits cleanly and supplies an inspected screenshot. Empty board,
+missing map zones and unaccepted terms are not human/feel/ranked-run acceptance.
+Unchanged CSQC/menu bytes and existing CSQC caches are reused. Build89, tested
+native pin/tag and ordinary human boards are unchanged by this delivery record.
 
 ## Patch 1133 — retain eligible airborne gravity status with jump input
 
