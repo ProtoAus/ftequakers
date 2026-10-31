@@ -25,6 +25,8 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include "fs.h"
 
 void CL_GetNumberedEntityInfo (int num, float *org, float *ang);
+/* Client-private presentation notification; no wire/body/angle changes. */
+void CL_SourcePracticeWarp(int seat, unsigned int sequence);
 void CLDP_ParseDarkPlaces5Entities(void);
 void CLH2_ParseEntities(void);
 static void CL_SetStatNumeric (int pnum, unsigned int stat, int ivalue, float fvalue);
@@ -1814,7 +1816,7 @@ static int CL_LoadModels(int stage, qboolean dontactuallyload)
 
 	for (i=1 ; i<MAX_CSMODELS ; i++)
 	{
-		if (!cl.model_csqcname[i])
+		if (!cl.model_csqcname[i][0])
 			skipstage();
 		else if (atstage())
 		{
@@ -8024,6 +8026,8 @@ static void CL_ParseBaseAngle(int seat)
 		}
 	}
 
+	if (fl & 8)
+		CL_SourcePracticeWarp(seat, cls.netchan.incoming_sequence);
 	if (!CSQC_Parse_SetAngles(seat, newang, false))
 	{
 		if (fl & 8)
@@ -8365,6 +8369,7 @@ void CLQW_ParseServerMessage (void)
 				else
 				{
 					fixtype = 2;	//snap
+					CL_SourcePracticeWarp(destsplit, cls.netchan.incoming_sequence);
 					CSQC_PredictAngleAbsolute(destsplit, ang);	//FTESurf Patch 396 (335 flushed here)
 				}
 				if (!CSQC_Parse_SetAngles(destsplit, ang, fixtype==1))
@@ -10340,6 +10345,7 @@ void CLNQ_ParseServerMessage (void)
 				for (i=0 ; i<3 ; i++)
 					ang[i] = MSG_ReadAngle();
 				VectorCopy(cl.playerview[destsplit].viewangles, angbefore);
+				CL_SourcePracticeWarp(destsplit, cls.netchan.incoming_sequence);
 				CSQC_PredictAngleAbsolute(destsplit, ang);	//FTESurf Patch 396 (335 flushed here)
 				if (!CSQC_Parse_SetAngles(destsplit, ang, false))
 				{

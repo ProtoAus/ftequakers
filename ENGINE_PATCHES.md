@@ -1,5 +1,30 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1147 — continuous practice speed changes and short reset placement
+
+**Problem:** Changing slow scale discarded the completed-pose camera history;
+returning to1 exposed the undelayed body in one frame. A short zone reset could
+also interpolate across its old/new positions below the128-unit jump guard.
+
+**Fix:** Rebase a changed delay on the last actually drawn feet and a known
+server endpoint; identify that presentation seed separately from an idle server
+pose. Retire only the cosmetic offset smoothly when ordinary speed1 prediction
+resumes. Consume the existing absolute-setangle/baseangle-lock event even when
+CSQC handles its angle, waiting for a valid corresponding/later snapshot, and
+snap only the camera to the acknowledged reset location. No new wire/stat,
+recording field, mover, input, clock or practice-eligibility change. Existing
+save metadata still does not invalidate the view; real loads/warps do. Current
+P1145 is retained verbatim. The newly covered parser's fixed-array empty-name
+check tests its first character rather than the always-nonnull array address.
+
+**Verified so far:** Twelve literal-source groups (including all16 slow-scale
+pairs, speed1/stair handoff and two-unit reset controls) pass. Initial seed/idle
+hold counterexample and strict parser empty-array warning are retained and their
+actual producer defects fixed, not excluded. Actual-header checks, compiled
+runtime transition/control captures and strict dual-Windows delivery remain the
+qualification gates; no delivery claimed by this source commit. Existing human
+stair/roof acceptance remains with the owner. No Pi/backend/VM deployment needed.
+
 ## Patch 1145 — normalized duck takeoff gravity-use status
 
 **Problem:** Normalized crouch and ground-duck-transition jumps use the same

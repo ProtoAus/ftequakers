@@ -1214,8 +1214,10 @@ typedef struct
 	vec3_t viewoffset;
 	float rendertime;
 	int next, count, owner, servercount, modelindex, solidsize;
-	qboolean blocked;
-	unsigned int sequence, effects;
+	qboolean blocked, hasoffset, haveview, releasing, seeded, warppending;
+	vec3_t vieworg, releaseoffset;
+	double viewtime, releasebegin, releaseduration;
+	unsigned int sequence, effects, warpsequence;
 	const void *world;
 	float scale, tick, packettime, saveop, saveseq, viewheight;
 } sourcepracticelerp_t;
@@ -1263,13 +1265,13 @@ static qboolean CL_SourcePracticePush(sourcepracticelerp_t *s, double time,
 		p = &s->pose[(s->next + SOURCE_PRACTICE_POSES - 1) % SOURCE_PRACTICE_POSES];
 		if (time < p->time)
 			return false;
-		if (VectorCompare(origin, p->origin) && VectorCompare(velocity, p->velocity))
+		if (!s->seeded && VectorCompare(origin, p->origin) && VectorCompare(velocity, p->velocity))
 			return true; /* No new completed motion tick. Keep its first stamp. */
 		if (time == p->time)
 			return false;
 		/* Keep the old stop endpoint: retiming it replays earlier movement.
 		   Add a second stationary point before the new motion instead. */
-		if (VectorCompare(p->velocity, vec3_origin) && time - p->time > interval)
+		if (!s->seeded && VectorCompare(p->velocity, vec3_origin) && time - p->time > interval)
 		{
 			sourcepracticepose_t hold = *p;
 			hold.time = time - interval;
@@ -1283,6 +1285,7 @@ static qboolean CL_SourcePracticePush(sourcepracticelerp_t *s, double time,
 	p->time = time;
 	VectorCopy(origin, p->origin);
 	VectorCopy(velocity, p->velocity);
+	s->seeded = false;
 	s->next = (s->next + 1) % SOURCE_PRACTICE_POSES;
 	if (s->count < SOURCE_PRACTICE_POSES)
 		s->count++;
@@ -1320,6 +1323,51 @@ static qboolean CL_SourcePracticeSample(const sourcepracticelerp_t *s, double ti
 	return true;
 }
 
+/* A changed presentation delay must start from the last DRAWN feet, not
+   rewind the old ring or abruptly expose the undelayed body. Both endpoints
+   remain known poses; this never extrapolates future movement. */
+static qboolean CL_SourcePracticeRebase(sourcepracticelerp_t *s, double time,
+	float tick, float scale, const vec3_t anchor)
+{
+	s->count = s->next = 0;
+	s->releasing = s->seeded = false;
+	if (!CL_SourcePracticePush(s, time - CL_SourcePracticeDelay(tick, scale),
+		anchor, vec3_origin, tick/scale))
+		return false;
+	/* This is a drawn presentation anchor, not a stopped server pose. Do not
+	   insert an idle hold before the first authoritative endpoint. */
+	s->seeded = true;
+	return true;
+}
+
+static void CL_SourcePracticeRelease(sourcepracticelerp_t *s, double time,
+	const vec3_t origin, const vec3_t gravity, float stair)
+{
+	vec3_t classic;
+	CL_SourcePracticeEntry(origin, gravity, stair, classic);
+	VectorSubtract(s->vieworg, classic, s->releaseoffset);
+	s->releasebegin = time;
+	s->releaseduration = fmax(.08, CL_SourcePracticeDelay(s->tick, s->scale));
+	s->releasing = true;
+	s->count = 0;
+}
+
+static qboolean CL_SourcePracticeReleaseView(sourcepracticelerp_t *s, double time,
+	const vec3_t origin, const vec3_t gravity, float stair, vec3_t out)
+{
+	double f = bound(0, (time - s->releasebegin)/s->releaseduration, 1);
+	if (f >= 1)
+	{
+		s->releasing = false;
+		return false;
+	}
+	CL_SourcePracticeEntry(origin, gravity, stair, out);
+	/* Retire only the cosmetic offset; ordinary prediction/input is already
+	   active at speed1. Preserve the classic stair height on BOTH sides. */
+	VectorMA(out, 1 - f*f*(3 - 2*f), s->releaseoffset, out);
+	return true;
+}
+
 static qboolean CL_SourcePracticeContext(const playerview_t *pv)
 {
 	return cl_source_practice_lerp.ival && cls.state == ca_active && cl.validsequence &&
@@ -1330,9 +1378,27 @@ static qboolean CL_SourcePracticeContext(const playerview_t *pv)
 		(cls.fteprotocolextensions2 & PEXT2_REPLACEMENTDELTAS) &&
 		movevars.physicsmode == PHYSMODE_SOURCE &&
 		!strcmp(InfoBuf_ValueForKey(&cl.serverinfo, "fs_sourcephase"), "1") &&
-		pv->statsf[STAT_FS_TIMESCALE] >= 0.1f && pv->statsf[STAT_FS_TIMESCALE] < 1 &&
+		pv->statsf[STAT_FS_TIMESCALE] >= 0.1f && pv->statsf[STAT_FS_TIMESCALE] <= 1 &&
 		movevars.ticrate >= 0.001f && movevars.ticrate <= 0.1f &&
 		pv->statsf[STAT_FS_TASPAUSE] == 0;
+}
+
+/* Client-private notification from the existing native setangle transport.
+   CSQC may consume the angle itself, so packet_entities.fixangles is not a
+   reliable spatial signal. This touches only presentation state, never angles. */
+void CL_SourcePracticeWarp(int seat, unsigned int sequence)
+{
+	sourcepracticelerp_t *s;
+	if ((unsigned int)seat >= MAX_SPLITS)
+		return;
+	s = &sourcepractice[seat];
+	if (!s->count && !s->releasing)
+	{
+		s->haveview = false;
+		return;
+	}
+	s->warppending = true;
+	s->warpsequence = sequence;
 }
 
 static void CL_UpdateSourcePracticeView(int seat, playerview_t *pv, qboolean nopred)
@@ -1346,16 +1412,11 @@ static void CL_UpdateSourcePracticeView(int seat, playerview_t *pv, qboolean nop
 	double time, target;
 	float saveop = floor(pv->statsf[STAT_FS_SLOP] / 1000); /* Existing FS_SLOP_RADIX. */
 	unsigned int sequence = cl.validsequence;
+	qboolean warp;
 	int i;
 
-	if (!nopred || !CL_SourcePracticeContext(pv))
+	if ((!nopred && scale != 1) || !CL_SourcePracticeContext(pv))
 		goto reset;
-	if (s->blocked)
-	{
-		if (sequence == s->sequence)
-			return; /* Let the classic path consume the discontinuity packet. */
-		memset(s, 0, sizeof(*s));
-	}
 	interval = tick / scale;
 	/* CL_CalcClientTime can hold cl.servertime at the newest packet. A
 	   delayed sample of that clock still freezes even inside a known segment.
@@ -1375,11 +1436,30 @@ static void CL_UpdateSourcePracticeView(int seat, playerview_t *pv, qboolean nop
 	if (!ent || (ent->u.q1.pmovetype & 0x3f) != MOVETYPE_WALK)
 		goto reset;
 	VectorScale(ent->u.q1.velocity, 1/8.0f, velocity);
-	if (s->count && (s->owner != pv->viewentity || s->world != cl.worldmodel ||
-		s->servercount != cl.servercount || s->scale != scale || s->tick != tick ||
+	if (s->blocked && sequence == s->sequence)
+	{
+		/* Even classic nopred can blend a short reset: hold its acknowledged
+		   server endpoint, not an old/new intermediate body position. */
+		VectorSubtract(s->vieworg, pv->simorg, s->viewoffset);
+		s->rendertime = cl.servertime;
+		return;
+	}
+	s->blocked = false;
+	warp = s->warppending && sequence - s->warpsequence < 0x80000000u;
+	if (warp)
+		s->warppending = false;
+	if (s->haveview && !s->count && !s->releasing &&
+		(s->owner != pv->viewentity || s->world != cl.worldmodel || s->servercount != cl.servercount))
+		s->haveview = false;
+	if ((s->count || s->releasing) &&
+		(s->owner != pv->viewentity || s->world != cl.worldmodel ||
+		s->servercount != cl.servercount ||
 		sequence - s->sequence > 0x7fffffffu || pack->servertime < s->packettime ||
 		pack->servertime - s->packettime > interval * 4 ||
 		((s->effects ^ ent->effects) & EF_TELEPORT_BIT) ||
+		/* Consume the existing setangle event only once its snapshot (or a
+		   later one) is valid, even when CSQC consumed the angle callback. */
+		warp ||
 		s->modelindex != ent->modelindex || s->solidsize != ent->solidsize ||
 		/* Eye/roof height belongs to the captured pose domain too. Never
 		   combine old feet under a roof with a newer standing eye height. */
@@ -1393,13 +1473,42 @@ static void CL_UpdateSourcePracticeView(int seat, playerview_t *pv, qboolean nop
 		if (DotProduct(delta, delta) > 128 * 128)
 			goto discontinuity; /* Same spherical bound as the nopred path. */
 	}
-	if (!s->count)
+	if (scale == 1)
 	{
-		/* Keep entry continuous even if a classic stair correction is active. */
-		CL_SourcePracticeEntry(pv->simorg, pv->gravitydir, pv->crouch, anchor);
-		if (target >= time || !CL_SourcePracticePush(s, target, anchor, pv->simvel, interval))
+		if (s->count && s->haveview && time >= s->viewtime && time - s->viewtime < .25)
+			CL_SourcePracticeRelease(s, time, pv->simorg, pv->gravitydir, pv->crouch);
+		s->count = 0;
+	}
+	else if (!s->count || s->scale != scale || s->tick != tick)
+	{
+		if (s->haveview && time >= s->viewtime && time - s->viewtime < .25)
+			VectorCopy(s->vieworg, anchor);
+		else
+			CL_SourcePracticeEntry(pv->simorg, pv->gravitydir, pv->crouch, anchor);
+		if (!CL_SourcePracticeRebase(s, time, tick, scale, anchor))
 			goto reset;
 	}
+	s->hasoffset = false;
+	if (scale < 1)
+	{
+		if (!CL_SourcePracticePush(s, time, ent->origin, velocity, interval) ||
+			!CL_SourcePracticeSample(s, target, sampled))
+			goto reset;
+		s->hasoffset = true;
+	}
+	else if (s->releasing)
+		s->hasoffset = CL_SourcePracticeReleaseView(s, time, pv->simorg, pv->gravitydir, pv->crouch, sampled);
+	if (s->hasoffset)
+		VectorSubtract(sampled, pv->simorg, s->viewoffset);
+	goto commit;
+discontinuity:
+	s->count = s->next = 0;
+	s->releasing = false;
+	s->blocked = s->hasoffset = s->haveview = true;
+	VectorCopy(ent->origin, s->vieworg);
+	s->viewtime = time;
+	VectorSubtract(ent->origin, pv->simorg, s->viewoffset);
+commit:
 	s->owner = pv->viewentity;
 	s->world = cl.worldmodel;
 	s->servercount = cl.servercount;
@@ -1409,18 +1518,9 @@ static void CL_UpdateSourcePracticeView(int seat, playerview_t *pv, qboolean nop
 	s->modelindex = ent->modelindex; s->solidsize = ent->solidsize;
 	s->saveop = saveop; s->saveseq = pv->statsf[STAT_FS_SLSEQ];
 	s->viewheight = pv->viewheight;
-	if (!CL_SourcePracticePush(s, time, ent->origin, velocity, interval) ||
-		!CL_SourcePracticeSample(s, target, sampled))
-		goto reset;
-	VectorSubtract(sampled, pv->simorg, s->viewoffset);
 	s->rendertime = cl.servertime;
 	/* Only V_CalcRefdef consumes this delta. Keep the shared body pair,
 	   input callbacks, HUD/trail state and command buffers on their old path. */
-	return;
-discontinuity:
-	memset(s, 0, sizeof(*s));
-	s->blocked = true;
-	s->sequence = sequence;
 	return;
 reset:
 	memset(s, 0, sizeof(*s));
@@ -1428,7 +1528,7 @@ reset:
 
 qboolean CL_GetSourcePracticeViewOffset(const playerview_t *pv, vec3_t out)
 {
-	const sourcepracticelerp_t *s;
+	sourcepracticelerp_t *s;
 	int seat;
 	for (seat = 0; seat < MAX_SPLITS; seat++)
 		if (pv == &cl.playerview[seat])
@@ -1436,8 +1536,16 @@ qboolean CL_GetSourcePracticeViewOffset(const playerview_t *pv, vec3_t out)
 	if (seat == MAX_SPLITS || !CL_SourcePracticeContext(pv))
 		return false;
 	s = &sourcepractice[seat];
-	if (!s->count || s->blocked || s->sequence != (unsigned int)cl.validsequence ||
-		s->rendertime != (float)cl.servertime)
+	if (s->sequence != (unsigned int)cl.validsequence || s->rendertime != (float)cl.servertime)
+		return false;
+	/* Record the actual camera consumer, not an unrendered predictor pass. */
+	if (s->hasoffset)
+		VectorAdd(pv->simorg, s->viewoffset, s->vieworg);
+	else
+		CL_SourcePracticeEntry(pv->simorg, pv->gravitydir, pv->crouch, s->vieworg);
+	s->haveview = true;
+	s->viewtime = realtime;
+	if (!s->hasoffset)
 		return false;
 	VectorCopy(s->viewoffset, out);
 	return true;
