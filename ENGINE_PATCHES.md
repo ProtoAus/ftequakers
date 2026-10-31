@@ -113,7 +113,7 @@ Replace the Maps strip with one Surf/Bhop switch; old multi/other filters migrat
 to Surf. Additive schema25 retains all existing player/run/link/history rows.
 No engine code, native pin, recording grammar, mover version or Build change.
 
-**Verified (isolated, not yet a fleet claim).** Nine inventory route/persistence/
+**Verified (automated; delivery/acceptance limits below).** Nine inventory route/persistence/
 authority tests, existing accounts/social/board/join suites, eight schema/future-
 refusal tests, and acted POSIX transition-guard schema25 dependency controls pass.
 QC builds have zero new warnings (two existing viewmodel F333 warnings). Real
@@ -128,8 +128,17 @@ fixture's menu, so visual/click and cosmetic-feel acceptance remain human checks
 The aura is an occluded additive shell, not a through-wall/JFA port. Game shipping
 is isolated to the installed P1151 VM baseline; pending P1154 source stays out.
 Backend source is backported to the inspected fleet baseline, with a schema25-
-compatible data-retaining rollback. Delivery provenance/role assignment is
-recorded separately after promotion; owner's Developer identity is still pending.
+compatible data-retaining rollback. Both complete 82-file runtime cohorts also
+cold-start against fresh schema25 fixtures, own their measured listeners, and
+pass CLOSED-candidate acceptance, OPEN then drained CLOSED; primary exposes the
+inventory route while compatibility does not. These are not production DB or
+namespace claims. Game-side files are now installed/hash-verified in both Windows
+roots and all12 lobbies (PiForce with one player); native executables are unchanged.
+The backend is NOT activated: its protected installer passes dry-run but requires
+interactive sudo. Shared ingress was restored and no live backend fence was left
+closed. QC repo `tools/profile-inventory-p1160.md` records hashes/provenance and
+limits; `lextest.md` holds human checks. Mark's grant awaits activation; the
+owner's Developer assignment also awaits an explicit Steam profile identity.
 
 ## Patch 1156 — preserve installed P1152 with the paired roof/duck camera
 
