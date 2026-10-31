@@ -34,9 +34,15 @@ native arms and reader suite were not repeated to fix readers.
 
 Published P1140 dependencies arrived after candidate checks: their actual delta
 was inspected and its PM source blob was unchanged. Native-header integration
-requires a full clean qualification. This engine-only ship set retains verified
-QQ source `8edc5de034`; the unrelated TAS UI and pending backend are NOT promoted.
-Final clean tagged artifacts, fresh independent reviews and deployment pending.
+required full clean qualification. Tagged native `0879469c9`, version
+`git-8035-patch-1143-0-g0879469c9`, passes all 58 new/509 older controls on
+Windows/ARM and all 120 identical full-content physics rows. Final same-QQ
+current-eight and four qualified historical legacy CLI cases pass. QQ source
+`8edc5de034` is a stable TEST control, NOT permission to replace newer peer VMs:
+actual Windows programs advanced during validation. This engine-only promotion
+must preserve whatever game programs are actually live, with fresh boundary
+hashes and unchanged-VM guards. It does not newly promote the TAS UI or backend.
+Fresh independent whole-feature reviews and deployment remain pending.
 
 ## Patch 1140 — share and open portable TAS revisions in the game
 
