@@ -3302,7 +3302,6 @@ static qboolean PMSrc_BankGravityGroundStartCommon(vec3_t normal)
 	if (!pmove.onground || !(pmove.cmd.buttons & BUTTON_JUMP) ||
 		movevars.ktjump ||
 		PMSrc_StaminaEnabled() || movevars.jumpzoffset ||
-		pmove.ducked || pmove.ducking ||
 		!isfinite(movevars.entgravity) || !isfinite(movevars.gravity) ||
 		!isfinite(movevars.jumpvelocity) || !isfinite(movevars.maxvelocity))
 		return false;
@@ -3311,7 +3310,9 @@ static qboolean PMSrc_BankGravityGroundStartCommon(vec3_t normal)
 
 static qboolean PMSrc_BankGravityGroundStartDefault(vec3_t normal)
 {
-	if (movevars.normalizejump || movevars.jumpaddrise) return false;
+	// P1145: stock crouch assigns Z; normalized postures share the existing add path.
+	if (movevars.normalizejump || movevars.jumpaddrise || pmove.ducked || pmove.ducking)
+		return false;
 	return PMSrc_BankGravityGroundStartCommon(normal);
 }
 
@@ -5156,6 +5157,93 @@ static void PMSrc_TestBankStartGravity(void)
 			}
 			Q_snprintfz(name, sizeof(name), "P1143 additive rise %i accepted use", i);
 			PMSrc_Check(name, PMSrc_BankGravityEnd(), i == 2, 0);
+		}
+		/* P1145: normalized duck postures with their real hull and blocked alternative. */
+		{
+			int mode, posture;
+			float height;
+			movevars.normalizejump = 1;
+			movevars.standheight = 62;
+			movevars.duckheight = 45;
+			for (mode = 0; mode < 2; ++mode)
+			for (posture = 0; posture < 2; ++posture)
+			{
+				movevars.jumpaddrise = mode;
+				movevars.jumpvelocity = mode ? 1000 : 14000;
+				height = posture ? PMSrc_StandHeight() : PMSrc_DuckHeight();
+				for (i = 0; i < 6; ++i)
+				{
+					memset(&pmove, 0, sizeof(pmove));
+					pmove.pm_type = PM_NORMAL;
+					pmove.skipent = -1;
+					pmove.ducked = !posture;
+					pmove.ducking = !!posture;
+					VectorSet(pmove.player_mins, -16, -16, 0);
+					VectorSet(pmove.player_maxs, 16, 16, height);
+					VectorSet(pmove.origin, 0, 0, 128);
+					pmove.surfacefriction = 1;
+					pmove.basevelocity[2] = mode ? 768000 : 0;
+					pmove.numphysent = 1;
+					pmove.physents[0].info = 1;
+					pmove.physents[0].scale = 1;
+					VectorSet(pmove.physents[0].mins, -256, -256, -16);
+					VectorSet(pmove.physents[0].maxs, 256, 256, 0);
+					pmove.physents[0].origin[2] = 128;
+					if (i == 3)
+					{
+						pmove.numphysent = 2;
+						pmove.physents[1].info = 2;
+						pmove.physents[1].scale = 1;
+						VectorSet(pmove.physents[1].mins, -256, -256, 0);
+						VectorSet(pmove.physents[1].maxs, 256, 256, 16);
+						pmove.physents[1].origin[2] = 176 + height;
+					}
+					movevars.entgravity = (i == 0 || i == 4) ? 1 : 1.5f;
+					PMSrc_CategorizePosition();
+					Q_snprintfz(name, sizeof(name), "P1145 normalized duck %i/%i/%i actual contact", mode, posture, i);
+					PMSrc_Check(name, pmove.onground, 1, 0);
+					if (i == 0)
+					{
+						Q_snprintfz(name, sizeof(name), "P1145 normalized duck %i/%i actual hull", mode, posture);
+						PMSrc_Check(name, pmove.player_maxs[2] - pmove.player_mins[2], posture ? 62 : 45, 0);
+					}
+					pmove.cmd.buttons = BUTTON_JUMP | BUTTON_DUCK;
+					if (i == 5)
+					{
+						pmove.jump_held = true;
+						pmove.oldbuttons = BUTTON_JUMP | BUTTON_DUCK;
+					}
+					PMSrc_BankGravityBegin(i >= 2);
+					if (i == 2)
+					{
+						Q_snprintfz(name, sizeof(name), "P1145 normalized duck %i/%i normalized admitted", mode, posture);
+						PMSrc_Check(name, PMSrc_BankGravityGroundStartNormalized(normal), 1, 0);
+					}
+					PMSrc_FullWalkMove();
+					Q_snprintfz(name, sizeof(name), "P1145 normalized duck %i/%i/%i jump phase acted", mode, posture, i);
+					PMSrc_Check(name, i == 5 ? pmove.onground :
+						(pmove.jump_held && (pmove.oldbuttons & BUTTON_JUMP) && !pmove.onground), 1, 0);
+					Q_snprintfz(name, sizeof(name), "P1145 normalized duck %i/%i/%i accepted rise", mode, posture, i);
+					PMSrc_Check(name, pmove.origin[2], i == 5 ? 128 :
+						((i == 0 || i == 4) ? 182.6875f : (mode ? 139.125f : 154.75f)), 0);
+					Q_snprintfz(name, sizeof(name), "P1145 normalized duck %i/%i/%i accepted tail", mode, posture, i);
+					PMSrc_Check(name, pmove.velocity[2], i == 5 ? 0 : -3500, 0);
+					if (i == 1)
+					{
+						VectorCopy(pmove.origin, unobserved_origin);
+						VectorCopy(pmove.velocity, unobserved_velocity);
+					}
+					if (i == 2 || i == 3)
+					{
+						Q_snprintfz(name, sizeof(name), "P1145 normalized duck %i/%i/%i observer preserves origin", mode, posture, i);
+						PMSrc_Check(name, VectorCompare(pmove.origin, unobserved_origin), 1, 0);
+						Q_snprintfz(name, sizeof(name), "P1145 normalized duck %i/%i/%i observer preserves velocity", mode, posture, i);
+						PMSrc_Check(name, VectorCompare(pmove.velocity, unobserved_velocity), 1, 0);
+					}
+					Q_snprintfz(name, sizeof(name), "P1145 normalized duck %i/%i/%i accepted use", mode, posture, i);
+					PMSrc_Check(name, PMSrc_BankGravityEnd(), i == 2, 0);
+				}
+			}
 		}
 		pms_forwardmove = forwardmove;
 		pms_sidemove = sidemove;

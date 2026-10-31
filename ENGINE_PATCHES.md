@@ -1,5 +1,40 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1145 — normalized duck takeoff gravity-use status
+
+**Problem:** Normalized crouch and ground-duck-transition jumps use the same
+accepted add/inbound-undo path as normalized standing jumps, but the shared
+posture refusal excluded their earlier surviving gravity displacement when the
+late half converged. This was missing bounded status coverage, not bad physics.
+
+**Change:** Keep duck posture refusal in the stock assignment selector; let the
+normalized selector retain its existing finite/mode, actual accepted-jump,
+consumed-carrier, current-hull default-clear and late-use proof. No mover/hull,
+recorded field, API, format, flag or tier-policy change. Preserve published P1144
+camera/current-main code and headers rather than replacing that parallel work.
+
+**Verified/limits:** Untouched-production test-only baseline acted:136 positive
+checks and eight predicted admission/use failures, all567 old checks passed;
+complete source/native/output archive read back before product edits. FULL Win
+and ARM candidates pass144 new/all567 old checks (old printed values exact).
+Completed-duck and ground-transition real hulls each exercise normalized
+nonadditive/additive rise, observer disabled/enabled, neutral/default-only-blocked
+and refused-held-jump controls. Actual bodies and saturated tails retain their
+expected values; observation preserves full origin/velocity. Each platform's60
+actual full-content physical rows/5maps/2048ticks exactly match P1143 clean;
+prop-piece and wrapped-hull controls acted. Current eight-arm real-socket same-QQ
+raw/cache/pin/input/motion/status/IO outputs match P1143; logged SSQC frametime
+is separate, not exact mover cadence or positive flag-bitword proof. Stable QQ
+is a test control only, not authority to downgrade the actual newer runtime VMs.
+Inherited P1144 camera nine literal-source groups compile/pass; not new geometry,
+socket or human acceptance. Reader949/0; explicit runs528/336 existing faults,
+all705 record/view/part bytes/domain unchanged, NOT fault-free/SAVES/save-prefix.
+Zero new compiler warnings. Initial concurrent program-change and read-only
+export/summary/schema failures are retained, not repaired by restoring peer data,
+rerunning passed tests or changing the baseline. Clean tagged/historical-world
+qualification, two fresh whole-feature reviews and frozen runtime delivery remain
+pending. Wider bank, unsupported contexts and human/ranked limits remain open.
+
 ## Patch 1144 — preserve the slow-practice camera in current main
 
 **Problem:** Later P1143 native deliveries were based on main without the tested
