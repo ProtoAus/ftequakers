@@ -1214,10 +1214,10 @@ typedef struct
 	vec3_t viewoffset;
 	float rendertime;
 	int next, count, owner, servercount, modelindex, solidsize;
-	qboolean blocked, hasoffset, haveview, releasing, seeded, warppending;
+	qboolean blocked, hasoffset, haveview, releasing, seeded;
 	vec3_t vieworg, sampleorg, releaseoffset;
 	double viewtime, releasebegin, releaseduration;
-	unsigned int sequence, effects, warpsequence;
+	unsigned int sequence, effects;
 	const void *world;
 	float scale, tick, packettime, saveop, saveseq, viewheight;
 } sourcepracticelerp_t;
@@ -1383,26 +1383,6 @@ static qboolean CL_SourcePracticeContext(const playerview_t *pv)
 		pv->statsf[STAT_FS_TASPAUSE] == 0;
 }
 
-/* Client-private notification from the existing native setangle transport.
-   CSQC may consume the angle itself, so packet_entities.fixangles is not a
-   reliable spatial signal. This touches only presentation state, never angles. */
-void CL_SourcePracticeWarp(int seat, unsigned int sequence)
-{
-	sourcepracticelerp_t *s;
-	if ((unsigned int)seat >= MAX_SPLITS)
-		return;
-	s = &sourcepractice[seat];
-	if (cl_predtrace.ival && seat == 0)
-		Con_Printf("sourceview warp seq%u poses%d release%d\n", sequence, s->count, s->releasing);
-	if (!s->count && !s->releasing)
-	{
-		s->haveview = false;
-		return;
-	}
-	s->warppending = true;
-	s->warpsequence = sequence;
-}
-
 static void CL_UpdateSourcePracticeView(int seat, playerview_t *pv, qboolean nopred)
 {
 	sourcepracticelerp_t *s = &sourcepractice[seat];
@@ -1414,7 +1394,6 @@ static void CL_UpdateSourcePracticeView(int seat, playerview_t *pv, qboolean nop
 	double time, target;
 	float saveop = floor(pv->statsf[STAT_FS_SLOP] / 1000); /* Existing FS_SLOP_RADIX. */
 	unsigned int sequence = cl.validsequence;
-	qboolean warp;
 	int i;
 
 	if ((!nopred && scale != 1) || !CL_SourcePracticeContext(pv))
@@ -1447,9 +1426,6 @@ static void CL_UpdateSourcePracticeView(int seat, playerview_t *pv, qboolean nop
 		return;
 	}
 	s->blocked = false;
-	warp = s->warppending && sequence - s->warpsequence < 0x80000000u;
-	if (warp)
-		s->warppending = false;
 	if (s->haveview && !s->count && !s->releasing &&
 		(s->owner != pv->viewentity || s->world != cl.worldmodel || s->servercount != cl.servercount))
 		s->haveview = false;
@@ -1459,9 +1435,6 @@ static void CL_UpdateSourcePracticeView(int seat, playerview_t *pv, qboolean nop
 		sequence - s->sequence > 0x7fffffffu || pack->servertime < s->packettime ||
 		pack->servertime - s->packettime > interval * 4 ||
 		((s->effects ^ ent->effects) & EF_TELEPORT_BIT) ||
-		/* Consume the existing setangle event only once its snapshot (or a
-		   later one) is valid, even when CSQC consumed the angle callback. */
-		warp ||
 		s->modelindex != ent->modelindex || s->solidsize != ent->solidsize ||
 		/* Eye/roof height belongs to the captured pose domain too. Never
 		   combine old feet under a roof with a newer standing eye height. */
@@ -1508,7 +1481,7 @@ static void CL_UpdateSourcePracticeView(int seat, playerview_t *pv, qboolean nop
 	goto commit;
 discontinuity:
 	if (cl_predtrace.ival && seat == 0)
-		Con_Printf("sourceview snap seq%u warp%d server%g body%g\n", sequence, warp, ent->origin[0], pv->simorg[0]);
+		Con_Printf("sourceview snap seq%u effects%u server%g body%g\n", sequence, ent->effects, ent->origin[0], pv->simorg[0]);
 	s->count = s->next = 0;
 	s->releasing = false;
 	s->blocked = s->hasoffset = s->haveview = true;

@@ -9,9 +9,10 @@ also interpolate across its old/new positions below the128-unit jump guard.
 **Fix:** Rebase a changed delay on the last actually drawn feet and a known
 server endpoint; identify that presentation seed separately from an idle server
 pose. Retire only the cosmetic offset smoothly when ordinary speed1 prediction
-resumes. Consume the existing absolute-setangle/baseangle-lock event even when
-CSQC handles its angle, waiting for a valid corresponding/later snapshot, and
-snap only the camera to the acknowledged reset location. Keep the sampled
+resumes. Successful position-changing zone placements now toggle the existing
+native EF_TELEPORT_BIT even when no angle is available; ordinary angle callbacks
+are not spatial markers. Snap only the camera to the acknowledged reset location.
+Keep the sampled
 endpoint absolute until the actual render consumer: CSQC/prediction can refresh
 simorg again after the predictor computed its camera delta. No new wire/stat,
 recording field, mover, input, clock or practice-eligibility change. Existing
@@ -24,12 +25,15 @@ pairs, speed1/stair handoff, two-unit resets and the render-consumer boundary)
 pass. The first compiled candidate passed all speed-switch cases but retained a
 short-reset failure; its literal render-consumer counterexample also acts. Its
 absolute-endpoint correction now passes that source boundary; final native
-retake remains pending. Initial seed/idle
-hold counterexample and strict parser empty-array warning are retained and their
+retake remains pending. The angle-only candidate also retained a reset failure:
+angle-less legal placements send no angle event. That inference was removed,
+not papered over; the actual SSQC placement producer now emits the standard
+spatial bit. Initial seed/idle hold counterexample and strict parser empty-array warning are retained and their
 actual producer defects fixed, not excluded. Actual-header checks, compiled
 runtime transition/control captures and strict dual-Windows delivery remain the
 qualification gates; no delivery claimed by this source commit. Existing human
-stair/roof acceptance remains with the owner. No Pi/backend/VM deployment needed.
+stair/roof acceptance remains with the owner. The new SSQC producer requires the
+normal no-force Pi QC deployment; no backend or Pi-native replacement is needed.
 
 ## Patch 1145 — normalized duck takeoff gravity-use status
 
