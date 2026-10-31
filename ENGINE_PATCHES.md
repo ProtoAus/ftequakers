@@ -1,5 +1,39 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1154 — TAS native 10ms and 15ms clock contexts
+
+**Problem.** TAS admitted only a 15ms Source clock and injected a fixed 15ms
+command. Simply admitting 10ms would leave the grant duration, fractional carry,
+retained checkpoints and queued inputs inconsistent. The map timer is also
+latched at map load, independently of a later mover-cvar change.
+
+**Change.** Admit exactly 10ms or 15ms Source clocks, validate carry against the
+selected interval, and grant one actual interval. Share a connection/map-bound
+clock latch with checkpoint/input entrypoints. An observed rate change faults and
+clears marked pending work; returning to the old rate cannot revive it. SSQC
+refuses authoring when the last admitted mover interval differs from the map's
+latched timer; status exposes both intervals and checkpoint capability. Defaults,
+ordinary movement math, recording formats and human eligibility are unchanged.
+
+**Verified.** Portable actual-C controls pass 100262 admission/input/queue checks,
+including exact/adjacent/invalid rates, carry bounds and identity/map/change/revert
+cases. Windows header-full isolated build has no new native or QC warnings.
+Actual owned dedicated-socket 15ms controls and 10ms subjects preserve paused
+counts/carry, grant exactly 1/7 native ticks, restore printed pose/carry through
+back7 and repeat the printed endpoint. Active queued work cancels on rate change,
+stays stopped after revert, and recovers only in a fresh matching context. A
+mixed mover/map-timer control is refused before grants; normal movement remains
+live when the TAS clock is unsupported. Additional 10ms airborne controls exercise
+manual/directional input, retained native tape replay and a bounded 22-candidate
+optimizer with monotone native movement/completion counters.
+
+These socket proofs are airborne movement components at printed pose precision,
+not grounded/collision, cold-project, whole-world or byte-state equality proofs.
+A real-map route that reentered the start correctly refused back; it is not a
+rewind pass. Canonical source qualification and TAS-board admission remain held;
+backend verification's supported profile is unchanged. Review, final-tag builds,
+installation and owner feel are separate checks, not claimed by these controls.
+
 ## Patch 1151 — server-confirmed clean return from slow practice
 
 **Problem.** Restoring normal speed retained the connection's slow-practice history.

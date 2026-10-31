@@ -8503,9 +8503,8 @@ static enum sv_tas_action SV_TASCommandPlan(usercmd_t *cmd, int kind, eval_t **f
 		"run_tas_pending", "run_tas_done", "run_tas_ready", "run_tas_fault",
 		"run_tas_cmdkey", "rec_gh_on", "run_ms_phase", "run_pmhold",
 		"rec_sl_hold", "rec_wt_hold", "run_t_viewowner"};
-	extern cvar_t pm_physicsmode, pm_ticrate;
 	uint32_t previous = 0;
-	int i, valid, fresh, supported, bodyfree;
+	int i, valid, fresh, supported, bodyfree, clockchanged = 0;
 	eval_t *rewindpin;
 	enum sv_tas_action action;
 
@@ -8525,9 +8524,12 @@ static enum sv_tas_action SV_TASCommandPlan(usercmd_t *cmd, int kind, eval_t **f
 		!PR_FindFunction(svprogfuncs, "SV_RunClientCommand", PR_ANY) &&
 		host_client->protocol == SCP_QUAKEWORLD &&
 		!(host_client->fteprotocolextensions2 & PEXT2_VRINPUTS) &&
-		SV_TASClockSupported(pm_physicsmode.ival == PHYSMODE_SOURCE,
-			pm_ticrate.value > 0 ? pm_ticrate.value : SV_TAS_TICK,
-			sv.gamespeed, host_client->pmsrc.msec_carry);
+		SV_TASClockForClient(host_client,&clockchanged);
+	if (clockchanged && f[TAS_USED]->_float > 0)
+	{
+		f[TAS_PENDING]->_float = 0;
+		f[TAS_FAULT]->_float = 1;
+	}
 	valid = f[TAS_KEY]->_vector[2] == 1 &&
 		isfinite(f[TAS_KEY]->_vector[0]) && isfinite(f[TAS_KEY]->_vector[1]) &&
 		f[TAS_KEY]->_vector[0] >= 0 && f[TAS_KEY]->_vector[0] <= 65535 &&
@@ -8687,7 +8689,7 @@ static void SV_RunCmdPart (usercmd_t *ucmd, qboolean recurse, int kind, float to
 	if (tas_action == SV_TAS_STEP)
 	{
 		tas_cmd = *ucmd;
-		tas_cmd.msec = 15; // exactly one Source tick; validated carry is retained
+		tas_cmd.msec = SV_TASTickMsec(SV_TASCurrentTick()); // one admitted tick, preserving carry
 		tas_replay = SV_TASTapeOverlay(host_client, sv_player, &tas_cmd);
 		if (!tas_replay && SV_TASPlanActive(host_client))
 		{

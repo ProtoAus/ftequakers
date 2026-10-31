@@ -7,18 +7,48 @@
 
 #define SV_TAS_MAX_PENDING 128
 #define SV_TAS_MAX_DONE 16000000
-#define SV_TAS_TICK 0.015f
+#define SV_TAS_TICK 0.015f /* Default when pm_ticrate is unset. */
 #define SV_TAS_EPSILON 1e-5f /* PMSRC_TICK_EPSILON; test guards the shared value. */
 
 enum sv_tas_action {
 	SV_TAS_NORMAL, SV_TAS_BLOCK, SV_TAS_STEP, SV_TAS_CANCEL
 };
 
+static int SV_TASTickMsec(float tick)
+{
+	return tick == 0.010f ? 10 : tick == 0.015f ? 15 : 0;
+}
+
 static int SV_TASClockSupported(int source, float tick, float gamespeed, float carry)
 {
-	return source && tick == SV_TAS_TICK &&
+	return source && SV_TASTickMsec(tick) &&
 		gamespeed == 1.0f && isfinite(carry) && carry >= 0 &&
-		carry < SV_TAS_TICK - SV_TAS_EPSILON;
+		carry < tick - SV_TAS_EPSILON;
+}
+
+typedef struct {
+	int userid, spawncount, blocked;
+	float tick;
+} sv_tas_clock_t;
+
+static int SV_TASClockContextSupported(sv_tas_clock_t *context, int userid, int spawncount,
+	int source, float tick, float gamespeed, float carry)
+{
+	if (userid <= 0) return 0;
+	if (context->userid != userid || context->spawncount != spawncount)
+	{
+		context->userid = userid;
+		context->spawncount = spawncount;
+		context->tick = 0;
+		context->blocked = 0;
+	}
+	if (context->tick)
+	{
+		// Returning to the old rate must not revive queued input or history.
+		if (tick != context->tick) context->blocked = 1;
+	}
+	else if (source && SV_TASTickMsec(tick)) context->tick = tick;
+	return !context->blocked && SV_TASClockSupported(source,tick,gamespeed,carry);
 }
 
 /* QC's timeline arithmetic must still resolve each native tick. */
