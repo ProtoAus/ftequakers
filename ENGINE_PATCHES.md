@@ -12,28 +12,43 @@ pose. Retire only the cosmetic offset smoothly when ordinary speed1 prediction
 resumes. Successful position-changing zone placements now toggle the existing
 native EF_TELEPORT_BIT even when no angle is available; ordinary angle callbacks
 are not spatial markers. Snap only the camera to the acknowledged reset location.
-Keep the sampled
-endpoint absolute until the actual render consumer: CSQC/prediction can refresh
+Keep the sampled endpoint absolute until the actual render consumer: CSQC/prediction can refresh
 simorg again after the predictor computed its camera delta. No new wire/stat,
 recording field, mover, input, clock or practice-eligibility change. Existing
 save metadata still does not invalidate the view; real loads/warps do. Current
-P1145 is retained verbatim. The newly covered parser's fixed-array empty-name
+P1145 accepted-mover/status code is retained verbatim. The newly covered parser's fixed-array empty-name
 check tests its first character rather than the always-nonnull array address.
 
-**Verified so far:** Thirteen literal-source groups (including all16 slow-scale
-pairs, speed1/stair handoff, two-unit resets and the render-consumer boundary)
-pass. The first compiled candidate passed all speed-switch cases but retained a
-short-reset failure; its literal render-consumer counterexample also acts. Its
-absolute-endpoint correction now passes that source boundary; final native
-retake remains pending. The angle-only candidate also retained a reset failure:
-angle-less legal placements send no angle event. That inference was removed,
-not papered over; the actual SSQC placement producer now emits the standard
-spatial bit. Initial seed/idle hold counterexample and strict parser empty-array warning are retained and their
-actual producer defects fixed, not excluded. Actual-header checks, compiled
-runtime transition/control captures and strict dual-Windows delivery remain the
-qualification gates; no delivery claimed by this source commit. Existing human
-stair/roof acceptance remains with the owner. The new SSQC producer requires the
-normal no-force Pi QC deployment; no backend or Pi-native replacement is needed.
+**Verified/delivered 31 Oct 2026:** Thirteen literal-source groups cover all16
+slow-scale pairs, speed1/stair handoff, two-unit spatial controls and the real
+render-consumer boundary. Strict actual-header predictor/parser/view checks and
+the official seven-image source-only build pass (no native header changes;
+owned metadata objects refreshed, not a Full claim). Exact-image attempt10
+passes all steady camera/transition/reset cases; attempt11 retains those exact
+proofs and finishes only acting flag checks after fixing an omitted fixture
+restore1 action. Slower-switch normalized peak4.030 old/1.003 fixed (limit3);
+sub128-unit reset first-camera error3.692 old/0.0625 fixed (limit0.5;
+placements83.834/90.907units respectively, not identical trajectory evidence).
+Faster/normal switches pass; all seven steady cases retain0% camera holds except
+the deliberate OFF falsifier43.6%. Restore1/reset retain earlier practice status;
+a confirmed genuinely fresh connection clears it. Old seed, parser, compiled
+reset/angle-inference failures and missing-action receipt remain intact; no
+threshold, capture shape, eligibility rule or original outcome was weakened.
+
+Both Windows installs hold all28 exact qualified destinations,18 writes,
+224 configs and all15,473 old protected entries unchanged at delivery; real
+preimages/paired predecessors retained. Existing no-force QC deploy reached
+all12 positively empty Pi lobbies, one restart each. All36,661 old Pi data/config
+entries and four closed parts (1,426,033bytes) remain exact after a fresh installed
+client cold join. Parts were archived/read back on-box AND off-box before any
+restart; no data restore. Cold join fetched expected CSQC, drew9cols/type14,
+exited0/no QC errors; empty board/unaccepted terms is not ranked acceptance.
+Post-cold native/plugin epochs retained; no extra healthy restart. No backend
+or Pi-native replacement, Build bump or release. P1147 source pin iscf2290902;
+raw authority/rollback/limits are in the owned task's artifacts/p1147/FINAL.*.
+Human stairs/low-roof feel and general embedded-eye/input-data equivalence remain
+uncertified, not known unfinished scale/reset code. Other plugins are built and
+byte-checked, not behaviorally exercised by this camera fixture.
 
 ## Patch 1145 — normalized duck takeoff gravity-use status
 
