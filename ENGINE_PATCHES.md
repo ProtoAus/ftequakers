@@ -17,17 +17,25 @@ Preserve the published P1152/P1156 and 10/15ms TAS-clock source. Build tooling
 serializes Windows plugin metadata packaging after reproduced parallel ZIP
 temporary-file failures; engine compilation still uses the requested job count.
 
-**Verified/limits.** On the current published-header Windows source, the actual
-untreated control passes 1428 checks and fails exactly the 20 predicted new
-requirements. The candidate passes all 1448 checks, including 249 new checks and
-nine explicitly updated finite-admission expectations. Native jump-oracle,
-pre/post-cost, zero/half/three-quarter scale, body/config preservation, accepted-jump,
-posture, speculative/no-use and actual earlier-use controls execute. Full-header
-compilation and repaired serial packaging complete all seven native images with
-aligned metadata in all five plugins. Original parallel packaging failures and
-the first obsolete P1139 test expectation failure remain failed evidence. Clean
-committed-source review, final-tag Windows/ARM builds and guarded native-only
-delivery are still pending; no runtime, current-program, human or ranked claim.
+**Verified/limits.** Frozen native `793ee161a` / `patch-1158` / actual
+`git-8072-patch-1158-0-g793ee161a`, with producer QC `d620045b`, passes all 1448
+native checks on BOTH Windows and ARM64, including 249 new checks and nine
+explicitly updated finite-admission expectations. The untreated current-header
+Windows control actually passes 1428 and fails exactly the 20 predicted new
+requirements. Native jump-oracle, pre/post-cost, zero/half/three-quarter scale,
+body/config preservation, accepted-jump, posture, speculative/no-use and actual
+earlier-use controls execute. All 60 full five-map rows match across platforms
+using byte-identical test programs, and match the retained P1152 rows exactly.
+Clean final-tag Full Windows builds all seven images with fresh serial metadata
+in all five plugins; aligned offsets, CRCs and DECOMPRESSED metadata version are
+verified. ARM64 server, HL2 plugin and symbols are built from all 1124 verified
+canonical Git blobs and read back off-box. Two independent whole-feature review
+lenses accept the code; two factual documentation findings were corrected and
+confirmed. Reader self-tests pass 949/949 and the stable runs-only sweep has no
+fault-count increase. Original failed packaging, expectation and caller-domain
+checks remain failed evidence, not renamed passes. Guarded native-only delivery
+and actual-current-program runtime checks remain pending. Stable test programs
+are not deployment inputs; no full-bank, human feel or ranked-finish claim.
 
 ## Patch 1156 — preserve installed P1152 with the paired roof/duck camera
 
