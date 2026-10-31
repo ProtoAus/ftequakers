@@ -50,8 +50,18 @@ local-CS expectation during a concurrent program rollout; the original same-acto
 post-cold gate also refuses the changed lobby process epochs. Read-only diagnosis
 retains those failures and verifies our native/predecessor pairs, old data and
 parts, and unchanged backend. No healthy restart, client replay, data restore or
-verifier downgrade was used to hide them. New-program cold acceptance is separate;
-empty-board/unaccepted-terms screenshots do not establish human feel or ranking.
+verifier downgrade was used to hide them.
+
+A separate fresh current-program cohort now passes both installed-image/menu
+cold checks against an immutable off-box copy of actual Pi-served CSQC, rather
+than mutable Windows CSQC. The same current12 native/plugin process epochs,
+programs/configs, strict13 actor FD census, old data/parts and backend hold
+before/after; current Windows preimages and native/predecessor pairs also hold.
+The first fresh post-empty census refusal is retained; a separate positive-empty
+live/directory and no-FD control precedes the unchanged postgate on fresh census
+input, without repeating either client or restarting a healthy lobby. Its
+original transient cause was not captured. All original failures remain failed.
+Empty-board/unaccepted-terms screenshots do not establish human feel or ranking.
 
 ## Patch 1160 — Steam-profile inventory, cosmetics and role badges (QC/backend)
 
