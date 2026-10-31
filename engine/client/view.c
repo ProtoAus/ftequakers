@@ -1730,7 +1730,7 @@ static float V_SourcePracticeEye(const vec3_t feet, const vec3_t gravity, float 
 void V_CalcRefdef (playerview_t *pv)
 {
 	float		bob;
-	float		viewheight;
+	float		viewheight, practiceheight;
 	vec3_t		practiceoffset;
 	qboolean	practiceview;
 
@@ -1767,7 +1767,7 @@ void V_CalcRefdef (playerview_t *pv)
 	VectorCopy (pv->simorg, r_refdef.vieworg);
 	/* P1138: interpolate the camera, not the shared body/input/HUD state.
 	   Apply before the gun, portal, chase-camera and skyroom calculations. */
-	practiceview = CL_GetSourcePracticeViewOffset(pv, practiceoffset);
+	practiceview = CL_GetSourcePracticeViewOffset(pv, practiceoffset, &practiceheight);
 	if (practiceview)
 		VectorAdd(r_refdef.vieworg, practiceoffset, r_refdef.vieworg);
 
@@ -1787,7 +1787,9 @@ void V_CalcRefdef (playerview_t *pv)
 	V_CalcViewRoll (pv);
 	V_AddIdle (pv);
 
-	viewheight = pv->viewheight;
+	/* Historical feet and eye height are one presentation sample. Mixing in
+	   the newest duck/roof eye height repeatedly kicks a delayed camera. */
+	viewheight = practiceview ? practiceheight : pv->viewheight;
 	if (viewheight == DEFAULT_VIEWHEIGHT && cls.protocol == CP_QUAKEWORLD && !(cls.z_ext & Z_EXT_VIEWHEIGHT))
 	{
 		if (view_message && view_message->flags & PF_GIB)

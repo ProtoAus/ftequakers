@@ -1687,7 +1687,7 @@ void	 CSQC_CvarChanged(cvar_t *var);
 void CL_InitPrediction (void);
 qboolean CL_SourcePracticePredictReset(int seat, float request, float seedframe);
 void CL_CacheSourcePhase(int seat, const char *text); // P924: packet-time phase history
-qboolean CL_GetSourcePracticeViewOffset(const playerview_t *pv, vec3_t out); // P1138: camera delta only
+qboolean CL_GetSourcePracticeViewOffset(const playerview_t *pv, vec3_t out, float *viewheight); // camera-only paired feet/eye
 void CL_PredictMove (void);
 void CL_PredictUsercmd (int seat, int entnum, player_state_t *from, player_state_t *to, usercmd_t *u);
 #ifdef Q2CLIENT

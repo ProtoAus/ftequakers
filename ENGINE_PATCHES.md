@@ -1,5 +1,54 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1156 — preserve installed P1152 with the paired roof/duck camera
+
+**Problem.** P1152 was installed while the P1155 camera candidate was being
+validated. The original before-snapshot guard refused the advanced installed
+bytes; shipping that earlier candidate would now discard the installed status
+change. P1155 was never installed and its tag/proofs remain historical.
+
+**Change.** Forward-integrate the unchanged paired slow-practice feet/eye-height
+camera with byte-exact published P1152 mover-status source. Preserve the actual
+installed status behavior, current programs and all protected data. The camera
+still uses the configured zero-floor duck pair and unchanged presented-roof cap.
+No additional physical movement, input, eligibility, API or format change beyond
+the separately published and installed P1152 source.
+
+**Verification boundary.** All three camera files and their 16-case literal
+harness are byte-identical to the qualified P1155 snapshot; those controls remain
+valid without healthy reruns. Fresh whole integrated-source review, final seven
+native images, native regression, same-transaction generated-preimage continuation
+and post-install cold checks are required. The exact owner save14 roof feel is
+not asserted. No Pi/native/QC/backend rollout is part of this local camera task.
+
+## Patch 1155 — keep slow-practice feet and duck eye height on one sample
+
+**Problem.** Ordinary duck/roof eye-height changes and the standing/duck hull pair
+were treated as camera discontinuities below speed1, repeatedly discarding
+otherwise smooth movement history. Owner reports this while moving under a roof.
+
+**Change.** Store and interpolate eye height with the existing camera-only feet
+and velocity samples. Carry the paired height through rebase and normal-speed
+release and consume it before the unchanged presented-world roof cap. Admit only
+the configured native-codec Source standing/duck pair with decoded floor zero;
+other hull/model/world/owner/teleport/epoch/jump fences remain. Stationary holds
+retain the entire old pair even when the incoming eye changes. No physics,
+commands, eligibility, evidence or network-format changes; ordinary steady1
+outside an active/retiring practice presentation uses its existing view height.
+
+**Verified/limits.** Final16 literal-source cases pass. The old eye-reset and
+two first-candidate idle/translated-hull failures are retained. Both fresh whole
+source reviews clear. Official header-Full7 baseline and final-source incremental
+targets completed; the final incremental has no native compiler warnings. Tests
+use controlled trace/predicate seams, not a real geometry/packet proof. Final
+image delivery and the exact owner roof/save14 feel remain separately gated.
+
+**Image scope.** The frozen camera-only image is tag `patch-1155` at `d1bc17875`.
+Current main also retains the subsequently published P1152 source below, but this
+qualified pre-P1152 image deliberately does not activate that separately pending
+status change. Source integration and the inspected image are different clocks;
+existing installed P1151 movement/status and actual live programs are preserved.
+
 ## Patch 1154 — TAS native 10ms and 15ms clock contexts
 
 **Problem.** TAS admitted only a 15ms Source clock and injected a fixed 15ms
@@ -59,9 +108,25 @@ Windows data/config/native/program domain remained unchanged with no new members
 Current P1151 literal pose/return/client-prediction/support harnesses pass. Reader
 949/0 passes; the mandatory runs-only sweep retains existing faults with identical
 reader/input dependencies, not a fault-free corpus. A separate default sweep is
-blocked by an existing protected save prefix and remains unqualified. ARM64,
-independent review, installed-client cold/human acceptance and deployment are
-pending; these Windows/source checks do not claim them. No backend or Pi operation.
+blocked by an existing protected save prefix and remains unqualified.
+
+**Final qualification/delivery, 31 Oct 2026.** Two fresh whole-source reviews are
+clear with scoped notes; the exact reviewed source and evidence remained held.
+The final tagged Windows and clean ARM64 natives each pass all 1,199 checks;
+all 60 full physical rows match across platforms and the current P1151 control.
+The stable QC remains explicitly test-only, not current-VM/packet acceptance.
+Native source `c36bc6b06` / `patch-1152` (actual 8064) and QC declaration `f9d1ad84`
+are published. Both Windows installs received the exact seven native images and
+matching predecessor copies. All 17,608 protected old files, including twelve
+actual VM/symbol files, remained unchanged; all 28 rollback members were verified.
+No owner/peer process was killed. Later P1156 source forward-preserves this exact
+mover-status source; its camera qualification and installation are separate.
+
+Pi native-only preparation refused a newly occupied lobby before any part archive,
+payload, canonical stage, swap or restart; only owned source artifacts were kept.
+Fresh part/actor/FD/on-off-box/execution-boundary checks remain required. No backend
+change. Installed-client cold/current-VM/human/rank acceptance and the wider bank
+remain open; none is inferred from source, selftests or physics controls.
 
 ## Patch 1151 — server-confirmed clean return from slow practice
 
