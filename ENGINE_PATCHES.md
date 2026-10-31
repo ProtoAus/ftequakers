@@ -1,5 +1,17 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1144 — preserve the slow-practice camera in current main
+
+**Problem:** Later P1143 native deliveries were based on main without the tested
+P1138 camera branch, replacing the local fix and leaving the airborne judder.
+**Change:** Merge the exact qualified render-realtime camera with current main;
+retain P1140 write-path metadata and P1143 additive-rise status verbatim. No new
+movement, command, clock, capture, format, eligibility or backend implementation.
+**Verified:** Prior camera build/runtime and P1143 proofs remain separate inputs.
+Current-source literal/header checks, FULL combined build, real motion/flag checks
+and destination-preserving delivery are required before claiming qualification.
+Human/geometry and known scale-switch/short-reset follow-ups are not waived.
+
 ## Patch 1138 — blend completed Source ticks during slow practice
 
 **Problem:** P954's authoritative slow-practice path blends adjacent packets,
@@ -48,6 +60,183 @@ final delivery, preserving concurrent work. One unrelated compiler OOM was
 retained and the same FULL pipeline succeeded on its one retry. Render-observation
 time is not exact socket-arrival time; mixed-time presentation, camera-derived
 cursor/projection consumers and the stated runtime/human limits remain explicit.
+
+## Patch 1143 — retain eligible gravity status through additive-rise takeoff
+
+**Problem:** The bounded normalized ground-jump observer excluded the mover's
+additive-rise mode. Its shadow also undid positive inbound velocity even though
+that mode deliberately retains it. An actual clear takeoff could therefore miss
+the existing derived use status despite a surviving earlier displacement effect.
+
+**Change:** Admit only finite normalized additive-rise selectors through the same
+standing/actual-jump/default-path/clear/late-use proof. Retain the stock entry's
+alternate-rise exclusion and all other unsupported-context gates. Mirror the
+actual branch's impulse addition without its non-additive inbound undo; retain
+sanitization and skipped inner half. Actual movement, capture, API, formats,
+flags and tier policy are unchanged.
+
+**Verified:** Before production edits, untouched P1141 production with only the
+new tests passes 51 controls and fails the seven preregistered extension checks;
+all 509 older checks pass. Exact raw inverse-source proof and independently
+read-back seven-member source/native/results recovery archive precede the edit.
+Windows and ARM candidates pass all 58 new controls and every old check; all
+509 old Windows printed rows exactly match baseline. Real coupled ground/contact,
+carrier consumption, observer-disabled/enabled, default-only ceiling, neutral,
+held refusal, finite boolean, nonfinite, inbound/fallback/clamp arms ACTED.
+All 120 full-content physics rows match P1141 and each other. Same compiled QQ
+current-eight socket/cache/admission keeps raw/full-pin/input/body/motion/status
+and IO exact; logged SSQC frametime is retained separately, not claimed to equal
+the mover command duration. Original/unavailable controls are unchanged reuse,
+NOT fresh ground-socket, human, ranked-finish or complete-bank acceptance.
+Reader 949/0; explicit runs-only main stays 528 inputs/336 existing faulty items,
+with record/view/part bytes and domain unchanged, NOT fault-free or a saved-prefix
+sweep. Reader-only comparison/Windows-argv transport failures are retained; passed
+native arms and reader suite were not repeated to fix readers.
+
+Published P1140 dependencies arrived after candidate checks: their actual delta
+was inspected and its PM source blob was unchanged. Native-header integration
+required full clean qualification. Tagged native `0879469c9`, version
+`git-8035-patch-1143-0-g0879469c9`, passes all 58 new/509 older controls on
+Windows/ARM and all 120 identical full-content physics rows. Final same-QQ
+current-eight and four qualified historical legacy CLI cases pass. QQ source
+`8edc5de034` is a stable TEST control, NOT permission to replace newer peer VMs:
+actual Windows programs advanced during validation. This engine-only promotion
+must preserve whatever game programs are actually live, with fresh boundary
+hashes and unchanged-VM guards. It does not newly promote the TAS UI or backend.
+Fresh independent whole-feature reviews and deployment remain pending.
+
+## Patch 1140 — share and open portable TAS revisions in the game
+
+**Problem:** The revision service had no in-game collaboration consumer. Local
+projects needed explicit public sharing, current-map discovery and a safe path
+back into the TAS editor without confusing contributions with human-run evidence.
+Final review also found replace-capable automatic retention and Linux enumeration
+errors being mistaken for absence; neither permits replacing closed recovery bytes.
+
+**Change:** Add a Shared tab, explicit saved/retained-v3 upload, existing statements
+before body, bounded informational credit view and protected new-name download.
+Validate canonical hash/map/profile before install; use the ordinary client
+command for deferred load. Cancel slot-owned work at teardown. Protect final,
+staged and recovery paths with SSQC-only named builtin fwritepathstatus: uncached
+metadata in the actual write path returns0 confirmed absent,1 occupied,-1 error.
+Keep filename/TAS sandboxing and conservative mounted-path/census checks; Windows
+attributes/POSIX lstat distinguish access errors from absence. Home-enabled writes
+can fall back to another root, so the primitive deliberately returns unknown for
+explicit home overrides; the default FTESurf manifest disables home. Windows
+metadata follows the writer's same WinNT/FTE_SDL ANSI-or-UTF8/wide path selection.
+Neither owner home settings nor dedicated-server encoding are changed. Old engines
+refuse Open before writing. Gate retained finals/recovery stages before download and
+handoff: reuse a readable retained final, otherwise require both paths absent.
+This is not atomic reservation: exclude external writers across import/load.
+Other legacy replace-capable retention callers are unchanged. Restrict transport
+to the fixed public origin or a bounded loopback test listener. Native pin/tag now
+required; physics, receipt formats, human admission and Build remain unchanged.
+
+**Verified:** QuakeC builds with zero new warnings (two unchanged client F333).
+Real isolated native HTTP controls prove byte-exact POST/download and tape load
+to the requested head, statement ordering and no linked credit for an unlinked
+fixture key. Preseeded/late unreadable files and recovery bytes survive; cached-only
+control reaches failed rename, fresh census refuses before staging. Malformed,
+wrong-hash and nonportable bodies are refused; actual teardown prevents late
+install/next upload. Credit bounds retain Open, retained child uploads report its
+parent, and endpoint admission has acting negative/positive controls. No physical
+owner signing, human UI/feel, verified time or production deployment is inferred.
+Final filesystem review ACTED both Windows retention counterexamples in the
+frozen code. Repaired full native/QC preview has zero new Windows warning
+fingerprints against P1134; Linux gl/server/plugin Full preview completes after
+restoring its last-working read-only dependency input. Windows subject preserves
+recovery stage/unreadable retained final and still loads/retains an exact positive
+to tick30. New QC on old native refuses before writes. POSIX control ACTS hidden
+stage consumption under proved list denial/write permission/cache1; new native
+preserves it, refuses traversal-denial errors and loads/retains an exact positive
+to tick30. Observer failures (wrong zone fixture, guessed refusal and a rate-limited
+early command) and initial missing native dependency failure remain retained.
+Mandatory reader suite:949 checks/0 failed. These bounded arms do not claim a
+symlink/type matrix, concurrent-writer, crash-durability or all-map qualification.
+QC/lifetime repair review cleared with the documented non-transactional limits.
+Further native review exposed home fallback and Windows dedicated ANSI/wide
+namespace mismatches. Actual native controls ACT stage destruction in both;
+corrected source preserves the base recovery behind a read-only explicit home,
+and preserves the hidden stage under a non-ASCII ANSI basedir while still
+installing/retaining/loading a byte-exact positive to tick30. Windows ANSI1252,
+actual list denial and write capability were measured; own modes/ACLs restored
+and all probe handles stopped. The ACL Unicode pipe and home-log/constructor
+observer failures remain retained, not feature passes. Native namespace review
+and delivery status are recorded separately; human checks remain in lextest.md.
+
+## Patch 1142 — finish held collector and linked-account refresh work (backend only)
+
+**Problem:** The unpublished P1117 collector branch retained useful retry,
+rotation and account-PB work, but could not simply replace current main or the
+live guarded generation. Fresh review also exposed invalid-main promotion,
+map-list cursor drift and an omitted runtime dependency.
+
+**Change:** Integrate its complete history with current schema24. Keep login
+queue-only and imports in their existing external/cache tiers. Separate retry
+parks, bound shared Momentum work and reserve progress under small budgets.
+Skip malformed numeric PB rows, use bounded dates, retain invalid KSF semantic
+markers, and durably bind each stage cursor to that walk/style's ordered map AND
+zone identities. Older offsets without a snapshot restart safely. Ship the
+flat fetcher with its unconditional msml dependency; test real installed imports.
+No native/QC interface, movement, evidence format/flag/tier or binary pin changes.
+
+**Verification/delivery boundary:** Local synthetic collector/profile/account,
+board/web and completion controls pass; concrete fresh-review falsifiers were
+acted before repair and retained. The current-main schema24 and P984 donated-zone
+contracts replace seven stale expected results, not failed product controls.
+Two unrelated admin amplification/snapshot expectations also fail the unchanged
+published control and remain recorded. The product notes retain remaining
+DNS-deadline and human-acceptance limits. Source publication is not live delivery:
+the existing exact81-file guarded runtime excludes new momprofile.py and requires
+a verified closure extension and rollback-preserving successor. No live backend
+mutation, account impersonation, external sweep, native build or lobby restart.
+
+## Patch 1141 — retain eligible gravity status through normalized ground takeoff
+
+**Problem:** The bounded standing-takeoff observer still refuses normalized
+jumps, including accepted displacements whose carried-gravity effect survives
+although the late half has converged.
+
+**Change:** Share the existing standing eligibility without weakening the stock
+entry's exclusion. Add a finite normalized-mode entry; mirror the actual positive
+inbound undo, impulse addition and skipped inner half before the common sanitizer.
+Keep the actual accepted-jump, airborne, clear/default-geometry and late-use proof.
+Only the existing derived status changes: no movement arithmetic, recorded field,
+API, format, flag or tier changes. Other consumers remain partial.
+
+**Verified:** Before implementation, the unchanged production mover with only
+new tests acts in all six coupled worlds: 35 new controls pass and three missing
+extension requirements fail as predicted. The bounded change passes all 48 new
+Windows/ARM64 controls, 209 recent and all older checks. The 461 older printed
+Windows rows exactly match that baseline; observer-on/off body and tail agree.
+Positive/negative inbound, fallback impulse, finite-mode admission, nonfinite-mode
+refusal, default, blocked-default and held-button counterparts act. Each platform's
+60 full-content physics rows exactly match the qualified predecessor and each
+other, with zero new warnings. The same compiled eight-arm Windows socket/cache/
+admission regression preserves raw/profile/input/relative and total motion/status
+outputs; original/unavailable-API evidence is unchanged reuse. Reader tests pass
+949 checks; the intended current runs corpus remains 528 inputs/336 existing
+faults with all bytes unchanged, not a fault-free or saved-prefix sweep. No new
+genuine-ground socket, human, ranked-finish or complete bank acceptance.
+Clean tagged version `git-8027-patch-1141-0-g85e13a4ca` passes the same gates.
+Two fresh independent whole-feature reviews found no supported-scope issues;
+the parent verified all 3,999 tracked source files, refs/index/tag and frozen
+artifacts unchanged before and after review. Exact native `85e13a4ca` and QC
+pin declaration `ce44c35c` are published; the higher project patch stays 1142.
+
+**Delivery (30 Oct 2026 UTC):** Both Windows installs verified all 22 destinations
+and paired `.prev` at 22:27:23; all 16,963 old protected entries were unchanged.
+At 22:37:29 the 12 empty lobbies received the frozen paired files with one ordinary
+restart each, no force. All four current part files (1,426,033 bytes, no open part
+FDs) were archived and independently read back off-box BEFORE any restart.
+Strict postflight verified new native/plugin epochs, all 35,774 old protected
+entries, configs/backend and released sweep lock. This does NOT recover or waive
+P1136's historical three-file preservation failure. A fresh installed client
+fetched exact served CSQC, drew the board and exited without QC errors; the image
+shows an empty board and unaccepted terms, not human or ranked-run acceptance.
+At 22:45:42 the same 12 new actors and every old protected entry/part still matched;
+nine new files were preserved. The later Windows check also retained all old
+protected bytes. No extra healthy restart, backend generation, Build or release.
 
 ## Patch 1139 — retain eligible gravity status through stock ground takeoff
 
