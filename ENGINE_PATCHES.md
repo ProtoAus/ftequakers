@@ -1,5 +1,39 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1161 — cold TAS project validation and replay admission
+
+**Problem.** A fresh matching-clock TAS session could not validate a nonempty
+base-save project until native rewind history had created its input pool.
+Removing that accidental decoder dependency also exposed a legal-start caller
+using validation as a pool probe, and a base-load path lacking early body/hold
+admission before placement.
+
+**Change.** Decode rows after current native actor admission but before the
+pool requirement, without allocating history, staging input or granting replay.
+Keep failed-admission cancellation and all native execution gates. Legal
+placement initializes its recording serial before a one-row CHECK and uses the
+existing explicit live-plan allocator only when needed, checking its result.
+Project loading applies the shared living/unheld walk-body preflight before
+reading or placing either project kind. Preserve published P1158/P1160; no
+physical movement, capture/recording format or human-eligibility change.
+
+**Verified/limits.** Isolated Windows source builds have no new warnings; two
+independent source reviews accept both caller corrections. Actual dedicated
+socket controls reproduce the old-VM legal failure, execute corrected cold
+pre-start replay and verify its exact target on the next step. The same immutable
+nonempty base project cold-loads and completes its exact native row delta.
+Canonical malformed input and actual unsupported 20ms context refuse before
+placement. Noclip and a real save hold preserve body/timer/recorder/project state;
+normal no-op movement clocks still advance, while an explicit owned-world pause
+also proves unchanged request/movement/completion counters around the refusal.
+Body/velocity observations are printed precision only. Production C headers pass
+100262 checks. Seventeen compiled production dispatcher/context/cancellation
+checks, with controlled engine admission/pool/field adapters, stop a staged tape
+and reject its old token after support returns; a compiled broken-admission
+control fails that exact requirement. These are component controls, not full
+protocol/identity, canonical-world, board or final-image/deployment approval.
+Final integrated tagged Windows/ARM images and delivery remain separately gated.
+
 ## Patch 1158 — retain gravity-use status through finite-stamina takeoff
 
 **Problem.** The existing default-jump counterfactual accepted only fully

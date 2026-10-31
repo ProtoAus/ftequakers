@@ -403,13 +403,14 @@ float SV_TASTape(edict_t *e, unsigned int op, float a, float b,
 		SV_TASTapePublish(e, p);
 		return 1;
 	}
+	// Row syntax needs current TAS admission, not an earlier checkpoint pool.
+	if (op == SV_TAPE_VALIDATE && cl) return SV_TASInputDecode(moves, angles, buttons, &in);
 	if (!cl || !(p = SV_TASInputPool(cl)))
 	{
 		SV_TASInputCancel(e); // failed capability must not leave a stage to arm later
 		return 0;
 	}
 	if (op == SV_TAPE_STATUS) return p->tape.state;
-	if (op == SV_TAPE_VALIDATE) return SV_TASInputDecode(moves, angles, buttons, &in);
 	if (op == SV_TAPE_CHECK || op == SV_TAPE_BEGIN)
 	{
 		if (!(a >= 1 && a <= SV_TAS_TAPE_MAX && floorf(a) == a) ||
