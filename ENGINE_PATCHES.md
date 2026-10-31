@@ -34,6 +34,15 @@ control fails that exact requirement. These are component controls, not full
 protocol/identity, canonical-world, board or final-image/deployment approval.
 Final integrated tagged Windows/ARM images and delivery remain separately gated.
 
+**Qualification update (31 Oct 2026).** Frozen source `844619bcf`, tag `patch-1161`,
+version `git-8077-patch-1161-0-g844619bcf`: final Full Windows build/metadata pass;
+actual final cold base/legal/unsupported socket cases pass. ARM server/HL2 build
+and metadata pass. Both platforms pass native1448, header100262 and the scoped
+production-dispatch17/broken-guard controls. Later published prose merges leave
+all compilation inputs and that tag unchanged. These are not canonical/fleet or
+ARM actual-client replay approval; deployment is still not claimed. Detailed
+scope/failure history: FTESurf `tools/tas-cold-p1161.md`.
+
 ## Patch 1158 — retain gravity-use status through finite-stamina takeoff
 
 **Problem.** The existing default-jump counterfactual accepted only fully
