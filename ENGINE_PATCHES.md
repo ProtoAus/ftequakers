@@ -1,5 +1,27 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1155 — keep slow-practice feet and duck eye height on one sample
+
+**Problem.** Ordinary duck/roof eye-height changes and the standing/duck hull pair
+were treated as camera discontinuities below speed1, repeatedly discarding
+otherwise smooth movement history. Owner reports this while moving under a roof.
+
+**Change.** Store and interpolate eye height with the existing camera-only feet
+and velocity samples. Carry the paired height through rebase and normal-speed
+release and consume it before the unchanged presented-world roof cap. Admit only
+the configured native-codec Source standing/duck pair with decoded floor zero;
+other hull/model/world/owner/teleport/epoch/jump fences remain. Stationary holds
+retain the entire old pair even when the incoming eye changes. No physics,
+commands, eligibility, evidence or network-format changes; ordinary steady1
+outside an active/retiring practice presentation uses its existing view height.
+
+**Verified/limits.** Final16 literal-source cases pass. The old eye-reset and
+two first-candidate idle/translated-hull failures are retained. Both fresh whole
+source reviews clear. Official header-Full7 baseline and final-source incremental
+targets completed; the final incremental has no native compiler warnings. Tests
+use controlled trace/predicate seams, not a real geometry/packet proof. Final
+image delivery and the exact owner roof/save14 feel remain separately gated.
+
 ## Patch 1151 — server-confirmed clean return from slow practice
 
 **Problem.** Restoring normal speed retained the connection's slow-practice history.

@@ -1208,6 +1208,7 @@ typedef struct
 {
 	double time; /* Existing native realtime, not the packet-clamped game clock. */
 	vec3_t origin, velocity;
+	float viewheight;
 } sourcepracticepose_t;
 
 typedef struct
@@ -1222,6 +1223,7 @@ typedef struct
 	unsigned int sequence, effects;
 	const void *world;
 	float scale, tick, packettime, saveop, saveseq, viewheight;
+	float sampleheight, releaseheight;
 } sourcepracticelerp_t;
 
 static sourcepracticelerp_t sourcepractice[MAX_SPLITS];
@@ -1253,11 +1255,12 @@ static qboolean CL_SourcePracticeSaveEpochChanged(float oldseq, float oldop,
 /* Kept separate from the native adapter so the exact source can be exercised
    without simulating a second mover or rebuilding an interpolation model. */
 static qboolean CL_SourcePracticePush(sourcepracticelerp_t *s, double time,
-	const vec3_t origin, const vec3_t velocity, float interval)
+	const vec3_t origin, const vec3_t velocity, float interval, float viewheight)
 {
 	sourcepracticepose_t *p;
 	int i;
-	if (!(time > -1e9f && time < 1e9f && interval > 0 && interval <= 1))
+	if (!(time > -1e9f && time < 1e9f && interval > 0 && interval <= 1 &&
+		viewheight > -1024 && viewheight < 1024))
 		return false;
 	for (i = 0; i < 3; i++)
 		if (IS_NAN(origin[i]) || IS_NAN(velocity[i]))
@@ -1267,13 +1270,15 @@ static qboolean CL_SourcePracticePush(sourcepracticelerp_t *s, double time,
 		p = &s->pose[(s->next + SOURCE_PRACTICE_POSES - 1) % SOURCE_PRACTICE_POSES];
 		if (time < p->time)
 			return false;
-		if (!s->seeded && VectorCompare(origin, p->origin) && VectorCompare(velocity, p->velocity))
+		if (!s->seeded && VectorCompare(origin, p->origin) &&
+			VectorCompare(velocity, p->velocity) && viewheight == p->viewheight)
 			return true; /* No new completed motion tick. Keep its first stamp. */
 		if (time == p->time)
 			return false;
 		/* Keep the old stop endpoint: retiming it replays earlier movement.
 		   Add a second stationary point before the new motion instead. */
-		if (!s->seeded && VectorCompare(p->velocity, vec3_origin) && time - p->time > interval)
+		if (!s->seeded && VectorCompare(p->velocity, vec3_origin) &&
+			time - p->time > interval)
 		{
 			sourcepracticepose_t hold = *p;
 			hold.time = time - interval;
@@ -1285,6 +1290,7 @@ static qboolean CL_SourcePracticePush(sourcepracticelerp_t *s, double time,
 	}
 	p = &s->pose[s->next];
 	p->time = time;
+	p->viewheight = viewheight;
 	VectorCopy(origin, p->origin);
 	VectorCopy(velocity, p->velocity);
 	s->seeded = false;
@@ -1294,7 +1300,8 @@ static qboolean CL_SourcePracticePush(sourcepracticelerp_t *s, double time,
 	return true;
 }
 
-static qboolean CL_SourcePracticeSample(const sourcepracticelerp_t *s, double time, vec3_t out)
+static qboolean CL_SourcePracticeSample(const sourcepracticelerp_t *s, double time,
+	vec3_t out, float *viewheight)
 {
 	const sourcepracticepose_t *a, *b;
 	float f;
@@ -1307,6 +1314,7 @@ static qboolean CL_SourcePracticeSample(const sourcepracticelerp_t *s, double ti
 	if (time >= b->time)
 	{
 		VectorCopy(b->origin, out); /* Never extrapolate unknown movement. */
+		*viewheight = b->viewheight;
 		return true;
 	}
 	for (i = 1; i < s->count; i++)
@@ -1317,11 +1325,13 @@ static qboolean CL_SourcePracticeSample(const sourcepracticelerp_t *s, double ti
 		{
 			f = bound(0, (time - a->time) / (b->time - a->time), 1);
 			VectorInterpolate(a->origin, f, b->origin, out);
+			*viewheight = a->viewheight + f * (b->viewheight - a->viewheight);
 			return true;
 		}
 		b = a;
 	}
 	VectorCopy(b->origin, out);
+	*viewheight = b->viewheight;
 	return true;
 }
 
@@ -1329,12 +1339,12 @@ static qboolean CL_SourcePracticeSample(const sourcepracticelerp_t *s, double ti
    rewind the old ring or abruptly expose the undelayed body. Both endpoints
    remain known poses; this never extrapolates future movement. */
 static qboolean CL_SourcePracticeRebase(sourcepracticelerp_t *s, double time,
-	float tick, float scale, const vec3_t anchor)
+	float tick, float scale, const vec3_t anchor, float viewheight)
 {
 	s->count = s->next = 0;
 	s->releasing = s->seeded = false;
 	if (!CL_SourcePracticePush(s, time - CL_SourcePracticeDelay(tick, scale),
-		anchor, vec3_origin, tick/scale))
+		anchor, vec3_origin, tick/scale, viewheight))
 		return false;
 	/* This is a drawn presentation anchor, not a stopped server pose. Do not
 	   insert an idle hold before the first authoritative endpoint. */
@@ -1343,11 +1353,12 @@ static qboolean CL_SourcePracticeRebase(sourcepracticelerp_t *s, double time,
 }
 
 static void CL_SourcePracticeRelease(sourcepracticelerp_t *s, double time,
-	const vec3_t origin, const vec3_t gravity, float stair)
+	const vec3_t origin, const vec3_t gravity, float stair, float viewheight)
 {
 	vec3_t classic;
 	CL_SourcePracticeEntry(origin, gravity, stair, classic);
 	VectorSubtract(s->vieworg, classic, s->releaseoffset);
+	s->releaseheight = s->viewheight - viewheight;
 	s->releasebegin = time;
 	s->releaseduration = fmax(.08, CL_SourcePracticeDelay(s->tick, s->scale));
 	s->releasing = true;
@@ -1355,7 +1366,8 @@ static void CL_SourcePracticeRelease(sourcepracticelerp_t *s, double time,
 }
 
 static qboolean CL_SourcePracticeReleaseView(sourcepracticelerp_t *s, double time,
-	const vec3_t origin, const vec3_t gravity, float stair, vec3_t out)
+	const vec3_t origin, const vec3_t gravity, float stair, vec3_t out,
+	float height, float *viewheight)
 {
 	double f = bound(0, (time - s->releasebegin)/s->releaseduration, 1);
 	if (f >= 1)
@@ -1366,8 +1378,37 @@ static qboolean CL_SourcePracticeReleaseView(sourcepracticelerp_t *s, double tim
 	CL_SourcePracticeEntry(origin, gravity, stair, out);
 	/* Retire only the cosmetic offset; ordinary prediction/input is already
 	   active at speed1. Preserve the classic stair height on BOTH sides. */
-	VectorMA(out, 1 - f*f*(3 - 2*f), s->releaseoffset, out);
+	f = 1 - f*f*(3 - 2*f);
+	VectorMA(out, f, s->releaseoffset, out);
+	*viewheight = height + f * s->releaseheight;
 	return true;
+}
+
+/* Source changes its hull at completed duck transitions, independently of the
+   eye spline. Only those configured posture hulls may keep camera history. */
+static qboolean CL_SourcePracticePosture(int oldsolid, int solid,
+	float standheight, float duckheight)
+{
+	vec3_t oldmins, oldmaxs, mins, maxs;
+	int standsolid, ducksolid;
+	if (oldsolid == solid)
+		return true;
+	if (oldsolid == ES_SOLID_NOT || oldsolid == ES_SOLID_BSP ||
+		solid == ES_SOLID_NOT || solid == ES_SOLID_BSP)
+		return false;
+	COM_DecodeSize(oldsolid, oldmins, oldmaxs);
+	COM_DecodeSize(solid, mins, maxs);
+	if (oldmins[2] != 0 || !VectorCompare(oldmins, mins) ||
+		oldmaxs[0] != maxs[0] || oldmaxs[1] != maxs[1] ||
+		oldmaxs[0] <= 0 || oldmaxs[1] <= 0)
+		return false;
+	/* Same defaults as PMSrc_StandHeight/DuckHeight; presentation only. */
+	oldmaxs[2] = oldmins[2] + (standheight > 0 ? standheight : 62);
+	standsolid = COM_EncodeSize(oldmins, oldmaxs);
+	oldmaxs[2] = oldmins[2] + (duckheight > 0 ? duckheight : 45);
+	ducksolid = COM_EncodeSize(oldmins, oldmaxs);
+	return (oldsolid == standsolid && solid == ducksolid) ||
+		(oldsolid == ducksolid && solid == standsolid);
 }
 
 static qboolean CL_SourcePracticeContext(const playerview_t *pv)
@@ -1392,7 +1433,7 @@ static void CL_UpdateSourcePracticeView(int seat, playerview_t *pv, qboolean nop
 	entity_state_t *ent = NULL;
 	vec3_t velocity, delta, sampled, anchor;
 	float scale = pv->statsf[STAT_FS_TIMESCALE];
-	float tick = movevars.ticrate, interval;
+	float tick = movevars.ticrate, interval, height = pv->viewheight, anchorheight;
 	double time, target;
 	float saveop = floor(pv->statsf[STAT_FS_SLOP] / 1000); /* Existing FS_SLOP_RADIX. */
 	unsigned int sequence = cl.validsequence;
@@ -1437,10 +1478,9 @@ static void CL_UpdateSourcePracticeView(int seat, playerview_t *pv, qboolean nop
 		sequence - s->sequence > 0x7fffffffu || pack->servertime < s->packettime ||
 		pack->servertime - s->packettime > interval * 4 ||
 		((s->effects ^ ent->effects) & EF_TELEPORT_BIT) ||
-		s->modelindex != ent->modelindex || s->solidsize != ent->solidsize ||
-		/* Eye/roof height belongs to the captured pose domain too. Never
-		   combine old feet under a roof with a newer standing eye height. */
-		s->viewheight != pv->viewheight ||
+		s->modelindex != ent->modelindex ||
+		!CL_SourcePracticePosture(s->solidsize, ent->solidsize,
+			movevars.standheight, movevars.duckheight) ||
 		CL_SourcePracticeSaveEpochChanged(s->saveseq, s->saveop,
 			pv->statsf[STAT_FS_SLSEQ], saveop)))
 		goto discontinuity;
@@ -1453,30 +1493,38 @@ static void CL_UpdateSourcePracticeView(int seat, playerview_t *pv, qboolean nop
 	if (scale == 1)
 	{
 		if (s->count && s->haveview && time >= s->viewtime && time - s->viewtime < .25)
-			CL_SourcePracticeRelease(s, time, pv->simorg, pv->gravitydir, pv->crouch);
+			CL_SourcePracticeRelease(s, time, pv->simorg, pv->gravitydir, pv->crouch, pv->viewheight);
 		s->count = 0;
 	}
 	else if (!s->count || s->scale != scale || s->tick != tick)
 	{
 		if (s->haveview && time >= s->viewtime && time - s->viewtime < .25)
+		{
 			VectorCopy(s->vieworg, anchor);
+			anchorheight = s->viewheight;
+		}
 		else
+		{
 			CL_SourcePracticeEntry(pv->simorg, pv->gravitydir, pv->crouch, anchor);
-		if (!CL_SourcePracticeRebase(s, time, tick, scale, anchor))
+			anchorheight = pv->viewheight;
+		}
+		if (!CL_SourcePracticeRebase(s, time, tick, scale, anchor, anchorheight))
 			goto reset;
 	}
 	s->hasoffset = false;
 	if (scale < 1)
 	{
-		if (!CL_SourcePracticePush(s, time, ent->origin, velocity, interval) ||
-			!CL_SourcePracticeSample(s, target, sampled))
+		if (!CL_SourcePracticePush(s, time, ent->origin, velocity, interval, pv->viewheight) ||
+			!CL_SourcePracticeSample(s, target, sampled, &height))
 			goto reset;
 		s->hasoffset = true;
 	}
 	else if (s->releasing)
-		s->hasoffset = CL_SourcePracticeReleaseView(s, time, pv->simorg, pv->gravitydir, pv->crouch, sampled);
+		s->hasoffset = CL_SourcePracticeReleaseView(s, time, pv->simorg, pv->gravitydir,
+			pv->crouch, sampled, pv->viewheight, &height);
 	if (s->hasoffset)
 	{
+		s->sampleheight = height;
 		VectorCopy(sampled, s->sampleorg);
 		VectorSubtract(sampled, pv->simorg, s->viewoffset);
 	}
@@ -1489,6 +1537,7 @@ discontinuity:
 	s->blocked = s->hasoffset = s->haveview = true;
 	VectorCopy(ent->origin, s->vieworg);
 	VectorCopy(ent->origin, s->sampleorg);
+	s->viewheight = s->sampleheight = pv->viewheight;
 	s->viewtime = time;
 	VectorSubtract(ent->origin, pv->simorg, s->viewoffset);
 commit:
@@ -1500,7 +1549,6 @@ commit:
 	s->effects = ent->effects;
 	s->modelindex = ent->modelindex; s->solidsize = ent->solidsize;
 	s->saveop = saveop; s->saveseq = pv->statsf[STAT_FS_SLSEQ];
-	s->viewheight = pv->viewheight;
 	s->rendertime = cl.servertime;
 	/* Only V_CalcRefdef consumes this delta. Keep the shared body pair,
 	   input callbacks, HUD/trail state and command buffers on their old path. */
@@ -1509,7 +1557,7 @@ reset:
 	memset(s, 0, sizeof(*s));
 }
 
-qboolean CL_GetSourcePracticeViewOffset(const playerview_t *pv, vec3_t out)
+qboolean CL_GetSourcePracticeViewOffset(const playerview_t *pv, vec3_t out, float *viewheight)
 {
 	sourcepracticelerp_t *s;
 	int seat;
@@ -1526,16 +1574,23 @@ qboolean CL_GetSourcePracticeViewOffset(const playerview_t *pv, vec3_t out)
 	   against an earlier simorg smears a short acknowledged reset. */
 	if (s->hasoffset && s->releasing)
 		s->hasoffset = CL_SourcePracticeReleaseView(s, realtime, pv->simorg,
-			pv->gravitydir, pv->crouch, s->sampleorg);
+			pv->gravitydir, pv->crouch, s->sampleorg, pv->viewheight, &s->sampleheight);
 	if (s->hasoffset)
+	{
 		VectorCopy(s->sampleorg, s->vieworg);
+		s->viewheight = s->sampleheight;
+	}
 	else
+	{
 		CL_SourcePracticeEntry(pv->simorg, pv->gravitydir, pv->crouch, s->vieworg);
+		s->viewheight = pv->viewheight;
+	}
 	s->haveview = true;
 	s->viewtime = realtime;
 	if (!s->hasoffset)
 		return false;
 	VectorSubtract(s->sampleorg, pv->simorg, out);
+	*viewheight = s->sampleheight;
 	return true;
 }
 
