@@ -74,9 +74,25 @@ Windows data/config/native/program domain remained unchanged with no new members
 Current P1151 literal pose/return/client-prediction/support harnesses pass. Reader
 949/0 passes; the mandatory runs-only sweep retains existing faults with identical
 reader/input dependencies, not a fault-free corpus. A separate default sweep is
-blocked by an existing protected save prefix and remains unqualified. ARM64,
-independent review, installed-client cold/human acceptance and deployment are
-pending; these Windows/source checks do not claim them. No backend or Pi operation.
+blocked by an existing protected save prefix and remains unqualified.
+
+**Final qualification/delivery, 31 Oct 2026.** Two fresh whole-source reviews are
+clear with scoped notes; the exact reviewed source and evidence remained held.
+The final tagged Windows and clean ARM64 natives each pass all 1,199 checks;
+all 60 full physical rows match across platforms and the current P1151 control.
+The stable QC remains explicitly test-only, not current-VM/packet acceptance.
+Native source `c36bc6b06` / `patch-1152` (actual 8064) and QC declaration `f9d1ad84`
+are published. Both Windows installs received the exact seven native images and
+matching predecessor copies. All 17,608 protected old files, including twelve
+actual VM/symbol files, remained unchanged; all 28 rollback members were verified.
+No owner/peer process was killed. Later P1156 source forward-preserves this exact
+mover-status source; its camera qualification and installation are separate.
+
+Pi native-only preparation refused a newly occupied lobby before any part archive,
+payload, canonical stage, swap or restart; only owned source artifacts were kept.
+Fresh part/actor/FD/on-off-box/execution-boundary checks remain required. No backend
+change. Installed-client cold/current-VM/human/rank acceptance and the wider bank
+remain open; none is inferred from source, selftests or physics controls.
 
 ## Patch 1151 — server-confirmed clean return from slow practice
 
