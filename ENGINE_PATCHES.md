@@ -33,9 +33,25 @@ canonical Git blobs and read back off-box. Two independent whole-feature review
 lenses accept the code; two factual documentation findings were corrected and
 confirmed. Reader self-tests pass 949/949 and the stable runs-only sweep has no
 fault-count increase. Original failed packaging, expectation and caller-domain
-checks remain failed evidence, not renamed passes. Guarded native-only delivery
-and actual-current-program runtime checks remain pending. Stable test programs
-are not deployment inputs; no full-bank, human feel or ranked-finish claim.
+checks remain failed evidence, not renamed passes. Stable test programs are not
+deployment inputs; no full-bank, human feel or ranked-finish claim.
+
+**Delivery (31 Oct UTC).** The exact frozen seven Windows images are installed
+in both installs with their approved P1156 predecessors retained. Native server
+and HL2 plugin are installed in all 12 positively empty NanoPi lobbies, each
+restarted once without force. Before staging/restart, every current native-part
+and suffix-part archive member was verified on and off box; strict original
+actor/FD and part identities were rechecked at the locked execution boundary.
+Old player data, actual programs, configs and backend remain unchanged at the
+delivery boundary. Fresh copies of both installed clients naturally exit after
+joining, downloading the then-served CSQC and drawing the board without QC errors.
+The first cold harness passes. The second original harness fails its mutable
+local-CS expectation during a concurrent program rollout; the original same-actor
+post-cold gate also refuses the changed lobby process epochs. Read-only diagnosis
+retains those failures and verifies our native/predecessor pairs, old data and
+parts, and unchanged backend. No healthy restart, client replay, data restore or
+verifier downgrade was used to hide them. New-program cold acceptance is separate;
+empty-board/unaccepted-terms screenshots do not establish human feel or ranking.
 
 ## Patch 1160 — Steam-profile inventory, cosmetics and role badges (QC/backend)
 
