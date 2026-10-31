@@ -11554,6 +11554,7 @@ static void QCBUILTIN PF_fs_randomf (pubprogfuncs_t *prinst, struct globalvars_s
 static void QCBUILTIN PF_sourcepractice_reset(pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
 {
 	edict_t *ent;
+	eval_t *carry;
 	globalptrs_t *g = pr_global_ptrs;
 	extern cvar_t pm_physicsmode;
 	G_FLOAT(OFS_RETURN) = 0;
@@ -11561,6 +11562,7 @@ static void QCBUILTIN PF_sourcepractice_reset(pubprogfuncs_t *prinst, struct glo
 		return;
 	ent = G_EDICT(prinst, OFS_PARM0);
 	if (ent != host_client->edict || ent != sv_player || host_client->state != cs_spawned ||
+		host_client->controller || host_client->controlled || // shared QC action queues are not per-seat
 		host_client->protocol != SCP_QUAKEWORLD ||
 		(host_client->fteprotocolextensions2 & PEXT2_VRINPUTS) ||
 		sv_nqplayerphysics.ival || pm_physicsmode.ival != PHYSMODE_SOURCE || sv.gamespeed != 1 ||
@@ -11577,6 +11579,11 @@ static void QCBUILTIN PF_sourcepractice_reset(pubprogfuncs_t *prinst, struct glo
 	// sources to maintain. Cumulative clocks/counters and other seats stay intact.
 	memset(&host_client->pmsrc, 0, sizeof(host_client->pmsrc));
 	host_client->jump_held = false;
+	// QC can re-arm before the normal post-move mirror publication. Publish
+	// this derived zero now so SV_ClockSec never sees the previous fraction.
+	carry = prinst->GetEdictFieldValue(prinst, ent, "run_movecarry", ev_float, NULL);
+	if (carry)
+		carry->_float = 0;
 	G_FLOAT(OFS_RETURN) = 1;
 }
 
