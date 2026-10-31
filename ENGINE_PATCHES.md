@@ -1,5 +1,26 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1156 — preserve installed P1152 with the paired roof/duck camera
+
+**Problem.** P1152 was installed while the P1155 camera candidate was being
+validated. The original before-snapshot guard refused the advanced installed
+bytes; shipping that earlier candidate would now discard the installed status
+change. P1155 was never installed and its tag/proofs remain historical.
+
+**Change.** Forward-integrate the unchanged paired slow-practice feet/eye-height
+camera with byte-exact published P1152 mover-status source. Preserve the actual
+installed status behavior, current programs and all protected data. The camera
+still uses the configured zero-floor duck pair and unchanged presented-roof cap.
+No additional physical movement, input, eligibility, API or format change beyond
+the separately published and installed P1152 source.
+
+**Verification boundary.** All three camera files and their 16-case literal
+harness are byte-identical to the qualified P1155 snapshot; those controls remain
+valid without healthy reruns. Fresh whole integrated-source review, final seven
+native images, native regression, same-transaction generated-preimage continuation
+and post-install cold checks are required. The exact owner save14 roof feel is
+not asserted. No Pi/native/QC/backend rollout is part of this local camera task.
+
 ## Patch 1155 — keep slow-practice feet and duck eye height on one sample
 
 **Problem.** Ordinary duck/roof eye-height changes and the standing/duck hull pair
