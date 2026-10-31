@@ -1,5 +1,43 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1151 — server-confirmed clean return from slow practice
+
+**Problem.** Restoring normal speed retained the connection's slow-practice history.
+Clearing that history alone would let an old attempt, prediction queue or native
+movement carry leak into a nominally clean run. A reset also needs fresh support
+identity when its neutral command advances no Source tick.
+
+**Change.** Returning to 1 can prepare a fresh zero-motion attempt at the same
+eligible grounded start pose, while still practice. Completion requires the
+client's native prediction reset for the matching neutral server snapshot and a
+subsequent decoded neutral command from the same live attempt. Native client
+history fences reject pre-return replay/interpolation bases and clear prediction
+carry; SSQC closes old evidence before reset and clears practice history only at
+confirmed completion. Missing support or an old/missing client hook fails closed.
+Zero-duration grounded Source commands resolve the supporting edict against the
+current command's rebuilt physents before observation and mover writeback.
+No mover-version, recording grammar or ordinary movement change.
+
+**Verified.** Two independent whole-patch source reviews have no remaining
+findings. Literal SSQC/CSQC/native harnesses include refusal, stale history,
+sequence/ring identity and zero-tick world/moving-support controls; the previous
+native ground overwrite fails before the fix and passes after it. A real dedicated
+client/server pair preserved the pose, cleared charged old client landing carry
+(76 to 0), confirmed the new attempt, then accepted a fresh jump and later slow
+practice. An old native client remained practice. Final-tag listen routing passed;
+disabling CSQC timed out without clearing practice. Header-full Windows build
+baseline plus the final source compiled all seven official targets; ARM64 server
+and HL2 plugin compiled. The five-map gate matches all 60 named physical rows
+exactly across Windows/ARM, both native selftests pass, and declared reconstructed
+historical-world pin2/pin7 controls pass on both platforms (4418/4418 and
+9194/9192 ticks/rows). Final tag-only binaries preserve the Windows .text and ARM
+.text/.init/.fini sections from those qualified images; all six QC program/line-number
+files are byte-identical. Reader suite 949 checks passes; unchanged-reader corpus outcomes
+and old bytes match the captured baseline. This is not whole-corpus native replay,
+archived historical VM byte identity, loss/split-seat or every start-bank runtime
+coverage. Human feel/first-jump acceptance remains in lextest.md. Delivery is
+recorded separately; these checks do not claim installation.
+
 ## Patch 1148 - retain neutral-stamina normalized takeoff coverage
 
 **Problem:** The normalized ground-takeoff status gate refused stamina even when
