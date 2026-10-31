@@ -1,5 +1,33 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1148 - retain neutral-stamina normalized takeoff coverage
+
+**Problem:** The normalized ground-takeoff status gate refused stamina even when
+its actual jump multiplier was exactly one. The later helper sees the pool after
+the accepted jump charged its stamina cost, too late to decide that identity.
+
+**Change:** Admit finite normalized contexts only at an exactly neutral pre-cost
+ratio; keep stock and non-unit stamina excluded. Retain accepted-jump, consumed
+carrier, current-hull default-clear and late-use proof. Preserve current P1147
+camera/spatial-reset code and runtime VMs. No mover arithmetic, hull, captured
+field, API, format, flag, tier policy, Build or release change.
+
+**Verified/limits:** The sealed untouched-production control acted:348 positive
+and twelve predicted admission/use failures with all711 inherited checks passing.
+Its actual production CPP, headers, server and build inputs remain unchanged in
+the current-main base. The same new gate/test code, except patch-number labels,
+passed1071 native checks and60 full-content physical rows per Windows/ARM platform,
+with observer-off/on, held/equal-gravity, default-only ceiling, real posture/hull,
+actual stamina charge and pre/post-ratio controls. Current eight-arm same-QQ
+raw/cache/pin/input/motion/status/IO and historical pin2/P813pin7 world controls
+remain bounded evidence, not a positive flag-bitword, exact mover cadence, new
+live stamina socket, full-bank or human/ranked acceptance. Reader949/0 and
+runs528/336 existing faults retain705 raw record/view/part bytes/domain; not
+fault-free/SAVES/save-prefix. Current-camera integration requires its new clean
+cohort checks; prior image/source stamps and camera proofs are not relabelled.
+Final integrated clean-tag qualification, whole-feature reviews and frozen
+deployment are recorded separately. Wider stamina/bank contexts stay excluded.
+
 ## Patch 1147 — continuous practice speed changes and short reset placement
 
 **Problem:** Changing slow scale discarded the completed-pose camera history;
