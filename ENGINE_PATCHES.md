@@ -1,5 +1,43 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1143 — retain eligible gravity status through additive-rise takeoff
+
+**Problem:** The bounded normalized ground-jump observer excluded the mover's
+additive-rise mode. Its shadow also undid positive inbound velocity even though
+that mode deliberately retains it. An actual clear takeoff could therefore miss
+the existing derived use status despite a surviving earlier displacement effect.
+
+**Change:** Admit only finite normalized additive-rise selectors through the same
+standing/actual-jump/default-path/clear/late-use proof. Retain the stock entry's
+alternate-rise exclusion and all other unsupported-context gates. Mirror the
+actual branch's impulse addition without its non-additive inbound undo; retain
+sanitization and skipped inner half. Actual movement, capture, API, formats,
+flags and tier policy are unchanged.
+
+**Verified:** Before production edits, untouched P1141 production with only the
+new tests passes 51 controls and fails the seven preregistered extension checks;
+all 509 older checks pass. Exact raw inverse-source proof and independently
+read-back seven-member source/native/results recovery archive precede the edit.
+Windows and ARM candidates pass all 58 new controls and every old check; all
+509 old Windows printed rows exactly match baseline. Real coupled ground/contact,
+carrier consumption, observer-disabled/enabled, default-only ceiling, neutral,
+held refusal, finite boolean, nonfinite, inbound/fallback/clamp arms ACTED.
+All 120 full-content physics rows match P1141 and each other. Same compiled QQ
+current-eight socket/cache/admission keeps raw/full-pin/input/body/motion/status
+and IO exact; logged SSQC frametime is retained separately, not claimed to equal
+the mover command duration. Original/unavailable controls are unchanged reuse,
+NOT fresh ground-socket, human, ranked-finish or complete-bank acceptance.
+Reader 949/0; explicit runs-only main stays 528 inputs/336 existing faulty items,
+with record/view/part bytes and domain unchanged, NOT fault-free or a saved-prefix
+sweep. Reader-only comparison/Windows-argv transport failures are retained; passed
+native arms and reader suite were not repeated to fix readers.
+
+Published P1140 dependencies arrived after candidate checks: their actual delta
+was inspected and its PM source blob was unchanged. Native-header integration
+requires a full clean qualification. This engine-only ship set retains verified
+QQ source `8edc5de034`; the unrelated TAS UI and pending backend are NOT promoted.
+Final clean tagged artifacts, fresh independent reviews and deployment pending.
+
 ## Patch 1140 — share and open portable TAS revisions in the game
 
 **Problem:** The revision service had no in-game collaboration consumer. Local
