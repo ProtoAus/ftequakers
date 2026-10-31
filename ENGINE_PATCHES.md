@@ -1,5 +1,19 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Standing save-load duck press edge (01a192ea; source only, not installed)
+
+The authoritative `run_forceduck` stand path and predicted `PM_ApplyPreInput`
+stand path now clear only `BUTTON_DUCK` from `oldbuttons`, alongside their
+existing posture/transition reset. A key held before restoring standing gets
+the same fresh duck press as a key pressed after. Crouched restoration and the
+jump latch are unchanged. No layout, builtin, stat or wire-format changes.
+`tools/test_saveload_duck.py` extracts the actual force blocks and native
+Duck/FinishDuck code: ground/air held-versus-new-press, jump preservation,
+crouched restore and release pass; original server and predicted paths fail
+separate controls. World/hull helpers are bounded stubs. This is NOT a full
+native build, dedicated-socket save-lock test or proof of reported airborne
+clearance. Task artifacts: `C:/FTESurf-worktrees/playstats-01a192ea/artifacts/`.
+
 ## Patch 1152 - retain recovered-stamina stock standing takeoff status
 
 **Problem.** The ordinary standing-jump gravity-carry observer refused any enabled

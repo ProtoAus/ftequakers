@@ -9159,6 +9159,12 @@ static void SV_RunCmdPart (usercmd_t *ucmd, qboolean recurse, int kind, float to
 			pmove.ducked   = (ev->_float == 2);
 			pmove.ducking  = false;
 			pmove.ducktime = 0;
+			// A restored stand is also the start of a new duck transition.
+			// Otherwise a key held before loading has no press edge: Duck sees
+			// oldbuttons=cmd.buttons and leaves a grounded player standing.
+			// Preserve every other button (in particular the jump latch).
+			if (!pmove.ducked)
+				pmove.oldbuttons &= ~BUTTON_DUCK;
 			ev->_float = 0;
 		}
 	}
