@@ -8573,6 +8573,23 @@ static enum sv_tas_action SV_TASCommandPlan(usercmd_t *cmd, int kind, eval_t **f
 }
 
 //FTESurf Patch 893: later = a later part of a usercmd split per tick (a parameter, so nothing outlives it)
+// Zero-duration Source commands may run no categorization tick. The physent
+// list was rebuilt for THIS player, so a previous global ground INDEX is not
+// contact evidence. Seed it from this body's authoritative edict identity.
+static void SV_SeedZeroSourceGround(unsigned int groundentity)
+{
+	int i;
+	pmove.groundent = -1;
+	for (i = 0; i < pmove.numphysent; i++)
+		if (pmove.physents[i].info == groundentity)
+		{
+			pmove.groundent = i;
+			return;
+		}
+	// Unknown support must not turn into a different nearby brush or an OOB read.
+	pmove.onground = false;
+}
+
 static void SV_RunCmdPart (usercmd_t *ucmd, qboolean recurse, int kind, float totalmsec, float offsetmsec, qboolean later)
 {
 	edict_t		*ent;
@@ -9175,6 +9192,10 @@ static void SV_RunCmdPart (usercmd_t *ucmd, qboolean recurse, int kind, float to
 	}
 	sv_player->xv->pmove_flags = (int)sv_player->xv->pmove_flags & ~PMF_LADDER;	//assume not touching ladder trigger
 	AddAllLinksToPmove (&sv.world, (wedict_t*)sv_player);
+	if (movevars.physicsmode == PHYSMODE_SOURCE && !held && pmove.pm_type == PM_NORMAL &&
+		pmove.cmd.msec == 0 && pmove.onground)
+		SV_SeedZeroSourceGround(NUM_FOR_EDICT(svprogfuncs,
+			PROG_TO_EDICT(svprogfuncs, sv_player->v->groundentity)));
 
 	if ((int)sv_player->xv->pmove_flags & PMF_LADDER)
 		pmove.onladder = true;
