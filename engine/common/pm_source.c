@@ -3301,7 +3301,7 @@ static qboolean PMSrc_BankGravityGroundStartCommon(vec3_t normal)
 {
 	if (!pmove.onground || !(pmove.cmd.buttons & BUTTON_JUMP) ||
 		movevars.ktjump ||
-		PMSrc_StaminaEnabled() || movevars.jumpzoffset ||
+		movevars.jumpzoffset ||
 		!isfinite(movevars.entgravity) || !isfinite(movevars.gravity) ||
 		!isfinite(movevars.jumpvelocity) || !isfinite(movevars.maxvelocity))
 		return false;
@@ -3311,7 +3311,8 @@ static qboolean PMSrc_BankGravityGroundStartCommon(vec3_t normal)
 static qboolean PMSrc_BankGravityGroundStartDefault(vec3_t normal)
 {
 	// P1145: stock crouch assigns Z; normalized postures share the existing add path.
-	if (movevars.normalizejump || movevars.jumpaddrise || pmove.ducked || pmove.ducking)
+	if (movevars.normalizejump || movevars.jumpaddrise || pmove.ducked || pmove.ducking ||
+		PMSrc_StaminaEnabled())
 		return false;
 	return PMSrc_BankGravityGroundStartCommon(normal);
 }
@@ -3320,6 +3321,11 @@ static qboolean PMSrc_BankGravityGroundStartNormalized(vec3_t normal)
 {
 	if (!isfinite(movevars.normalizejump) || !movevars.normalizejump ||
 		!isfinite(movevars.jumpaddrise)) return false;
+	// P1148: identity BEFORE jump cost; the default helper runs after it is spent.
+	if (PMSrc_StaminaEnabled())
+		if (!isfinite(movevars.stamina) || !isfinite(pmove.stamina) ||
+			!isfinite(movevars.staminarecovery) || !isfinite(movevars.staminajumpcost) ||
+			PMSrc_StaminaRatio() != 1.0f) return false;
 	return PMSrc_BankGravityGroundStartCommon(normal);
 }
 
@@ -5241,6 +5247,125 @@ static void PMSrc_TestBankStartGravity(void)
 						PMSrc_Check(name, VectorCompare(pmove.velocity, unobserved_velocity), 1, 0);
 					}
 					Q_snprintfz(name, sizeof(name), "P1145 normalized duck %i/%i/%i accepted use", mode, posture, i);
+					PMSrc_Check(name, PMSrc_BankGravityEnd(), i == 2, 0);
+				}
+			}
+		}
+		/* P1148: recovered normalized stamina must use the pre-cost identity ratio. */
+		{
+			int mode, posture;
+			float height;
+			movevars.normalizejump = movevars.stamina = 1;
+			movevars.staminarecovery = 19;
+			movevars.staminajumpcost = 25;
+			movevars.standheight = 62;
+			movevars.duckheight = 45;
+			for (mode = 0; mode < 2; ++mode)
+			for (posture = 0; posture < 3; ++posture)
+			{
+				movevars.jumpaddrise = mode;
+				movevars.jumpvelocity = mode ? 1000 : 14000;
+				height = posture == 1 ? PMSrc_DuckHeight() : PMSrc_StandHeight();
+				for (i = 0; i < 6; ++i)
+				{
+					memset(&pmove, 0, sizeof(pmove));
+					pmove.pm_type = PM_NORMAL;
+					pmove.skipent = -1;
+					pmove.ducked = posture == 1;
+					pmove.ducking = posture == 2;
+					VectorSet(pmove.player_mins, -16, -16, 0);
+					VectorSet(pmove.player_maxs, 16, 16, height);
+					VectorSet(pmove.origin, 0, 0, 128);
+					pmove.surfacefriction = 1;
+					pmove.basevelocity[2] = mode ? 768000 : 0;
+					pmove.numphysent = 1;
+					pmove.physents[0].info = 1;
+					pmove.physents[0].scale = 1;
+					VectorSet(pmove.physents[0].mins, -256, -256, -16);
+					VectorSet(pmove.physents[0].maxs, 256, 256, 0);
+					pmove.physents[0].origin[2] = 128;
+					if (i == 3)
+					{
+						pmove.numphysent = 2;
+						pmove.physents[1].info = 2;
+						pmove.physents[1].scale = 1;
+						VectorSet(pmove.physents[1].mins, -256, -256, 0);
+						VectorSet(pmove.physents[1].maxs, 256, 256, 16);
+						pmove.physents[1].origin[2] = 176 + height;
+					}
+					movevars.entgravity = (i == 0 || i == 4) ? 1 : 1.5f;
+					PMSrc_CategorizePosition();
+					Q_snprintfz(name, sizeof(name), "P1148 recovered stamina %i/%i/%i actual contact", mode, posture, i);
+					PMSrc_Check(name, pmove.onground, 1, 0);
+					Q_snprintfz(name, sizeof(name), "P1148 recovered stamina %i/%i/%i PRE-cost ratio", mode, posture, i);
+					PMSrc_Check(name, PMSrc_StaminaRatio(), 1, 0);
+					if (i == 0)
+					{
+						Q_snprintfz(name, sizeof(name), "P1148 recovered stamina %i/%i actual hull", mode, posture);
+						PMSrc_Check(name, pmove.player_maxs[2] - pmove.player_mins[2], posture == 1 ? 45 : 62, 0);
+					}
+					pmove.cmd.buttons = BUTTON_JUMP | (posture ? BUTTON_DUCK : 0);
+					if (i == 5)
+					{
+						pmove.jump_held = true;
+						pmove.oldbuttons = pmove.cmd.buttons;
+					}
+					PMSrc_BankGravityBegin(i >= 2);
+					if (i == 2)
+					{
+						Q_snprintfz(name, sizeof(name), "P1148 recovered stamina %i/%i normalized admitted", mode, posture);
+						PMSrc_Check(name, PMSrc_BankGravityGroundStartNormalized(normal), 1, 0);
+						movevars.normalizejump = movevars.jumpaddrise = 0;
+						Q_snprintfz(name, sizeof(name), "P1148 recovered stamina %i/%i stock excluded", mode, posture);
+						PMSrc_Check(name, PMSrc_BankGravityGroundStartDefault(normal), 0, 0);
+						movevars.normalizejump = 1;
+						movevars.jumpaddrise = mode;
+						pmove.stamina = 40;
+						Q_snprintfz(name, sizeof(name), "P1148 recovered stamina %i/%i fatigue excluded", mode, posture);
+						PMSrc_Check(name, PMSrc_BankGravityGroundStartNormalized(normal), 0, 0);
+						pmove.stamina = NAN;
+						Q_snprintfz(name, sizeof(name), "P1148 recovered stamina %i/%i NaN pool excluded", mode, posture);
+						PMSrc_Check(name, PMSrc_BankGravityGroundStartNormalized(normal), 0, 0);
+						pmove.stamina = 0;
+						movevars.stamina = NAN;
+						Q_snprintfz(name, sizeof(name), "P1148 recovered stamina %i/%i NaN mode excluded", mode, posture);
+						PMSrc_Check(name, PMSrc_BankGravityGroundStartNormalized(normal), 0, 0);
+						movevars.stamina = 1;
+						movevars.staminarecovery = NAN;
+						Q_snprintfz(name, sizeof(name), "P1148 recovered stamina %i/%i NaN recovery excluded", mode, posture);
+						PMSrc_Check(name, PMSrc_BankGravityGroundStartNormalized(normal), 0, 0);
+						movevars.staminarecovery = 19;
+						movevars.staminajumpcost = NAN;
+						Q_snprintfz(name, sizeof(name), "P1148 recovered stamina %i/%i NaN cost excluded", mode, posture);
+						PMSrc_Check(name, PMSrc_BankGravityGroundStartNormalized(normal), 0, 0);
+						movevars.staminajumpcost = 25;
+					}
+					PMSrc_FullWalkMove();
+					Q_snprintfz(name, sizeof(name), "P1148 recovered stamina %i/%i/%i jump phase acted", mode, posture, i);
+					PMSrc_Check(name, i == 5 ? pmove.onground :
+						(pmove.jump_held && (pmove.oldbuttons & BUTTON_JUMP) && !pmove.onground), 1, 0);
+					Q_snprintfz(name, sizeof(name), "P1148 recovered stamina %i/%i/%i actual stamina cost acted", mode, posture, i);
+					PMSrc_Check(name, pmove.stamina > 0, i != 5, 0);
+					Q_snprintfz(name, sizeof(name), "P1148 recovered stamina %i/%i/%i POST-cost ratio changed", mode, posture, i);
+					PMSrc_Check(name, PMSrc_StaminaRatio() < 1, i != 5, 0);
+					Q_snprintfz(name, sizeof(name), "P1148 recovered stamina %i/%i/%i accepted rise", mode, posture, i);
+					PMSrc_Check(name, pmove.origin[2], i == 5 ? 128 :
+						((i == 0 || i == 4) ? 182.6875f : (mode ? 139.125f : 154.75f)), 0);
+					Q_snprintfz(name, sizeof(name), "P1148 recovered stamina %i/%i/%i accepted tail", mode, posture, i);
+					PMSrc_Check(name, pmove.velocity[2], i == 5 ? 0 : -3500, 0);
+					if (i == 1)
+					{
+						VectorCopy(pmove.origin, unobserved_origin);
+						VectorCopy(pmove.velocity, unobserved_velocity);
+					}
+					if (i == 2 || i == 3)
+					{
+						Q_snprintfz(name, sizeof(name), "P1148 recovered stamina %i/%i/%i observer preserves origin", mode, posture, i);
+						PMSrc_Check(name, VectorCompare(pmove.origin, unobserved_origin), 1, 0);
+						Q_snprintfz(name, sizeof(name), "P1148 recovered stamina %i/%i/%i observer preserves velocity", mode, posture, i);
+						PMSrc_Check(name, VectorCompare(pmove.velocity, unobserved_velocity), 1, 0);
+					}
+					Q_snprintfz(name, sizeof(name), "P1148 recovered stamina %i/%i/%i accepted use", mode, posture, i);
 					PMSrc_Check(name, PMSrc_BankGravityEnd(), i == 2, 0);
 				}
 			}
