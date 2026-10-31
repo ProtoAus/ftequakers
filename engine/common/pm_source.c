@@ -3308,11 +3308,20 @@ static qboolean PMSrc_BankGravityGroundStartCommon(vec3_t normal)
 	return PMSrc_BankGravityDefaultStart(normal, true);
 }
 
+static qboolean PMSrc_BankGravityJumpStaminaDefault(void)
+{
+	// P1148/P1152: identity BEFORE cost; never reread the spent pool in JumpDefault.
+	if (!PMSrc_StaminaEnabled()) return true;
+	return isfinite(movevars.stamina) && isfinite(pmove.stamina) &&
+		isfinite(movevars.staminarecovery) && isfinite(movevars.staminajumpcost) &&
+		PMSrc_StaminaRatio() == 1.0f;
+}
+
 static qboolean PMSrc_BankGravityGroundStartDefault(vec3_t normal)
 {
 	// P1145: stock crouch assigns Z; normalized postures share the existing add path.
 	if (movevars.normalizejump || movevars.jumpaddrise || pmove.ducked || pmove.ducking ||
-		PMSrc_StaminaEnabled())
+		!PMSrc_BankGravityJumpStaminaDefault())
 		return false;
 	return PMSrc_BankGravityGroundStartCommon(normal);
 }
@@ -3321,11 +3330,7 @@ static qboolean PMSrc_BankGravityGroundStartNormalized(vec3_t normal)
 {
 	if (!isfinite(movevars.normalizejump) || !movevars.normalizejump ||
 		!isfinite(movevars.jumpaddrise)) return false;
-	// P1148: identity BEFORE jump cost; the default helper runs after it is spent.
-	if (PMSrc_StaminaEnabled())
-		if (!isfinite(movevars.stamina) || !isfinite(pmove.stamina) ||
-			!isfinite(movevars.staminarecovery) || !isfinite(movevars.staminajumpcost) ||
-			PMSrc_StaminaRatio() != 1.0f) return false;
+	if (!PMSrc_BankGravityJumpStaminaDefault()) return false;
 	return PMSrc_BankGravityGroundStartCommon(normal);
 }
 
@@ -4906,7 +4911,9 @@ static void PMSrc_TestBankStartGravity(void)
 				PMSrc_Check("P1139 KT jump excluded", PMSrc_BankGravityGroundStartDefault(normal), 0, 0);
 				movevars.ktjump = 0;
 				movevars.stamina = 1;
-				PMSrc_Check("P1139 stamina jump excluded", PMSrc_BankGravityGroundStartDefault(normal), 0, 0);
+				pmove.stamina = 40;
+				PMSrc_Check("P1139 fatigued stamina jump excluded", PMSrc_BankGravityGroundStartDefault(normal), 0, 0);
+				pmove.stamina = 0;
 				movevars.stamina = 0;
 				movevars.jumpzoffset = 1;
 				PMSrc_Check("P1139 offset jump excluded", PMSrc_BankGravityGroundStartDefault(normal), 0, 0);
@@ -5316,8 +5323,8 @@ static void PMSrc_TestBankStartGravity(void)
 						Q_snprintfz(name, sizeof(name), "P1148 recovered stamina %i/%i normalized admitted", mode, posture);
 						PMSrc_Check(name, PMSrc_BankGravityGroundStartNormalized(normal), 1, 0);
 						movevars.normalizejump = movevars.jumpaddrise = 0;
-						Q_snprintfz(name, sizeof(name), "P1148 recovered stamina %i/%i stock excluded", mode, posture);
-						PMSrc_Check(name, PMSrc_BankGravityGroundStartDefault(normal), 0, 0);
+						Q_snprintfz(name, sizeof(name), "P1148 recovered stamina %i/%i stock posture bounded", mode, posture);
+						PMSrc_Check(name, PMSrc_BankGravityGroundStartDefault(normal), posture == 0, 0);
 						movevars.normalizejump = 1;
 						movevars.jumpaddrise = mode;
 						pmove.stamina = 40;
@@ -5366,6 +5373,114 @@ static void PMSrc_TestBankStartGravity(void)
 						PMSrc_Check(name, VectorCompare(pmove.velocity, unobserved_velocity), 1, 0);
 					}
 					Q_snprintfz(name, sizeof(name), "P1148 recovered stamina %i/%i/%i accepted use", mode, posture, i);
+					PMSrc_Check(name, PMSrc_BankGravityEnd(), i == 2, 0);
+				}
+			}
+		}
+		/* P1152: stock standing must use a finite PRE-cost identity, not fatigue. */
+		{
+			int poolcase, bad;
+			float saved_bad;
+			float *finite_values[] = {&pmove.stamina, &movevars.stamina,
+				&movevars.staminarecovery, &movevars.staminajumpcost};
+			movevars.normalizejump = movevars.jumpaddrise = 0;
+			movevars.jumpvelocity = 16000;
+			movevars.standheight = 62;
+			movevars.duckheight = 45;
+			for (poolcase = 0; poolcase < 2; ++poolcase)
+			{
+				movevars.stamina = poolcase ? -1 : 1;
+				movevars.staminarecovery = poolcase ? 0 : 19;
+				movevars.staminajumpcost = poolcase ? 0 : 25;
+				for (i = 0; i < 6; ++i)
+				{
+					memset(&pmove, 0, sizeof(pmove));
+					pmove.pm_type = PM_NORMAL;
+					pmove.skipent = -1;
+					pmove.stamina = poolcase ? -64 : 0;
+					VectorSet(pmove.player_mins, -16, -16, 0);
+					VectorSet(pmove.player_maxs, 16, 16, PMSrc_StandHeight());
+					VectorSet(pmove.origin, 0, 0, 128);
+					pmove.surfacefriction = 1;
+					pmove.numphysent = 1;
+					pmove.physents[0].info = 1;
+					pmove.physents[0].scale = 1;
+					VectorSet(pmove.physents[0].mins, -256, -256, -16);
+					VectorSet(pmove.physents[0].maxs, 256, 256, 0);
+					pmove.physents[0].origin[2] = 128;
+					if (i == 3)
+					{
+						pmove.numphysent = 2;
+						pmove.physents[1].info = 2;
+						pmove.physents[1].scale = 1;
+						VectorSet(pmove.physents[1].mins, -256, -256, 0);
+						VectorSet(pmove.physents[1].maxs, 256, 256, 16);
+						pmove.physents[1].origin[2] = 238;
+					}
+					movevars.entgravity = (i == 0 || i == 4) ? 1 : 1.5f;
+					PMSrc_CategorizePosition();
+					Q_snprintfz(name, sizeof(name), "P1152 stock stamina %i/%i actual contact", poolcase, i);
+					PMSrc_Check(name, pmove.onground, 1, 0);
+					Q_snprintfz(name, sizeof(name), "P1152 stock stamina %i/%i PRE-cost ratio", poolcase, i);
+					PMSrc_Check(name, PMSrc_StaminaRatio(), 1, 0);
+					pmove.cmd.buttons = BUTTON_JUMP;
+					if (i == 5)
+					{
+						pmove.jump_held = true;
+						pmove.oldbuttons = BUTTON_JUMP;
+					}
+					PMSrc_BankGravityBegin(i >= 2);
+					if (i == 2)
+					{
+						Q_snprintfz(name, sizeof(name), "P1152 stock stamina %i admitted", poolcase);
+						PMSrc_Check(name, PMSrc_BankGravityGroundStartDefault(normal), 1, 0);
+						pmove.stamina = 40;
+						Q_snprintfz(name, sizeof(name), "P1152 stock stamina %i fatigue excluded", poolcase);
+						PMSrc_Check(name, PMSrc_BankGravityGroundStartDefault(normal), 0, 0);
+						pmove.stamina = poolcase ? -64 : 0;
+						for (bad = 0; bad < 8; ++bad)
+						{
+							saved_bad = *finite_values[bad / 2];
+							*finite_values[bad / 2] = (bad & 1) ? NAN : INFINITY;
+							Q_snprintfz(name, sizeof(name), "P1152 stock stamina %i nonfinite %i excluded", poolcase, bad);
+							PMSrc_Check(name, PMSrc_BankGravityGroundStartDefault(normal), 0, 0);
+							*finite_values[bad / 2] = saved_bad;
+						}
+						pmove.ducked = true;
+						Q_snprintfz(name, sizeof(name), "P1152 stock stamina %i ducked excluded", poolcase);
+						PMSrc_Check(name, PMSrc_BankGravityGroundStartDefault(normal), 0, 0);
+						pmove.ducked = false;
+						pmove.ducking = true;
+						Q_snprintfz(name, sizeof(name), "P1152 stock stamina %i ducking excluded", poolcase);
+						PMSrc_Check(name, PMSrc_BankGravityGroundStartDefault(normal), 0, 0);
+						pmove.ducking = false;
+					}
+					PMSrc_FullWalkMove();
+					Q_snprintfz(name, sizeof(name), "P1152 stock stamina %i/%i jump phase acted", poolcase, i);
+					PMSrc_Check(name, i == 5 ? pmove.onground :
+						(pmove.jump_held && (pmove.oldbuttons & BUTTON_JUMP) && !pmove.onground), 1, 0);
+					Q_snprintfz(name, sizeof(name), "P1152 stock stamina %i/%i stamina cost acted", poolcase, i);
+					PMSrc_Check(name, pmove.stamina > 0, i != 5, 0);
+					Q_snprintfz(name, sizeof(name), "P1152 stock stamina %i/%i POST-cost ratio changed", poolcase, i);
+					PMSrc_Check(name, PMSrc_StaminaRatio() < 1, i != 5, 0);
+					Q_snprintfz(name, sizeof(name), "P1152 stock stamina %i/%i accepted rise", poolcase, i);
+					PMSrc_Check(name, pmove.origin[2], i == 5 ? 128 :
+						((i == 0 || i == 4) ? 182.6875f : 131.3125f), 0);
+					Q_snprintfz(name, sizeof(name), "P1152 stock stamina %i/%i accepted tail", poolcase, i);
+					PMSrc_Check(name, pmove.velocity[2], i == 5 ? 0 : -3500, 0);
+					if (i == 1)
+					{
+						VectorCopy(pmove.origin, unobserved_origin);
+						VectorCopy(pmove.velocity, unobserved_velocity);
+					}
+					if (i == 2 || i == 3)
+					{
+						Q_snprintfz(name, sizeof(name), "P1152 stock stamina %i/%i preserves origin", poolcase, i);
+						PMSrc_Check(name, VectorCompare(pmove.origin, unobserved_origin), 1, 0);
+						Q_snprintfz(name, sizeof(name), "P1152 stock stamina %i/%i preserves velocity", poolcase, i);
+						PMSrc_Check(name, VectorCompare(pmove.velocity, unobserved_velocity), 1, 0);
+					}
+					Q_snprintfz(name, sizeof(name), "P1152 stock stamina %i/%i accepted use", poolcase, i);
 					PMSrc_Check(name, PMSrc_BankGravityEnd(), i == 2, 0);
 				}
 			}
