@@ -7,10 +7,17 @@ P1138 camera branch, replacing the local fix and leaving the airborne judder.
 **Change:** Merge the exact qualified render-realtime camera with current main;
 retain P1140 write-path metadata and P1143 additive-rise status verbatim. No new
 movement, command, clock, capture, format, eligibility or backend implementation.
-**Verified:** Prior camera build/runtime and P1143 proofs remain separate inputs.
-Current-source literal/header checks, FULL combined build, real motion/flag checks
-and destination-preserving delivery are required before claiming qualification.
-Human/geometry and known scale-switch/short-reset follow-ups are not waived.
+**Verified/limits:** Native7d35d5914/current QC1da2243e: nine literal-source groups,
+actual-header syntax, FULL seven-image cohort (zero new warning messages), and
+two fresh whole-feature source-only reviews pass. Same-transaction attempt7
+retakes every camera/acting-flag case with current official programs and a fresh
+passive observer of current CSQC. Half-speed OFF43.94% frozen pairs, ON0%;0.1,
+0.25,0.75, normal and restored1 all0%. Earlier raw outcomes remain immutable.
+Current-main mover/builtin implementations are retained verbatim. Only newer
+delivery-doc commits were merged afterward; compiled code/src trees match the
+frozen candidates exactly. Strict destination-preserving delivery is pending.
+Human/geometry, camera-derived-input equivalence and known scale-switch/short-
+reset continuity follow-ups are not waived.
 
 ## Patch 1138 — blend completed Source ticks during slow practice
 
@@ -103,7 +110,27 @@ current-eight and four qualified historical legacy CLI cases pass. QQ source
 actual Windows programs advanced during validation. This engine-only promotion
 must preserve whatever game programs are actually live, with fresh boundary
 hashes and unchanged-VM guards. It does not newly promote the TAS UI or backend.
-Fresh independent whole-feature reviews and deployment remain pending.
+Two fresh independent whole-feature source reviews found no supported-scope
+issue; parent checks held all 6,881 tracked source files, refs/index/tag and all
+10 frozen native/symbol artifacts before/after. Reviewers did not independently
+execute tests or establish runtime identity. On 31 Oct 2026 the frozen native-only
+payload updated 10 destinations across BOTH Windows installs (01:04:56Z); their
+actual paired predecessors and all 16,987 protected old entries, including the
+12 current game-program/symbol files, matched. The Pi native pair updated at
+01:17:47Z with one restart per positively empty lobby, no force. All 35,863 old
+protected entries, actual VMs/configs/backend and new native/plugin epochs passed
+strict postflight. All four current recording parts (1,426,033 bytes, zero open
+part FDs) were archived/read back on-box and off-box BEFORE restarting; this does
+not recover or waive the historical P1136 preservation failure. A fresh isolated
+installed-client cold join fetched the actual preserved CSQC, drew the 9-column
+type-14 board, exited0 and logged no client QC error. The screenshot shows an
+empty board/unaccepted terms, NOT ranked or human acceptance. Post-cold checks
+at01:25:17Z retain the same12 native/plugin actors and all old Pi/part bytes;
+Windows old entries/native-prev pairs also match at01:26:25Z. Read-only helper/
+receipt-path failures were fixed without repeating swaps or healthy restarts.
+No VM/UI/backend generation, Build or release was newly promoted; no rebuild
+followed the frozen qualification. Wider-bank and unsupported-context limits
+above remain open.
 
 ## Patch 1140 — share and open portable TAS revisions in the game
 
