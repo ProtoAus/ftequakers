@@ -37,6 +37,40 @@ checks remain failed evidence, not renamed passes. Guarded native-only delivery
 and actual-current-program runtime checks remain pending. Stable test programs
 are not deployment inputs; no full-bank, human feel or ranked-finish claim.
 
+## Patch 1160 — Steam-profile inventory, cosmetics and role badges (QC/backend)
+
+**Problem.** Player customization had no persistent item ownership/equipment or
+profile role badges, and the Maps mode strip exposed unwanted gamemodes.
+
+**Change.** Add an account-owned 4×4 inventory with server-authoritative grants
+and revision-checked equip/remove. Linked Steam accounts receive Tester, an ice
+blue additive aura and a paper cone hat with a persistent random colour. Public
+server-reserved presentation keys replicate selected equipment; ownership and
+session capabilities stay private. Authenticated, CSRF-checked account controls
+grant/revoke items and cosmetic Zoner/Developer badges (no gameplay/editor/admin
+permissions). Draw selected equipment in the profile preview and remote bodies.
+Replace the Maps strip with one Surf/Bhop switch; old multi/other filters migrate
+to Surf. Additive schema25 retains all existing player/run/link/history rows.
+No engine code, native pin, recording grammar, mover version or Build change.
+
+**Verified (isolated, not yet a fleet claim).** Nine inventory route/persistence/
+authority tests, existing accounts/social/board/join suites, eight schema/future-
+refusal tests, and acted POSIX transition-guard schema25 dependency controls pass.
+QC builds have zero new warnings (two existing viewmodel F333 warnings). Real
+separate dedicated/client sockets show OFF→ON inventory state, coloured badges,
+aura and hat in the preview and on the second client. A native loopback mock
+separately sees nonempty inventory-opt-in rosters and two real equip posts,
+with revision5 / both-equipped acknowledged in CSQC (authentication remains the
+separate signed-account test). The actual map filter
+selects one Surf row then one Bhop row from a four-category fixture; legacy511
+normalizes to Surf. The consent gate correctly remains in front of that fresh
+fixture's menu, so visual/click and cosmetic-feel acceptance remain human checks.
+The aura is an occluded additive shell, not a through-wall/JFA port. Game shipping
+is isolated to the installed P1151 VM baseline; pending P1154 source stays out.
+Backend source is backported to the inspected fleet baseline, with a schema25-
+compatible data-retaining rollback. Delivery provenance/role assignment is
+recorded separately after promotion; owner's Developer identity is still pending.
+
 ## Patch 1156 — preserve installed P1152 with the paired roof/duck camera
 
 **Problem.** P1152 was installed while the P1155 camera candidate was being
