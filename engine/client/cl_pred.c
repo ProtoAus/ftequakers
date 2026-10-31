@@ -1564,6 +1564,13 @@ static qboolean CL_SourceReturnOwner(int seat)
 	return true;
 }
 
+// Interpolation exposes ring slots; prediction exposes full incoming identities.
+// Normalize before applying the same absolute receive/epoch fence to both.
+static int CL_SourceReturnEndpointFrame(int frame, qboolean ringslot)
+{
+	return ringslot ? cl.inframes[frame & UPDATE_MASK].frameid : frame;
+}
+
 static qboolean CL_SourceReturnFrameAllowed(const playerview_t *pv, int frame)
 {
 	const inframe_t *in = &cl.inframes[frame & UPDATE_MASK];
@@ -1922,6 +1929,8 @@ void CL_PredictMovePNum (int seat)
 		inframe_t *latest = &cl.inframes[cl.validsequence & UPDATE_MASK];
 		if (!CL_SourceReturnFrameAllowed(pv, cl.validsequence))
 			return;
+		from.frame = CL_SourceReturnEndpointFrame(from.frame, nopred);
+		to.frame = CL_SourceReturnEndpointFrame(to.frame, nopred);
 		if (!CL_SourceReturnFrameAllowed(pv, from.frame) || !CL_SourceReturnFrameAllowed(pv, to.frame))
 		{
 			from.frame = to.frame = cl.validsequence;

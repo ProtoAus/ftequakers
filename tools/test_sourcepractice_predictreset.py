@@ -50,7 +50,7 @@ typedef struct {pmsourcestate_t pmsrc; int jump_held, jump_msec, messagenum, pm_
 typedef struct {unsigned int sequence; float msec; unsigned long long buttons, impulse;
  int forwardmove, sidemove, upmove;} usercmd_t;
 typedef struct {int number; player_state_t net;} entity_state_t;
-typedef struct {int num_entities; entity_state_t entities[2];} packet_entities_t;
+typedef struct {int num_entities; entity_state_t entities[2]; double servertime;} packet_entities_t;
 typedef struct {int frameid, invalid, ackframe; player_state_t playerstate[2]; packet_entities_t packet_entities;} inframe_t;
 typedef struct {int cmd_sequence; usercmd_t cmd[MAX_SPLITS];} outframe_t;
 typedef struct {int playernum, viewentity, spectator, cam_state, cam_spec_track; float statsf[256];
@@ -126,6 +126,22 @@ int main(void)
  cl.inframes[19].frameid=19; cl.inframes[19].ackframe=101;
  CHECK(!CL_SourceReturnFrameAllowed(&cl.playerview[0],19));
  cl.inframes[20].invalid=1; CHECK(!CL_SourceReturnFrameAllowed(&cl.playerview[0],20));
+ // Actual absolute-frame helper with the former no-prediction CALLER arguments:
+ // post-wrap slots are refused even though both real endpoint frames are valid.
+ setup(); register_request(); CHECK(CL_SourcePracticePredictReset(0,7,100));
+ cl.validsequence=cls.netchan.incoming_sequence=999;
+ cl.inframes[998&UPDATE_MASK].frameid=998;cl.inframes[998&UPDATE_MASK].ackframe=102;
+ cl.inframes[999&UPDATE_MASK].frameid=999;cl.inframes[999&UPDATE_MASK].ackframe=102;
+ cl.inframes[998&UPDATE_MASK].packet_entities.servertime=9.98;
+ cl.inframes[999&UPDATE_MASK].packet_entities.servertime=9.99;
+ CHECK(CL_SourceReturnFrameAllowed(&cl.playerview[0],998)&&CL_SourceReturnFrameAllowed(&cl.playerview[0],999));
+ CHECK(!CL_SourceReturnFrameAllowed(&cl.playerview[0],998&UPDATE_MASK)); // concrete old-caller counterexample
+ int from=CL_SourceReturnEndpointFrame(998&UPDATE_MASK,true);
+ int to=CL_SourceReturnEndpointFrame(999&UPDATE_MASK,true);
+ CHECK(from==998&&to==999&&from!=to);
+ CHECK(CL_SourceReturnFrameAllowed(&cl.playerview[0],from)&&CL_SourceReturnFrameAllowed(&cl.playerview[0],to));
+ CHECK(cl.inframes[from&UPDATE_MASK].packet_entities.servertime<cl.inframes[to&UPDATE_MASK].packet_entities.servertime);
+ CHECK(CL_SourceReturnEndpointFrame(998,false)==998);
  setup(); register_request(); cl.playerview[0].statsf[202]=0; refused_unchanged();
  setup(); register_request(); cl.playerview[0].statsf[202]=-7; refused_unchanged();
  setup(); register_request(); cl.playerview[0].statsf[203]=99; refused_unchanged();
@@ -171,12 +187,16 @@ def main():
     root = Path(__file__).resolve().parents[1]
     source = (root / 'engine/client/cl_pred.c').read_text()
     signatures = ['static qboolean CL_SourceReturnOwner(',
+                  'static int CL_SourceReturnEndpointFrame(',
                   'static qboolean CL_SourceReturnFrameAllowed(',
                   'static void CL_SourceReturnClearCarry(',
                   'qboolean CL_SourcePracticePredictReset(']
     # The lower-bound selection and phase guard must remain wired into the real paths.
     prediction = function(source, 'void CL_PredictMovePNum (')
     assert 'out < pv->source_return.minack' in prediction
+    assert 'from.frame = CL_SourceReturnEndpointFrame(from.frame, nopred)' in prediction
+    assert 'to.frame = CL_SourceReturnEndpointFrame(to.frame, nopred)' in prediction
+    assert prediction.index('from.frame = CL_SourceReturnEndpointFrame(from.frame, nopred)') < prediction.index('!CL_SourceReturnFrameAllowed(pv, from.frame)')
     assert '!CL_SourceReturnFrameAllowed(pv, from.frame)' in prediction
     assert prediction.index('!CL_SourceReturnFrameAllowed(pv, from.frame)') < prediction.index('if (pv->nolocalplayer)')
     assert 'sequence <= cl.playerview[seat].source_return.minack' in function(source, 'static void CL_PredictSourcePhase(')
