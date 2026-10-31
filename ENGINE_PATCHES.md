@@ -31,9 +31,29 @@ socket or human acceptance. Reader949/0; explicit runs528/336 existing faults,
 all705 record/view/part bytes/domain unchanged, NOT fault-free/SAVES/save-prefix.
 Zero new compiler warnings. Initial concurrent program-change and read-only
 export/summary/schema failures are retained, not repaired by restoring peer data,
-rerunning passed tests or changing the baseline. Clean tagged/historical-world
-qualification, two fresh whole-feature reviews and frozen runtime delivery remain
-pending. Wider bank, unsupported contexts and human/ranked limits remain open.
+rerunning passed tests or changing the baseline. Clean tagged8050/f9 Windows and
+ARM images each pass711 native checks and60 physical rows; historical-world four
+controls pass. Two fresh independent whole-feature reviews return OK/OK with
+notes; all6882 tracked raw sources, three HEAD/ref/index sets and ten frozen
+native/symbol payloads remain exact across review. Nativef9f541ee0/tag1145 and
+QC declarationfef25f52c are published; no source or artifact rebuild after freeze.
+On31Oct2026 the exact frozen14-image current native cohort reached both Windows
+installs, and native2 reached all12 positively empty Pi lobbies once each without
+force. All16989 old Windows protected entries and35974 old Pi data entries plus
+configs/current VMs/backend remain exact after an installed-image isolated cold
+join; all12 new native/plugin epochs and predecessor pairs verify. The fresh
+client downloaded the current CSQC, drew the board and exited0 without QC error;
+its empty/unaccepted-terms screenshot is not human/ranked acceptance.
+A delivery preflight scope error is retained: its new archive selected `.part`
+suffixes, omitting native partial recordings named `data/parts/*.rec`. An older
+verified four-member native archive still matches all four current beforepayloads;
+all four also remain byte-identical after delivery/cold. The corrected11-member
+current recording archive was verified on-box/off-box AFTER delivery, not backdated
+into a fresh pre-restart FD/backup pass. That qualification gap remains unwaived;
+no healthy restart, data restoration or verifier downgrade was used to hide it.
+Historical P1136's three missing beforepayloads remain unrecovered; six unrelated
+`.part` suffix matches are not their recovery. Wider bank, active-writer/force,
+unsupported contexts and human/ranked limits remain open.
 
 ## Patch 1144 — preserve the slow-practice camera in current main
 
