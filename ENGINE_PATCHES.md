@@ -22,6 +22,41 @@ targets completed; the final incremental has no native compiler warnings. Tests
 use controlled trace/predicate seams, not a real geometry/packet proof. Final
 image delivery and the exact owner roof/save14 feel remain separately gated.
 
+**Image scope.** The frozen camera-only image is tag `patch-1155` at `d1bc17875`.
+Current main also retains the subsequently published P1152 source below, but this
+qualified pre-P1152 image deliberately does not activate that separately pending
+status change. Source integration and the inspected image are different clocks;
+existing installed P1151 movement/status and actual live programs are preserved.
+
+## Patch 1152 - retain recovered-stamina stock standing takeoff status
+
+**Problem.** The ordinary standing-jump gravity-carry observer refused any enabled
+stamina mode, including a fully recovered jump whose actual multiplier is one.
+Testing the pool after the jump is too late because the accepted jump spends it.
+
+**Change.** Share the existing finite pre-cost identity predicate between stock
+standing and normalized takeoff. Keep stock crouch/duck transitions and non-unit
+fatigue excluded, and retain the accepted jump, current hull, neutral clear-path,
+source provenance and late-use guards. Preserve all P1151 practice-return changes.
+No physical mover, captured field, API, format, flag, tier, Build or release change.
+
+**Verified.** A test-only insertion into the untouched current P1151 production
+source failed exactly the four predicted admission/use checks; the other 1,195
+checks passed, including real takeoff, stamina spending, exact body, neutral,
+blocked-path and refusal controls. The fixed Windows native selftest passes all
+1,199 checks (128 new). The old enabled-stamina negative now uses genuine fatigue;
+the two old stock-standing posture probes intentionally accept while ducked and
+transition probes still refuse. Windows baseline and subject match all 60 named
+full-content five-map physical rows using the explicitly test-only stable QC;
+this is not current-VM runtime acceptance. All 17,104 files in that test's protected
+Windows data/config/native/program domain remained unchanged with no new members.
+Current P1151 literal pose/return/client-prediction/support harnesses pass. Reader
+949/0 passes; the mandatory runs-only sweep retains existing faults with identical
+reader/input dependencies, not a fault-free corpus. A separate default sweep is
+blocked by an existing protected save prefix and remains unqualified. ARM64,
+independent review, installed-client cold/human acceptance and deployment are
+pending; these Windows/source checks do not claim them. No backend or Pi operation.
+
 ## Patch 1151 — server-confirmed clean return from slow practice
 
 **Problem.** Restoring normal speed retained the connection's slow-practice history.
