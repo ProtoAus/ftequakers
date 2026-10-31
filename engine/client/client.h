@@ -797,6 +797,13 @@ struct playerview_s
 		int			sequence;
 	} prop;
 
+	// P1151: confirmed practice-return epoch; owned by the normal client lifecycle.
+	struct {
+		int owner, userid;
+		int request, completed, seedframe;
+		int minack; // prediction must never seed or replay below this command
+	} source_return;
+
 #ifdef Q2CLIENT
 	float forcefov;
 	int handedness;	//0=right,1=left,2=center/hidden
@@ -1627,6 +1634,7 @@ qboolean CSQC_PredictsHeld(void);	//FTESurf Patch 754
 void	 CSQC_PredictConsumeBaseVel(int seat, int sequence, qboolean restoreprevious);
 void     CSQC_PredictSaveBaseVel(int seat, int sequence);
 void	 CSQC_PredictBaseVelFlush(void);
+void     CSQC_PredictBaseVelResetSeat(int seat);
 void	 CSQC_PredictAngleCorrect(int seat, vec3_t delta);
 void	 CSQC_PredictAngleFlush(int seat);
 void	 CSQC_PredictAngleAbsolute(int seat, vec3_t ang);	//FTESurf Patch 396: may redirect ang to a newer predicted snap
@@ -1665,6 +1673,7 @@ void	 CSQC_CvarChanged(cvar_t *var);
 #define CSQC_PredictConsumeBaseVel(seat,sequence,restoreprevious)
 #define CSQC_PredictSaveBaseVel(seat,sequence)
 #define CSQC_PredictBaseVelFlush()
+#define CSQC_PredictBaseVelResetSeat(seat)
 #define CSQC_PredictAngleCorrect(seat,delta)
 #define CSQC_PredictAngleFlush(seat)
 #define CSQC_PredictAngleAbsolute(seat,ang)
@@ -1676,6 +1685,7 @@ void	 CSQC_CvarChanged(cvar_t *var);
 // cl_pred.c
 //
 void CL_InitPrediction (void);
+qboolean CL_SourcePracticePredictReset(int seat, float request, float seedframe);
 void CL_CacheSourcePhase(int seat, const char *text); // P924: packet-time phase history
 qboolean CL_GetSourcePracticeViewOffset(const playerview_t *pv, vec3_t out); // P1138: camera delta only
 void CL_PredictMove (void);

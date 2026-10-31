@@ -489,6 +489,8 @@ static void CL_PredictSourcePhase(int seat, int sequence, player_state_t *state)
 	if (movevars.physicsmode != PHYSMODE_SOURCE || IS_NAN(tick) ||
 		strcmp(InfoBuf_ValueForKey(&cl.serverinfo, "fs_sourcephase"), "1"))
 		return;
+	if (cl.playerview[seat].source_return.minack && sequence <= cl.playerview[seat].source_return.minack)
+		return; // the neutral prepared seed has reset phase, even if a stat string is stale
 	CL_CacheSourcePhase(seat, cl.playerview[seat].statsstr[STAT_FS_SOURCEPHASE]);
 	// Keep phases at receipt, including packets read between rendered frames.
 	slot = (unsigned int)sequence & UPDATE_MASK;
@@ -1537,6 +1539,136 @@ qboolean CL_GetSourcePracticeViewOffset(const playerview_t *pv, vec3_t out)
 	return true;
 }
 
+// These are derived QC handshake stats, not a protocol/capture format version.
+#define STAT_SOURCE_RETURN_REQUEST 202
+#define STAT_SOURCE_RETURN_SEED 203
+
+static qboolean CL_SourceReturnOwner(int seat)
+{
+	playerview_t *pv = &cl.playerview[seat];
+	qboolean owned = seat == 0 && cl.splitclients == 1 && cls.state == ca_active &&
+		cls.protocol == CP_QUAKEWORLD && !cls.demoplayback &&
+		!(cls.fteprotocolextensions2 & PEXT2_VRINPUTS) &&
+		!pv->spectator && pv->cam_state == CAM_FREECAM && pv->cam_spec_track == -1 &&
+		(unsigned int)pv->playernum < (unsigned int)cl.allocated_client_slots &&
+		pv->viewentity == pv->playernum + 1;
+	if (!owned || pv->source_return.owner != pv->playernum + 1 ||
+		pv->source_return.userid != cl.players[pv->playernum].userid)
+	{
+		memset(&pv->source_return, 0, sizeof(pv->source_return));
+		if (!owned)
+			return false;
+		pv->source_return.owner = pv->playernum + 1;
+		pv->source_return.userid = cl.players[pv->playernum].userid;
+	}
+	return true;
+}
+
+static qboolean CL_SourceReturnFrameAllowed(const playerview_t *pv, int frame)
+{
+	const inframe_t *in = &cl.inframes[frame & UPDATE_MASK];
+	return frame > 0 && frame <= cl.validsequence &&
+		frame > cls.netchan.incoming_sequence - UPDATE_BACKUP &&
+		in->frameid == frame && !in->invalid && in->ackframe >= pv->source_return.minack &&
+		cl.outframes[in->ackframe & UPDATE_MASK].cmd_sequence == in->ackframe;
+}
+
+static void CL_SourceReturnClearCarry(player_state_t *state)
+{
+	memset(&state->pmsrc, 0, sizeof(state->pmsrc));
+	state->jump_held = false;
+	state->jump_msec = 0;
+	state->waterjumptime = 0;
+}
+
+qboolean CL_SourcePracticePredictReset(int seat, float request, float seedframe)
+{
+	playerview_t *pv;
+	inframe_t *in;
+	player_state_t seed;
+	int b, a, i;
+	float oldstamina;
+	int oldlandticks;
+	if ((unsigned int)seat >= MAX_SPLITS || !CL_SourceReturnOwner(seat))
+		return false;
+	pv = &cl.playerview[seat];
+	if (movevars.physicsmode != PHYSMODE_SOURCE || cl.intermissionmode != IM_NONE ||
+		cl.paused || !cl.worldmodel || cl.worldmodel->loadstate != MLS_LOADED ||
+		!(request >= 1 && request <= 16000000) || request != floor(request))
+		return false;
+	// Idempotence must not erase legitimate movement after the ready/final ACK.
+	if (pv->source_return.completed == (int)request && seedframe == pv->source_return.seedframe)
+		return true;
+	if (pv->statsf[STAT_SOURCE_RETURN_REQUEST] != request)
+		return false;
+	if (seedframe == 0)
+	{
+		pv->source_return.request = request;
+		return false;
+	}
+	if (pv->source_return.request != (int)request ||
+		!(seedframe >= 1 && seedframe <= 16000000) || seedframe != floor(seedframe) ||
+		pv->statsf[STAT_SOURCE_RETURN_SEED] != seedframe)
+		return false;
+	b = seedframe;
+	if (!cl.validsequence || cl.validsequence > cls.netchan.incoming_sequence ||
+		cl.validsequence <= cls.netchan.incoming_sequence - UPDATE_BACKUP)
+		return false;
+	in = &cl.inframes[cl.validsequence & UPDATE_MASK];
+	a = in->ackframe;
+	if (in->frameid != cl.validsequence || in->invalid || a != cl.ackedmovesequence ||
+		b <= pv->source_return.minack || a < b || a - b >= UPDATE_BACKUP ||
+		a >= cl.movesequence)
+		return false;
+	// Missing/stale/nonneutral history is a refusal, never a best-effort reset.
+	for (i = b; i <= a; i++)
+	{
+		outframe_t *out = &cl.outframes[i & UPDATE_MASK];
+		usercmd_t *cmd = &out->cmd[seat];
+		if (out->cmd_sequence != i || cmd->sequence != (unsigned int)i ||
+			cmd->msec != 0 || cmd->buttons || cmd->impulse ||
+			cmd->forwardmove || cmd->sidemove || cmd->upmove)
+			return false;
+	}
+	seed = in->playerstate[pv->playernum];
+	if (cls.fteprotocolextensions2 & PEXT2_REPLACEMENTDELTAS)
+	{
+		packet_entities_t *pe = &in->packet_entities;
+		for (i = 0; i < pe->num_entities; i++)
+			if (pe->entities[i].number == pv->viewentity)
+				break;
+		if (i == pe->num_entities)
+			return false;
+		// Conversion reads network velocity/hull/type but also retains jumpheld.
+		// Do it on a temporary, then clear carry, before mutating any history.
+		CL_EntStateToPlayerState(&seed, &pe->entities[i]);
+	}
+	else if (seed.messagenum != cl.validsequence)
+		return false;
+	if (seed.pm_type != PM_NORMAL)
+		return false;
+	oldstamina = pv->prop.pmsrc.stamina;
+	oldlandticks = pv->prop.pmsrc.landticks;
+	for (i = 0; i < UPDATE_BACKUP; i++)
+		CL_SourceReturnClearCarry(&cl.inframes[i].playerstate[pv->playernum]);
+	CL_SourceReturnClearCarry(&seed);
+	in->playerstate[pv->playernum] = seed;
+	memset(&pv->prop, 0, sizeof(pv->prop));
+	pv->prop.sequence = a;
+	pv->prop.onground = seed.onground;
+	VectorCopy(seed.gravitydir, pv->prop.gravitydir);
+	VectorCopy(seed.velocity, pv->prop.velocity);
+	VectorCopy(seed.origin, pv->prop.origin);
+	CSQC_PredictBaseVelResetSeat(seat);
+	pv->source_return.completed = request;
+	pv->source_return.seedframe = b;
+	pv->source_return.minack = a;
+	Con_DPrintf("sourcepractice_predictreset req=%i B=%i A=%i oldprop stamina=%.9g landticks=%i new stamina=%.9g landticks=%i carry=%.9g minbase=%i\n",
+		(int)request, b, a, oldstamina, oldlandticks, pv->prop.pmsrc.stamina,
+		pv->prop.pmsrc.landticks, pv->prop.pmsrc.msec_carry, pv->source_return.minack);
+	return true;
+}
+
 void CL_PredictMovePNum (int seat)
 {
 	//when this is called, the entity states have been interpolated.
@@ -1575,6 +1707,7 @@ void CL_PredictMovePNum (int seat)
 	/* Clear even on the early-return paths (disconnect/demo/pause/seat swap). */
 	if (!CL_SourcePracticeContext(pv))
 		memset(&sourcepractice[seat], 0, sizeof(sourcepractice[seat]));
+	CL_SourceReturnOwner(seat);
 	simtime = CL_GetPredictionRealtime(pv);
 
 	pv->nolocalplayer = !!(cls.fteprotocolextensions2 & PEXT2_REPLACEMENTDELTAS) || (cls.protocol != CP_QUAKEWORLD);
@@ -1752,6 +1885,8 @@ void CL_PredictMovePNum (int seat)
 
 			//each inbound frame tracks the outgoing frame that was last applied to it, and its outgoing frames that contain our timing info
 			out = cl.inframes[i&UPDATE_MASK].ackframe;
+			if (out < pv->source_return.minack)
+				continue;
 			backdate = &cl.outframes[out & UPDATE_MASK];
 			if (backdate->cmd_sequence != out)
 			{
@@ -1780,6 +1915,20 @@ void CL_PredictMovePNum (int seat)
 	}
 
 //	Con_DPrintf("sim%f, %i(%i-%i): old%f, cur%f\n", simtime, cl.ackedmovesequence, fromframe, toframe, fromtime, totime);
+
+	// Interpolation/no-prediction must obey the same epoch as replay/extrapolation.
+	if (pv->source_return.minack)
+	{
+		inframe_t *latest = &cl.inframes[cl.validsequence & UPDATE_MASK];
+		if (!CL_SourceReturnFrameAllowed(pv, cl.validsequence))
+			return;
+		if (!CL_SourceReturnFrameAllowed(pv, from.frame) || !CL_SourceReturnFrameAllowed(pv, to.frame))
+		{
+			from.frame = to.frame = cl.validsequence;
+			from.time = to.time = nopred ? latest->packet_entities.servertime : cl.outframes[latest->ackframe & UPDATE_MASK].senttime;
+			from.cmd = to.cmd = &cl.outframes[latest->ackframe & UPDATE_MASK].cmd[seat];
+		}
+	}
 
 	if ((pv->cam_state == CAM_WALLCAM || pv->cam_state == CAM_EYECAM) && trackent && trackent <= cl.allocated_client_slots)
 	{

@@ -2981,6 +2981,17 @@ static void QCBUILTIN PF_cs_getstat_int(pubprogfuncs_t *prinst, struct globalvar
 	else
 		G_INT(OFS_RETURN) = csqc_playerview->stats[stnum];
 }
+// float(float request, float seedframe) sourcepractice_predictreset
+static void QCBUILTIN PF_cs_sourcepractice_predictreset(pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
+{
+	G_FLOAT(OFS_RETURN) = 0;
+	if (prinst != csqcprogs || prinst->callargc != 2 || csqc_playerseat != 0 ||
+		csqc_playerview != &cl.playerview[0])
+		return;
+	G_FLOAT(OFS_RETURN) = CL_SourcePracticePredictReset(csqc_playerseat,
+		G_FLOAT(OFS_PARM0), G_FLOAT(OFS_PARM1));
+}
+
 static void QCBUILTIN PF_cs_getstat_float(pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
 {	//read a numeric stat into a qc float.
 	//if bits offsets are specified, reads explicitly the integer version of the stat, allowing high bits to be read for items2/serverflags. the float stat should have the same value, just with lower precision as a float can't hold a 32bit value. maybe we should just use doubles.
@@ -7280,6 +7291,7 @@ static struct {
 
 //330
 	{"getstati",				PF_cs_getstat_int,				330},	// #330 int(float stnum) getstati (EXT_CSQC)
+	{"sourcepractice_predictreset", PF_cs_sourcepractice_predictreset, 0},
 	{"getstatf",				PF_cs_getstat_float,			331},	// #331 float(float stnum) getstatf (EXT_CSQC)
 	{"getstats",				PF_cs_getstat_string,			332},	// #332 string(float firststnum) getstats (EXT_CSQC)
 	{"getplayerstat",			PF_cs_getplayerstat,			0},		// #0 __variant(float playernum, float statnum, float stattype) getplayerstat
@@ -10251,6 +10263,15 @@ static struct {
 } pred_bvring[MAX_SPLITS][PRED_BVEL_RING];
 static vec3_t pred_bv_held[MAX_SPLITS];
 static qboolean pred_bv_armed[MAX_SPLITS];
+
+void CSQC_PredictBaseVelResetSeat(int seat)
+{
+	if ((unsigned int)seat >= MAX_SPLITS)
+		return;
+	memset(pred_bvring[seat], 0, sizeof(pred_bvring[seat]));
+	VectorClear(pred_bv_held[seat]);
+	pred_bv_armed[seat] = false;
+}
 
 void CSQC_PredictBaseVelFlush(void)
 {
