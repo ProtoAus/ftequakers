@@ -1813,7 +1813,7 @@ void V_CalcRefdef (playerview_t *pv)
 	/* The historical feet already blend a stair rise. Applying the current
 	   body's correction to them produces a downward kick before the step. */
 	viewheight += practiceview ? 0 : pv->crouch;
-	if (practiceview)
+	if (practiceview && pv->pmovetype == PM_NORMAL)
 		viewheight = V_SourcePracticeEye(r_refdef.vieworg, pv->gravitydir, viewheight);
 
 	VectorMA(r_refdef.vieworg, -viewheight, pv->gravitydir, r_refdef.vieworg);

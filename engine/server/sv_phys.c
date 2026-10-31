@@ -240,6 +240,10 @@ void WPhys_CheckVelocity (world_t *w, wedict_t *ent)
 				ent->v->origin[i] = 0;
 			}
 
+			/* Source's collision-free noclip mover intentionally has no cap.
+			   Keep finite sanitation above, but don't truncate its snapshots. */
+			if (movevars.physicsmode == PHYSMODE_SOURCE && ent->v->movetype == MOVETYPE_NOCLIP)
+				continue;
 			if (ent->v->velocity[i] > sv_maxvelocity.value)
 				ent->v->velocity[i] = sv_maxvelocity.value;
 			else if (ent->v->velocity[i] < -sv_maxvelocity.value)

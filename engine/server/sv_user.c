@@ -8396,6 +8396,17 @@ Done before running a player command.  Clears the touch array
 qbyte *playertouch;
 size_t playertouchmax;
 
+/* P1159: preference never affects walking, observers or other players. */
+static float SV_SourceNoclipSpeed(client_t *client, float fallback)
+{
+	float speed;
+	if (movevars.physicsmode != PHYSMODE_SOURCE || client->spectator ||
+		!client->edict || client->edict->v->movetype != MOVETYPE_NOCLIP)
+		return fallback;
+	speed = Q_atof(InfoBuf_ValueForKey(&client->userinfo, "cl_noclipspeed"));
+	return !IS_NAN(speed) && speed >= 0.25f && speed <= 16 ? speed : fallback;
+}
+
 /* Apply the actual QW per-client overrides to an already prepared base.
  * Shared with pre-input capture so no later mover state is copied backward. */
 void SV_SetQWClientMoveVars(client_t *client)
@@ -8427,6 +8438,7 @@ void SV_SetQWClientMoveVars(client_t *client)
 	movevars.coordtype = client->netchan.netprim.coordtype;
 	movevars.flags = MOVEFLAG_VALID|MOVEFLAG_NOGRAVITYONGROUND|(*pm_edgefriction.string?0:MOVEFLAG_QWEDGEBOX);
 	SV_SetSourceMoveVars();
+	movevars.noclipspeed = SV_SourceNoclipSpeed(client, movevars.noclipspeed);
 }
 
 void SV_PreRunCmd(void)

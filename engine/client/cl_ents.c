@@ -5932,7 +5932,7 @@ static void CL_TransitionPacketEntities(int newsequence, packet_entities_t *newp
 	int oldsequence;
 	extern cvar_t r_nolerp;
 
-	qboolean			isnew;
+	qboolean			isnew, source_noclip_lerp;
 
 	vec3_t move;
 
@@ -6006,10 +6006,11 @@ static void CL_TransitionPacketEntities(int newsequence, packet_entities_t *newp
 			isnew = true;
 		le->sequence = newsequence;
 		le->entstate = snew;
+		source_noclip_lerp = (cls.fteprotocolextensions2 & PEXT2_REPLACEMENTDELTAS) && CL_SourceNoclipEntityLerp(snew->u.q1.pmovetype);
 
 		if (snew->u.q1.pmovetype)
 		{
-			if (!cl.do_lerp_players)
+			if (!cl.do_lerp_players && !source_noclip_lerp)
 			{
 				entity_state_t *from;
 				float age;
@@ -6055,8 +6056,8 @@ static void CL_TransitionPacketEntities(int newsequence, packet_entities_t *newp
 
 			//FIXME: find a packet where this entity changed.
 
-			snew__origin = snew->u.q1.predorg;
-			sold__origin = sold->u.q1.predorg;
+			snew__origin = source_noclip_lerp ? snew->origin : snew->u.q1.predorg;
+			sold__origin = source_noclip_lerp ? sold->origin : sold->u.q1.predorg;
 			cos_theta = 1;	//don't cut off lerping when the player spins too fast.
 		}
 		else
@@ -6067,7 +6068,16 @@ static void CL_TransitionPacketEntities(int newsequence, packet_entities_t *newp
 		}
 
 		VectorSubtract(snew__origin, sold__origin, move);
-		if (DotProduct(move, move) > maxdist || cos_theta < 0.707 || snew->modelindex != sold->modelindex || ((sold->effects ^ snew->effects) & EF_TELEPORT_BIT))
+		qboolean moved_too_far = DotProduct(move, move) > maxdist;
+		if (source_noclip_lerp)
+		{
+			vec3_t oldvel, newvel;
+			VectorScale(sold->u.q1.velocity, 1/8.0f, oldvel);
+			VectorScale(snew->u.q1.velocity, 1/8.0f, newvel);
+			moved_too_far = !CL_SourceNoclipEntityLerp(sold->u.q1.pmovetype) ||
+				CL_SourceNoclipDiscontinuity(move, oldvel, newvel, newpack->servertime - oldpack->servertime, sqrt(maxdist));
+		}
+		if (moved_too_far || cos_theta < 0.707 || snew->modelindex != sold->modelindex || ((sold->effects ^ snew->effects) & EF_TELEPORT_BIT))
 		{
 			isnew = true;	//disable lerping (and indirectly trails)
 //			VectorClear(move);
@@ -6278,6 +6288,22 @@ qboolean CL_MayLerp(void)
 }
 
 /*fills in cl.lerpents and cl.currentpackentities*/
+/* Classic QW serializes player effects as a byte: EF_TELEPORT_BIT cannot
+   arrive. Do not infer a warp from plausible velocity. Keep the latest raw
+   noclip pose (also for small placements), not interpolation or seat0 PM. */
+static void CL_SnapSourceNoclipPlayer(int player, const player_state_t *selected, double oldtime, lerpents_t *le)
+{
+	const player_state_t *latest = &cl.inframes[cl.parsecount & UPDATE_MASK].playerstate[player];
+	int i;
+	if (latest->messagenum != cl.parsecount)
+		latest = selected;
+	VectorCopy(latest->origin, le->origin);
+	for (i = 0; i < 3; i++)
+		le->angles[i] = SHORT2ANGLE(latest->command.angles[i]);
+	le->orglerpdeltatime = 0.1;
+	le->orglerpstarttime = oldtime;
+}
+
 void CL_TransitionEntities (void)
 {
 	packet_entities_t	*packnew, *packold;
@@ -6366,6 +6392,11 @@ void CL_TransitionEntities (void)
 			}
 		
 			le = &cl.lerpplayers[p];
+			if (CL_SourceNoclipLerp(pnew->pm_type))
+			{
+				CL_SnapSourceNoclipPlayer(p, pnew, packold->servertime, le);
+				continue;
+			}
 			VectorSubtract(pnew->predorigin, pold->predorigin, move);
 
 			if (DotProduct(move, move) > 120*120)
@@ -7621,7 +7652,7 @@ guess_pm_type:
 	}
 #endif
 
-	if (cl.worldmodel && cl.do_lerp_players && cl_predict_players.ival)
+	if (cl.worldmodel && cl.do_lerp_players && cl_predict_players.ival && !CL_SourceNoclipLerp(state->pm_type))
 	{
 		player_state_t exact;
 		msec -= 1000 * (cls.latency*cl_predict_players_latency.value-cl_predict_players_nudge.value);
@@ -7979,6 +8010,8 @@ void CL_LinkPlayers (void)
 				ent->origin[0] = pv->simorg[0];
 				ent->origin[1] = pv->simorg[1];
 				ent->origin[2] = pv->simorg[2]+pv->crouch;
+				if (CL_SourceNoclipLerp(state->pm_type))
+					break; // preserve this local noclip body's own predicted position
 			}
 		}
 
@@ -7997,7 +8030,7 @@ void CL_LinkPlayers (void)
 		if (pnum < cl.splitclients)
 		{	//this is a local player
 		}
-		else if (cl.do_lerp_players)
+		else if (cl.do_lerp_players || CL_SourceNoclipLerp(state->pm_type))
 		{
 			lerpents_t *le = &cl.lerpplayers[j];
 			VectorCopy (le->origin, ent->origin);
@@ -8592,7 +8625,7 @@ void CL_SetUpPlayerPrediction(qboolean dopred)
 			msec = predictmsmult*(playertime - state->state_time);
 			if (msec <= 0 ||
 				!cl_predict_players.ival ||
-				!dopred)
+				!dopred || CL_SourceNoclipLerp(state->pm_type))
 			{
 				VectorCopy (state->origin, pplayer->origin);
 	//Con_DPrintf ("nopredict\n");

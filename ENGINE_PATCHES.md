@@ -1,5 +1,169 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1162 — individual lobby noclip speed and slow-flight presentation
+
+Delivery candidate: backport the held P1159 runtime delta to the installed
+P1158 native source; retain the actual P1160 VM backport. Do NOT activate the
+pending P1154/P1161 VMs or P1161 decoder change. The full main-source integration
+is retained separately; this branch is the scoped delivery source, not installed.
+
+**Change.** Add archived native userinfo `cl_noclipspeed`: 0 keeps the server
+fallback, .25..16 overrides ONLY that player's Source noclip. Advertise a
+read-only server capability; match only the owning local prediction chain and
+restore shared movevars afterwards. Client Source defaults are recovered from
+serverinfo rather than another listen client's mutable movevars. Actual
+spectators, colliding fly and normal movement keep their defaults. Remote
+personal-speed noclip entities use authoritative entity interpolation on
+replacement deltas, not seat0's maxspeed/default. Classic QW lacks the teleport
+epoch and conservatively shows the latest raw noclip pose. Own QW demo and
+locked-observer noclip use actor snapshots without the viewer's preference;
+fresh movement type controls that
+choice even with the legacy freshtype toggle off. Noclip diagnostic grace tracks
+the effective per-seat speed. Other movement retains its prediction policy. The CSQC wheel must use this
+preference rather than writing the lobby's global `pm_noclipspeed`.
+
+Admit own Source noclip into the existing slow-practice camera, fence movement
+class changes and allow finite fast-flight tick/phase displacement. Walking's
+spherical128 discontinuity fence and paired roof/duck camera remain unchanged;
+noclip never runs the collision roof clamp. Preserve finite origin/velocity
+sanitation but do not truncate Source noclip velocity in the generic server cap.
+Source walking's per-axis limit and non-Source behavior remain unchanged.
+
+**Verification boundary.** Literal old-source controls expose velocity
+truncation and four camera omissions; candidate controlled-context preference,
+isolation, sanitation and camera checks pass. Native preview build succeeds.
+A real remote client/UI-event-chain/server check keeps global speed16 while
+wheel-down selects14.55: authoritative velocity7566 stays steady. Old server
+alternates3500/8320 and ignores userinfo2; new server applies2 as1040 and rejects
+17 back to default8320. These are NOT physical-key, multiple-player, rendered
+HUD/camera, final-tag/platform or deployment proof; those gates, fresh whole
+reviews and guarded delivery remain pending. Internal client.h presentation
+helper declarations require a header-full SDK build; no plugin API epoch/ABI,
+shared pm_source.c edit, record format, practice/ranking policy, P1152 status
+source or Build/release change is intended.
+
+**First review repairs (not final acceptance).** Both independent whole reviews
+requested changes for mutable listen defaults and QW demo preference leakage;
+the diagnostic and fixture parser were also corrected. Retained literal reviewed
+source fails the new lifecycle controls; candidate passes using the actual
+Q_atof implementation (its leading1 in `1e99` is not strtof's overflow). Include
+published TAS clock-context source without editing its behavior. Final source
+reviews and actual listen/demo/remote-frame acceptance remain pending.
+
+**Second review repairs (not final acceptance).** The prior predicate checks
+were not proof of final interpolation. Read replacement-demo movement type
+from the newest packet entity before selecting interpolation frames; convert
+its model/effects fences and retain packet timestamps. The actual final demo
+consumer now permits finite velocity/time/tick-bounded fast noclip but keeps
+class/model/teleport fences. Apply the same qualified allowance in the packet
+renderer, selecting raw endpoints despite default player policy0. Classic QW
+players avoid receipt, setup and render-time seat0 extrapolation; because their
+byte-wide effects cannot carry the epoch, they use raw latest poses rather than
+the enlarged interpolation envelope. Local noclip bodies retain their own
+predicted pose. Walking/old-server/non-Source policies remain unchanged. A
+literal full-consumer controlled fixture exposes the reviewed source's failures
+and passes the repaired renderer/demo/role paths, not just a policy predicate.
+CSQC refuses wheel tuning for nonzero local seats because archived native
+cvars mirror seat0; it must never change another local player's flight.
+Header-full official NoDeploy native SDK/QC rebuild succeeds with no new
+warnings (existing native warnings and two CSQC F333 remain). Runtime and fresh
+whole-source qualification remain pending.
+
+**Third review repairs (not final acceptance).** QW noclip demo turning uses
+recorded command angles keyed by each packet's acknowledgement, independent of
+positional nopred; missing commands use the recorded view and server fixed
+angles retain priority. Locked live/demo observers acquire the tracked actor
+and retain its packet times just like own demos; free spectators are unchanged.
+Point/map and angle-preserving trigger placements toggle the existing epoch
+only when origin changes. Classic byte serialization cannot deliver that bit:
+conservative latest-pose fallback replaces the unsupported interpolation, with
+no wire-format change. Literal consumer/ack-angle/byte-codec/QC-derived producer
+controls expose11 failures on the reviewed source and pass all31 after repairs;
+20 reviewed-source controls already passed. QC producer syntax is adapted into
+a controlled C context, not executed in the QC VM. Official source-only native/
+QC NoDeploy update succeeds over the qualified header-full cache, with existing
+warnings only. Final whole review/platform/live role acceptance and guarded
+delivery remain pending.
+
+**Fourth review repairs (not final acceptance).** Relative-trigger and public
+setpos counterexamples required a complete raw QC origin-write census, not
+another two-site claim. The shared SV_SetPlayerOrigin primitive changes only
+origin plus the existing presentation bit on actual movement; map/relative/
+bhop/public/spawn/save/resume/TAS placement/start-jitter callers retain their
+own timer, bank, recorder, velocity and angle ordering. Non-player visual/prop
+updates, same-origin relinks and the physical trigger_push lift remain separate.
+Full-FTE replacement MVD selects the existing BIGVELOCITY capability so actual
+SV_EncodeVelocity and matching writer/reader preserve fast noclip velocity;
+legacy and replacement-disabled modes remain narrow. No new protocol bit,
+plugin API/epoch, native mover or bank/.rec grammar is introduced. Expanded
+literal payload/producer/final-consumer controls and raw-call census pass38;
+reviewed source fails5 while33 other controls act. This does not qualify the
+full demo/QC VM/clock/arrival/hardware path. The actual prior QWD observer trace
+turns and preserves native speed with a different viewer preference, but its
+scale assertion failed: it is not a passing whole-demo or final-source proof.
+Official NoDeploy source update succeeds over the qualified header-full cache:
+zero SSQC warnings and existing two CSQC F333; no new native warnings. Whole
+review, platform/role acceptance and guarded delivery remain pending.
+
+**Fifth review repair (not delivery).** The default lobby stream previously
+ignored the shared placement epoch, so native-renderer fixes alone did not
+fence CSQC bodies or their Body_Pose spectator consumer. Capture/seed the epoch
+on the avatar and advance the existing three-bit pose serial on a real change;
+retain the current wire format and distance/portal fallbacks. Execute literal
+capture/quantize/publish/send/read/evaluate/Body_Pose functions in a headless
+native QC VM: eleven controlled scenarios pass, including small/high-speed
+placements, serial wrap, forced publication, same-origin, reseed, continuous
+flight and walking. The prior source fails29 assertions with its other controls
+acting. Transport is a bounded QC byte buffer; role/arrival/render clocks are
+controlled, not real CSQC dispatch, network, GPU, world physics or human feel.
+The fixture and official complete QC build have zero new warnings. Initial
+fixture context/plugin failures and an official compile-order crash are kept;
+the latter was resolved by retaining the constant in the earlier sv_entities
+module. Source-equivalent VM proof is not final-tag or installation proof.
+
+## Patch 1161 — cold TAS project validation and replay admission
+
+**Problem.** A fresh matching-clock TAS session could not validate a nonempty
+base-save project until native rewind history had created its input pool.
+Removing that accidental decoder dependency also exposed a legal-start caller
+using validation as a pool probe, and a base-load path lacking early body/hold
+admission before placement.
+
+**Change.** Decode rows after current native actor admission but before the
+pool requirement, without allocating history, staging input or granting replay.
+Keep failed-admission cancellation and all native execution gates. Legal
+placement initializes its recording serial before a one-row CHECK and uses the
+existing explicit live-plan allocator only when needed, checking its result.
+Project loading applies the shared living/unheld walk-body preflight before
+reading or placing either project kind. Preserve published P1158/P1160; no
+physical movement, capture/recording format or human-eligibility change.
+
+**Verified/limits.** Isolated Windows source builds have no new warnings; two
+independent source reviews accept both caller corrections. Actual dedicated
+socket controls reproduce the old-VM legal failure, execute corrected cold
+pre-start replay and verify its exact target on the next step. The same immutable
+nonempty base project cold-loads and completes its exact native row delta.
+Canonical malformed input and actual unsupported 20ms context refuse before
+placement. Noclip and a real save hold preserve body/timer/recorder/project state;
+normal no-op movement clocks still advance, while an explicit owned-world pause
+also proves unchanged request/movement/completion counters around the refusal.
+Body/velocity observations are printed precision only. Production C headers pass
+100262 checks. Seventeen compiled production dispatcher/context/cancellation
+checks, with controlled engine admission/pool/field adapters, stop a staged tape
+and reject its old token after support returns; a compiled broken-admission
+control fails that exact requirement. These are component controls, not full
+protocol/identity, canonical-world, board or final-image/deployment approval.
+Final integrated tagged Windows/ARM images and delivery remain separately gated.
+
+**Qualification update (31 Oct 2026).** Frozen source `844619bcf`, tag `patch-1161`,
+version `git-8077-patch-1161-0-g844619bcf`: final Full Windows build/metadata pass;
+actual final cold base/legal/unsupported socket cases pass. ARM server/HL2 build
+and metadata pass. Both platforms pass native1448, header100262 and the scoped
+production-dispatch17/broken-guard controls. Later published prose merges leave
+all compilation inputs and that tag unchanged. These are not canonical/fleet or
+ARM actual-client replay approval; deployment is still not claimed. Detailed
+scope/failure history: FTESurf `tools/tas-cold-p1161.md`.
+
 ## Patch 1158 — retain gravity-use status through finite-stamina takeoff
 
 **Problem.** The existing default-jump counterfactual accepted only fully
@@ -17,17 +181,94 @@ Preserve the published P1152/P1156 and 10/15ms TAS-clock source. Build tooling
 serializes Windows plugin metadata packaging after reproduced parallel ZIP
 temporary-file failures; engine compilation still uses the requested job count.
 
-**Verified/limits.** On the current published-header Windows source, the actual
-untreated control passes 1428 checks and fails exactly the 20 predicted new
-requirements. The candidate passes all 1448 checks, including 249 new checks and
-nine explicitly updated finite-admission expectations. Native jump-oracle,
-pre/post-cost, zero/half/three-quarter scale, body/config preservation, accepted-jump,
-posture, speculative/no-use and actual earlier-use controls execute. Full-header
-compilation and repaired serial packaging complete all seven native images with
-aligned metadata in all five plugins. Original parallel packaging failures and
-the first obsolete P1139 test expectation failure remain failed evidence. Clean
-committed-source review, final-tag Windows/ARM builds and guarded native-only
-delivery are still pending; no runtime, current-program, human or ranked claim.
+**Verified/limits.** Frozen native `793ee161a` / `patch-1158` / actual
+`git-8072-patch-1158-0-g793ee161a`, with producer QC `d620045b`, passes all 1448
+native checks on BOTH Windows and ARM64, including 249 new checks and nine
+explicitly updated finite-admission expectations. The untreated current-header
+Windows control actually passes 1428 and fails exactly the 20 predicted new
+requirements. Native jump-oracle, pre/post-cost, zero/half/three-quarter scale,
+body/config preservation, accepted-jump, posture, speculative/no-use and actual
+earlier-use controls execute. All 60 full five-map rows match across platforms
+using byte-identical test programs, and match the retained P1152 rows exactly.
+Clean final-tag Full Windows builds all seven images with fresh serial metadata
+in all five plugins; aligned offsets, CRCs and DECOMPRESSED metadata version are
+verified. ARM64 server, HL2 plugin and symbols are built from all 1124 verified
+canonical Git blobs and read back off-box. Two independent whole-feature review
+lenses accept the code; two factual documentation findings were corrected and
+confirmed. Reader self-tests pass 949/949 and the stable runs-only sweep has no
+fault-count increase. Original failed packaging, expectation and caller-domain
+checks remain failed evidence, not renamed passes. Stable test programs are not
+deployment inputs; no full-bank, human feel or ranked-finish claim.
+
+**Delivery (31 Oct UTC).** The exact frozen seven Windows images are installed
+in both installs with their approved P1156 predecessors retained. Native server
+and HL2 plugin are installed in all 12 positively empty NanoPi lobbies, each
+restarted once without force. Before staging/restart, every current native-part
+and suffix-part archive member was verified on and off box; strict original
+actor/FD and part identities were rechecked at the locked execution boundary.
+Old player data, actual programs, configs and backend remain unchanged at the
+delivery boundary. Fresh copies of both installed clients naturally exit after
+joining, downloading the then-served CSQC and drawing the board without QC errors.
+The first cold harness passes. The second original harness fails its mutable
+local-CS expectation during a concurrent program rollout; the original same-actor
+post-cold gate also refuses the changed lobby process epochs. Read-only diagnosis
+retains those failures and verifies our native/predecessor pairs, old data and
+parts, and unchanged backend. No healthy restart, client replay, data restore or
+verifier downgrade was used to hide them.
+
+A separate fresh current-program cohort now passes both installed-image/menu
+cold checks against an immutable off-box copy of actual Pi-served CSQC, rather
+than mutable Windows CSQC. The same current12 native/plugin process epochs,
+programs/configs, strict13 actor FD census, old data/parts and backend hold
+before/after; current Windows preimages and native/predecessor pairs also hold.
+The first fresh post-empty census refusal is retained; a separate positive-empty
+live/directory and no-FD control precedes the unchanged postgate on fresh census
+input, without repeating either client or restarting a healthy lobby. Its
+original transient cause was not captured. All original failures remain failed.
+Empty-board/unaccepted-terms screenshots do not establish human feel or ranking.
+
+## Patch 1160 — Steam-profile inventory, cosmetics and role badges (QC/backend)
+
+**Problem.** Player customization had no persistent item ownership/equipment or
+profile role badges, and the Maps mode strip exposed unwanted gamemodes.
+
+**Change.** Add an account-owned 4×4 inventory with server-authoritative grants
+and revision-checked equip/remove. Linked Steam accounts receive Tester, an ice
+blue additive aura and a paper cone hat with a persistent random colour. Public
+server-reserved presentation keys replicate selected equipment; ownership and
+session capabilities stay private. Authenticated, CSRF-checked account controls
+grant/revoke items and cosmetic Zoner/Developer badges (no gameplay/editor/admin
+permissions). Draw selected equipment in the profile preview and remote bodies.
+Replace the Maps strip with one Surf/Bhop switch; old multi/other filters migrate
+to Surf. Additive schema25 retains all existing player/run/link/history rows.
+No engine code, native pin, recording grammar, mover version or Build change.
+
+**Verified (automated; delivery/acceptance limits below).** Nine inventory route/persistence/
+authority tests, existing accounts/social/board/join suites, eight schema/future-
+refusal tests, and acted POSIX transition-guard schema25 dependency controls pass.
+QC builds have zero new warnings (two existing viewmodel F333 warnings). Real
+separate dedicated/client sockets show OFF→ON inventory state, coloured badges,
+aura and hat in the preview and on the second client. A native loopback mock
+separately sees nonempty inventory-opt-in rosters and two real equip posts,
+with revision5 / both-equipped acknowledged in CSQC (authentication remains the
+separate signed-account test). The actual map filter
+selects one Surf row then one Bhop row from a four-category fixture; legacy511
+normalizes to Surf. The consent gate correctly remains in front of that fresh
+fixture's menu, so visual/click and cosmetic-feel acceptance remain human checks.
+The aura is an occluded additive shell, not a through-wall/JFA port. Game shipping
+is isolated to the installed P1151 VM baseline; pending P1154 source stays out.
+Backend source is backported to the inspected fleet baseline, with a schema25-
+compatible data-retaining rollback. Both complete 82-file runtime cohorts also
+cold-start against fresh schema25 fixtures, own their measured listeners, and
+pass CLOSED-candidate acceptance, OPEN then drained CLOSED; primary exposes the
+inventory route while compatibility does not. These are not production DB or
+namespace claims. Game-side files are now installed/hash-verified in both Windows
+roots and all12 lobbies (PiForce with one player); native executables are unchanged.
+The backend is NOT activated: its protected installer passes dry-run but requires
+interactive sudo. Shared ingress was restored and no live backend fence was left
+closed. QC repo `tools/profile-inventory-p1160.md` records hashes/provenance and
+limits; `lextest.md` holds human checks. Mark's grant awaits activation; the
+owner's Developer assignment also awaits an explicit Steam profile identity.
 
 ## Patch 1156 — preserve installed P1152 with the paired roof/duck camera
 

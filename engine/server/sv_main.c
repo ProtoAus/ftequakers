@@ -6015,6 +6015,7 @@ void SV_InitLocal (void)
 	extern	cvar_t	sv_gamemode;	//FTESurf Patch 224
 
 #ifdef VM_Q1	//cvars for pimping ourselves to ktx...
+	static cvar_t sv_noclipspeed_user = CVARFD("sv_noclipspeed_user", "1", CVAR_SERVERINFO|CVAR_NOSET, "Supports bounded per-player Source noclip speed via cl_noclipspeed userinfo (read-only capability).");
 	static cvar_t qws_name		= CVARF("qws_name",		DISTRIBUTION,			CVAR_NOSET );
 	static cvar_t qws_fullname	= CVARF("qws_fullname", FULLENGINENAME,			CVAR_NOSET );
 	static cvar_t qws_version	= CVARF("qws_version",	STRINGIFY(FTE_VER_MAJOR)"."STRINGIFY(FTE_VER_MINOR),CVAR_NOSET );
@@ -6111,6 +6112,7 @@ void SV_InitLocal (void)
 	Cvar_Register (&pm_duckviewheight,		cvargroup_serverphysics);
 	Cvar_Register (&pm_viewscale,			cvargroup_serverphysics);
 	Cvar_Register (&pm_noclipspeed,			cvargroup_serverphysics);
+	Cvar_Register (&sv_noclipspeed_user,		cvargroup_serverphysics);
 	Cvar_Register (&pm_stamina,				cvargroup_serverphysics);
 	Cvar_Register (&pm_staminajumpcost,		cvargroup_serverphysics);
 	Cvar_Register (&pm_staminalandcost,		cvargroup_serverphysics);

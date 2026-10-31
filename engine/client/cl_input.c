@@ -44,6 +44,7 @@ cvar_t  cl_queueimpulses = CVARD("cl_queueimpulses", "0", "Queues unsent impulse
 cvar_t	cl_smartjump = CVARD("cl_smartjump", "1", "Makes the jump button act as +moveup when in water. This is typically quieter and faster.");
 cvar_t	cl_iDrive = CVARFD("cl_iDrive", "1", CVAR_SEMICHEAT, "Effectively releases movement keys when the opposing key is pressed. This avoids dead-time when both keys are pressed. This can be emulated with various scripts, but that's messy.");
 cvar_t	cl_run = CVARD("cl_run", "0", "Enables autorun, inverting the state of the +speed key.");
+static cvar_t cl_noclipspeed = CVARFD("cl_noclipspeed", "0", CVAR_ARCHIVE|CVAR_USERINFO, "Your Source noclip speed multiplier on supporting servers: 0 uses the server default; .25 through 16 override only your own noclip flight.");
 cvar_t	cl_fastaccel = CVARD("cl_fastaccel", "1", "Begin moving at full speed instantly, instead of waiting a frame or so.");
 extern cvar_t cl_rollspeed;
 static cvar_t cl_sendchatstate = CVARD("cl_sendchatstate", "1", "Announce your chat state to the server in a privacy-violating kind of way. This allows other players to see your afk/at-console status.");
@@ -3672,6 +3673,7 @@ void CL_InitInput (void)
 	Cvar_Register (&cl_netfps, inputnetworkcvargroup);
 	Cvar_Register (&cl_netfps_snap, inputnetworkcvargroup);	//FTESurf Patch 252
 	Cvar_Register (&cl_run, inputnetworkcvargroup);
+	Cvar_Register (&cl_noclipspeed, inputnetworkcvargroup);
 	Cvar_Register (&cl_iDrive, inputnetworkcvargroup);
 
 #ifdef NQPROT

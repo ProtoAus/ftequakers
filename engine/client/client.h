@@ -1688,6 +1688,9 @@ void CL_InitPrediction (void);
 qboolean CL_SourcePracticePredictReset(int seat, float request, float seedframe);
 void CL_CacheSourcePhase(int seat, const char *text); // P924: packet-time phase history
 qboolean CL_GetSourcePracticeViewOffset(const playerview_t *pv, vec3_t out, float *viewheight); // camera-only paired feet/eye
+qboolean CL_SourceNoclipEntityLerp(unsigned int movetype); // internal presentation policy, not mover API
+qboolean CL_SourceNoclipLerp(int pmtype);
+qboolean CL_SourceNoclipDiscontinuity(const vec3_t delta, const vec3_t oldvel, const vec3_t newvel, double interval, float baseline);
 void CL_PredictMove (void);
 void CL_PredictUsercmd (int seat, int entnum, player_state_t *from, player_state_t *to, usercmd_t *u);
 #ifdef Q2CLIENT

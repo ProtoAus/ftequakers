@@ -19,6 +19,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 */
 #include "quakedef.h"
 #include "winquake.h"
+#include "pr_common.h"
 
 cvar_t	cl_predict_extrapolate = CVARD("cl_predict_extrapolate", "", "If 1, enables prediction based upon partial input frames which can change over time resulting in a swimmy feel but does not need to interpolate. If 0, prediction will stay in the past and thus use only completed frames. Interpolation will then be used to smooth movement.\nThis cvar only applies when video and input frames are independant (ie: cl_netfps is set).");
 static cvar_t	cl_predict_timenudge = CVARD("cl_predict_timenudge", "0", "A debug feature. You should normally leave this as 0. Nudges local player prediction into the future if positive (resulting in extrapolation), or into the past if negative (resulting in laggy interpolation). Value is in seconds, so small decimals are required. This cvar applies even if input frames are tied to video frames.");
@@ -503,11 +504,74 @@ static void CL_PredictSourcePhase(int seat, int sequence, player_state_t *state)
 	state->pmsrc.msec_carry = phase;
 }
 
+qboolean CL_SourceNoclipEntityLerp(unsigned int movetype)
+{
+	return movevars.physicsmode == PHYSMODE_SOURCE && (movetype & 0x3f) == MOVETYPE_NOCLIP &&
+		!strcmp(InfoBuf_ValueForKey(&cl.serverinfo, "sv_noclipspeed_user"), "1");
+}
+
+qboolean CL_SourceNoclipLerp(int type)
+{
+	return (type == PM_SPECTATOR || type == PM_OLD_SPECTATOR) && CL_SourceNoclipEntityLerp(MOVETYPE_NOCLIP);
+}
+
+qboolean CL_SourceNoclipDiscontinuity(const vec3_t delta, const vec3_t oldvel, const vec3_t newvel, double interval, float baseline)
+{
+	float limit, speed, tick = movevars.ticrate;
+	int i;
+	for (i = 0; i < 3; i++)
+		if (IS_NAN(delta[i]) || IS_NAN(oldvel[i]) || IS_NAN(newvel[i]))
+			return true;
+	if (!(interval > 0 && interval <= 0.5) || IS_NAN(baseline) || baseline < 0)
+		return true;
+	if (IS_NAN(tick) || tick <= 0 || tick > 0.1)
+		tick = 0.015f;
+	speed = max(Length(oldvel), Length(newvel));
+	/* Only qualified noclip callers use this allowance. Walking's historical
+	   bounds are unchanged; callers fence type/model/teleport changes first. */
+	limit = max(baseline, speed * (interval + tick) + 1);
+	return IS_NAN(limit) || DotProduct(delta, delta) > limit * limit;
+}
+
+static float CL_SourceNoclipSpeed(int seat, int type, qboolean ownchain, float fallback)
+{
+	const char *base;
+	float speed;
+	if (movevars.physicsmode != PHYSMODE_SOURCE)
+		return fallback;
+	/* Listen-server movevars can still contain another client's override.
+	   Recover the same authoritative default as CL_CheckServerInfo, even
+	   for walking's captured (unused) noclip parameter. */
+	base = InfoBuf_ValueForKey(&cl.serverinfo, "pm_noclipspeed");
+	fallback = *base ? Q_atof(base) : 4;
+	if (!ownchain || cls.demoplayback ||
+		(type != PM_SPECTATOR && type != PM_OLD_SPECTATOR) ||
+		cl.playerview[seat].spectator ||
+		strcmp(InfoBuf_ValueForKey(&cl.serverinfo, "sv_noclipspeed_user"), "1"))
+		return fallback;
+	speed = Q_atof(InfoBuf_ValueForKey(&cls.userinfo[seat], "cl_noclipspeed"));
+	return !IS_NAN(speed) && speed >= 0.25f && speed <= 16 ? speed : fallback;
+}
+
+static qboolean CL_SourceNoclipSpeedGrace(int seat, int type)
+{
+	static float speed[MAX_SPLITS];
+	static double changed[MAX_SPLITS];
+	float effective = CL_SourceNoclipSpeed(seat, type, true, movevars.noclipspeed);
+	if (effective != speed[seat])
+	{
+		speed[seat] = effective;
+		changed[seat] = realtime;
+	}
+	return (type == PM_SPECTATOR || type == PM_OLD_SPECTATOR) && realtime - changed[seat] < 0.3;
+}
+
 static void CL_PredictUsercmdPart (int pnum, int entnum, player_state_t *from, player_state_t *to, usercmd_t *u, float offsetmsec, qboolean *carrier_cleared, qboolean later)
 {
 	int preflags = 0;
 	vec3_t preorigin;
 	qboolean preground;
+	float noclipspeed;
 
 	// P924: match SV_RunCmdPart's one-Source-tick parts, including carried time.
 	// fs_tickparts confirms the progs declares input_cmd_later; old progs opt out.
@@ -632,7 +696,10 @@ static void CL_PredictUsercmdPart (int pnum, int entnum, player_state_t *from, p
 	}
 	VectorCopy(pmove.origin, preorigin);
 	preground = pmove.onground;
+	noclipspeed = movevars.noclipspeed;
+	movevars.noclipspeed = CL_SourceNoclipSpeed(pnum, pmove.pm_type, cl_pred_localchain, noclipspeed);
 	PM_PlayerMove (cl.gamespeed);
+	movevars.noclipspeed = noclipspeed;
 	if (cl_pred_localchain && pmove.portalcrossings)
 		CSQC_PredictPortalAngles(pnum, u);
 
@@ -1012,7 +1079,6 @@ static void CL_DecodeStateSize(unsigned int solid, int modelindex, vec3_t mins, 
 }
 
 /*called on packet reception*/
-#include "pr_common.h"
 static void CL_EntStateToPlayerState(player_state_t *plstate, entity_state_t *state)
 {
 	vec3_t a;
@@ -1069,6 +1135,8 @@ static void CL_EntStateToPlayerState(player_state_t *plstate, entity_state_t *st
 		plstate->jump_held = !!(state->u.q1.pmovetype&64);
 	}
 	plstate->pm_type = pmtype;
+	plstate->modelindex = state->modelindex;
+	plstate->effects = state->effects;
 	plstate->flags = flags & PF_INWATER;
 
 	plstate->viewangles[0] = SHORT2ANGLE(state->u.q1.vangle[0]);
@@ -1125,7 +1193,10 @@ void CL_PredictEntityMovement(entity_state_t *estate, float age)
 	extern cvar_t cl_predict_players;
 	//build the entitystate state into a player state for prediction to use
 
-	if (!estate->u.q1.pmovetype || !cl_predict_players.ival || age <= 0)
+	/* This extrapolator has only seat0's maxspeed and no actor-specific
+	   noclip preference. Leave those actors to authoritative entity lerp. */
+	if (!estate->u.q1.pmovetype || !cl_predict_players.ival || age <= 0 ||
+		CL_SourceNoclipEntityLerp(estate->u.q1.pmovetype))
 		VectorCopy(estate->origin, estate->u.q1.predorg);
 	else
 	{
@@ -1216,7 +1287,7 @@ typedef struct
 	sourcepracticepose_t pose[SOURCE_PRACTICE_POSES];
 	vec3_t viewoffset;
 	float rendertime;
-	int next, count, owner, servercount, modelindex, solidsize;
+	int next, count, owner, servercount, modelindex, solidsize, movetype;
 	qboolean blocked, hasoffset, haveview, releasing, seeded;
 	vec3_t vieworg, sampleorg, releaseoffset;
 	double viewtime, releasebegin, releaseduration;
@@ -1437,7 +1508,7 @@ static void CL_UpdateSourcePracticeView(int seat, playerview_t *pv, qboolean nop
 	double time, target;
 	float saveop = floor(pv->statsf[STAT_FS_SLOP] / 1000); /* Existing FS_SLOP_RADIX. */
 	unsigned int sequence = cl.validsequence;
-	int i;
+	int i, movetype;
 
 	if ((!nopred && scale != 1) || !CL_SourcePracticeContext(pv))
 		goto reset;
@@ -1457,7 +1528,11 @@ static void CL_UpdateSourcePracticeView(int seat, playerview_t *pv, qboolean nop
 			ent = &pack->entities[i];
 			break;
 		}
-	if (!ent || (ent->u.q1.pmovetype & 0x3f) != MOVETYPE_WALK)
+	if (!ent)
+		goto reset;
+	movetype = ent->u.q1.pmovetype & 0x3f;
+	if (!((pv->pmovetype == PM_NORMAL && movetype == MOVETYPE_WALK) ||
+		((pv->pmovetype == PM_SPECTATOR || pv->pmovetype == PM_OLD_SPECTATOR) && movetype == MOVETYPE_NOCLIP)))
 		goto reset;
 	VectorScale(ent->u.q1.velocity, 1/8.0f, velocity);
 	if (s->blocked && sequence == s->sequence)
@@ -1470,11 +1545,12 @@ static void CL_UpdateSourcePracticeView(int seat, playerview_t *pv, qboolean nop
 	}
 	s->blocked = false;
 	if (s->haveview && !s->count && !s->releasing &&
-		(s->owner != pv->viewentity || s->world != cl.worldmodel || s->servercount != cl.servercount))
+		(s->owner != pv->viewentity || s->world != cl.worldmodel ||
+		s->servercount != cl.servercount || s->movetype != movetype))
 		s->haveview = false;
 	if ((s->count || s->releasing) &&
 		(s->owner != pv->viewentity || s->world != cl.worldmodel ||
-		s->servercount != cl.servercount ||
+		s->servercount != cl.servercount || s->movetype != movetype ||
 		sequence - s->sequence > 0x7fffffffu || pack->servertime < s->packettime ||
 		pack->servertime - s->packettime > interval * 4 ||
 		((s->effects ^ ent->effects) & EF_TELEPORT_BIT) ||
@@ -1487,8 +1563,19 @@ static void CL_UpdateSourcePracticeView(int seat, playerview_t *pv, qboolean nop
 	if (s->count)
 	{
 		VectorSubtract(ent->origin, s->pose[(s->next + SOURCE_PRACTICE_POSES - 1) % SOURCE_PRACTICE_POSES].origin, delta);
-		if (DotProduct(delta, delta) > 128 * 128)
-			goto discontinuity; /* Same spherical bound as the nopred path. */
+		float limit = 128;
+		if (movetype == MOVETYPE_NOCLIP)
+		{
+			const sourcepracticepose_t *last = &s->pose[(s->next + SOURCE_PRACTICE_POSES - 1) % SOURCE_PRACTICE_POSES];
+			float speed = max(Length(last->velocity), Length(velocity));
+			/* A fast noclip tick can exceed 128. Include one tick of phase
+			   rounding; walking keeps its historical spherical fence. */
+			limit = max(limit, speed * (scale * (time - last->time) + tick) + 1);
+			if (IS_NAN(limit))
+				goto discontinuity;
+		}
+		if (DotProduct(delta, delta) > limit * limit)
+			goto discontinuity;
 	}
 	if (scale == 1)
 	{
@@ -1547,7 +1634,7 @@ commit:
 	s->scale = scale; s->tick = tick;
 	s->sequence = sequence; s->packettime = pack->servertime;
 	s->effects = ent->effects;
-	s->modelindex = ent->modelindex; s->solidsize = ent->solidsize;
+	s->modelindex = ent->modelindex; s->solidsize = ent->solidsize; s->movetype = movetype;
 	s->saveop = saveop; s->saveseq = pv->statsf[STAT_FS_SLSEQ];
 	s->rendertime = cl.servertime;
 	/* Only V_CalcRefdef consumes this delta. Keep the shared body pair,
@@ -1731,6 +1818,25 @@ qboolean CL_SourcePracticePredictReset(int seat, float request, float seedframe)
 	return true;
 }
 
+/* Position snapshots and recorded command angles have different frame keys.
+   QW dem_cmd writes outframes by command sequence; packet frames acknowledge
+   those sequences. Never index recorded angles by an incoming packet number. */
+static void CL_SourceNoclipDemoAngles(playerview_t *pv, int seat, int fromframe, int toframe, float frac)
+{
+	int i, a = cl.inframes[fromframe & UPDATE_MASK].ackframe;
+	int b = cl.inframes[toframe & UPDATE_MASK].ackframe;
+	outframe_t *old = &cl.outframes[a & UPDATE_MASK], *next = &cl.outframes[b & UPDATE_MASK];
+	if (!a || !b || old->cmd_sequence != a || next->cmd_sequence != b)
+	{
+		/* Missing/overwritten commands: dem_cmd's actual recorded view, not
+		   aimangles, which the playback input early-return does not update. */
+		VectorCopy(pv->viewangles, pv->simangles);
+		return;
+	}
+	for (i = 0; i < 3; i++)
+		pv->simangles[i] = LerpAngles16(old->cmd[seat].angles[i], next->cmd[seat].angles[i], frac) * (360.0f/65536);
+}
+
 void CL_PredictMovePNum (int seat)
 {
 	//when this is called, the entity states have been interpolated.
@@ -1755,8 +1861,10 @@ void CL_PredictMovePNum (int seat)
 	lerpents_t	*le;
 	qboolean	nopred;
 	qboolean	lerpangles = false;
-	int			trackent;
+	int			trackent, source_demo_type;
 	qboolean	cam_nowlocked = false;
+	qboolean	source_demo_lerp = false, source_demo_angles = false;
+	float		source_demo_anglefrac = 1;
 	usercmd_t indcmd;
 	/*FTESurf Patch 269 instrumentation -- see cl_predtrace.*/
 	int			pt_replays = 0;		/*commands re-simulated from the last ack*/
@@ -1889,17 +1997,47 @@ void CL_PredictMovePNum (int seat)
 	  read; and the demo/MVD paths pick their states differently.
 
 	  cl_predict_freshtype 0 restores the historical behaviour exactly.*/
-	if (cl_predict_freshtype.ival && !pv->nolocalplayer && !CAM_ISLOCKED(pv) &&
+	source_demo_type = pv->pmovetype;
+	if ((cl_predict_freshtype.ival || cls.demoplayback) && !pv->nolocalplayer && !CAM_ISLOCKED(pv) &&
 		cls.demoplayback != DPB_MVD && cl.validsequence &&
 		(unsigned int)pv->playernum < (unsigned int)cl.allocated_client_slots)
 	{
 		player_state_t *fresh = &cl.inframes[cl.validsequence & UPDATE_MASK].playerstate[pv->playernum];
 		if (fresh->messagenum == cl.validsequence)
-			pv->pmovetype = fresh->pm_type;
+		{
+			source_demo_type = fresh->pm_type;
+			if (cl_predict_freshtype.ival)
+				pv->pmovetype = fresh->pm_type;
+		}
 	}
+	if ((cls.demoplayback || CAM_ISLOCKED(pv)) && pv->nolocalplayer)
+	{
+		/* Replacement deltas have no separate playerstate until conversion
+		   below. Read the newest actor entity now, never last frame's type. */
+		packet_entities_t *fresh = &cl.inframes[cl.validsequence & UPDATE_MASK].packet_entities;
+		source_demo_type = PM_NONE;
+		for (i = 0; i < fresh->num_entities; i++)
+			if (fresh->entities[i].number == trackent)
+			{
+				player_state_t actor = {0};
+				CL_EntStateToPlayerState(&actor, &fresh->entities[i]);
+				source_demo_type = actor.pm_type;
+				break;
+			}
+	}
+	else if ((cls.demoplayback || CAM_ISLOCKED(pv)) && trackent > 0 && trackent <= cl.allocated_client_slots)
+	{
+		player_state_t *fresh = &cl.inframes[cl.validsequence & UPDATE_MASK].playerstate[trackent-1];
+		source_demo_type = fresh->messagenum == cl.validsequence ? fresh->pm_type : PM_NONE;
+	}
+	/* Both own demos and locked observers consume the actor's snapshots,
+	   never the viewer's speed. Free spectator flight stays on its old path. */
+	source_demo_lerp = ((cls.demoplayback && !pv->spectator) || CAM_ISLOCKED(pv)) && CL_SourceNoclipLerp(source_demo_type);
+	source_demo_angles = source_demo_lerp && cls.demoplayback == DPB_QUAKEWORLD && !pv->spectator && !CAM_ISLOCKED(pv) && lerpangles &&
+		(!cl.currentpackentities || !cl.currentpackentities->fixangles[seat]);
 
 	//these things also force-disable prediction
-	if (cls.demoplayback==DPB_MVD ||
+	if (cls.demoplayback==DPB_MVD || source_demo_lerp ||
 		cl.intermissionmode != IM_NONE || cl.paused || pv->pmovetype == PM_FREEZE || CAM_ISLOCKED(pv) ||
 		(pv->pmovetype == PM_NONE && !CSQC_PredictsHeld()))	//FTESurf Patch 754
 	{
@@ -1921,6 +2059,15 @@ void CL_PredictMovePNum (int seat)
 		to.time = cl.inframes[to.frame & UPDATE_MASK].packet_entities.servertime;
 		simtime = cl.currentpacktime;
 		to.cmd = from.cmd = NULL;
+		if (source_demo_lerp && !(cls.fteprotocolextensions2 & PEXT2_REPLACEMENTDELTAS))
+		{
+			/* Classic player effects carry only eight bits, not the existing
+			   teleport epoch. No invented wire fence: use the latest raw pose,
+			   including for small placements. Fast legacy flight may step. */
+			from.frame = to.frame = cl.validsequence;
+			from.time = to.time = cl.inframes[cl.validsequence & UPDATE_MASK].packet_entities.servertime;
+			simtime = to.time;
+		}
 	}
 	else
 	{
@@ -2034,7 +2181,7 @@ void CL_PredictMovePNum (int seat)
 			if (pe->entities[i].number == trackent)
 			{
 				CL_EntStateToPlayerState(from.state, &pe->entities[i]);
-				if (nopred)
+				if (nopred && !source_demo_lerp)
 					from.time -= (pe->entities[i].u.q1.msec / 1000.0f);	//correct the time to match stale players
 				break;
 			}
@@ -2053,7 +2200,9 @@ void CL_PredictMovePNum (int seat)
 			if (pe->entities[i].number == trackent)
 			{
 				CL_EntStateToPlayerState(to.state, &pe->entities[i]);
-				if (nopred)
+				/* Authoritative noclip actor endpoints retain their packet times;
+				   last-command age is not a snapshot timestamp correction. */
+				if (nopred && !source_demo_lerp)
 					to.time -= (pe->entities[i].u.q1.msec / 1000.0f);	//correct the time to match stale players. FIXME: this can push the simtime into the 'future' resulting in stuttering
 				if (cls.fteprotocolextensions2 & PEXT2_REPLACEMENTDELTAS)
 				{
@@ -2154,15 +2303,8 @@ void CL_PredictMovePNum (int seat)
 				  disagree by construction (5.2 or 10.4 units between 4x and 6x, measured, hosted game or not);
 				  only a per-command speed would remove it.  Noclip voids the run, and this line is for
 				  disagreements nobody has explained.*/
-				static float pt_ncspeed;
-				static double pt_ncchanged = -1;
-				if (movevars.noclipspeed != pt_ncspeed)
-				{
-					pt_ncspeed = movevars.noclipspeed;
-					pt_ncchanged = realtime;
-				}
-				if (cl_prederror.value > 0 &&
-					!((from.state->pm_type == PM_SPECTATOR || from.state->pm_type == PM_OLD_SPECTATOR) && realtime - pt_ncchanged < 0.3))
+				/* Track the effective per-seat value even with printing disabled. */
+				if (!CL_SourceNoclipSpeedGrace(seat, from.state->pm_type) && cl_prederror.value > 0)
 				{
 					static int pt_err_lastseq[MAX_SPLITS];
 					vec3_t perr;
@@ -2340,7 +2482,14 @@ void CL_PredictMovePNum (int seat)
 			else
 				VectorInterpolate(from.state->pmsrc.portaloffset, f, to.state->pmsrc.portaloffset, pv->portaloffset);
 		}
-		if (DotProduct(move, move) > 128*128)
+		qboolean discontinuity = DotProduct(move, move) > 128*128;
+		if (source_demo_lerp)
+			discontinuity = !(cls.fteprotocolextensions2 & PEXT2_REPLACEMENTDELTAS) ||
+				!CL_SourceNoclipLerp(from.state->pm_type) || from.state->pm_type != to.state->pm_type ||
+				from.state->modelindex != to.state->modelindex || ((from.state->effects ^ to.state->effects) & EF_TELEPORT_BIT) ||
+				CL_SourceNoclipDiscontinuity(move, from.state->velocity, to.state->velocity, to.time - from.time, 128);
+		source_demo_anglefrac = discontinuity ? 1 : f;
+		if (discontinuity)
 		{
 			// teleported, so don't lerp
 			VectorCopy (to.state->velocity, pv->simvel);
@@ -2478,6 +2627,8 @@ void CL_PredictMovePNum (int seat)
 				VectorCopy(to.state->velocity, pv->simvel);
 		}
 	}
+	if (source_demo_angles)
+		CL_SourceNoclipDemoAngles(pv, seat, from.frame, to.frame, source_demo_anglefrac);
 	/*FTESurf Patch 269: the dump.  Everything above is final by here -- simorg
 	  and simvel are what CSQC will be handed as pmove_org/pmove_vel.*/
 	if (cl_predtrace.ival != 0 && seat == 0)
