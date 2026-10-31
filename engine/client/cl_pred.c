@@ -1215,7 +1215,7 @@ typedef struct
 	float rendertime;
 	int next, count, owner, servercount, modelindex, solidsize;
 	qboolean blocked, hasoffset, haveview, releasing, seeded, warppending;
-	vec3_t vieworg, releaseoffset;
+	vec3_t vieworg, sampleorg, releaseoffset;
 	double viewtime, releasebegin, releaseduration;
 	unsigned int sequence, effects, warpsequence;
 	const void *world;
@@ -1392,6 +1392,8 @@ void CL_SourcePracticeWarp(int seat, unsigned int sequence)
 	if ((unsigned int)seat >= MAX_SPLITS)
 		return;
 	s = &sourcepractice[seat];
+	if (cl_predtrace.ival && seat == 0)
+		Con_Printf("sourceview warp seq%u poses%d release%d\n", sequence, s->count, s->releasing);
 	if (!s->count && !s->releasing)
 	{
 		s->haveview = false;
@@ -1440,7 +1442,7 @@ static void CL_UpdateSourcePracticeView(int seat, playerview_t *pv, qboolean nop
 	{
 		/* Even classic nopred can blend a short reset: hold its acknowledged
 		   server endpoint, not an old/new intermediate body position. */
-		VectorSubtract(s->vieworg, pv->simorg, s->viewoffset);
+		VectorSubtract(s->sampleorg, pv->simorg, s->viewoffset);
 		s->rendertime = cl.servertime;
 		return;
 	}
@@ -1499,13 +1501,19 @@ static void CL_UpdateSourcePracticeView(int seat, playerview_t *pv, qboolean nop
 	else if (s->releasing)
 		s->hasoffset = CL_SourcePracticeReleaseView(s, time, pv->simorg, pv->gravitydir, pv->crouch, sampled);
 	if (s->hasoffset)
+	{
+		VectorCopy(sampled, s->sampleorg);
 		VectorSubtract(sampled, pv->simorg, s->viewoffset);
+	}
 	goto commit;
 discontinuity:
+	if (cl_predtrace.ival && seat == 0)
+		Con_Printf("sourceview snap seq%u warp%d server%g body%g\n", sequence, warp, ent->origin[0], pv->simorg[0]);
 	s->count = s->next = 0;
 	s->releasing = false;
 	s->blocked = s->hasoffset = s->haveview = true;
 	VectorCopy(ent->origin, s->vieworg);
+	VectorCopy(ent->origin, s->sampleorg);
 	s->viewtime = time;
 	VectorSubtract(ent->origin, pv->simorg, s->viewoffset);
 commit:
@@ -1538,16 +1546,21 @@ qboolean CL_GetSourcePracticeViewOffset(const playerview_t *pv, vec3_t out)
 	s = &sourcepractice[seat];
 	if (s->sequence != (unsigned int)cl.validsequence || s->rendertime != (float)cl.servertime)
 		return false;
-	/* Record the actual camera consumer, not an unrendered predictor pass. */
+	/* Prediction/CSQC can refresh simorg again before this actual render
+	   consumer. Keep the absolute sampled endpoint: reusing a delta measured
+	   against an earlier simorg smears a short acknowledged reset. */
+	if (s->hasoffset && s->releasing)
+		s->hasoffset = CL_SourcePracticeReleaseView(s, realtime, pv->simorg,
+			pv->gravitydir, pv->crouch, s->sampleorg);
 	if (s->hasoffset)
-		VectorAdd(pv->simorg, s->viewoffset, s->vieworg);
+		VectorCopy(s->sampleorg, s->vieworg);
 	else
 		CL_SourcePracticeEntry(pv->simorg, pv->gravitydir, pv->crouch, s->vieworg);
 	s->haveview = true;
 	s->viewtime = realtime;
 	if (!s->hasoffset)
 		return false;
-	VectorCopy(s->viewoffset, out);
+	VectorSubtract(s->sampleorg, pv->simorg, out);
 	return true;
 }
 

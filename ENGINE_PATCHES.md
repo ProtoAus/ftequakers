@@ -11,14 +11,20 @@ server endpoint; identify that presentation seed separately from an idle server
 pose. Retire only the cosmetic offset smoothly when ordinary speed1 prediction
 resumes. Consume the existing absolute-setangle/baseangle-lock event even when
 CSQC handles its angle, waiting for a valid corresponding/later snapshot, and
-snap only the camera to the acknowledged reset location. No new wire/stat,
+snap only the camera to the acknowledged reset location. Keep the sampled
+endpoint absolute until the actual render consumer: CSQC/prediction can refresh
+simorg again after the predictor computed its camera delta. No new wire/stat,
 recording field, mover, input, clock or practice-eligibility change. Existing
 save metadata still does not invalidate the view; real loads/warps do. Current
 P1145 is retained verbatim. The newly covered parser's fixed-array empty-name
 check tests its first character rather than the always-nonnull array address.
 
-**Verified so far:** Twelve literal-source groups (including all16 slow-scale
-pairs, speed1/stair handoff and two-unit reset controls) pass. Initial seed/idle
+**Verified so far:** Thirteen literal-source groups (including all16 slow-scale
+pairs, speed1/stair handoff, two-unit resets and the render-consumer boundary)
+pass. The first compiled candidate passed all speed-switch cases but retained a
+short-reset failure; its literal render-consumer counterexample also acts. Its
+absolute-endpoint correction now passes that source boundary; final native
+retake remains pending. Initial seed/idle
 hold counterexample and strict parser empty-array warning are retained and their
 actual producer defects fixed, not excluded. Actual-header checks, compiled
 runtime transition/control captures and strict dual-Windows delivery remain the
