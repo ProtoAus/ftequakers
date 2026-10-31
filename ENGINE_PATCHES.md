@@ -15,7 +15,24 @@ passive observer of current CSQC. Half-speed OFF43.94% frozen pairs, ON0%;0.1,
 0.25,0.75, normal and restored1 all0%. Earlier raw outcomes remain immutable.
 Current-main mover/builtin implementations are retained verbatim. Only newer
 delivery-doc commits were merged afterward; compiled code/src trees match the
-frozen candidates exactly. Strict destination-preserving delivery is pending.
+frozen candidates exactly. On 31 Oct 2026 both Windows installs received the
+qualified native/official-program cohort: all28 destinations rehash correctly,
+20 writes, paired predecessors retained, all15,473 old protected entries including
+224 configs unchanged at delivery. Final follow-up retains one full-tree mismatch:
+the scheduled six-hour map scan rewrote data/mapscan.log afterward (successful
+02:07Z task, log02:08Z); all other15,472 old entries and all28 installed targets
+remain exact. That failed full-tree comparator is retained, not excluded/restored
+into a pass. The existing no-force QC deploy updated all12 positively
+empty Pi lobbies with one restart each; Pi native/plugins/backend were unchanged.
+All36,512 old Pi data/config entries and all four closed recording parts
+(1,426,033 bytes) survive byte-for-byte. Parts were archived and independently
+read back on-box AND off-box before restarting; no data restoration. A fresh
+isolated cold join fetched the expected CSQC, drew the9-column/type14 board,
+exited0 and logged no client QC error. Its empty/unaccepted-terms screenshot is
+NOT ranked/human acceptance. Post-cold guards retain all original data/parts and
+the same12 native/plugin epochs. Supplemental reader-schema, initial post-restart
+UDP timeout and immediate post-disconnect directory refusals remain recorded;
+only missing read-only guards were finished, no healthy restart/swap repeated.
 Human/geometry, camera-derived-input equivalence and known scale-switch/short-
 reset continuity follow-ups are not waived.
 
