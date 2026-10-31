@@ -11547,6 +11547,39 @@ static void QCBUILTIN PF_fs_randomf (pubprogfuncs_t *prinst, struct globalvars_s
 	G_FLOAT(OFS_RETURN) = (float)(v >> 8) / 16777216.0f;
 }
 
+// Trusted server VM only: a fresh Source movement epoch, not a queue flush or
+// eligibility decision. QC must first fence old input and close the old attempt.
+// A zero-duration decoded QW command supplies the per-seat ordered boundary;
+// synthetic repeats, timestamp input and calls outside that context fail closed.
+static void QCBUILTIN PF_sourcepractice_reset(pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
+{
+	edict_t *ent;
+	globalptrs_t *g = pr_global_ptrs;
+	extern cvar_t pm_physicsmode;
+	G_FLOAT(OFS_RETURN) = 0;
+	if (prinst != svprogfuncs || prinst->callargc != 1 || !host_client || !g)
+		return;
+	ent = G_EDICT(prinst, OFS_PARM0);
+	if (ent != host_client->edict || ent != sv_player || host_client->state != cs_spawned ||
+		host_client->protocol != SCP_QUAKEWORLD ||
+		(host_client->fteprotocolextensions2 & PEXT2_VRINPUTS) ||
+		sv_nqplayerphysics.ival || pm_physicsmode.ival != PHYSMODE_SOURCE || sv.gamespeed != 1 ||
+		PR_FindFunction(svprogfuncs, "SV_RunClientCommand", PR_ANY))
+		return;
+	if (!g->input_cmd_kind || !g->input_cmd_msec || !g->input_cmd_piece_msec ||
+		!g->input_cmd_offset_msec || *g->input_cmd_kind != 1 || *g->input_cmd_msec != 0 ||
+		*g->input_cmd_piece_msec != 0 || *g->input_cmd_offset_msec != 0 ||
+		pr_global_struct->input_buttons != 0 || pr_global_struct->input_impulse != 0 ||
+		!VectorCompare(pr_global_struct->input_movevalues, vec3_origin) ||
+		ent->v->movetype != MOVETYPE_WALK || !(ent->v->health > 0))
+		return;
+	// Entire carried struct, as on a fresh connection: no list of hidden speed
+	// sources to maintain. Cumulative clocks/counters and other seats stay intact.
+	memset(&host_client->pmsrc, 0, sizeof(host_client->pmsrc));
+	host_client->jump_held = false;
+	G_FLOAT(OFS_RETURN) = 1;
+}
+
 // P1129: trusted VM working metadata, no network/file/evidence transport.
 static void QCBUILTIN PF_bank_gravity_source(pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
 {
@@ -11594,6 +11627,7 @@ static void QCBUILTIN PF_tas_tape(pubprogfuncs_t *prinst, struct globalvars_s *p
 }
 
 static BuiltinList_t BuiltinList[] = {				//nq	qw		h2		ebfs
+	{"sourcepractice_reset", PF_sourcepractice_reset, 0, 0, 0, 0, D("float(entity player)", "Trusted server VM: reset this current player's complete Source carry and jump latch at a neutral zero-duration decoded QW command. No world/transport/counter reset or eligibility grant; unsupported contexts return0.")},
 	{"tas_input", PF_tas_input, 0, 0, 0, 0, D("vector(entity player, float slot, float token, float field)", "TAS checkpoint input: availability0, moves1, signed angle words2, compact jump/duck/walk mask3. Not hardware evidence or file import.")},
 	{"tas_tape", PF_tas_tape, 0, 0, 0, 0, D("float(entity player, float op, float a, float b, vector moves, vector angles, float buttons)", "TAS-only movement authoring: cancel0, validate1, preflight2, begin3, put4, arm5, status6, plan-cap8, plan-set9. Native owns presets; no transport/world restore or human eligibility.")},
 	{"tas_rewind", PF_tas_rewind, 0, 0, 0, 0, D("float(entity player, float slot, float token, float op)", "TAS-only bounded native movement checkpoints: capture0, probe1, apply2. Transient map/connection-bound handles; no world/counter or human-proof restore.")},
