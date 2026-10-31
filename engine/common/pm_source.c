@@ -3310,11 +3310,11 @@ static qboolean PMSrc_BankGravityGroundStartCommon(vec3_t normal)
 
 static qboolean PMSrc_BankGravityJumpStaminaDefault(void)
 {
-	// P1148/P1152: identity BEFORE cost; never reread the spent pool in JumpDefault.
+	// P1158: known finite scale; the caller models it BEFORE the pool is charged.
 	if (!PMSrc_StaminaEnabled()) return true;
 	return isfinite(movevars.stamina) && isfinite(pmove.stamina) &&
 		isfinite(movevars.staminarecovery) && isfinite(movevars.staminajumpcost) &&
-		PMSrc_StaminaRatio() == 1.0f;
+		isfinite(PMSrc_StaminaRatio());
 }
 
 static qboolean PMSrc_BankGravityGroundStartDefault(vec3_t normal)
@@ -3339,12 +3339,15 @@ static qboolean PMSrc_BankGravityJumpDefault(vec3_t normal)
 	float impulse = movevars.jumpvelocity;
 	if (impulse <= 0) impulse = 268.3281572999747f;
 	// P241: only normalized non-additive mode undoes positive inbound.
+	// P1158: evaluate this pure model BEFORE CheckJumpButton charges stamina.
 	if (movevars.normalizejump && !movevars.jumpaddrise)
 	{
 		float inbound = normal[2] + (1.0f * movevars.gravity * 0.5f * pms_frametime);
 		if (inbound > 0) normal[2] -= inbound;
 	}
 	normal[2] += impulse;
+	if (PMSrc_StaminaEnabled())
+		normal[2] *= PMSrc_StaminaRatio();
 	if (!movevars.normalizejump)
 		normal[2] -= (1.0f * movevars.gravity * pms_frametime * 0.5f);
 	PMSrc_BankGravitySanitize(normal);
@@ -3477,9 +3480,11 @@ static void PMSrc_FullWalkMove (void)
 		qboolean jumped;
 		if ((pms_slidetick & PMSLIDE_ALLOWJUMP) && !(pms_slidetick & PMSLIDE_STAYON))
 			PMSrc_CategorizePosition ();
-		jumped = PMSrc_CheckJumpButton ();
-		if (bankstart && wasonground && jumped)
+		if (bankstart && wasonground)
 			bankgroundjump = PMSrc_BankGravityJumpDefault(bankstart_default);
+		jumped = PMSrc_CheckJumpButton ();
+		if (!jumped)
+			bankgroundjump = false;
 	}
 	else
 		pmove.oldbuttons &= ~BUTTON_JUMP;
@@ -4912,7 +4917,7 @@ static void PMSrc_TestBankStartGravity(void)
 				movevars.ktjump = 0;
 				movevars.stamina = 1;
 				pmove.stamina = 40;
-				PMSrc_Check("P1139 fatigued stamina jump excluded", PMSrc_BankGravityGroundStartDefault(normal), 0, 0);
+				PMSrc_Check("P1139 finite fatigued stamina jump admitted", PMSrc_BankGravityGroundStartDefault(normal), 1, 0);
 				pmove.stamina = 0;
 				movevars.stamina = 0;
 				movevars.jumpzoffset = 1;
@@ -5328,8 +5333,8 @@ static void PMSrc_TestBankStartGravity(void)
 						movevars.normalizejump = 1;
 						movevars.jumpaddrise = mode;
 						pmove.stamina = 40;
-						Q_snprintfz(name, sizeof(name), "P1148 recovered stamina %i/%i fatigue excluded", mode, posture);
-						PMSrc_Check(name, PMSrc_BankGravityGroundStartNormalized(normal), 0, 0);
+						Q_snprintfz(name, sizeof(name), "P1148 recovered stamina %i/%i finite fatigue admitted", mode, posture);
+						PMSrc_Check(name, PMSrc_BankGravityGroundStartNormalized(normal), 1, 0);
 						pmove.stamina = NAN;
 						Q_snprintfz(name, sizeof(name), "P1148 recovered stamina %i/%i NaN pool excluded", mode, posture);
 						PMSrc_Check(name, PMSrc_BankGravityGroundStartNormalized(normal), 0, 0);
@@ -5435,8 +5440,8 @@ static void PMSrc_TestBankStartGravity(void)
 						Q_snprintfz(name, sizeof(name), "P1152 stock stamina %i admitted", poolcase);
 						PMSrc_Check(name, PMSrc_BankGravityGroundStartDefault(normal), 1, 0);
 						pmove.stamina = 40;
-						Q_snprintfz(name, sizeof(name), "P1152 stock stamina %i fatigue excluded", poolcase);
-						PMSrc_Check(name, PMSrc_BankGravityGroundStartDefault(normal), 0, 0);
+						Q_snprintfz(name, sizeof(name), "P1152 stock stamina %i finite fatigue admitted", poolcase);
+						PMSrc_Check(name, PMSrc_BankGravityGroundStartDefault(normal), 1, 0);
 						pmove.stamina = poolcase ? -64 : 0;
 						for (bad = 0; bad < 8; ++bad)
 						{
@@ -5482,6 +5487,154 @@ static void PMSrc_TestBankStartGravity(void)
 					}
 					Q_snprintfz(name, sizeof(name), "P1152 stock stamina %i/%i accepted use", poolcase, i);
 					PMSrc_Check(name, PMSrc_BankGravityEnd(), i == 2, 0);
+				}
+			}
+		}
+		/* P1158: the neutral jump must use the actual PRE-cost fatigue ratio. */
+		{
+			int mode, ratio_case, model_case, posture, arm;
+			float ratio, height, expected_z;
+			unsigned char oraclevars[sizeof(movevars)];
+			void *oraclebody = BZ_Malloc(sizeof(pmove));
+			vec3_t expected, unobserved_origin, unobserved_velocity;
+			qboolean jumped;
+			for (model_case = 0; model_case < 6; ++model_case)
+			{
+				mode = model_case / 3;
+				ratio_case = model_case % 3;
+				memset(&pmove, 0, sizeof(pmove));
+				pmove.pm_type = PM_NORMAL;
+				pmove.skipent = -1;
+				VectorSet(pmove.player_mins, -16, -16, 0);
+				VectorSet(pmove.player_maxs, 16, 16, 62);
+				VectorSet(pmove.origin, 0, 0, 128);
+				pmove.surfacefriction = 1;
+				pmove.numphysent = 1;
+				pmove.physents[0].info = 1;
+				pmove.physents[0].scale = 1;
+				VectorSet(pmove.physents[0].mins, -256, -256, -16);
+				VectorSet(pmove.physents[0].maxs, 256, 256, 0);
+				pmove.physents[0].origin[2] = 128;
+				movevars.gravity = 800;
+				movevars.entgravity = 1.5f;
+				movevars.maxvelocity = 3500;
+				movevars.normalizejump = mode;
+				movevars.jumpaddrise = movevars.jumpzoffset = movevars.ktjump = 0;
+				movevars.jumpvelocity = 268.3281572999747f;
+				movevars.stamina = ratio_case == 2 ? -1 : 1;
+				movevars.staminarecovery = ratio_case == 0 ? 20 : (ratio_case == 1 ? 40 : 0);
+				movevars.staminajumpcost = ratio_case == 0 ? 25 : (ratio_case == 1 ? 50 : 0);
+				pmove.stamina = ratio_case == 0 ? 2500 : (ratio_case == 1 ? 625 : 100000);
+				ratio = ratio_case == 0 ? .5f : (ratio_case == 1 ? .75f : 0);
+				pms_frametime = .015625f;
+				PMSrc_CategorizePosition();
+				Q_snprintfz(name, sizeof(name), "P1158 model %i/%i actual contact", mode, ratio_case);
+				PMSrc_Check(name, pmove.onground, 1, 0);
+				pmove.cmd.buttons = BUTTON_JUMP;
+				PMSrc_BankGravityBegin(true);
+				Q_snprintfz(name, sizeof(name), "P1158 model %i/%i PRE-cost ratio", mode, ratio_case);
+				PMSrc_Check(name, PMSrc_StaminaRatio(), ratio, 0);
+				Q_snprintfz(name, sizeof(name), "P1158 model %i/%i neutral start acts", mode, ratio_case);
+				PMSrc_Check(name, PMSrc_BankGravityGroundStartCommon(normal), 1, 0);
+				memcpy(oraclebody, &pmove, sizeof(pmove));
+				memcpy(oraclevars, &movevars, sizeof(movevars));
+				VectorCopy(normal, pmove.velocity);
+				movevars.entgravity = 1;
+				jumped = PMSrc_CheckJumpButton();
+				PMSrc_CheckVelocity();
+				VectorCopy(pmove.velocity, expected);
+				Q_snprintfz(name, sizeof(name), "P1158 model %i/%i native neutral jump acts", mode, ratio_case);
+				PMSrc_Check(name, jumped && pmove.jump_held && !pmove.onground, 1, 0);
+				Q_snprintfz(name, sizeof(name), "P1158 model %i/%i native cost changes ratio", mode, ratio_case);
+				PMSrc_Check(name, PMSrc_StaminaRatio() != ratio, 1, 0);
+				memcpy(&pmove, oraclebody, sizeof(pmove));
+				memcpy(&movevars, oraclevars, sizeof(movevars));
+				Q_snprintfz(name, sizeof(name), "P1158 model %i/%i default jump acts", mode, ratio_case);
+				PMSrc_Check(name, PMSrc_BankGravityJumpDefault(normal), 1, 0);
+				Q_snprintfz(name, sizeof(name), "P1158 model %i/%i matches native PRE-cost oracle", mode, ratio_case);
+				PMSrc_Check(name, VectorCompare(normal, expected), 1, 0);
+				Q_snprintfz(name, sizeof(name), "P1158 model %i/%i preserves whole body", mode, ratio_case);
+				PMSrc_Check(name, memcmp(&pmove, oraclebody, sizeof(pmove)) == 0, 1, 0);
+				Q_snprintfz(name, sizeof(name), "P1158 model %i/%i preserves all movevars", mode, ratio_case);
+				PMSrc_Check(name, memcmp(&movevars, oraclevars, sizeof(movevars)) == 0, 1, 0);
+				Q_snprintfz(name, sizeof(name), "P1158 model %i/%i speculative model is not use", mode, ratio_case);
+				PMSrc_Check(name, PMSrc_BankGravityEnd(), 0, 0);
+			}
+			BZ_Free(oraclebody);
+			movevars.gravity = 1048576;
+			movevars.stamina = 1;
+			movevars.staminarecovery = 20;
+			movevars.staminajumpcost = 25;
+			movevars.standheight = 62;
+			movevars.duckheight = 45;
+			for (mode = 0; mode < 3; ++mode)
+			for (posture = 0; posture < (mode ? 3 : 1); ++posture)
+			{
+				movevars.normalizejump = mode != 0;
+				movevars.jumpaddrise = mode == 2;
+				movevars.jumpvelocity = mode == 0 ? 28500 : (mode == 1 ? 13712 : 1712);
+				height = posture == 1 ? PMSrc_DuckHeight() : PMSrc_StandHeight();
+				for (arm = 0; arm < 3; ++arm)
+				{
+					memset(&pmove, 0, sizeof(pmove));
+					pmove.pm_type = PM_NORMAL;
+					pmove.skipent = -1;
+					pmove.ducked = posture == 1;
+					pmove.ducking = posture == 2;
+					pmove.stamina = 2500;
+					VectorSet(pmove.player_mins, -16, -16, 0);
+					VectorSet(pmove.player_maxs, 16, 16, height);
+					VectorSet(pmove.origin, 0, 0, 128);
+					pmove.surfacefriction = 1;
+					pmove.basevelocity[2] = mode == 2 ? 768000 : 0;
+					pmove.numphysent = 1;
+					pmove.physents[0].info = 1;
+					pmove.physents[0].scale = 1;
+					VectorSet(pmove.physents[0].mins, -256, -256, -16);
+					VectorSet(pmove.physents[0].maxs, 256, 256, 0);
+					pmove.physents[0].origin[2] = 128;
+					movevars.entgravity = arm == 2 ? 1 : 1.5f;
+					PMSrc_CategorizePosition();
+					Q_snprintfz(name, sizeof(name), "P1158 fatigue %i/%i/%i actual contact", mode, posture, arm);
+					PMSrc_Check(name, pmove.onground, 1, 0);
+					Q_snprintfz(name, sizeof(name), "P1158 fatigue %i/%i/%i PRE-cost ratio", mode, posture, arm);
+					PMSrc_Check(name, PMSrc_StaminaRatio(), .5f, 0);
+					pmove.cmd.buttons = BUTTON_JUMP | (posture ? BUTTON_DUCK : 0);
+					PMSrc_BankGravityBegin(arm != 0);
+					if (arm == 1)
+					{
+						Q_snprintfz(name, sizeof(name), "P1158 fatigue %i/%i earlier source admitted", mode, posture);
+						PMSrc_Check(name, mode ? PMSrc_BankGravityGroundStartNormalized(normal) :
+							PMSrc_BankGravityGroundStartDefault(normal), 1, 0);
+					}
+					PMSrc_FullWalkMove();
+					Q_snprintfz(name, sizeof(name), "P1158 fatigue %i/%i/%i actual jump acts", mode, posture, arm);
+					PMSrc_Check(name, pmove.jump_held && (pmove.oldbuttons & BUTTON_JUMP) && !pmove.onground, 1, 0);
+					Q_snprintfz(name, sizeof(name), "P1158 fatigue %i/%i/%i cost physically acts", mode, posture, arm);
+					PMSrc_Check(name, PMSrc_StaminaRatio(), .75f, 0);
+					expected_z = arm == 2 ? (mode == 0 ? 182.6875f : (mode == 1 ? 171.125f : 168.71875f)) :
+						(mode == 0 ? 131.3125f : 139.125f);
+					Q_snprintfz(name, sizeof(name), "P1158 fatigue %i/%i/%i accepted origin", mode, posture, arm);
+					PMSrc_Check(name, pmove.origin[2], expected_z, 0);
+					Q_snprintfz(name, sizeof(name), "P1158 fatigue %i/%i/%i accepted tail", mode, posture, arm);
+					PMSrc_Check(name, pmove.velocity[2], -3500, 0);
+					VectorSet(normal, 0, 0, (pmove.origin[2] - 128) / pms_frametime);
+					Q_snprintfz(name, sizeof(name), "P1158 fatigue %i/%i/%i late-only effect converges", mode, posture, arm);
+					PMSrc_Check(name, PMSrc_BankGravityFinishChanged(normal, pmove.velocity, NULL), 0, 0);
+					if (arm == 0)
+					{
+						VectorCopy(pmove.origin, unobserved_origin);
+						VectorCopy(pmove.velocity, unobserved_velocity);
+					}
+					if (arm == 1)
+					{
+						Q_snprintfz(name, sizeof(name), "P1158 fatigue %i/%i observer preserves origin", mode, posture);
+						PMSrc_Check(name, VectorCompare(pmove.origin, unobserved_origin), 1, 0);
+						Q_snprintfz(name, sizeof(name), "P1158 fatigue %i/%i observer preserves velocity", mode, posture);
+						PMSrc_Check(name, VectorCompare(pmove.velocity, unobserved_velocity), 1, 0);
+					}
+					Q_snprintfz(name, sizeof(name), "P1158 fatigue %i/%i/%i actual use only", mode, posture, arm);
+					PMSrc_Check(name, PMSrc_BankGravityEnd(), arm == 1, 0);
 				}
 			}
 		}

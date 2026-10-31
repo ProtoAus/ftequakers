@@ -1,5 +1,34 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1158 — retain gravity-use status through finite-stamina takeoff
+
+**Problem.** The existing default-jump counterfactual accepted only fully
+recovered stamina. Admitting finite fatigue also requires the native pre-cost
+vertical scale; evaluating that model after the real jump debits the pool would
+observe a different input.
+
+**Change.** Admit a known finite stamina scale, evaluate the pure default model
+before the native jump, and retain it only when that jump actually succeeds.
+Apply the same whole-vertical scale before the stock path's inner gravity half.
+Keep the existing posture, finite/default-context, clear-path, sanitization and
+actual-use proof. Stock crouch and ground-duck transition remain excluded.
+Physical movement, captured fields, APIs, formats, flags and tiers are unchanged.
+Preserve the published P1152/P1156 and 10/15ms TAS-clock source. Build tooling
+serializes Windows plugin metadata packaging after reproduced parallel ZIP
+temporary-file failures; engine compilation still uses the requested job count.
+
+**Verified/limits.** On the current published-header Windows source, the actual
+untreated control passes 1428 checks and fails exactly the 20 predicted new
+requirements. The candidate passes all 1448 checks, including 249 new checks and
+nine explicitly updated finite-admission expectations. Native jump-oracle,
+pre/post-cost, zero/half/three-quarter scale, body/config preservation, accepted-jump,
+posture, speculative/no-use and actual earlier-use controls execute. Full-header
+compilation and repaired serial packaging complete all seven native images with
+aligned metadata in all five plugins. Original parallel packaging failures and
+the first obsolete P1139 test expectation failure remain failed evidence. Clean
+committed-source review, final-tag Windows/ARM builds and guarded native-only
+delivery are still pending; no runtime, current-program, human or ranked claim.
+
 ## Patch 1156 — preserve installed P1152 with the paired roof/duck camera
 
 **Problem.** P1152 was installed while the P1155 camera candidate was being
