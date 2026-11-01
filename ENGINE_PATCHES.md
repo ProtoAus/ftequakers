@@ -1,5 +1,39 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1178 — Maps list: snug rows, map authors, a 160x90 thumbnail atlas
+
+**Problem.** Lex (2 Nov): Maps rows had too much vertical room (128 px for a 90 px photo, 29 px
+empty under it); the map author was shown nowhere, in the list or the HUD's Map info; some
+pictures looked low-res. The atlas cells are 128x72 and P1111 draws them at 160x90. Every source
+picture is 480 px wide or more (2825 measured), so the softness is the scale-up, not the sources.
+
+**Change.** QC + tools/data, no engine change. Rows: wide 106 (photo plus 8 px each side),
+compact 156; Play is centred, or above the MOM/CS:S switch (now inside the row). mapmeta column
+12 is the author: Momentum credit type 0 plus a submission's type-0 placeholders, else KSF's
+mappers (tools/ksfmappers.py caches ksf.surf's /api/maps/search answers in
+data/mapmedia/ksf/). It is one token the released menu's net-table check already accepts
+([A-Za-z0-9_.-], at most 64): letters and digits stand, '_' is a space, '.hh' is one UTF-8
+byte; '^' and control characters are dropped. src/shared/sh_mapauthor.qc decodes it for the
+list ("by X" after the name) and for CSQC, which reads this PC's newer 14-digit-stamped
+data/mapmeta(.net).txt once per map and closes it. tools/mapthumbs.py --hd packs 160x90 cells
+into gfx/mapthumbs/hd<N>.jpg (1920x2016, 12x21 on a 96 px pitch so no JPEG block straddles two
+pictures, padding repeats the bottom row; JPEG 92 4:4:4) and writes columns 13/14. The menu
+takes an hd cell only when the table's `# hd P bytes` matches the page on disk and the cell is a
+whole number 0..251. The 128x72 pages and columns 6/7 are left alone, so older menus keep using
+the same table. mapmedia_refresh's --atlas fills hd cells only (past every hd page on disk),
+gates old and hd cell losses separately, and copies hd pages to the second install and a
+release export; release.ps1 ships hd*.jpg.
+
+**Verified.** fteqcc c24ede65, 0 warnings x3; test_mapmedia 15/15 (4 new; review 1's new
+assertions fail on the reviewed code). The regenerated table keeps the first 12 columns of all
+2831 live rows byte-identical; authors on 2811 (20 KSF maps credit nobody). The hd atlas is 12
+pages, 15.6 MB (the 128x72 PNGs are 36 MB). Owned rig at 1920x1080 and 800x600: snug rows,
+"by Arblarg", switch and Play inside the row, HUD "by Arblarg", "+ 12 hd" pages and sharper
+cells at 1:1; a newer data/mapmeta.net.txt wins in both list and HUD, and an hd cell of 300
+falls back to the row's old cell. Two reviewers (pipeline; QuakeC and untrusted text): seven
+findings, all fixed in review 1 (main 9b0f0dde).
+In both Windows installs 1 Nov ~17:45Z from QC origin/deploy/p1178-mapslist 093fbbe7 (5f4293a7 + P1178): menu 055fda08, csprogs f557a642 (in tasrevd codes.txt), qwprogs unchanged; table 3b9ff363 and hd0-11.jpg installed and the table published to the Pi media; the lobbies get the csprogs with P1187; main 83702b06/9b0f0dde, notes 8fe2bf36.
+
 ## Patch 1186 — Enter sends the menu chat on every screen that shows it
 
 **Problem.** Lex (2 Nov): "allow enter key for main menu lobby chat". Menu_InputEvent sent the
