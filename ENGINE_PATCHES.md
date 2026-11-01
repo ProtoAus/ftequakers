@@ -1,5 +1,34 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1174 — KSF site maps get pictures; Momentum zones on nine KSF builds
+
+**Problem.** Of 415 KSF builds the 1 Nov audit counted without a picture, 398 are
+second builds the menu folds under their base row (P652), which has one. The 17
+rows players see alone had none: mapmeta.py and ksfshots.py read only KSF's sheet
+(928 maps), which lacks 16 maps on KSF's site, ksfshots refused surf_froots2's real
+WEBP served as .jpg, and surf_parrot_selector_h has no KSF picture. Nine KSF builds
+that share their world with a Momentum map had no zones.
+
+**Change.** Tools only (QC c9e5262d): mapmeta.py and ksfshots.py also take
+data/mapdl.txt's KSF rows under KSF's own name (no `of`) that the sheet lacks;
+ksfshots accepts WEBP bytes; mapthumbs.py gives a byte-identical BSP the other map's
+picture (parrot_selector_h, sha1 72c859a2). Atlas page 10 (20 cells), refreshed and
+published with the existing mapmedia tools. Zone data: nine files from the Momentum
+builds -- five unchanged, devil/lore/wasteland2_css with each restart renamed to the
+CS:S entity at the donor's exact origin and yaw (lore stage1: explicit teleDestPos),
+fast_css main only -- installed fresh-name-only to the lobbies' maps/zones/local,
+ftesurf-site/zones and C:\FTESurf's shipped library (manifest rows `donation`).
+
+**Verified.** KSF's WR replays: our main start is left and end entered on the same
+tick as KSF's own bookmarks on all nine (wasteland2's end one tick early), every
+gate entered in order; bonuses likewise except pyzire b1 (end 5 ticks early, kept)
+and fast_css's (dropped). Wrong-map controls never reach the end; compulsive_njv_h
+(+7/-30 ticks), aquaflow_css (+4), race_final and beyer2_css (a gate off KSF's
+route) were held back. zonefit FIT and restart-on-donor-point for all nine; the
+dedicated server (patch-1173) loads each from maps/zones/local with no zone error;
+the live catalogue reads zoned 1 for all nine. Scratch mapmeta adds exactly 16 rows;
+the scratch atlas page shows 20 real pictures; test_mapmedia.py 11 OK.
+
 ## Patch 1173 — held duck after a standing save load
 
 **Problem.** Loading a standing save with duck held left `BUTTON_DUCK` in the
