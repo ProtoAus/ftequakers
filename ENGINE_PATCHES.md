@@ -28,11 +28,17 @@ caught the fixture's invented endpoint; the query-form URL and strict GUI fixtur
 now act two canonical200 requests. At1Nov2026 05:43:15UTC both Windows MENU/LNO
 were adopted from clean public fba5b68f after exact published fea6969b MENU baseline
 matching; destination/rollback hashes verified, native/CSQC/SSQC/config bytes
-unchanged. Lobby/game-program source ownership remains unresolved. Inventory-only
-frozen schema25 backend candidates qualify, but protected namespace install needs
-owner sudo authentication; live predecessor OPEN, prepared fences CLOSED, shared
-fixture restored and health200. No candidate production import/migration/restart.
-No manual owner acceptance or real counter collection is inferred from fixtures.
+unchanged. Lobby/game-program source ownership remains unresolved. After owner
+namespace admission, inventory-only FCC on frozen DA activated1Nov2026 06:47:08UTC:
+primary OPEN, exact previous-primary fallback CLOSED on SAME schema25 DB, original
+predecessor drained CLOSED. Source82/canonical-entrypoint hashes, actual process /
+namespace, all closed-boundary schema/count/identity+inventory digests, four cron
+routes, momrequests and health200 verified. At06:54:47UTC seven real public
+profiles returned exact persisted owned lists including14 unequipped items;
+unknown-player control404. No grants/equipment changes or fabricated actors.
+An account lacking a public board profile remains404. No schema migration,
+old-DB restoration, native/game-program deployment or counter activation.
+Owner appearance/interaction acceptance and real collection remain pending.
 
 ## Patch 1167 — opt-in content epochs at map and zone publication
 
