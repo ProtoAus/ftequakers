@@ -11465,10 +11465,12 @@ static void FS_MapDepsStamp(const char *file, char out[15])
 //ftesurf (P1099): the mounts either table may name -- tools/mapdeps.py's ADDONS, as the
 //menu's Mmm_KnownMount takes them, and the Momentum stand-in 0.1.32's table still names.
 //Any other spec mounts any directory, and CSQC reached the shipped table too (review 2).
+//P1188: Momentum's platform/ holds loose fallback/default_* materials two maps name.
 static qboolean FS_MapDepsNetSpec(const char *spec)
 {
 	static const char *const known[] = {"steam:Team Fortress 2/tf", "steam:Counter-Strike Global Offensive/csgo",
-		"steam:Portal 2/portal2", "steam:Portal/portal", "steam:Momentum Mod Playtest/mount"};
+		"steam:Portal 2/portal2", "steam:Portal/portal", "steam:Momentum Mod Playtest/mount",
+		"steam:Momentum Mod Playtest/platform"};
 	size_t i;
 	for (i = 0; i < countof(known); i++)
 		if (!strcmp(spec, known[i]))
