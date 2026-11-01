@@ -1,5 +1,31 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1168 — public inventories, tracked-time readers and board navigation
+
+**Problem.** Public profiles exposed only equipped cosmetics. A sought board page
+could not fetch ranks above its first row; menu pictures had no profile action.
+Profile/map playtime and main/bonus attempts had no reader surfaces.
+
+**Change.** Expose bounded owned-item snapshots without granting or equipping.
+Show readonly inventories and optional tracked totals in client/menu profiles;
+open the global profile from menu pictures. Existing map catalogue supplies
+main/bonus chips and optional map time/attempts. Add readonly !time/name queries,
+8/12-hex public-handle validation, bidirectional bounded board windows and native
+Previous handling. Missing counters stay explicitly unavailable; collection is
+separate. Preserve private Friends identities, schema, native pins/tags, physics,
+recordings, eligibility and qcbuild. Never backfill invented historical time.
+
+**Verified/limits.** Ten inventory tests pass. Three product programs build with
+zero new warnings (same two existing client F333 warnings). Actual isolated
+socket/GUI/HTTP controls show both unequipped owned items, absent-vs-present
+tracked time, normal say self/name lookup, stage-excluded attempts, earlier
+ranks after seeking, course selection and picture-opened profile. Screenshots
+inspected; a detached menu crown was caught and fixed with SUI point transforms.
+Seven of nine old source guards pass on baseline and subject, with identical two
+stale expectations. Native-table Previous is compile/source-only; real counter
+collection, live totals and Windows/fleet/backend delivery are separate gates.
+No manual owner acceptance or deployment is inferred from synthetic fixtures.
+
 ## Patch 1167 — opt-in content epochs at map and zone publication
 
 **Problem.** A content snapshot lease cannot fence a publisher that does not
