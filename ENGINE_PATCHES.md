@@ -1,5 +1,38 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1172 — retain managed content lease binding through completion
+
+**Problem.** Initial descriptor validation did not establish that later scope use
+and completion still referred to the configured managed-content file and record.
+
+**Change.** Backend only: validate canonical parent, held/named identity and exact
+expected record before admission/reentry and at completion. Refuse unexpected
+state rather than completing or repairing it. Preserve cooperative namespace
+ownership, kernel lock lifetime, ordinary nested publication and exception epochs.
+Zone puts distinguish body/restoration errors from scope-completion errors: a later
+refusal retains partial operator-recovery state, not a safely-restored claim. No
+unfenced rollback or lease repair. Include the lease and existing account-helper
+modules in the isolated zone-service ship set. No native pin/tag, runtime QC, schema,
+capture, eligibility or Build change.
+
+**Verified (isolated; no deployment).** Matched real-kernel binding/record controls
+act on the predecessor and refuse on the subject; healthy nested/partial-exception
+semantics remain. Same-length valid-record regressions discriminate a missing
+expected-record comparison; predecessor zone puts ACT with wrong post-write failed
+classification, while corrected apply/rollback retain partial recovery and admission
+refusals leave files untouched. Content11/publisher11/zonepub155 pass on Windows/Linux
+with explicit POSIX skips; Linux VFS28/Peer42 pass. Installer7 passes on both
+platforms, including isolated import success and independent dependency-omission
+refusals. Current service dependencies plus publisher suites pass184 Linux tests
+with1 platform skip. Actual native borrowed-reader retention,
+selected source reads, excluded writer and post-cleanup publication still act;
+source fixture preserved. Human reader949/0 failed; the byte-identical reader's
+541-run corpus retains348 existing faults, not a clean-corpus claim. Official QC
+NoDeploy adds no warning fingerprints (same two client F333 warnings); both Windows
+install images remain unchanged. An initial compiler-PATH refusal and reader
+infrastructure limits were retained; no product/test weakening. Partial publisher
+coverage remains unqualified: no live bootstrap, activation or canonical permit.
+
 ## Patch 1170 — clean lobby disconnect, distinct weapon Drop (mod-side only)
 
 Reserve QW transport drop/disconnect for existing native teardown; weapon
