@@ -1,5 +1,30 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1176 — site: cleaner front page, rainbow BETA, zoning page
+
+**Problem.** Lex (2 Nov) wanted the front page's version line ("0.1.34 · Free and open
+source"), tagline and install/requirements notes gone, a BETA on the title's line in the
+board's Perfect rainbow, and P1174's zoning worklist on the site in its own style, live as
+zoners (Lex, Markbeaton54) publish.
+
+**Change.** Site only (QC 89454799), re-rendered for 0.1.34 with sitepage.ps1.
+page.template.html drops the eyebrow, lede, launch and requirements notes; the build details
+(version, date, QuakeC build, engine patch) move to the BETA badge's title, so the receipt
+token contract is unchanged. BETA sits on SURF's baseline (SURF ends at x 552 of 720, baseline
+y 293 of 320; Bebas at line-height .8) and each letter cycles 0.15 + 0.85 * Milk_Rainbow at
+0.65 cycles/s, 0.09 behind the one before, as cl_hud.qc HUD_BoardGrade draws Perfect.
+zoning.html/zoning.js list the catalogue's KSF rows with zoned 0 (445 on 2 Nov, plus
+surf_sinister kept) from tools/zoningpage.py: KSF API facts (linear, stages, bonuses, plays,
+mappers, main WR) cached per map, P1174's related-build notes, one 128x72 webp sheet (444
+pictures, 342 KB). The page polls board/api/maps every 60 s and drops maps whose `have` is 1
+(BSP and zones on the Pi; surfd's map_index cache adds up to 300 s).
+
+**Verified.** test_site_copy.py 7/7, with HEAD as the control failing 7 + 1 error; sitepage
+dry run renders every token; headless Edge at 1280 px and in a 390 px frame (headless windows
+stop at 496 px, which cropped the first phone shots); a local board copy with two of the maps
+marked zoned dropped both and read "443 maps to zone · 2 zoned since 2 Nov". Live: every file
+served byte for byte, and the page read "444 maps to zone · 1 zoned since 2 Nov".
+
 ## Patch 1175 — zone publishing reads accounts again (surfd idle read-only DB holder)
 
 **Problem.** Every zone upload from 1 Nov answered "Zone uploads unavailable" (first reported
