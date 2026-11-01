@@ -65,6 +65,9 @@ qboolean PM_ApplyPreInput(playermove_t *move, const pmpreinput_t *input)
 		move->ducked = (input->forceduck == 2);
 		move->ducking = false;
 		move->ducktime = 0;
+		// A forced stand needs a fresh duck edge even if the key stayed held.
+		if (input->forceduck == 1)
+			move->oldbuttons &= ~BUTTON_DUCK;
 	}
 	if (input->flags & PMPI_HOLD)
 		move->cmd.msec = 0;
