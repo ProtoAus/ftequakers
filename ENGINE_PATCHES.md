@@ -1,5 +1,51 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1184 — zone editor: a zone's size, typed or wheeled
+
+**Problem.** Lex (2 Nov): "on some maps ... we can't get into the corner to make the zone
+correctly ... allow us to see the zone dimentions and to shift faces/values with a text box or
+click and drag". The editor placed boxes only by aiming at world geometry and showed no size.
+
+**Change.** QC only (client, in QC 4a03e17b on deploy/p1180-zones; main e7f6af7c). The panel's
+inspector shows the selected zone's size and six values (x min/max, y min/max, bottom, top). A
+click opens the editor's text field (Enter applies, Esc cancels), the wheel over a value moves
+it one grid step (1 unit on Surface). An x or y face stretches the outline from the opposite
+face, so a box's face moves exactly and a polygon keeps its proportions; height stays 16-16384.
+`zone_edit face <xmin|xmax|ymin|ymax|bottom|top> <value>` does the same.
+
+**Verified.** build.ps1 0 warnings x3 (fteqcc c24ede65). Hosted surf_dune in a runlines_smoke
+overlay: a box's x max -11328 -> -11200 and top 15260 -> 15300 (status bounds, panel chips, list
+row and crc follow), a 16-point polygon's x min 11360 -> 11000 with x max kept, bottom -99999
+and "abc" refused, an unchanged value leaves the table untouched; repeated on the delivered base.
+A first screenshot showed the frame before the edit (2 s later the panel had the new values).
+
+## Patch 1180 — zone publishing is instant, with a history
+
+**Problem.** Lex (2 Nov): "when we publish a zone, I just want it to be instant ... If the zone
+is bad, then it NEEDs to be updated now, not after people finish their runs. Only have 1 option,
+publish"; "store the user who uploaded the last zone, and also have an ability to browse the
+previously uploaded zones". P815/P1081 waited for a quiet map, or a warning minute, two sweeps
+and every owed verdict; the uploader was stored but nothing showed it.
+
+**Change.** zonepub (QC main 02c91e7a..85ed1a7c, installed by Lex's sudo `install_zonepub.py
+--upgrade` at 85ed1a7c, 6cff6856 kept as the way back): every accepted upload is written by the
+upload's own apply(); each of our lobbies on the map answers serverinfo just before the write
+and then gets say + changelevel in that tick; 55 s rounds confirm by zonecrc and load time. A
+lobby whose pre-write read shows another map is left alone; a write needs 2 free rcon packets
+per target; a held row expires an hour after its first hold; rollbacks reload their lobbies too.
+New public POST /api/zones/history (uploader display names, never SteamIDs; covering index) and
+/api/zones/file, CORS *. Client (csprogs 9138d2ba on all 12 lobbies and both installs): one
+Publish button, a History page in the editor (load any published version as unsaved edits). The
+site's zoning page shows "Recently zoned" and "Zoned by X" from the history.
+
+**Verified.** surfd/test_zonepub.py 169 OK. Five independent review rounds (state machine;
+public surface/abuse; then each fix) found 12 defects, each fixed with a test that fails on the
+commit before. Dry run as proto, then the owner's --apply: unit at 85ed1a7c, history lists 20+
+publishes by Markbeaton54 and Proto (account names read from the sandbox), /api/zones/file of
+#22 equals the live surf_kraken.json (52dae58d514d). Lobbies restarted at 0 players, no QC errors.
+The instant path itself is unit-tested against a fake fleet; the first real publish is the
+owner's check (lextest).
+
 ## Patch 1185 — a booster's own re-enable keeps it world-owned
 
 **Problem.** Lex (2 Nov): surf_mesa's booster put the run in practice ("practice -- inherited
