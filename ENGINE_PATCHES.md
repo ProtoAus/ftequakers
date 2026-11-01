@@ -1,5 +1,35 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1177 — hud_player colours survive a restart
+
+**Problem.** Lex (2 Nov): the colours picked in hud_player were forgotten every time he joined
+a lobby; equipped items came back. The look keys (lobbycolor, lobbyrgb, lobbymark, lobbybody,
+lobbyfx, lobbylen, lobbytrail) are userinfo set with `setinfo`, and FTESurf runs
+`cfg_save_infos 0` (cfg/default.cfg: a saved `serverinfo` line once froze sv_airaccelerate),
+so no userinfo reaches ftesurf.cfg and every new game process joined with none. A reconnect
+inside one process kept them: the engine clears cls.userinfo only at shutdown (cl_main.c:8526).
+Equipped items survive because surfd stores them. sv_lobby.qc's comment over Lobby_ColourFor
+claimed userinfo archives itself.
+
+**Change.** CSQC only (cl_avatar.qc). Every panel write goes through Av_Put, which also sets
+an archived `cl_<key>` cvar. Av_RegisterCvars (CSQC init) registers the seven cvars and sends
+a saved value only when `getlocaluserinfo(0, key)` is empty, so a map change or reconnect
+sends nothing and a command-line setinfo wins; values other than digits, space, '.' and '-'
+are not sent (they go inside a quoted setinfo). Review 1 replaced a non-archived
+once-a-launch cvar: with `cfg_save_all 1` the quit-time save writes it, and the next launch
+never restored. `hud_player swatch <n>` / `hud_player look` are arm hooks. Server behaviour
+is unchanged: Lobby_Frame already re-reads the keys every second, so for about a second after
+joining a returning player shows the random colour.
+
+**Verified.** tools/p1177look.py on a dedicated socket with the installed exes (= 0.1.34):
+pick 5, the lobby grants lc 5, a reconnect keeps it and sends nothing, the quit-time save
+with cfg_save_all 1 keeps `seta cl_lobbycolor "5"` and no setinfo lines, the next launch has
+no lobbycolor in userinfo before CSQC, CSQC sends exactly one setting, the lobby grants 5,
+and a hand-edited `cl_lobbylen "x"` is not sent: 16/16 on the deploy build. The review-0
+build is the control: its saved config holds `set _av_looksent "1"` and the restore never
+runs. Builds 0 warnings (fteqcc c24ede65). One review (non-ranking feature).
+Live 1 Nov 17:13Z on all 12 lobbies and both installs from QC origin/deploy/p1177-look 28bbd501 (3cc4fec7 + P1177): qwprogs f0e66da4, csprogs 310caf73 (in tasrevd codes.txt); main 1d54d35d/6553ff6a, notes acf037a3.
+
 ## Patch 1176 — site: cleaner front page, rainbow BETA, zoning page
 
 **Problem.** Lex (2 Nov) wanted the front page's version line ("0.1.34 · Free and open
