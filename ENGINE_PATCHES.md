@@ -1,5 +1,33 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1163 — soft outward falloff for the inventory ice aura
+
+**Problem.** Owner confirmed the P1160 inventory grid and toggles but reported
+that its constant-alpha scaled shell looked like a line stroke, not a soft aura.
+
+**Change.** CSQC only: sixteen normal-expanded, backface-only additive shells
+have integrated squared-falloff weights, so brightness decreases outward to
+zero rather than ending at one bright rim. Preserve frame blending, body depth
+occlusion and independent party-hat state. Name the item Ice aura. No native
+source/pin/tag, backend schema, ownership, privileges or qcbuild change.
+
+**Verified.** Isolated fleet source84a8ff1a + this change compiles with zero new
+warnings (two existing F333 argument227 warnings). Retained dedicated fixture
+proves inventory OFF/ON acted, both items stayed selected, inline shader compiled,
+and actual screenshots were inspected. The first single-shell view-angle shader
+compiled but still drew flat strokes on the low-poly player: retained as a failed
+visual control, not a pass. Layered subject shows an outward cyan fade with body
+still opaque. Existing server/menu binaries remain byte-identical. Wall testing
+is retained by the pass, not a measured behind-wall acceptance; owner appearance,
+other-avatar occlusion and ordinary playing smoothness remain in lextest.md.
+No numerical performance, pixel-width invariance or JFA equivalence claim.
+Delivered/read back1Nov2026 00:57:55UTC from clean fleet471fa957: both Windows
+installs six DAT/LNO files + exact.prev, native/config unchanged; Pi pair + exact
+.prev,12healthy/fresh/UDP lobbies. Empty-lobby UDP replies omit CSQC checksums,
+so no advertised-checksum claim. PiForce used with0players. Backend25 primaryOPEN
+and compatible rollbackCLOSED preserved. QC tools/profile-aura-p1163.md records
+artifact hashes, rollback, target-assumption correction and acceptance limits.
+
 ## Patch 1161 — cold TAS project validation and replay admission
 
 **Problem.** A fresh matching-clock TAS session could not validate a nonempty
