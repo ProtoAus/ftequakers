@@ -108,6 +108,10 @@ struct vfsfile_s *FS_OpenReadLocation(const char *fname, flocation_t *location)
 {
 	return location->search->handle->OpenVFS(location->search->handle, location, "rb");
 }
+struct vfsfile_s *FS_OpenReadLocationRaw(const char *fname, flocation_t *location)
+{
+	return FS_OpenReadLocation(fname,location);
+}
 
 void Q_strncpyz(char *d, const char *s, int n)
 {

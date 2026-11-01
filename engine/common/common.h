@@ -636,6 +636,7 @@ void FS_RehashIfStale(void);					//ftesurf (P180): rebuild the name hash if it w
 void FS_Cache_Tick(void);						//ftesurf (P186): drain a little of the asset-cache harvest. Called once per client frame; does nothing unless a harvest is armed and has settled.
 struct vfsfile_s *FS_OpenReadLocation(const char *fname, flocation_t *location);	//fname used for extension-based filters
 struct vfsfile_s *FS_OpenReadLocationRaw(const char *fname, flocation_t *location);	//logical name retained, no decompression filter
+struct vfsfile_s *FS_OpenReadLocationCode(const char *fname, flocation_t *location);	//explicit script/VM execution purpose
 #define WP_REFERENCE	1
 #define WP_FULLPATH		2
 #define WP_FORCE		4

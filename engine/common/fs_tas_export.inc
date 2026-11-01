@@ -153,6 +153,22 @@ static const char *FS_TASExportAliases(const fs_tas_export_name_t *a, const fs_t
 	if (!strcmp(a->name,b->name) && a->source == b->source) return "duplicate_member";
 	return NULL;
 }
+static qboolean FS_TASExportHasDescendant(fs_tas_export_t *e, const char *name)
+{
+	char prefix[MAX_OSPATH+1];
+	size_t len;
+	unsigned int lo = 0, hi = e->count, mid;
+	Q_snprintfz(prefix,sizeof(prefix),"%s/",name);
+	len = strlen(prefix);
+	// Prefix lower-bound also finds descendants separated by punctuation siblings.
+	while (lo < hi)
+	{
+		mid = lo+(hi-lo)/2;
+		if (Q_strncasecmp(e->names[mid].name,prefix,len) < 0) lo = mid+1;
+		else hi = mid;
+	}
+	return lo < e->count && !Q_strncasecmp(e->names[lo].name,prefix,len);
+}
 static qboolean FS_TASExportParents(fs_tas_export_t *e, const char *full)
 {
 	char path[MAX_OSPATH], *p;
@@ -198,7 +214,7 @@ static qboolean FS_TASExportFile(fs_tas_export_t *e, const char *name, qboolean 
 	}
 	id = FS_TASLookupPathId(loc.search,e->paths,e->pathcount);
 	if (!id) { e->error = "external_provider"; return false; }
-	input = FS_OpenReadLocationInternal(name,&loc,false,true);
+	input = FS_OpenReadLocationInternal(name,&loc,true,true);
 	if (!input) { e->error = "open"; goto done; }
 	size = VFS_GETLEN(input);
 	if (size == qofs_ErrorValue() || size > FS_TAS_EXPORT_FILE)
@@ -370,6 +386,12 @@ static void FS_TASExportNative(fs_tas_export_t *e)
 	qsort(e->names,e->count,sizeof(*e->names),FS_TASExportCompare);
 	for (i = 1; i < e->count; i++)
 		if ((e->error = FS_TASExportAliases(&e->names[i-1],&e->names[i]))) return;
+	for (i = 0; i < e->count; i++)
+		if (!e->names[i].directory && FS_TASExportHasDescendant(e,e->names[i].name))
+		{
+			e->error = "file_directory_alias";
+			return;
+		}
 	for (i = 0; i < e->count; i++)
 	{
 		if (!FS_TASLookupHex(e->names[i].name,hex,sizeof(hex)) || !FS_TASExportRow(e,"ENTRY %u %u %"PRIuQOFS" %s\n",e->names[i].source,e->names[i].directory,e->names[i].size,hex)) return;

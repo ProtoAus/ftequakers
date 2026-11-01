@@ -598,7 +598,7 @@ const char *HTTP_RunClient (HTTP_active_connections_t *cl)
 					if (gzipped || FS_FLocateFile(filename, FSLF_IFFOUND|FSLF_DONTREFERENCE, &loc))
 					{
 						FS_GetLocMTime(&loc, &timestamp);
-						cl->file = FS_OpenReadLocation(NULL, &loc);
+						cl->file = FS_OpenReadLocationRaw(gzipped?nbuf:filename, &loc);
 					}
 					else
 						cl->file = NULL;

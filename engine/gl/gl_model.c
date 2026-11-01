@@ -3129,7 +3129,7 @@ static char *EF_LoadTrusted(const char *path)
 		Con_Printf(CON_WARNING "entfix: %s is not in a trusted directory - not read\n", path);
 		return NULL;
 	}
-	f = FS_OpenReadLocation(NULL, &loc);
+	f = FS_OpenReadLocationRaw(path, &loc);
 	if (!f)
 		return NULL;
 	len = VFS_GETLEN(f);

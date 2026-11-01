@@ -2695,7 +2695,7 @@ static void FS_TASLookup_f(void)
 	{
 		id = FS_TASLookupPathId(loc.search, paths, count);
 		if (!id) { error = "external_provider"; goto done; }
-		file = FS_OpenReadLocation(name, &loc);
+		file = FS_OpenReadLocationRaw(name, &loc);
 		if (!file) { error = "open"; goto done; }
 		size = VFS_GETLEN(file);
 		if (size == qofs_ErrorValue() || size > ((qofs_t)1<<30)) { error = "file_bound"; goto done; }
@@ -4441,6 +4441,27 @@ vfsfile_t *FS_OpenReadLocation(const char *fname, flocation_t *location)
 vfsfile_t *FS_OpenReadLocationRaw(const char *fname, flocation_t *location)
 {
 	return FS_OpenReadLocationInternal(fname,location,true,false);
+}
+vfsfile_t *FS_OpenReadLocationCode(const char *fname, flocation_t *location)
+{
+#ifdef __linux__
+	char full[MAX_OSPATH], physical[MAX_OSPATH];
+#endif
+	searchpath_t *source = location->search;
+	FS_TASPolicyInit();
+	if (fs_tas_policy_enabled && (!source || !source->origin_policy_private))
+	{
+#ifdef __linux__
+		// Execution is a consuming operation, independent of the file's suffix.
+		if (fname && source && source->origin_policy_bound && source->origin_kind == FSORIGIN_DIRECTORY && !*source->prefix &&
+			try_snprintf(full,sizeof(full),"%s/%s",source->origin_root,fname) &&
+			FS_TASCanonical(full,physical,sizeof(physical)) && FS_TASPhysicalClass(physical) == 3)
+			return FS_OpenReadLocationInternal(fname,location,false,false);
+#endif
+		FS_TASPolicyLatchPath("policy_execution",fname?fname:"");
+		return NULL;
+	}
+	return FS_OpenReadLocationInternal(fname,location,false,false);
 }
 
 qboolean FS_Rename2(const char *oldf, const char *newf, enum fs_relative oldrelativeto, enum fs_relative newrelativeto)

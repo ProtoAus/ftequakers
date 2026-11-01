@@ -1043,7 +1043,7 @@ static void Cmd_Exec_f (void)
 
 	if (Cmd_ExecLocate(name, &loc, skipped, sizeof(skipped)))
 	{
-		file = FS_OpenReadLocation(name, &loc);
+		file = FS_OpenReadLocationCode(name, &loc);
 		if (!file)
 		{
 			Con_TPrintf ("couldn't %s %s. check permissions.\n", Cmd_Argv(0), name);
