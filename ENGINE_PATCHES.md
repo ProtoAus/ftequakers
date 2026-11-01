@@ -1,5 +1,30 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1164 — cylindrical paper party crown with upward points
+
+**Problem.** The owner envisioned a cylindrical party hat with upward-pointing
+tips; the existing cone did not match that shape.
+
+**Change.** CSQC only: replace the cone by a sixteen-sided open cylindrical paper
+band and eight triangular crown points. Give the inventory slot a matching
+three-point crown icon and Paper party crown label. Keep item2, its saved colour,
+server-authoritative equipment and the P1163 soft aura unchanged. No native
+source/pin/tag, backend/schema/grants, movement or qcbuild change.
+
+**Verified.** Isolated fleet471fa957 plus this change builds with zero new warnings
+(the same two existing F333 argument227 warnings). Reused real dedicated fixture
+acts OFF/ON, retains the supplied hat colour and both selected items; inspected
+native preview shows cylindrical crown and matching slot icon, with aura still
+rendered. Source/packet/ownership paths unchanged; actual owner shape/fit and
+other-avatar appearance remain manual acceptance in lextest.md, not claimed.
+Actual1Nov2026 01:44:06UTC: fleet69fdb328 Pi pair/.prev exact,12healthy/fresh/UDP
+lobbies, backend25 primaryOPEN/compatibilityCLOSED preserved. Both Windows caches
+seeded e1d884ef, but localVM/native adoption BLOCKED: intervening changed cohorts
+have no established source/owner. No unknown cohort overwrite or restore; their
+VM/native/config preimages remain exact. Used supported equalSurfDir/QuakeDir
+entrypoint for independent Pi-only deployment, PiForce with0players. Source,
+artifact hashes, rollback and local-adoption limits: tools/profile-crown-p1164.md.
+
 ## Patch 1163 — soft outward falloff for the inventory ice aura
 
 **Problem.** Owner confirmed the P1160 inventory grid and toggles but reported
