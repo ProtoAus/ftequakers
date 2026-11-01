@@ -1,5 +1,37 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1169 — larger native-pixel Maps filter fonts
+
+**Problem.** The Maps filter strip used small shadowed legacy text:12-unit
+labels and15-unit headings. Scaling those fonts made the filters look soft and
+small beside the map list, and merely enlarging text would mismeasure controls.
+
+**Change.** Draw filter labels at16 and display headings at20 through the
+existing physical-font helper. Keep the legacy face selected for bake lookup,
+measure with its native mirror and snapped size, and restore the legacy UI font
+after the strip.32-high controls/40 row pitch and measured mode-switch width
+keep text and hitboxes together and wrap groups on smaller screens. Preserve
+filter IDs, selection logic, tooltips and the rest of the menu/HUD typography.
+No engine code, native pin/tag, protocol, server/client QC, physics or Build change.
+
+**Verified/limits.** Untreated and subject three-program NoDeploy builds have
+zero new warnings: menu/server0, the same two existing client F333 warnings.
+SSQC/CSQC artifacts are byte-identical; menu changes. Actual native menu captures
+at1280x720,1920x1080 and900x600 were read: larger crisp filter text, wrapped
+controls and usable search/list/footer. Existing bootstrap driver ACTED tier3
+and Bhop filtering with the same fixture counts as the control. Offline fixture
+state is not owner consent/acceptance. Two queued-command UI fixtures reached
+the builtin menu before custom menu init and are retained as failures, not
+hit-test passes; the simpler existing bootstrap route supplies the stated
+captures. Source/ID inspection preserves library/sort actions; owner visual and
+click acceptance remains pending in lextest.md. Client-local MENU-only dual
+adoption is separate from these isolated checks; no menu.dat belongs on a lobby.
+
+A separate dated read-only census supplies all578 unzoned held maps with current
+and independent library tiers;117 remain explicitly UNKNOWN. All2179 catalog
+names match held BSP names, zoned positive control excluded. No tiers/zones,
+map pool, backend or player data were edited to produce the roster.
+
 ## Patch 1168 — public inventories, tracked-time readers and board navigation
 
 **Problem.** Public profiles exposed only equipped cosmetics. A sought board page
