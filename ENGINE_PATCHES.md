@@ -1,5 +1,87 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1185 — a booster's own re-enable keeps it world-owned
+
+**Problem.** Lex (2 Nov): surf_mesa's booster put the run in practice ("practice -- inherited
+player-origin map effect"). The trigger_push runs `OnEndTouch !self,Disable` and `!self,Enable`
+1 s later; SV_IOEnable recorded the off->on under the leaving attempt's I/O lineage, so once a
+save load or reset started a new attempt the next touch read as inherited (BANK_UNRANKED,
+TF_BANKTAINT). 158 library maps have an activation trigger that re-enables itself.
+
+**Change.** QC only (sv_entities.qc SV_IOEnable, sv_bank.qc). When a player cause switches a
+world-owned activation slot off, an off->on by exactly that cause (player, attempt, bad) leaves
+it world-owned. Any other cause's Disable while it is off cancels that; world causes never
+qualify (they all share one identity). Every other off->on snapshots its cause as before.
+
+**Verified.** surf_mesa listen arm (save, ride, load, ride): live P1177 progs print the practice
+line; this build prints none and logs the rule acting on each ride. Two review rounds: round 1
+(predicate, attacker, evidence) found world causes matching each other, a stale record
+surviving another cause's Disable (an untainted boost in the map's off window) and restores of
+older player owners; round 2 (predicate, attacker) confirmed those closed and found a
+theoretical residual, a player-re-armed world timer carrying their identity, with 0 reachable
+cases in 2204 library BSPs (BACKLOG). Two riders leaving together fall back to the old taint.
+Delivered on deploy/p1185-lexbugs 5729ce47 (live 18:09Z 1 Nov).
+
+## Patch 1183 — one "nothing saved", and Shift+wheel noclip on lobbies
+
+**Problem.** Lex (2 Nov): the load key with no saves printed "save: nothing saved on this map"
+twice (WOP_LOAD runs SV_SaveLocLoad then SV_SaveLocHold, both refusing). Shift+wheel noclip
+tuning on a lobby printed "first local seat only": CSQC_KeyPress sets no seat, so VF_ACTIVESEAT
+read whatever the last engine call left.
+
+**Change.** QC only. SV_SaveLocHold's no-saves refusal is silent (a hold acts only right after a
+load, which already said it). Noclip_Wheel asks about the seat only when numclientseats > 1.
+
+**Verified.** Listen arm, `cmd sl_load; cmd sl_hold` with no saves: live progs twice, this build
+once. The wheel needs a lobby to reproduce: owner check (lextest).
+
+## Patch 1182 — props hide the sun
+
+**Problem.** Lex (2 Nov): the env_sun glow showed through props (surf_pantheon, noclip save).
+cl_sun.qc's probe traced CONTENTBIT_SOLID only; every static prop's triangles carry BODY
+contents (render mesh and .phy hull, mod_hl2.c) and draw-only props sit behind 0x400 in the
+plugin's visual tree, so no prop could hide it.
+
+**Change.** QC only. The probe uses the glares' mask (SOLID|BODY|0x400) and traces once at map
+load, so the plugin builds its visual tree then rather than on the first frame facing the sun.
+
+**Verified.** At Lex's pantheon save pose: live progs log "env_sun: visible" and the glow sits on
+the hubpillar column (vbsp_sun 0 removes it); this build logs "hidden by" and the shot shows no
+glow; the plugin's occluder line now prints at load. Solid see-through props now hide it fully
+(Source's pixel query would not): BACKLOG. Frame cost not measured.
+
+## Patch 1181 — stage resets face the map's own destination
+
+**Problem.** Lex (2 Nov): `!r` on surf_for_shareholder_value stage 2 faced a corner while the
+map's fail teleport faced the right way. The zone editor's automatic spawn (the zone's xy
+centre) stores the zoner's view yaw from while the zone was drawn: 39 spawns on 13 of the
+lobbies' 91 local files face 80-180 degrees off the map's stage info_teleport_destination.
+
+**Change.** QC only (sv_zones.qc SV_ZoneSpawnYaws after Zone_Hash; sh_zones.qc zone_stamped). A
+spawn at its zone's xy centre with exactly one info_teleport_destination inside takes that
+destination's yaw. Momentum-mirrored files (numeric root dataTimestamp) and Set spawns keep
+theirs. Files, zone hashes and the client table are unchanged; reset prediction reads the same
+SV_ZoneDestRead.
+
+**Verified.** Server-only arm: live qwprogs turns nothing; this build turns shareholder_value
+(s2 90, not -46), sirena (5) and midnight (6), and leaves surf_ecosystem and surf_shape alone;
+zone crc unchanged. Two review rounds. Not yet seen in game (lextest).
+
+## Patch 1179 — journals reach surfd again
+
+**Problem.** Lex (2 Nov): `rec_ul_send: journal HTTP not acknowledged (status 503)`. Every POST
+/api/hid since at least 26 Oct failed with "journal upload unavailable (OSError)". surfd.service
+runs with ProtectSystem=strict; the worker's mountinfo shows /srv/nvme read-only, so
+hidupload.py's mkstemp in the lobbies' data/evidence/<map>/ failed. Receipts were fine.
+
+**Change.** A drop-in, /etc/systemd/system/surfd.service.d/20-hid-evidence.conf (FTESurf
+surfd/surfd-hid-evidence.conf), adds the evidence tree to ReadWritePaths. The P1115 installer
+rewrites only 10-guarded-startup.conf, so it needs one root install.
+
+**Verified.** Diagnosis only: staged on the Pi, waiting on Lex's sudo; then daemon-reload,
+surfd stop/start and the worker's mountinfo. Journals that failed meanwhile are not recoverable
+(the client does not retry; only the player's PC holds the key).
+
 ## Patch 1187 — chat goes to everyone by default
 
 **Problem.** Lex (2 Nov) wanted every lobby and the main menu to share one chat. P1010's
