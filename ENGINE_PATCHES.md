@@ -15,8 +15,9 @@ source/pin/tag, backend/schema/grants, movement or qcbuild change.
 (the same two existing F333 argument227 warnings). Reused real dedicated fixture
 acts OFF/ON, retains the supplied hat colour and both selected items; inspected
 native preview shows cylindrical crown and matching slot icon, with aura still
-rendered. Source/packet/ownership paths unchanged; actual owner shape/fit and
-other-avatar appearance remain manual acceptance in lextest.md, not claimed.
+rendered. Source/packet/ownership paths unchanged. Owner confirmed1Nov2026 that
+the crown appearance matches the intended design exactly (manual acceptance in
+lextest.md); other-avatar appearance, aura and performance remain unconfirmed.
 Actual1Nov2026 01:44:06UTC: fleet69fdb328 Pi pair/.prev exact,12healthy/fresh/UDP
 lobbies, backend25 primaryOPEN/compatibilityCLOSED preserved. Both Windows caches
 seeded e1d884ef, but localVM/native adoption BLOCKED: intervening changed cohorts
