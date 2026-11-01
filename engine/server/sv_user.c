@@ -9161,6 +9161,9 @@ static void SV_RunCmdPart (usercmd_t *ucmd, qboolean recurse, int kind, float to
 			pmove.ducked   = (ev->_float == 2);
 			pmove.ducking  = false;
 			pmove.ducktime = 0;
+			// Match pre-input prediction; preserve jump and the other button latches.
+			if (ev->_float == 1)
+				pmove.oldbuttons &= ~BUTTON_DUCK;
 			ev->_float = 0;
 		}
 	}

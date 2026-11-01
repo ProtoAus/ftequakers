@@ -1,5 +1,25 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1173 — held duck after a standing save load
+
+**Problem.** Loading a standing save with duck held left `BUTTON_DUCK` in the
+restored `oldbuttons`, so `PMSrc_Duck` saw no press edge and the body stayed
+standing until duck was released and pressed again. On the operator's airborne
+save the held-before body sat 8.5 units lower than pressing duck after the load.
+
+**Change.** When authoritative `run_forceduck` (`SV_RunCmdPart`) or the prediction
+pre-input (`PM_ApplyPreInput`) forces standing (value 1), also clear `BUTTON_DUCK`
+from `oldbuttons`. Jump and other latches, restored crouch (value 2), absent
+fields, formats and eligibility are unchanged. Backported onto the installed
+native 520ba3ca (P1162); main's pending TAS/lease work is not part of it.
+
+**Verified.** `tools/test_saveload_duck.py` compiles the real restore blocks with
+`PMSrc_Duck`/`FinishDuck` and the header's bit values: held-before equals
+pressed-after on ground and in air, other latches kept, absent field and
+unselected payload inert. It fails at `pmove.ducked` against 520's `sv_user.c`
+alone and its `pmove.c` alone. The 8.5-unit figure came from a private native
+replay of the parked combined candidate (fa0ea099c), not this build.
+
 ## Patch 1172 — retain managed content lease binding through completion
 
 **Problem.** Initial descriptor validation did not establish that later scope use
