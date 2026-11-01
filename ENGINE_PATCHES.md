@@ -140,14 +140,19 @@ Backend source is backported to the inspected fleet baseline, with a schema25-
 compatible data-retaining rollback. Both complete 82-file runtime cohorts also
 cold-start against fresh schema25 fixtures, own their measured listeners, and
 pass CLOSED-candidate acceptance, OPEN then drained CLOSED; primary exposes the
-inventory route while compatibility does not. These are not production DB or
-namespace claims. Game-side files are now installed/hash-verified in both Windows
-roots and all12 lobbies (PiForce with one player); native executables are unchanged.
-The backend is NOT activated: its protected installer passes dry-run but requires
-interactive sudo. Shared ingress was restored and no live backend fence was left
-closed. QC repo `tools/profile-inventory-p1160.md` records hashes/provenance and
-limits; `lextest.md` holds human checks. Mark's grant awaits activation; the
-owner's Developer assignment also awaits an explicit Steam profile identity.
+inventory route while compatibility does not. Game-side files are installed/hash-
+verified in both Windows roots and all12 lobbies (PiForce with one player); native
+executables are unchanged. Backend activated1Nov2026 00:33:44UTC after the owner's
+protected configuration install: real systemd namespace/listener/source checks
+pass, schema25 primary OPEN, predecessor/compatibility CLOSED, scheduled routes
+and request worker rebound. At the drained boundary pre-existing table counts,
+schema definitions and full account/link/viewmodel digests match. Private backup
+retained; no stale data restore. All13 eligible linked profiles received starter
+items; Mark's Zoner and explicitly confirmed owner's Developer persist and appear
+in the live public profile API. All12 directory rows refresh. The owner confirms
+the grid and item toggles, but reports the aura as a hard stroke instead of a
+soft fade: visual correction remains in scope. QC `tools/profile-inventory-p1160.md`
+records provenance/limits; `lextest.md` distinguishes confirmed and pending checks.
 
 ## Patch 1156 — preserve installed P1152 with the paired roof/duck camera
 
