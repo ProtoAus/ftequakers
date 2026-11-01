@@ -1,5 +1,48 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1175 — zone publishing reads accounts again (surfd idle read-only DB holder)
+
+**Problem.** Every zone upload from 1 Nov answered "Zone uploads unavailable" (first reported
+for Markbeaton54). The zone service looks the signer up in surfd.db with `mode=ro` from a
+ProtectSystem=strict sandbox that cannot write the DB's directory. In WAL mode a read-only open
+needs `-wal`/`-shm` to exist, and SQLite unlinks them when the last connection closes. surfd
+connects per request and nothing else held the DB any more, so the sidecars were absent ~90%
+of a 20 s sample. Reproduced in a read-only bind mount on the Pi: 8/8 "unable to open database
+file" without a holder, 15/15 with one. The zone service's DB access is identical in 66ed6677
+and 6cff6856. Its P1172 readback probed only `/api/zones/challenge`, which never opens the
+account DB.
+
+**Change.** Backend only (QC 27e2369e..3f64e685, deploy 58dbbf40):
+- Each gunicorn worker keeps one idle `mode=ro` connection (autocommit, no open statement).
+  It is opened after `migrate()` at import, under gunicorn only, and by `get_db()`. The
+  key is recorded only on success; a failure retries after 60 s.
+- Read-only, so its close never checkpoints or unlinks.
+- `connect()` sets `journal_size_limit` 16 MiB, since the WAL is no longer deleted when idle.
+- Crons and the requests watcher import surfd but hold nothing, so stopping surfd still
+  releases every holder. While a worker lives, journal_mode changes and EXCLUSIVE locking from
+  other processes get "database is locked".
+
+**Verified.** test_dbkeeper.py on the Pi, 9/9:
+- From another process, a reader that cannot write the directory or the sidecars opens the
+  DB; the control without the keeper fails.
+- The idle keeper does not hold back a TRUNCATE checkpoint; a reader in a transaction does.
+- A 40 MB WAL burst is trimmed to the limit; a writer without the limit leaves it.
+- The keeper's close as the last connection leaves the sidecars in place.
+- A failed open is retried, and a plain import holds nothing.
+- Seven mutants each fail their test.
+
+playstats 9, social 72, inventory 10, accounts, board and join pass on the Pi and Windows. Three
+independent review rounds:
+1. Worker-recycle gap, permanent disable on one failed open, WAL never shrinking.
+2. Import-time holders in crons outliving a surfd stop.
+3. Nothing serious; a real gunicorn worker held, its master did not.
+
+**Delivered (1 Nov 2026).** Generation 58dbbf40 at
+`/srv/nvme/agent-work/zonepub-dbhold-1175-01a19370`, code only (schema 26, no backup). API down
+14:29:57-14:30:20Z. Fallback is the exact P1171 primary 495537a9 on the same DB. With only the
+surfd worker holding, the sandboxed lookup passed 15/15. A bridge process held the DB from
+13:41Z until the swap.
+
 ## Patch 1174 — KSF site maps get pictures; Momentum zones on nine KSF builds
 
 **Problem.** Of 415 KSF builds the 1 Nov audit counted without a picture, 398 are
