@@ -3,8 +3,13 @@
 ## Patch 1169 — menu map-list refresh waits outside gameplay (mod-side only)
 
 Claimed2026-11-01 after inspecting published1168, both actual installed menus
-and the sole owned source pair. Implemented and actual private running-game
-control/subject qualified; MENU-only guarded installation pending. Native runtime remains exact520ba3ca9/P1162; no C, native header,
+and the sole owned source pair. DELIVERED MENU.dat/LNO to both Windows roots,
+only4 targets. Both actual installed native/menu/plugin fresh colds PASS board,
+correct unchanged lobbyCSQC, screenshot/noQCerror/exit0. Complete CURRENT15818
+protected config/data archive verified; all15818/224cfg+archive and all non-target
+native/server/client/cache/prev bytes held afterboth colds. No lobby restart,
+backend write or owner game stop/hot-reload. Runtime C/images remain exact520;
+this second engine commit is delivery documentation only. Human UX pending. Native runtime remains exact520ba3ca9/P1162; no C, native header,
 plugin API, mover, recorder, server VM, backend or lobby restart change intended.
 
 The directory reply currently saves rows then synchronously rebuilds the entire
