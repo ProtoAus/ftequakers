@@ -82,6 +82,47 @@ install images remain unchanged. An initial compiler-PATH refusal and reader
 infrastructure limits were retained; no product/test weakening. Partial publisher
 coverage remains unqualified: no live bootstrap, activation or canonical permit.
 
+## Patch 1171 — lobby playtime and main/bonus attempts (QC + surfd schema 26)
+
+**Problem.** P1168's profile, map-board and `!time` readers showed tracked playtime
+and course attempts, but no lobby produced them and the backend had nowhere to keep
+them, so every total read "not tracked".
+
+**Change.** Mod and backend only; native pin/tag and qcbuild unchanged.
+`sv_playstats.qc` counts real connected seconds (`gettime`, spectating included,
+host_timescale ignored) and main/bonus starts (leg 0; stages excluded) for a linked
+player whose lobby holds a social capability and activity binding and whose client
+gave the online answer `FS_TERMS_ONLINE` (8). Lex chose (1 Nov) to count that existing
+answer: the first cut's bump to 9 would have reached every released client through
+the lobbies' csprogs and stopped ranked uploads until menus re-asked. The terms page
+discloses the collection. One stream per connection and map; losing permission
+pauses it and the same identity resumes it. Sealed per-owner snapshots
+(FS_FILE_WRITESTREAM), first save 10-29 s after a stream begins, then every 30 s;
+at most 8 POSTs in flight, a 30 s hold after a timeout or backend failure, and 400
+removes the refused snapshot. surfd schema 26 adds P1162's `playstats.py`
+(byte-identical to c83774a7): per-(node, stream) max-merged watermarks, per-map and
+per-attempt sums, and a link generation rotated by keylinks triggers; the route
+needs consent >= 8, the capability and the current binding.
+
+**Verified.** QC 0 warnings with c24ede65; backend suites (playstats 9, social 72,
+inventory 10, accounts, join, board). Native arm on the shipped bytes (native520
+fixture, real dedicated socket, isolated backend), 10/10: the client's answer reaches
+the server as 8/0/8, nothing accrues at 0, three toggles keep one stream and one
+backend row, real seconds under timescale 4, one main plus one bonus, an outage
+leaves a sealed outbox that replays after a native restart, leaving stops time. On
+the Pi, CLOSED candidates on fresh fixtures, then the real primary migrated a private
+snapshot of the live DB: 37 existing tables' schema, counts and account/link/
+inventory digests unchanged, 22/22 link generations; the fallback (cba82980, schema
+26 tables only) starts on it and a down step restores schema 25 exactly. Two
+independent reviews; their defects were fixed and re-measured, quirks are in BACKLOG.
+
+**Delivered (1 Nov 2026).** surfd generation 495537a9 at
+`/srv/nvme/agent-work/profile-activity-1171-01a19370`, primary OPEN 11:37:06Z,
+"schema migrated 25 -> 26", drained pre-26 backup kept privately. Both Windows installs
+and all 12 lobbies 11:46:07Z from QC 3cc4fec7: qwprogs e487377c, csprogs 974f0ce9
+(added to tasrevd's codes.txt), menu 14ecde0a; `.prev` = P1170's pair. Owner check in
+lextest.md; tools/profile-activity-p1171.md.
+
 ## Patch 1170 — clean lobby disconnect, distinct weapon Drop (mod-side only)
 
 Reserve QW transport drop/disconnect for existing native teardown; weapon
