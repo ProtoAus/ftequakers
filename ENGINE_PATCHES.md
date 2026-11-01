@@ -1,5 +1,25 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1170 — clean lobby switch/quit; keep weapon drop distinct (mod-side only)
+
+Native runtime520/P1162 unchanged; no native/header/API/mover/recording/timeout
+change. QW CL_Disconnect sends the protocol string command drop, but SSQC's
+weapon-presentation drop handler consumed it. Reserve drop/disconnect for the
+engine via clientcommand and use weapon_drop for both CSQC emitters; user-facing
+Drop/key stays. Normal native teardown performs existing saves/avatar/slot cleanup.
+Abrupt process kill, broken network or lost packets still need timeout fallback.
+
+Exact current actual1ae7cd76/a726524a game pair from public14aef133 and current
+MENU6f scheduling preserved: official control matches all3 whole binaries. Only
+three feature source files change. Actual localhost UDP control: old client
+quits normally(exit0) and old server keeps ghost. Candidate weapon drop acts and
+staysconnected; A->B oldA0; B->B exactlyone; normalquitB0. No native/QC errors.
+Caller weapon impulse confusion and idle-machine wait timeout retained; SAME
+subject corrected to normal surf_weapon alias+real wire witness, healthy old
+control reused. Final reporter nonexistent Peer.base failed AFTER all7 product
+checks passed; corrected name and graded retained raw logs, no GUI rerun.
+Validated candidate; paired QC-only Windows/Pi deployment pending, no native build.
+
 ## Patch 1169 — menu map-list refresh waits outside gameplay (mod-side only)
 
 Claimed2026-11-01 after inspecting published1168, both actual installed menus
