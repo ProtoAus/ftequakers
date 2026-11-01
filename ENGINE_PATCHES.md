@@ -1,5 +1,31 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1167 — opt-in content epochs at map and zone publication
+
+**Problem.** A content snapshot lease cannot fence a publisher that does not
+participate, and independently replaced files or rollback can span observations.
+
+**Change.** Backend only: mapwatch rename/link and active-zone retirement, paired
+existing BSP/zone replacement, and zone publisher multi-file put/rollback can use
+SURFD_TAS_CONTENT_LEASE. Absent or explicitly empty retains ordinary unmanaged
+behavior; configured unavailable state aborts rather than publishing unlocked.
+Keep staging/downloads and long warning/reload workflows outside the content lease.
+These two hooks do not establish complete writer coverage or canonical approval.
+No native/runtime QC, recording, eligibility, schema, Build or activation change.
+
+**Verified (isolated source; no deployment).** Windows/Linux focused publisher
+suite6 passes, with4 POSIX cases explicitly skipped on Windows. Actual Linux
+multi-file writes, acted rollback and mapwatch fresh/replacement callbacks remain
+inside one odd epoch; completed publication advances the epoch, dirty state prevents
+writes. Existing mapwatch falsifier reports0 failed on both platforms with Windows
+platform skips. Zone publisher155 passes on Windows; Linux152 passed initially and
+the3 marker-source cases pass after staging their missing committed QC fixture.
+Original sparse-fixture failure retained, no unrelated source repair. Content core7
+passes with platform skips. Official QC NoDeploy builds pass with the same two
+pre-existing client warnings and zero new warning fingerprints; both Windows
+install images remain unchanged. Native pin/tag remain Patch1165. No live epoch bootstrap,
+service activation, full source census, canonical permit or queue promotion claimed.
+
 ## Patch 1165 — bounded native TAS source components and profile preparation
 
 **Problem.** A loose-file inventory cannot establish the engine's actual VFS
