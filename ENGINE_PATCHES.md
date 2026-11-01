@@ -2,7 +2,7 @@
 
 ## Patch 1177 — hud_player colours survive a restart
 
-**Problem.** Lex (2 Nov): the colours picked in hud_player were forgotten every time he joined
+**Problem.** Lex (2 Nov): the colours picked in hud_player were forgotten every time they joined
 a lobby; equipped items came back. The look keys (lobbycolor, lobbyrgb, lobbymark, lobbybody,
 lobbyfx, lobbylen, lobbytrail) are userinfo set with `setinfo`, and FTESurf runs
 `cfg_save_infos 0` (cfg/default.cfg: a saved `serverinfo` line once froze sv_airaccelerate),
