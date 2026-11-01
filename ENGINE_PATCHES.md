@@ -26,6 +26,13 @@ hit-test passes; the simpler existing bootstrap route supplies the stated
 captures. Source/ID inspection preserves library/sort actions; owner visual and
 click acceptance remains pending in lextest.md. Client-local MENU-only dual
 adoption is separate from these isolated checks; no menu.dat belongs on a lobby.
+At the actual mutation boundary BOTH current menus had changed from the known
+P1168 preimage to unbound6f8760a5/LNOa70ad3cb. Guard refused BEFORE any install
+copy; this feature is NOT installed. A bounded clean public-canonical1d0 control
+did not match; no provenance was invented. All8 actual current/.prev MENU files
+are archived/readback-hashed. Await actual writer source/build handoff or an
+explicit owner supersession decision for just those4 MENU/LNO files. No other
+owner's source, gameplay/native/config/data was reverted to make a test pass.
 
 A separate dated read-only census supplies all578 unzoned held maps with current
 and independent library tiers;117 remain explicitly UNKNOWN. All2179 catalog
