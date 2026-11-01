@@ -569,6 +569,7 @@ extern char	com_homepath[MAX_OSPATH];
 #define qofs_ErrorValue() (~(qofs_t)0u)
 
 typedef struct searchpathfuncs_s searchpathfuncs_t;
+enum fs_origin_e {FSORIGIN_OPAQUE, FSORIGIN_DIRECTORY, FSORIGIN_OSFILE, FSORIGIN_MEMBER, FSORIGIN_MAP};
 typedef struct searchpath_s
 {
 	searchpathfuncs_t *handle;
@@ -585,6 +586,13 @@ typedef struct searchpath_s
 
 	struct searchpath_s *next;
 	struct searchpath_s *nextpure;
+
+	// Native constructor declarations; opaque unless explicitly populated.
+	quint64_t origin_id, origin_parent_id;
+	enum fs_origin_e origin_kind;
+	char origin_name[MAX_OSPATH];
+	char origin_root[MAX_OSPATH];
+	qboolean origin_policy_bound, origin_policy_private;
 } searchpath_t;
 typedef struct flocation_s{
 	struct searchpath_s	*search;			//used to say which filesystem driver to open the file from
@@ -605,9 +613,17 @@ struct vfsfile_s;
 #define FSLF_IGNORELINKS		(1u<<7) //ignore any pak/pk3 symlinks. system ones may still be followed.
 #define FSLF_QUIET				(1u<<8)	//don't spam warnings about any dodgy paths.
 
+#define FSLF_UNCACHED			(1u<<9)	//read-only introspection: bypass the name hash and asset harvest
+
 //if loc is valid, loc->search is always filled in, the others are filled on success.
 //standard return value is 0 on failure, or depth on success.
 int FS_FLocateFile(const char *filename, unsigned int flags, flocation_t *loc);
+qboolean FS_TASCheckOSOpen(const char *name, const char *mode);
+qboolean FS_TASCheckOSDataOpen(const char *name, const char *directory, const char *logical);
+struct vfsfile_s *FSSTDIO_OpenReadOnlyData(searchpathfuncs_t *handle, flocation_t *loc, const char *logical);
+void FS_TASNoteDirectory(searchpathfuncs_t *handle, const char *name);
+void FS_TASForgetDirectory(searchpathfuncs_t *handle);
+qboolean FS_TASNoteFileOpen(const char *name, int fd);
 qboolean FS_FileIsAddonOnly(const char *name);	//nettest: file's top hit is in a low-priority fs_load addon dir
 void FS_SetPreferHint(const char *spec);		//nettest (P26 Part 2): bias the NEXT locate to a game spec's resolved dir
 void FS_ClearPreferHint(void);					//nettest (P26 Part 2): stop biasing (call right after the BSP load)
@@ -619,6 +635,7 @@ void FS_LoadStats_End(const char *what);		//cvar_t is not declared this early, s
 void FS_RehashIfStale(void);					//ftesurf (P180): rebuild the name hash if it was invalidated, without polling for external changes
 void FS_Cache_Tick(void);						//ftesurf (P186): drain a little of the asset-cache harvest. Called once per client frame; does nothing unless a harvest is armed and has settled.
 struct vfsfile_s *FS_OpenReadLocation(const char *fname, flocation_t *location);	//fname used for extension-based filters
+struct vfsfile_s *FS_OpenReadLocationRaw(const char *fname, flocation_t *location);	//logical name retained, no decompression filter
 #define WP_REFERENCE	1
 #define WP_FULLPATH		2
 #define WP_FORCE		4

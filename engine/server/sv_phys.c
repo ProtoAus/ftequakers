@@ -3494,7 +3494,7 @@ static char *SV_RulesetLoadLoose(const char *path, size_t *sz, qboolean addon, q
 			Con_Printf(CON_WARNING"ruleset: %s is not in a trusted directory - not read\n", path);
 		return NULL;
 	}
-	f = FS_OpenReadLocation(NULL, &loc);	//NULL: no VFS_Filter, which would decompress xz/gzip first
+	f = FS_OpenReadLocationRaw(path, &loc);	//Keep P841's raw bytes and the guarded logical name.
 	if (!f)
 		return NULL;
 	len = VFS_GETLEN(f);

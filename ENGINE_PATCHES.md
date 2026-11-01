@@ -1,5 +1,32 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1165 — bounded native TAS source components and profile preparation
+
+**Problem.** A loose-file inventory cannot establish the engine's actual VFS
+ordering, provider ancestry, lookup winners or bytes. Complete supported static
+profiles can also exceed an ordinary replay job's deliberately smaller budget.
+Reading such assets must not grant configuration/script execution permission.
+
+**Change.** Record native provider construction; add bounded native lookup and
+component exports with strict framing, winners, hashes and flat bytes. Unsupported
+or opaque cases fail closed. Separate internal readonly-data purpose from code
+opens and bind directory declarations to actual opened files. Add a distinct
+fixed-budget preparation frame/reader and operator-only Linux preparation Peer;
+ordinary component/replay limits stay unchanged. The preparation child inherits
+both custody and the actual managed-content shared-reader description through
+cleanup, with explicit source/private namespaces and isolated HOME/XDG discovery.
+No physical mover, human recording grammar, eligibility or queue enablement change.
+
+**Verified (local integration; not deployment).** Official Windows Full NoDeploy
+build passes; full/full warning comparison adds no warning fingerprints. Exact
+native/progs images in both Windows installs remain unchanged. Current Python
+suites pass:27 VFS,7 managed-content and42 Peer tests, with3/6/9 POSIX skips
+respectively. Linux/current-image acting controls and independent reviews are
+separate gates; synthetic byte/grammar checks are not canonical qualification.
+Complete source census, actual publisher participation, source/private equality,
+legal finish and promotion remain required. QC tools/tas-native-source.md records
+component scope and limits. No canonical permit, service activation or release.
+
 ## Patch 1164 — cylindrical paper party crown with upward points
 
 **Problem.** The owner envisioned a cylindrical party hat with upward-pointing

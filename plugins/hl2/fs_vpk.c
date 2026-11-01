@@ -188,7 +188,8 @@ static int QDECL FSVPK_EnumerateFiles (searchpathfuncs_t *handle, const char *ma
 
 	for (num = 0; num<(int)pak->numfiles; num++)
 	{
-		if (filefuncs->WildCmp(match, pak->files[num].name))
+		// NULL is the operator's complete raw inventory request.
+		if (!match || filefuncs->WildCmp(match, pak->files[num].name))
 		{
 			file = &pak->files[num];
 			//FIXME: time 0? maybe use the pak's mtime?
@@ -249,7 +250,7 @@ static int QDECL VFSVPK_ReadBytes (struct vfsfile_s *vfs, void *buffer, int byte
 	{
 		if (preread)
 			return preread;
-		return -1;
+		return 0; // normal bounded EOF, not a failed stream read
 	}
 
 	if (Sys_LockMutex(vfsp->parentpak->mutex))

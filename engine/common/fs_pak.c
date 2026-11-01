@@ -144,7 +144,8 @@ static int QDECL FSPAK_EnumerateFiles (searchpathfuncs_t *handle, const char *ma
 
 	for (num = 0; num<(int)pak->numfiles; num++)
 	{
-		if (wildcmp(match, pak->files[num].name))
+		// NULL requests complete raw inventory; ordinary wildcards remain per-directory.
+		if (!match || wildcmp(match, pak->files[num].name))
 		{
 			//FIXME: time 0? maybe use the pak's mtime?
 			if (!func(pak->files[num].name, pak->files[num].filelen, 0, parm, handle))
@@ -201,7 +202,7 @@ static int QDECL VFSPAK_ReadBytes (struct vfsfile_s *vfs, void *buffer, int byte
 		bytestoread = vfsp->length - (vfsp->currentpos - vfsp->startpos);
 	if (bytestoread <= 0)
 	{
-		return -1;
+		return 0; // normal bounded EOF; preserve negative parent read failures
 	}
 
 	if (Sys_LockMutex(vfsp->parentpak->mutex))

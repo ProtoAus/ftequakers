@@ -664,6 +664,7 @@ typedef struct
 #define ZFL_WEAKENCRYPT	(1u<<5)	//traditional zip encryption
 #define ZFL_DEFLATE64D	(1u<<6)	//need to use zlib's 'inflateBack9' stuff.
 #define ZFL_LZMA		(1u<<7)	//lzma1 (zip method 14 - Source/Strata packed bsps, and 7-zip). one-shot decode via fs_lzma.c
+#define ZFL_TAS_CASEFOLD (1u<<8)	//probe-only: original spelling is not represented by the normal namespace
 
 #define ZFL_COMPRESSIONTYPE (ZFL_STORED|ZFL_CORRUPT|ZFL_DEFLATED|ZFL_DEFLATE64D|ZFL_BZIP2|ZFL_LZMA)
 
@@ -818,9 +819,10 @@ static int QDECL FSZIP_EnumerateFiles (searchpathfuncs_t *handle, const char *ma
 
 	for (num = 0; num<(int)zip->numfiles; num++)
 	{
-		if (wildcmp(match, zip->files[num].name))
+		// NULL requests complete raw inventory; ordinary wildcards remain per-directory.
+		if (!match || wildcmp(match, zip->files[num].name))
 		{
-			if (!func(zip->files[num].name, zip->files[num].filelen, zip->files[num].mtime, parm, &zip->pub))
+			if (!func(zip->files[num].name, !match && (zip->files[num].flags & ZFL_TAS_CASEFOLD) ? qofs_ErrorValue() : zip->files[num].filelen, zip->files[num].mtime, parm, &zip->pub))
 				return false;
 		}
 	}
@@ -2105,7 +2107,9 @@ static qboolean FSZIP_EnumerateCentralDirectory(zipfile_t *zip, struct zipinfo *
 	zpackfile_t		*f;
 	struct zipcentralentry entry;
 	qofs_t ofs = 0;
-	unsigned int i;
+	unsigned int i, caseflag;
+	char *casechar;
+	qboolean tasprobe = COM_CheckParm("-tas-vfs-probe") != 0;
 	//lazily read the entire thing.
 	qbyte *centraldir = BZ_Malloc(info->centraldir_size);
 	if (centraldir)
@@ -2188,11 +2192,15 @@ static qboolean FSZIP_EnumerateCentralDirectory(zipfile_t *zip, struct zipinfo *
 						}
 					}
 				}
+				caseflag = 0;
+				if (tasprobe)
+					for (casechar = f->name; *casechar; casechar++)
+						if (*casechar >= 'A' && *casechar <= 'Z') caseflag = ZFL_TAS_CASEFOLD;
 				Q_strlwr(f->name);
 
 				f->filelen = *f->name?entry.usize:0;
 				f->localpos = entry.localheaderoffset+info->zipoffset;
-				f->flags = entry.flags;
+				f->flags = entry.flags|caseflag;
 				f->mtime = entry.mtime;
 
 				f++;

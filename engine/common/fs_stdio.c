@@ -188,7 +188,7 @@ vfsfile_t *FSSTDIO_OpenTemp(void)
 vfsfile_t *Sys_OpenAsset(const char *fname);
 #endif
 
-vfsfile_t *VFSSTDIO_Open(const char *osname, const char *mode, qboolean *needsflush)
+static vfsfile_t *VFSSTDIO_OpenInternal(const char *osname, const char *mode, qboolean *needsflush, const char *assetroot, const char *assetname)
 {
 	FILE *f;
 	vfsstdiofile_t *file;
@@ -202,6 +202,16 @@ vfsfile_t *VFSSTDIO_Open(const char *osname, const char *mode, qboolean *needsfl
 
 	if (needsflush)
 		*needsflush = false;
+#ifndef WEBSVONLY
+	if (assetname)
+	{
+		if (strcmp(mode,"rb") || !FS_TASCheckOSDataOpen(osname,assetroot,assetname)) return NULL;
+	}
+	else if (!FS_TASCheckOSOpen(osname, mode)) return NULL;
+#else
+	(void)assetroot;
+	(void)assetname;
+#endif
 
 #if 0//def ANDROID
 //	if (!strncmp("asset/", osname, 6))
@@ -236,6 +246,13 @@ vfsfile_t *VFSSTDIO_Open(const char *osname, const char *mode, qboolean *needsfl
 #endif
 	if (!f)
 		return NULL;
+#if defined(__linux__) && !defined(WEBSVONLY)
+	if (read && !write && !append && !strchr(mode,'+') && !FS_TASNoteFileOpen(osname,fileno(f)))
+	{
+		fclose(f);
+		return NULL;
+	}
+#endif
 
 	if (write || append)
 	{
@@ -260,6 +277,10 @@ vfsfile_t *VFSSTDIO_Open(const char *osname, const char *mode, qboolean *needsfl
 }
 
 #if !defined(_WIN32) || defined(WINRT) || defined(_XBOX)
+vfsfile_t *VFSSTDIO_Open(const char *osname, const char *mode, qboolean *needsflush)
+{
+	return VFSSTDIO_OpenInternal(osname,mode,needsflush,NULL,NULL);
+}
 vfsfile_t *VFSOS_Open(const char *osname, const char *mode)
 {
 	vfsfile_t *f;
@@ -288,8 +309,20 @@ static vfsfile_t *QDECL FSSTDIO_OpenVFS(searchpathfuncs_t *handle, flocation_t *
 	return f;
 }
 
+// Native exporter only: same stdio stream implementation, explicit data purpose.
+vfsfile_t *FSSTDIO_OpenReadOnlyData(searchpathfuncs_t *handle, flocation_t *loc, const char *logical)
+{
+	stdiopath_t *sp = (void*)handle;
+	size_t rootlen;
+	if (handle->OpenVFS != FSSTDIO_OpenVFS) return NULL;
+	rootlen = strlen(sp->rootpath);
+	if (strncmp(loc->rawname,sp->rootpath,rootlen) || loc->rawname[rootlen] != '/' ||
+		strcmp(loc->rawname+rootlen+1,logical)) return NULL;
+	return VFSSTDIO_OpenInternal(loc->rawname,"rb",NULL,sp->rootpath,logical);
+}
 static void QDECL FSSTDIO_ClosePath(searchpathfuncs_t *handle)
 {
+	FS_TASForgetDirectory(handle);
 	Z_Free(handle);
 }
 static qboolean QDECL FSSTDIO_PollChanges(searchpathfuncs_t *handle)
@@ -333,6 +366,9 @@ static unsigned int QDECL FSSTDIO_CreateLoc(searchpathfuncs_t *handle, flocation
 	loc->fhandle = handle;
 	if (Q_snprintfz(loc->rawname, sizeof(loc->rawname), "%s/%s", sp->rootpath, filename))
 		return FF_NOTFOUND;	//too long...
+#ifndef WEBSVONLY
+	if (!FS_TASCheckOSOpen(loc->rawname,"wb")) return FF_NOTFOUND;
+#endif
 
 	for (ofs = loc->rawname+1 ; *ofs ; ofs++)
 	{
@@ -396,6 +432,9 @@ static unsigned int QDECL FSSTDIO_FLocate(searchpathfuncs_t *handle, flocation_t
 #endif
 		if (!f)
 			return FF_NOTFOUND;
+#ifdef __linux__
+		if (!FS_TASNoteFileOpen(netpath,fileno(f))) { fclose(f); return FF_NOTFOUND; }
+#endif
 
 #ifdef __USE_LARGEFILE64
 		fseeko64(f, 0, SEEK_END);
@@ -424,6 +463,7 @@ static void QDECL FSSTDIO_ReadFile(searchpathfuncs_t *handle, flocation_t *loc, 
 	FILE *f;
 	size_t result;
 
+	if (!FS_TASCheckOSOpen(loc->rawname,"rb")) return;
 #ifdef __USE_LARGEFILE64
 	f = fopen64(loc->rawname, "rb");
 #else
@@ -431,6 +471,9 @@ static void QDECL FSSTDIO_ReadFile(searchpathfuncs_t *handle, flocation_t *loc, 
 #endif
 	if (!f)	//err...
 		return;
+#ifdef __linux__
+	if (!FS_TASNoteFileOpen(loc->rawname,fileno(f))) { fclose(f); return; }
+#endif
 #ifdef __USE_LARGEFILE64
 	fseeko64(f, loc->offset, SEEK_SET);
 #elif _POSIX_C_SOURCE >= 200112L
@@ -474,6 +517,9 @@ static qboolean	 QDECL FSSTDIO_RenameFile(searchpathfuncs_t *handle, const char 
 		return false;	//too long
 	if (Q_snprintfz (newsyspath, sizeof(newsyspath), "%s/%s", sp->rootpath, newname))
 		return false;	//too long
+#ifndef WEBSVONLY
+	if (!FS_TASCheckOSOpen(oldsyspath,"wb") || !FS_TASCheckOSOpen(newsyspath,"wb")) return false;
+#endif
 	return Sys_Rename(oldsyspath, newsyspath);
 }
 static qboolean QDECL FSSTDIO_RemoveFile(searchpathfuncs_t *handle, const char *filename)
@@ -484,6 +530,9 @@ static qboolean QDECL FSSTDIO_RemoveFile(searchpathfuncs_t *handle, const char *
 		return false;
 	if (Q_snprintfz (syspath, sizeof(syspath), "%s/%s", sp->rootpath, filename))
 		return false;	//too long
+#ifndef WEBSVONLY
+	if (!FS_TASCheckOSOpen(syspath,"wb")) return false;
+#endif
 	if (*filename && filename[strlen(filename)-1] == '/')
 		return Sys_rmdir(syspath);
 	return Sys_remove(syspath);
@@ -516,6 +565,7 @@ searchpathfuncs_t *QDECL FSSTDIO_OpenPath(vfsfile_t *mustbenull, searchpathfuncs
 	np->pub.CreateFile		= FSSTDIO_CreateLoc;
 	np->pub.RenameFile		= FSSTDIO_RenameFile;
 	np->pub.RemoveFile		= FSSTDIO_RemoveFile;
+	FS_TASNoteDirectory(&np->pub,np->rootpath);
 	return &np->pub;
 }
 

@@ -6,6 +6,10 @@
 
 #include <ctype.h>
 #include <limits.h>
+#ifdef __linux__
+#include <sys/stat.h>
+#include <errno.h>
+#endif
 
 #include "fs.h"
 #include "shader.h"
@@ -231,6 +235,32 @@ qboolean fs_readonly;
 static searchpath_t *fs_allowfileuri;
 int waitingformanifest;
 static unsigned int fs_restarts;
+static quint64_t fs_origin_counter;
+#define FS_TAS_POLICY_ROOTS 64
+static struct { char name[MAX_OSPATH]; unsigned int kind; } fs_tas_roots[FS_TAS_POLICY_ROOTS];
+static unsigned int fs_tas_rootcount;
+static qboolean fs_tas_policy_init, fs_tas_policy_enabled, fs_tas_policy_began;
+static char fs_tas_worldfile[MAX_OSPATH];
+static const char *fs_tas_policy_error;
+static char fs_tas_policy_detail[MAX_OSPATH];
+static void *fs_tas_policy_mutex;
+#ifdef __linux__
+#define FS_TAS_DIRECTORY_HANDLES 256
+#define FS_TAS_INPUT_FILES 4096
+static struct {
+	searchpathfuncs_t *handle;
+	char physical[MAX_OSPATH];
+	unsigned int kind;
+} fs_tas_directories[FS_TAS_DIRECTORY_HANDLES];
+typedef struct {
+	char physical[MAX_OSPATH];
+	quint64_t device, inode, links, size;
+	qint64_t mtime, ctime;
+	unsigned int mtime_ns, ctime_ns, kind;
+} fs_tas_input_t;
+static fs_tas_input_t fs_tas_inputs[FS_TAS_INPUT_FILES];
+static unsigned int fs_tas_inputcount;
+#endif
 static unsigned int fs_listgen = 1;	//FTESurf Patch 846: see FS_ListGeneration
 void *fs_thread_mutex;
 float fs_accessed_time;	//timestamp of read (does not include flocates, which should normally happen via a cache).
@@ -1920,6 +1950,791 @@ vfsfile_t *FS_Hash_ValidateWrites(vfsfile_t *f, const char *fname, qofs_t needsi
 	return f;
 }
 
+// Operator-only native lookup component, not a complete canonical-world witness.
+#define FS_TAS_LOOKUP_PATHS 128
+static qboolean FS_TASLookupHex(const char *in, char *out, size_t size)
+{
+	static const char digits[] = "0123456789abcdef";
+	size_t i, len = strlen(in);
+	if (len > (size-1)/2)
+		return false;
+	if (!len)
+	{
+		Q_strncpyz(out, "-", size);
+		return true;
+	}
+	for (i = 0; i < len; i++)
+	{
+		out[i*2] = digits[(unsigned char)in[i] >> 4];
+		out[i*2+1] = digits[(unsigned char)in[i] & 15];
+	}
+	out[len*2] = 0;
+	return true;
+}
+static unsigned int FS_TASLookupPathId(searchpath_t *path, searchpath_t **paths, unsigned int count)
+{
+	unsigned int i;
+	for (i = 0; i < count; i++)
+		if (paths[i] == path)
+			return i+1;
+	return 0;
+}
+static qboolean FS_TASLookupName(const char *name)
+{
+	const char *part = name, *p;
+	size_t len = name?strlen(name):0;
+	if (!len || len >= MAX_OSPATH || *name == '/')
+		return false;
+	for (p = name; ; p++)
+	{
+		if (*p && ((unsigned char)*p < 32 || *p == '\\' || *p == ':' || *p == 127))
+			return false;
+		if (*p == '/' || !*p)
+		{
+			if (p == part || (p-part == 1 && *part == '.') || (p-part == 2 && part[0] == '.' && part[1] == '.'))
+				return false;
+			if (!*p)
+				return true;
+			part = p+1;
+		}
+	}
+}
+static qboolean try_snprintf(char *buffer, size_t size, const char *format, ...);
+// A policy component only; full native discovery/backing witness is separately required.
+static qboolean FS_TASCanonical(const char *name, char *out, size_t size)
+{
+#ifdef __linux__
+	char path[MAX_OSPATH], suffix[MAX_OSPATH] = "", joined[MAX_OSPATH];
+	char *resolved, *slash;
+	size_t i, len = strlen(name), used = 0;
+	if (!len || len >= sizeof(path) || *name != '/') return false;
+	for (i = 0; i < len; i++)
+	{
+		if (name[i] == '/' && used && path[used-1] == '/') continue;
+		path[used++] = name[i];
+	}
+	path[len = used] = 0;
+	while (len > 1 && path[len-1] == '/') path[--len] = 0;
+	if (len == 1 || !FS_TASLookupName(path+1)) return false;
+	for (;;)
+	{
+		resolved = realpath(path, NULL);
+		if (resolved) break;
+		if (errno != ENOENT) return false;
+		slash = strrchr(path, '/');
+		if (!slash || !slash[1] || !try_snprintf(joined, sizeof(joined), "%s%s", slash, suffix)) return false;
+		Q_strncpyz(suffix, joined, sizeof(suffix));
+		if (slash == path) path[1] = 0;
+		else *slash = 0;
+	}
+	if (!try_snprintf(out, size, "%s%s", resolved, (!strcmp(resolved,"/") && *suffix)?suffix+1:suffix))
+	{
+		free(resolved);
+		return false;
+	}
+	free(resolved);
+	return true;
+#else
+	return false;
+#endif
+}
+static void FS_TASPolicyInit(void)
+{
+	int i, world = COM_CheckParm("-tas-vfs-world");
+	unsigned int kind, worlds = 0;
+	const char *p;
+	if (fs_tas_policy_init) return;
+	fs_tas_policy_init = true;
+	if (!world) return;
+	fs_tas_policy_enabled = true;
+#ifndef __linux__
+	fs_tas_policy_error = "policy_platform";
+	return;
+#endif
+	if (world+1 >= com_argc || strlen(com_argv[world+1]) >= MAX_QPATH || !FS_TASLookupName(com_argv[world+1]))
+	{
+		fs_tas_policy_error = "policy_map";
+		return;
+	}
+	for (p = com_argv[world+1]; *p; p++)
+		if (!((*p >= 'a' && *p <= 'z') || (*p >= '0' && *p <= '9') || *p == '_' || *p == '-' || *p == '.'))
+		{
+			fs_tas_policy_error = "policy_map";
+			return;
+		}
+	Q_snprintfz(fs_tas_worldfile, sizeof(fs_tas_worldfile), "maps/%s.bsp", com_argv[world+1]);
+	for (i = 1; i < com_argc; i++)
+	{
+		if (!strcmp(com_argv[i], "-tas-vfs-world"))
+		{
+			if (++worlds > 1) { fs_tas_policy_error = "policy_flags"; return; }
+			i++;
+			continue;
+		}
+		kind = !strcmp(com_argv[i], "-tas-vfs-root")?1:!strcmp(com_argv[i], "-tas-vfs-private")?2:!strcmp(com_argv[i], "-tas-vfs-file")?3:0;
+		if (!kind) continue;
+		if (++i >= com_argc || fs_tas_rootcount == countof(fs_tas_roots) ||
+			!FS_TASCanonical(com_argv[i], fs_tas_roots[fs_tas_rootcount].name, sizeof(fs_tas_roots[0].name)))
+		{
+			fs_tas_policy_error = "policy_roots";
+			return;
+		}
+		fs_tas_roots[fs_tas_rootcount++].kind = kind;
+	}
+	if (!fs_tas_rootcount) { fs_tas_policy_error = "policy_roots"; return; }
+	fs_tas_policy_mutex = Sys_CreateMutex();
+	if (!fs_tas_policy_mutex) fs_tas_policy_error = "policy_mutex";
+}
+static void FS_TASPolicyLatchPath(const char *reason, const char *path)
+{
+	if (!fs_tas_policy_mutex) return; // immutable bootstrap/platform error already holds
+	Sys_LockMutex(fs_tas_policy_mutex);
+	if (!fs_tas_policy_error)
+	{
+		fs_tas_policy_error = reason;
+		Q_strncpyz(fs_tas_policy_detail, path?path:"", sizeof(fs_tas_policy_detail));
+	}
+	Sys_UnlockMutex(fs_tas_policy_mutex);
+}
+static void FS_TASPolicyLatch(const char *reason)
+{
+	FS_TASPolicyLatchPath(reason,NULL);
+}
+static void FS_TASPolicyDetail(void)
+{
+	char path[MAX_OSPATH], hex[MAX_OSPATH*2+1];
+	if (!fs_tas_policy_mutex) return;
+	Sys_LockMutex(fs_tas_policy_mutex);
+	Q_strncpyz(path,fs_tas_policy_detail,sizeof(path));
+	Sys_UnlockMutex(fs_tas_policy_mutex);
+	// Only operator component commands export this; never print recursively in IO.
+	if (*path && FS_TASLookupHex(path,hex,sizeof(hex)))
+		Con_Printf("TASVFSPOLICY 1 detail %s\n",hex);
+}
+static const char *FS_TASPolicyError(void)
+{
+	const char *reason;
+	FS_TASPolicyInit();
+	if (!fs_tas_policy_mutex) return fs_tas_policy_error;
+	Sys_LockMutex(fs_tas_policy_mutex);
+	reason = fs_tas_policy_error;
+	Sys_UnlockMutex(fs_tas_policy_mutex);
+	return reason;
+}
+static int FS_TASPhysicalRoot(const char *name, char *path, size_t size)
+{
+	unsigned int i;
+	int best = -1;
+	size_t len, longest = 0;
+	if (!FS_TASCanonical(name, path, size)) return -1;
+	for (i = 0; i < fs_tas_rootcount; i++)
+	{
+		len = strlen(fs_tas_roots[i].name);
+		if (len < longest || strncmp(path, fs_tas_roots[i].name, len)) continue;
+		if (path[len] && (fs_tas_roots[i].kind == 3 || path[len] != '/')) continue;
+		if (len == longest && best >= 0 && fs_tas_roots[best].kind != fs_tas_roots[i].kind) return -1;
+		best = i;
+		longest = len;
+	}
+	return best;
+}
+static unsigned int FS_TASPhysicalClass(const char *name)
+{
+	char path[MAX_OSPATH];
+	int root = FS_TASPhysicalRoot(name, path, sizeof(path));
+	return root < 0 ? 0 : fs_tas_roots[root].kind;
+}
+static qboolean FS_TASBackingName(const char *name)
+{
+	const char *ext = COM_GetFileExtension(name,NULL);
+	unsigned int i;
+	if (*ext++ != '.') return false;
+	// Use the actual native discovery catalogue, including QuakeEX.kpf probes.
+	for (i = 0; i < countof(searchpathformats); i++)
+		if (searchpathformats[i].extension && searchpathformats[i].OpenNew)
+			if (!Q_strcasecmp(ext,searchpathformats[i].extension)) return true;
+	return false;
+}
+// Native map commands probe these before selecting the target BSP. They must
+// remain absent, not grant permission to read another map representation.
+static const char *fs_tas_map_probes[] = {"%s","maps/%s","maps/%s.d3dbsp","maps/mp/%s.bsp","maps/mp/%s.d3dbsp","maps/%s.cm","maps/%s.hmp","maps/%s.bsp.gz","maps/%s.bsp.xz"};
+static qboolean FS_TASMapProbeName(unsigned int index, char *out, size_t size)
+{
+	char leaf[MAX_OSPATH];
+	size_t len = strlen(fs_tas_worldfile);
+	if (index >= countof(fs_tas_map_probes) || len < 10 || strncmp(fs_tas_worldfile,"maps/",5) || strcmp(fs_tas_worldfile+len-4,".bsp")) return false;
+	memcpy(leaf,fs_tas_worldfile+5,len-9);
+	leaf[len-9] = 0;
+	return try_snprintf(out,size,fs_tas_map_probes[index],leaf);
+}
+static qboolean FS_TASMapProbe(const char *name)
+{
+	char probe[MAX_OSPATH];
+	unsigned int i;
+	for (i = 0; i < countof(fs_tas_map_probes); i++)
+		if (FS_TASMapProbeName(i,probe,sizeof(probe)) && !strcmp(name,probe)) return true;
+	return false;
+}
+// Keep exact control names shared with the exporter: even absent probes must
+// be classified, and adding a query must not create a sticky unknown-name error.
+static const char fs_tas_native_probe[] = "qwprogs.so";
+static const char *fs_tas_data_queries[] = {"maplist.txt","common.default.po","qwprogs.dat.default.po","csprogs.dat.default.po","menu.dat.default.po","progs.dat.default.po","csqcprogs.dat.default.po","fteadd.dat.default.po","q2bsp.dat.default.po","q3bsp.dat.default.po","doombsp.dat.default.po","hlbsp.dat.default.po"};
+static const char *fs_tas_queries[] = {"qwprogs.dat","csprogs.dat","menu.dat","progs.dat","csqcprogs.dat","default.cfg","quake.rc","autoexec.cfg","server.cfg","cfg/default.cfg","cfg/lobby/mode_surf.cfg","cfg/lobby/mode_bhop.cfg","data/mapmeta.txt","mapmeta.txt","data/mapdeps.txt","mapdeps.txt","data/mapdeps.net.txt","mapdeps.net.txt","qwprogs.qvm","vm/qagame.qvm","vm/cgame.qvm","vm/ui.qvm",fs_tas_native_probe,"data/maps/tiers.txt","maps/tiers.txt","qwprogs.lno","csprogs.lno","menu.lno","progs.lno","csqcprogs.lno","fte_bimap.txt","mod.gam","fteadd.dat","q2bsp.dat","q3bsp.dat","doombsp.dat","hlbsp.dat","fteadd.lno","q2bsp.lno","q3bsp.lno","doombsp.lno","hlbsp.lno","gibfiltr.cfg","impfiltr.cfg"};
+static const char *fs_tas_asset_prefixes[] = {"models/", "materials/", "textures/", "sound/", "gfx/", "particles/", "glsl/", "scripts/", "progs/", "sprites/"};
+// 1: private runtime/rules; 2: world/assets; 3: negative-only probe; 0: unsupported.
+static unsigned int FS_TASNameClass(const char *name)
+{
+	static const char *runtime[] = {"verify.cfg", "fs_addons.txt"};
+	static const char *sidecars[] = {".phy", ".phs", ".ent", ".edo", ".entities", ".lit", ".vis", ".rtlights", ".bspx", ".lux", ".loc"};
+	const char *ext;
+	unsigned int i;
+	size_t stem;
+	if (!FS_TASLookupName(name)) return 0;
+	ext = COM_GetFileExtension(name, NULL);
+	if (!Q_strcasecmp(ext, ".bsp")) return !strcmp(name, fs_tas_worldfile)?2:(FS_TASMapProbe(name)?3:0);
+	for (i = 0; i < countof(fs_tas_asset_prefixes); i++)
+		if (!Q_strncasecmp(name, fs_tas_asset_prefixes[i], strlen(fs_tas_asset_prefixes[i])))
+			return (!Q_strcasecmp(ext,".dat") || !Q_strcasecmp(ext,".cfg") || !Q_strcasecmp(ext,".qvm") || !Q_strcasecmp(ext,".wasm"))?1:2;
+	stem = strlen(fs_tas_worldfile)-4;
+	if (!strncmp(name, fs_tas_worldfile, stem))
+		for (i = 0; i < countof(sidecars); i++)
+			if (!strcmp(name+stem, sidecars[i])) return 2;
+	if (!strcmp(name,fs_tas_native_probe)) return 3;
+	for (i = 0; i < countof(fs_tas_data_queries); i++)
+		if (!strcmp(name,fs_tas_data_queries[i])) return 2;
+	for (i = 0; i < countof(fs_tas_queries); i++)
+		if (!strcmp(name, fs_tas_queries[i])) return 1;
+	for (i = 0; i < countof(runtime); i++)
+		if (!strcmp(name, runtime[i])) return 1;
+	if (!strncmp(name,"data/",5) || !strncmp(name,"logs/",5) || !strncmp(name,"downloads/csprogsvers/",sizeof("downloads/csprogsvers/")-1)) return 1;
+	if (!strncmp(name,"cfg/",4)) return 1;
+	if (!strncmp(name,"maps/zones/",11))
+	{
+		const char *map = strrchr(name,'/');
+		if (map && !strncmp(map+1, fs_tas_worldfile+5, stem-5) && !strcmp(map+1+stem-5,".json")) return 1;
+	}
+	if (!strncmp(name,"maps/settings/local/",20))
+	{
+		const char *map = strrchr(name,'/');
+		if (map && !strncmp(map+1, fs_tas_worldfile+5, stem-5) && !strcmp(map+1+stem-5,".cfg")) return 1;
+	}
+	return FS_TASMapProbe(name)?3:0;
+}
+// Only native byte export uses this purpose; ordinary code reads keep class 1.
+static qboolean FS_TASCodeAsset(const char *name)
+{
+	unsigned int i;
+	if (!fs_tas_policy_enabled || !fs_tas_policy_began || FS_TASNameClass(name) != 1) return false;
+	for (i = 0; i < countof(fs_tas_asset_prefixes); i++)
+		if (!Q_strncasecmp(name,fs_tas_asset_prefixes[i],strlen(fs_tas_asset_prefixes[i]))) return true;
+	return false;
+}
+static qboolean FS_TASCheckName(const char *name)
+{
+	if (!fs_tas_policy_enabled || !fs_tas_policy_began) return true;
+	if (FS_TASPolicyError()) return false;
+	if (FS_TASNameClass(name)) return true;
+	FS_TASPolicyLatchPath("policy_logical",name);
+	return false;
+}
+static qboolean FS_TASCheckSelectionPurpose(const char *name, searchpath_t *source, qboolean readonly_asset)
+{
+#ifdef __linux__
+	char full[MAX_OSPATH], physical[MAX_OSPATH];
+#endif
+	if (!fs_tas_policy_enabled) return true;
+	if (FS_TASPolicyError()) return false;
+	if (!FS_TASLookupName(name)) { FS_TASPolicyLatch("policy_logical"); return false; }
+	if (!source || !source->origin_policy_bound)
+	{
+		FS_TASPolicyLatch("policy_provider");
+		return false;
+	}
+	if (fs_tas_policy_began && FS_TASNameClass(name) == 3)
+	{
+		FS_TASPolicyLatchPath("policy_probe_present",name);
+		return false;
+	}
+	if (!source->origin_policy_private && FS_TASNameClass(name) != 2 && !(readonly_asset && FS_TASCodeAsset(name)))
+	{
+		if (!fs_tas_policy_began && FS_TASBackingName(name)) return true;
+#ifdef __linux__
+		// Exact trusted directory files need not be shadowed by a hand-picked copy.
+		if (FS_TASNameClass(name) == 1 && source->origin_kind == FSORIGIN_DIRECTORY && !*source->prefix &&
+			try_snprintf(full,sizeof(full),"%s/%s",source->origin_root,name) &&
+			FS_TASCanonical(full,physical,sizeof(physical)) && FS_TASPhysicalClass(physical) == 3)
+			return FS_TASCheckName(name);
+#endif
+		FS_TASPolicyLatchPath("policy_code_source",name);
+		return false;
+	}
+	return FS_TASCheckName(name);
+}
+static qboolean FS_TASCheckSelection(const char *name, searchpath_t *source)
+{
+	return FS_TASCheckSelectionPurpose(name,source,false);
+}
+#ifdef __linux__
+// Directory-backed packages have their own logical root inside the finite ancestor.
+static qboolean FS_TASDirectoryAsset(const char *path)
+{
+	unsigned int i;
+	size_t len;
+	qboolean allowed = false;
+	Sys_LockMutex(fs_tas_policy_mutex);
+	for (i = 0; i < countof(fs_tas_directories); i++)
+	{
+		if (!fs_tas_directories[i].handle || fs_tas_directories[i].kind != 1) continue;
+		len = strlen(fs_tas_directories[i].physical);
+		if (strncmp(path,fs_tas_directories[i].physical,len) || path[len] != '/') continue;
+		if (FS_TASNameClass(path+len+1) == 2) { allowed = true; break; }
+	}
+	Sys_UnlockMutex(fs_tas_policy_mutex);
+	return allowed;
+}
+#endif
+qboolean FS_TASCheckOSOpen(const char *name, const char *mode)
+{
+#ifdef __linux__
+	char path[MAX_OSPATH], absolute[MAX_OSPATH], cwd[MAX_OSPATH];
+	const char *relative;
+	int root;
+	unsigned int kind;
+	size_t len, worldlen;
+	qboolean writing;
+	FS_TASPolicyInit();
+	if (!fs_tas_policy_enabled) return true;
+	writing = (strchr(mode,'w') || strchr(mode,'a') || strchr(mode,'+')) != 0;
+	if (!fs_tas_policy_began && !writing) return true;
+	if (*name != '/')
+	{
+		if (!getcwd(cwd,sizeof(cwd)) || !try_snprintf(absolute,sizeof(absolute),"%s/%s",cwd,name)) goto refused;
+		name = absolute;
+	}
+	root = FS_TASPhysicalRoot(name, path, sizeof(path));
+	if (root < 0) goto refused;
+	kind = fs_tas_roots[root].kind;
+	if (writing)
+	{
+		if (kind == 2) return true;
+		FS_TASPolicyLatchPath("policy_write",name);
+		return false;
+	}
+	if (FS_TASPolicyError()) return false;
+	if (!Q_strcasecmp(COM_GetFileExtension(path,NULL),".bsp"))
+	{
+		len = strlen(path);
+		worldlen = strlen(fs_tas_worldfile);
+		if (len <= worldlen || path[len-worldlen-1] != '/' || strcmp(path+len-worldlen,fs_tas_worldfile))
+		{
+			FS_TASPolicyLatchPath("policy_world",name);
+			return false;
+		}
+	}
+	if (kind == 2 || kind == 3) return true;
+	relative = path + strlen(fs_tas_roots[root].name);
+	if (*relative == '/') relative++;
+	if (FS_TASNameClass(relative) == 2) return true;
+	// These are backing containers, not permission to read their code members.
+	if (FS_TASNameClass(relative) == 0 && FS_TASBackingName(relative)) return true;
+	if (FS_TASDirectoryAsset(path)) return true;
+refused:
+	FS_TASPolicyLatchPath("policy_physical",name);
+	return false;
+#else
+	return true; // world mode is already typed-unsupported on this platform
+#endif
+}
+// Explicit native data-open purpose, never an ambient scope or script flag.
+qboolean FS_TASCheckOSDataOpen(const char *name, const char *directory, const char *logical)
+{
+#ifdef __linux__
+	char path[MAX_OSPATH], root[MAX_OSPATH], joined[MAX_OSPATH], expected[MAX_OSPATH];
+	unsigned int i;
+	qboolean registered = false;
+	int physical;
+	FS_TASPolicyInit();
+	if (!fs_tas_policy_enabled) return true;
+	if (FS_TASPolicyError()) return false;
+	if (!fs_tas_policy_began || !FS_TASCodeAsset(logical)) goto refused;
+	if (!FS_TASCanonical(directory,root,sizeof(root))) goto refused;
+	Sys_LockMutex(fs_tas_policy_mutex);
+	for (i = 0; i < countof(fs_tas_directories); i++)
+		if (fs_tas_directories[i].handle &&
+			(fs_tas_directories[i].kind == 1 || fs_tas_directories[i].kind == 2) &&
+			!strcmp(fs_tas_directories[i].physical,root)) { registered = true; break; }
+	Sys_UnlockMutex(fs_tas_policy_mutex);
+	if (!registered) goto refused;
+	physical = FS_TASPhysicalRoot(name,path,sizeof(path));
+	if (physical < 0 || !try_snprintf(joined,sizeof(joined),"%s/%s",root,logical) ||
+		!FS_TASCanonical(joined,expected,sizeof(expected)) || strcmp(path,expected) ||
+		strncmp(expected,root,strlen(root)) || expected[strlen(root)] != '/') goto refused;
+	return true;
+refused:
+	FS_TASPolicyLatchPath("policy_data_purpose",name);
+	return false;
+#else
+	return false; // native export is Linux-only
+#endif
+}
+void FS_TASNoteDirectory(searchpathfuncs_t *handle, const char *name)
+{
+#ifdef __linux__
+	char physical[MAX_OSPATH], absolute[MAX_OSPATH], cwd[MAX_OSPATH];
+	unsigned int i, freeentry = FS_TAS_DIRECTORY_HANDLES, kind;
+	FS_TASPolicyInit();
+	if (!fs_tas_policy_enabled || !*name || FS_TASPolicyError()) return;
+	if (*name != '/')
+	{
+		if (!getcwd(cwd,sizeof(cwd)) || !try_snprintf(absolute,sizeof(absolute),"%s/%s",cwd,name)) goto refused;
+		name = absolute;
+	}
+	if (!FS_TASCanonical(name,physical,sizeof(physical))) goto refused;
+	kind = FS_TASPhysicalClass(physical);
+	if (kind != 1 && kind != 2) goto refused;
+	Sys_LockMutex(fs_tas_policy_mutex);
+	for (i = 0; i < countof(fs_tas_directories); i++)
+	{
+		if (fs_tas_directories[i].handle == handle) { freeentry = i; break; }
+		if (!fs_tas_directories[i].handle) freeentry = i;
+	}
+	if (freeentry < countof(fs_tas_directories))
+	{
+		fs_tas_directories[freeentry].handle = handle;
+		fs_tas_directories[freeentry].kind = kind;
+		Q_strncpyz(fs_tas_directories[freeentry].physical,physical,sizeof(fs_tas_directories[freeentry].physical));
+	}
+	Sys_UnlockMutex(fs_tas_policy_mutex);
+	if (freeentry == FS_TAS_DIRECTORY_HANDLES) FS_TASPolicyLatch("directory_bound");
+	return;
+refused:
+	FS_TASPolicyLatchPath("policy_origin",name);
+#endif
+}
+void FS_TASForgetDirectory(searchpathfuncs_t *handle)
+{
+#ifdef __linux__
+	unsigned int i;
+	if (!fs_tas_policy_enabled || !fs_tas_policy_mutex) return;
+	Sys_LockMutex(fs_tas_policy_mutex);
+	for (i = 0; i < countof(fs_tas_directories); i++)
+		if (fs_tas_directories[i].handle == handle)
+		{
+			memset(&fs_tas_directories[i],0,sizeof(fs_tas_directories[i]));
+			break;
+		}
+	Sys_UnlockMutex(fs_tas_policy_mutex);
+#endif
+}
+#ifdef __linux__
+static qboolean FS_TASDirectoryBacking(searchpathfuncs_t *handle, char *physical, size_t size)
+{
+	unsigned int i;
+	qboolean found = false;
+	Sys_LockMutex(fs_tas_policy_mutex);
+	for (i = 0; i < countof(fs_tas_directories); i++)
+		if (fs_tas_directories[i].handle == handle)
+		{
+			Q_strncpyz(physical,fs_tas_directories[i].physical,size);
+			found = true;
+			break;
+		}
+	Sys_UnlockMutex(fs_tas_policy_mutex);
+	return found;
+}
+#endif
+qboolean FS_TASNoteFileOpen(const char *name, int fd)
+{
+#ifdef __linux__
+	char physical[MAX_OSPATH], absolute[MAX_OSPATH], cwd[MAX_OSPATH];
+	struct stat opened, named;
+	fs_tas_input_t input;
+	unsigned int i, kind;
+	size_t len, worldlen;
+	const char *error = NULL;
+	FS_TASPolicyInit();
+	if (!fs_tas_policy_enabled) return true;
+	if (FS_TASPolicyError()) return false;
+	if (*name != '/')
+	{
+		if (!getcwd(cwd,sizeof(cwd)) || !try_snprintf(absolute,sizeof(absolute),"%s/%s",cwd,name)) goto refused;
+		name = absolute;
+	}
+	if (!FS_TASCanonical(name,physical,sizeof(physical))) goto refused;
+	kind = FS_TASPhysicalClass(physical);
+	if (!kind) goto refused;
+	if (!Q_strcasecmp(COM_GetFileExtension(physical,NULL),".bsp"))
+	{
+		len = strlen(physical);
+		worldlen = strlen(fs_tas_worldfile);
+		if (len <= worldlen || physical[len-worldlen-1] != '/' || strcmp(physical+len-worldlen,fs_tas_worldfile))
+		{
+			FS_TASPolicyLatchPath("policy_world",name);
+			return false;
+		}
+	}
+	// Private loose inputs are independently frozen by the controller, not outputs.
+	if (kind == 2 && !FS_TASBackingName(physical) && Q_strcasecmp(COM_GetFileExtension(physical,NULL),".bsp")) return true;
+	if (fstat(fd,&opened) || stat(physical,&named) || !S_ISREG(opened.st_mode) || opened.st_nlink != 1 ||
+		opened.st_dev != named.st_dev || opened.st_ino != named.st_ino || opened.st_size < 0)
+	{
+		FS_TASPolicyLatchPath("input_identity",name);
+		return false;
+	}
+	memset(&input,0,sizeof(input));
+	Q_strncpyz(input.physical,physical,sizeof(input.physical));
+	input.kind = kind;
+	input.device = opened.st_dev;
+	input.inode = opened.st_ino;
+	input.links = opened.st_nlink;
+	input.size = opened.st_size;
+	input.mtime = opened.st_mtim.tv_sec;
+	input.mtime_ns = opened.st_mtim.tv_nsec;
+	input.ctime = opened.st_ctim.tv_sec;
+	input.ctime_ns = opened.st_ctim.tv_nsec;
+	Sys_LockMutex(fs_tas_policy_mutex);
+	for (i = 0; i < fs_tas_inputcount; i++)
+		if (!strcmp(fs_tas_inputs[i].physical,physical)) break;
+	if (i == FS_TAS_INPUT_FILES) error = "input_bound";
+	else if (i < fs_tas_inputcount)
+	{
+		if (memcmp(&input,&fs_tas_inputs[i],sizeof(input))) error = "input_changed";
+	}
+	else fs_tas_inputs[fs_tas_inputcount++] = input;
+	Sys_UnlockMutex(fs_tas_policy_mutex);
+	if (error) { FS_TASPolicyLatchPath(error,name); return false; }
+	return true;
+refused:
+	FS_TASPolicyLatchPath("policy_physical",name);
+	return false;
+#else
+	return true;
+#endif
+}
+static const char *FS_TASDumpInputs(void)
+{
+#ifdef __linux__
+	fs_tas_input_t *copy;
+	unsigned int i, count;
+	char hex[MAX_OSPATH*2+1];
+	qboolean changed;
+	if (!fs_tas_policy_enabled) return NULL;
+	copy = BZ_Malloc(sizeof(fs_tas_inputs));
+	Sys_LockMutex(fs_tas_policy_mutex);
+	count = fs_tas_inputcount;
+	memcpy(copy,fs_tas_inputs,count*sizeof(*copy));
+	Sys_UnlockMutex(fs_tas_policy_mutex);
+	// Logging can itself open files. Never print while holding the input mutex.
+	for (i = 0; i < count; i++)
+	{
+		if (!FS_TASLookupHex(copy[i].physical,hex,sizeof(hex))) { BZ_Free(copy); return "input_encoding"; }
+		Con_Printf("TASVFSINPUT 1 file %u %u %"PRIu64" %"PRIu64" %"PRIu64" %"PRIu64" %"PRId64" %u %"PRId64" %u %s\n",
+			i+1,copy[i].kind,copy[i].device,copy[i].inode,copy[i].links,copy[i].size,
+			copy[i].mtime,copy[i].mtime_ns,copy[i].ctime,copy[i].ctime_ns,hex);
+	}
+	BZ_Free(copy);
+	Sys_LockMutex(fs_tas_policy_mutex);
+	changed = count != fs_tas_inputcount;
+	Sys_UnlockMutex(fs_tas_policy_mutex);
+	if (changed) return "inputs_changed";
+	Con_Printf("TASVFSINPUT 1 end %u\n",count);
+#endif
+	return FS_TASPolicyError();
+}
+static unsigned int FS_TASParentPolicy(searchpath_t *parent)
+{
+	return parent && parent->origin_policy_bound ? (parent->origin_policy_private?3:1) : 0;
+}
+static void FS_TASPolicyConstructor(searchpath_t *path, unsigned int parentpolicy)
+{
+	unsigned int kind, rootkind;
+	path->origin_policy_bound = path->origin_policy_private = false;
+	FS_TASPolicyInit();
+	if (!fs_tas_policy_enabled || FS_TASPolicyError()) return;
+#ifdef __linux__
+	if (FS_TASDirectoryBacking(path->handle,path->origin_root,sizeof(path->origin_root)))
+		path->origin_kind = FSORIGIN_DIRECTORY;
+#endif
+	switch (path->origin_kind)
+	{
+	case FSORIGIN_DIRECTORY:
+		kind = FS_TASPhysicalClass(*path->origin_root ? path->origin_root : path->origin_name);
+		if (kind != 1 && kind != 2) break;
+		path->origin_policy_bound = true;
+		path->origin_policy_private = (kind == 2);
+		return;
+	case FSORIGIN_OSFILE:
+		kind = FS_TASPhysicalClass(path->origin_name);
+		if (!kind) break;
+		// A temporary native parent (split VPKs) is an input directory too.
+		rootkind = *path->origin_root ? FS_TASPhysicalClass(path->origin_root) : 1;
+		if (rootkind != 1 && rootkind != 2) break;
+		path->origin_policy_bound = true;
+		path->origin_policy_private = (kind == 2);
+		return;
+	case FSORIGIN_MEMBER:
+		if (!path->origin_parent_id || !(parentpolicy & 1)) break;
+		path->origin_policy_bound = true;
+		path->origin_policy_private = (parentpolicy & 2) != 0;
+		return;
+	case FSORIGIN_MAP:
+		if (!fs_tas_policy_began || strcmp(path->origin_name, fs_tas_worldfile)) break;
+		path->origin_policy_bound = true;
+		return;
+	default:
+		break;
+	}
+	FS_TASPolicyLatch("policy_origin");
+}
+static void FS_TASBegin_f(void)
+{
+	const char *error;
+	if (Cmd_IsInsecure() || Cmd_FromGamecode()) { Con_Printf("TASVFSPOLICY 1 error untrusted\n"); return; }
+	error = FS_TASPolicyError();
+	if (!fs_tas_policy_enabled || Cmd_Argc() != 1) error = "policy_disabled";
+	if (error) { Con_Printf("TASVFSPOLICY 1 error %s\n", error); FS_TASPolicyDetail(); return; }
+	fs_tas_policy_began = true;
+	Con_Printf("TASVFSPOLICY 1 begin component\n");
+}
+static void FS_TASLookup_f(void)
+{
+	static unsigned int serial;
+	searchpath_t *paths[FS_TAS_LOOKUP_PATHS], *path;
+	qboolean pureseen[FS_TAS_LOOKUP_PATHS] = {false};
+	unsigned int count = 0, i, j, id, parentid, purecount = 0, epoch;
+	flocation_t loc;
+	vfsfile_t *file = NULL;
+	hashfunc_t *hash = &hash_sha2_256;
+	qbyte ctx[512], bytes[8192], digest[32];
+	char hex[MAX_OSPATH*2+1], namehex[MAX_OSPATH*2+1], sha[65];
+	const char *name, *error = NULL;
+	qofs_t size = 0, total = 0;
+	int got, want;
+
+	if (Cmd_IsInsecure() || Cmd_FromGamecode())
+	{
+		Con_Printf("TASVFSLOOKUP 1 error untrusted\n");
+		return;
+	}
+	if (!COM_CheckParm("-tas-vfs-probe"))
+	{
+		Con_Printf("TASVFSLOOKUP 1 error disabled\n");
+		return;
+	}
+	if (Cmd_Argc() != 2 || !FS_TASLookupName(Cmd_Argv(1)))
+	{
+		Con_Printf("TASVFSLOOKUP 1 error logical_name\n");
+		return;
+	}
+	name = Cmd_Argv(1);
+	if (!FS_TASLookupHex(name, namehex, sizeof(namehex)) || hash->contextsize > sizeof(ctx) || hash->digestsize != sizeof(digest))
+	{
+		Con_Printf("TASVFSLOOKUP 1 error capacity\n");
+		return;
+	}
+
+	error = FS_TASPolicyError();
+	if (error) { Con_Printf("TASVFSLOOKUP 1 error %s\n", error); FS_TASPolicyDetail(); return; }
+	COM_WorkerLock();
+	epoch = fs_restarts;
+	for (path = com_searchpaths; path; path = path->next)
+	{
+		if (count == countof(paths) || FS_TASLookupPathId(path, paths, count))
+		{
+			error = "path_bound";
+			goto done;
+		}
+		if (!path->origin_id) { error = "origin_id_exhausted"; goto done; }
+		paths[count++] = path;
+	}
+	if (!count)
+	{
+		error = "no_paths";
+		goto done;
+	}
+	if (!++serial) ++serial;
+	Con_Printf("TASVFSLOOKUP 1 begin %u %u %u %i %i %i component\n", serial, epoch, count, fs_puremode, com_fs_cache.ival, fs_mapmaterials.ival);
+	if (!FS_TASLookupHex(fs_preferhint, hex, sizeof(hex)))
+	{
+		error = "path_encoding";
+		goto done;
+	}
+	Con_Printf("TASVFSLOOKUP 1 prefer %s\n", hex);
+	for (i = 0; i < count; i++)
+	{
+		path = paths[i];
+		if (!FS_TASLookupHex(path->logicalpath, hex, sizeof(hex))) { error = "path_encoding"; goto done; }
+		Con_Printf("TASVFSLOOKUP 1 path %u %u %s\n", i+1, path->flags, hex);
+		if (!FS_TASLookupHex(path->purepath, hex, sizeof(hex))) { error = "path_encoding"; goto done; }
+		Con_Printf("TASVFSLOOKUP 1 pure %u %s\n", i+1, hex);
+		if (!FS_TASLookupHex(path->prefix, hex, sizeof(hex))) { error = "path_encoding"; goto done; }
+		Con_Printf("TASVFSLOOKUP 1 prefix %u %s\n", i+1, hex);
+		parentid = 0;
+		for (j = 0; j < count; j++)
+			if (path->origin_parent_id && paths[j]->origin_id == path->origin_parent_id)
+			{
+				if (parentid) { parentid = 0; break; } // ambiguous is not bound
+				parentid = j+1;
+			}
+		if (!FS_TASLookupHex(path->origin_name, hex, sizeof(hex))) { error = "origin_encoding"; goto done; }
+		Con_Printf("TASVFSLOOKUP 1 origin %u %u %u %s\n", i+1, (unsigned int)path->origin_kind, parentid, hex);
+		if (!FS_TASLookupHex(path->origin_root, hex, sizeof(hex))) { error = "origin_encoding"; goto done; }
+		Con_Printf("TASVFSLOOKUP 1 originroot %u %s\n", i+1, hex);
+		Con_Printf("TASVFSLOOKUP 1 bound %u %u %u\n", i+1, path->origin_policy_bound, path->origin_policy_private);
+	}
+	for (path = com_purepaths; path; path = path->nextpure)
+	{
+		id = FS_TASLookupPathId(path, paths, count);
+		if (!id || purecount == count || pureseen[id-1]) { error = "pure_bound"; goto done; }
+		pureseen[id-1] = true;
+		Con_Printf("TASVFSLOOKUP 1 pureorder %u %u\n", ++purecount, id);
+	}
+	id = 0;
+	Q_strncpyz(sha, "-", sizeof(sha));
+	if (FS_FLocateFile(name, FSLF_UNCACHED|FSLF_DONTREFERENCE|FSLF_QUIET, &loc))
+	{
+		id = FS_TASLookupPathId(loc.search, paths, count);
+		if (!id) { error = "external_provider"; goto done; }
+		file = FS_OpenReadLocation(name, &loc);
+		if (!file) { error = "open"; goto done; }
+		size = VFS_GETLEN(file);
+		if (size == qofs_ErrorValue() || size > ((qofs_t)1<<30)) { error = "file_bound"; goto done; }
+		hash->init(ctx);
+		while (total < size)
+		{
+			want = (size-total > sizeof(bytes)) ? sizeof(bytes) : (int)(size-total);
+			got = VFS_READ(file, bytes, want);
+			if (got <= 0 || got > want) { error = "read"; goto done; }
+			hash->process(ctx, bytes, got);
+			total += got;
+		}
+		if (VFS_READ(file, bytes, 1) != 0 || VFS_GETLEN(file) != size) { error = "read_changed"; goto done; }
+		if (!VFS_CLOSE(file)) { file = NULL; error = "close"; goto done; }
+		file = NULL;
+		hash->terminate(digest, ctx);
+		Base16_EncodeBlock(digest, sizeof(digest), sha, sizeof(sha));
+		sha[sizeof(digest)*2] = 0;
+	}
+	for (path = com_searchpaths, i = 0; path && i < count; path = path->next, i++)
+		if (path != paths[i]) { error = "graph_changed"; goto done; }
+	if (path || i != count || fs_restarts != epoch) { error = "graph_changed"; goto done; }
+	error = FS_TASPolicyError();
+	if (error) goto done;
+	Con_Printf("TASVFSLOOKUP 1 file %u %"PRIuQOFS" %s %s\n", id, size, sha, namehex);
+	error = FS_TASDumpInputs();
+	if (error) goto done;
+	Con_Printf("TASVFSLOOKUP 1 end %u %u %u\n", serial, epoch, purecount);
+done:
+	if (file) VFS_CLOSE(file);
+	if (FS_TASPolicyError()) error = FS_TASPolicyError();
+	if (error) { Con_Printf("TASVFSLOOKUP 1 error %s\n", error); FS_TASPolicyDetail(); }
+	COM_WorkerUnlock();
+}
+
+static int FS_FLocateFilePurpose(const char *filename, unsigned int lflags, flocation_t *loc, qboolean readonly_asset);
+static vfsfile_t *FS_OpenReadLocationInternal(const char *fname, flocation_t *location, qboolean raw, qboolean readonly_asset);
+#include "fs_tas_export.inc"
+
 static void COM_CalcHash_Thread(void *ctx, void *fname, size_t a, size_t b)
 {
 	int h;
@@ -2047,6 +2862,7 @@ static void	COM_CreatePath (char *path)
 {
 	char	*ofs;
 
+	if (!FS_TASCheckOSOpen(path,"wb")) return;
 	if (fs_readonly)
 		return;
 
@@ -2404,7 +3220,7 @@ Sets com_filesize and one of handle or file
 */
 //if loc is valid, loc->search is always filled in, the others are filled on success.
 //returns 0 if couldn't find.
-int FS_FLocateFile(const char *filename, unsigned int lflags, flocation_t *loc)
+static int FS_FLocateFilePurpose(const char *filename, unsigned int lflags, flocation_t *loc, qboolean readonly_asset)
 {
 	int depth=0;
 	searchpath_t	*search;
@@ -2424,6 +3240,7 @@ int FS_FLocateFile(const char *filename, unsigned int lflags, flocation_t *loc)
 	*loc->rawname = 0;
 	loc->search = NULL;
 	loc->len = -1;
+	if (!FS_TASCheckName(filename)) goto fail;
 
 	if (!strncmp(filename, "file:", 5))
 	{
@@ -2457,7 +3274,7 @@ int FS_FLocateFile(const char *filename, unsigned int lflags, flocation_t *loc)
 	}
 #endif
 
-	if (com_fs_cache.ival && !com_fschanged && !(lflags & FSLF_IGNOREPURE) && !*preferhint)
+	if (com_fs_cache.ival && !com_fschanged && !(lflags & (FSLF_IGNOREPURE|FSLF_UNCACHED)) && !*preferhint)
 	{	//nettest (P26 Part 2): a prefer-hint bypasses the cache fast-path -- the hash keeps only the highest-
 		//priority hit per filename, which is exactly the copy the hint wants to OVERRIDE, so fall through to
 		//the full search (pf = NULL) and let the preferred-searchpath pass below pick the hinted game's copy.
@@ -2625,6 +3442,13 @@ int FS_FLocateFile(const char *filename, unsigned int lflags, flocation_t *loc)
 		}
 	}
 fail:
+	if (found != FF_NOTFOUND && found != FF_DIRECTORY && loc->len != -1)
+		if (!FS_TASCheckSelectionPurpose(filename, loc->search, readonly_asset))
+		{
+			loc->search = NULL;
+			loc->len = -1;
+			found = FF_NOTFOUND;
+		}
 	if (found == FF_SYMLINK && !(lflags & FSLF_IGNORELINKS))
 	{
 		static int blocklink;
@@ -2671,7 +3495,7 @@ fail:
 
 			//and locate that instead.
 			blocklink++;
-			depth = FS_FLocateFile(mergedname, lflags, loc);
+			depth = FS_FLocateFilePurpose(mergedname, lflags, loc, readonly_asset);
 			blocklink--;
 			if (!loc->search)
 				Con_Printf("Symlink %s -> %s (%s) is dead\n", filename, targname, mergedname);
@@ -2715,7 +3539,7 @@ fail:
 
 	Everything expensive is behind two loads and a flag test, because this runs on the hot
 	path and on loader threads. */
-	if (loc->search)
+	if (loc->search && !(lflags & FSLF_UNCACHED))
 		FS_Cache_Note(filename, loc->search);
 
 	return depth+1;
@@ -2723,6 +3547,11 @@ fail:
 
 //returns the location's root package (or gamedir).
 //(aka: loc->search->purepath, but stripping contained nested packs)
+int FS_FLocateFile(const char *filename, unsigned int lflags, flocation_t *loc)
+{
+	return FS_FLocateFilePurpose(filename,lflags,loc,false);
+}
+
 const char *FS_GetRootPackagePath(flocation_t *loc)
 {
 	searchpath_t *sp, *search;
@@ -2779,11 +3608,13 @@ const char *FS_GetPackageDownloadFilename(flocation_t *loc)
 qboolean FS_GetLocationForPackageHandle(flocation_t *loc, searchpathfuncs_t *spath, const char *fname)
 {
 	searchpath_t *search;
+	if (!FS_TASCheckName(fname)) return false;
 	for (search = com_searchpaths; search; search = search->next)
 	{
 		if (search->handle == spath)
 		{
 			loc->search = search;
+			if (!FS_TASCheckSelection(fname, search)) { loc->search = NULL; return false; }
 			return spath->FindFile(spath, loc, fname, NULL) == FF_FOUND;
 		}
 	}
@@ -3438,6 +4269,9 @@ vfsfile_t *QDECL FS_OpenVFS(const char *filename, const char *mode, enum fs_rela
 	//eventually, this function will be the *ONLY* way to get at files
 
 	fs_accessed_time = realtime;
+	if (relativeto != FS_SYSTEM && strncmp(filename,"file:",5))
+		if (!strchr(mode,'w') && !strchr(mode,'a') && !strchr(mode,'+'))
+			if (!FS_TASCheckName(filename)) return NULL;
 
 	if (fs_readonly && *mode == 'w')
 		return NULL;
@@ -3589,13 +4423,24 @@ qboolean FS_GetLocMTime(flocation_t *location, time_t *modtime)
 }
 
 /*opens a vfsfile from an already discovered location*/
-vfsfile_t *FS_OpenReadLocation(const char *fname, flocation_t *location)
+static vfsfile_t *FS_OpenReadLocationInternal(const char *fname, flocation_t *location, qboolean raw, qboolean readonly_asset)
 {
 	if (location->search)
 	{
-		return VFS_Filter(fname, location->search->handle->OpenVFS(location->search->handle, location, "rb"));
+		if (!FS_TASCheckSelectionPurpose(fname, location->search, readonly_asset)) return NULL;
+		if (readonly_asset && FS_TASCodeAsset(fname) && location->search->origin_kind == FSORIGIN_DIRECTORY)
+			return VFS_Filter(raw?NULL:fname, FSSTDIO_OpenReadOnlyData(location->search->handle,location,fname));
+		return VFS_Filter(raw?NULL:fname, location->search->handle->OpenVFS(location->search->handle, location, "rb"));
 	}
 	return NULL;
+}
+vfsfile_t *FS_OpenReadLocation(const char *fname, flocation_t *location)
+{
+	return FS_OpenReadLocationInternal(fname,location,false,false);
+}
+vfsfile_t *FS_OpenReadLocationRaw(const char *fname, flocation_t *location)
+{
+	return FS_OpenReadLocationInternal(fname,location,true,false);
 }
 
 qboolean FS_Rename2(const char *oldf, const char *newf, enum fs_relative oldrelativeto, enum fs_relative newrelativeto)
@@ -3607,6 +4452,7 @@ qboolean FS_Rename2(const char *oldf, const char *newf, enum fs_relative oldrela
 		return false;
 	if (!FS_SystemPath(newf, newrelativeto, newfullname, sizeof(newfullname)))
 		return false;
+	if (!FS_TASCheckOSOpen(oldfullname,"wb") || !FS_TASCheckOSOpen(newfullname,"wb")) return false;
 
 	FS_CreatePath(newf, newrelativeto);
 	if (Sys_Rename(oldfullname, newfullname))
@@ -3636,6 +4482,7 @@ qboolean FS_Remove(const char *fname, enum fs_relative relativeto)
 
 	if (!FS_SystemPath(fname, relativeto, fullname, sizeof(fullname)))
 		return false;
+	if (!FS_TASCheckOSOpen(fullname,"wb")) return false;
 
 	if (Sys_remove (fullname))
 	{
@@ -4182,6 +5029,7 @@ static searchpath_t *FS_MapPackIsActive(searchpathfuncs_t *archive)
 }
 
 static searchpath_t *FS_AddPathHandle(searchpath_t **oldpaths, const char *purepath, const char *probablepath, searchpathfuncs_t *handle, const char *prefix, unsigned int flags, unsigned int loadstuff);
+static searchpath_t *FS_AddPathHandleOrigin(searchpath_t **oldpaths, const char *purepath, const char *logicalpath, searchpathfuncs_t *handle, const char *prefix, unsigned int flags, unsigned int loadstuff, enum fs_origin_e kind, quint64_t parentid, unsigned int parentpolicy, const char *name, const char *root);
 qboolean FS_LoadMapPackFile (const char *filename, searchpathfuncs_t *archive)
 {
 	if (!archive)
@@ -4191,7 +5039,7 @@ qboolean FS_LoadMapPackFile (const char *filename, searchpathfuncs_t *archive)
 	if (FS_MapPackIsActive(archive))
 		return false;	//don't do it twice.
 	archive->AddReference(archive);
-	if (FS_AddPathHandle(NULL, filename, filename, archive, "", SPF_TEMPORARY, 0))
+	if (FS_AddPathHandleOrigin(NULL, filename, filename, archive, "", SPF_TEMPORARY, 0, FSORIGIN_MAP, 0, 0, filename, ""))
 		return true;
 	return false;
 }
@@ -4258,6 +5106,8 @@ typedef struct {
 	const char *parentdesc;
 	const char *puredesc;
 	unsigned int inheritflags;
+	quint64_t parentid;
+	unsigned int parentpolicy;
 } wildpaks_t;
 static void FS_AddSingleDataFile (const char *descriptor, wildpaks_t *param, searchpathfuncs_t *funcs)
 {
@@ -4306,7 +5156,11 @@ static void FS_AddSingleDataFile (const char *descriptor, wildpaks_t *param, sea
 		snprintf (purefile, sizeof(purefile), "%s/%s", param->puredesc, descriptor);
 	else
 		Q_strncpyz(purefile, descriptor, sizeof(purefile));
-	FS_AddPathHandle(param->oldpaths, purefile, pakfile, newpak, "", ((!Q_strncasecmp(descriptor, "pak", 3))?SPF_COPYPROTECTED:0)|keptflags|param->inheritflags, (unsigned int)-1);
+	FS_AddPathHandleOrigin(param->oldpaths, purefile, pakfile, newpak, "", ((!Q_strncasecmp(descriptor, "pak", 3))?SPF_COPYPROTECTED:0)|keptflags|param->inheritflags, (unsigned int)-1,
+		(param->OpenNew == VFSOS_OpenPath)?FSORIGIN_DIRECTORY:FSORIGIN_MEMBER,
+		(param->OpenNew == VFSOS_OpenPath)?0:param->parentid,
+		(param->OpenNew == VFSOS_OpenPath)?0:param->parentpolicy,
+		(param->OpenNew == VFSOS_OpenPath)?pakfile:descriptor, "");
 }
 typedef struct
 {
@@ -4511,7 +5365,9 @@ void FS_AddHashedPackage(searchpath_t **oldpaths, const char *parentpath, const 
 					}
 				}
 				if (handle)
-					FS_AddPathHandle(oldpaths, pakpath, lname, handle, pakprefix, packflags|keptflags, (unsigned int)-1);
+					FS_AddPathHandleOrigin(oldpaths, pakpath, lname, handle, pakprefix, packflags|keptflags, (unsigned int)-1,
+						search?FSORIGIN_MEMBER:FSORIGIN_OSFILE, search?search->origin_id:0, FS_TASParentPolicy(search),
+						search?(!strcmp(lname,lname2)?pakpath+ptlen+1:pname+ptlen+1):lname, "");
 			}
 			return;
 		}
@@ -4579,6 +5435,8 @@ static void FS_AddDataFiles(searchpath_t **oldpaths, const char *purepath, const
 	wp.puredesc = purepath;
 	wp.oldpaths = oldpaths;
 	wp.inheritflags = pflags;
+	wp.parentid = search->origin_id;
+	wp.parentpolicy = FS_TASParentPolicy(search);
 
 	//read pak.lst to get some sort of official ordering of pak files
 	if (search->handle->FindFile(search->handle, &loc, "pak.lst", NULL) == FF_FOUND)
@@ -4657,7 +5515,7 @@ static void FS_AddDataFiles(searchpath_t **oldpaths, const char *purepath, const
 							if (!handle)
 								break;
 						}
-						FS_AddPathHandle(oldpaths, purefile, logicalfile, handle, "", SPF_COPYPROTECTED|pflags|keptflags, (unsigned int)-1);
+						FS_AddPathHandleOrigin(oldpaths, purefile, logicalfile, handle, "", SPF_COPYPROTECTED|pflags|keptflags, (unsigned int)-1, FSORIGIN_MEMBER, search->origin_id, FS_TASParentPolicy(search), pakfile, "");
 					}
 				}
 				else
@@ -4706,6 +5564,10 @@ static void FS_AddDataFiles(searchpath_t **oldpaths, const char *purepath, const
 
 static searchpath_t *FS_AddPathHandle(searchpath_t **oldpaths, const char *purepath, const char *logicalpath, searchpathfuncs_t *handle, const char *prefix, unsigned int flags, unsigned int loadstuff)
 {
+	return FS_AddPathHandleOrigin(oldpaths, purepath, logicalpath, handle, prefix, flags, loadstuff, FSORIGIN_OPAQUE, 0, 0, "", "");
+}
+static searchpath_t *FS_AddPathHandleOrigin(searchpath_t **oldpaths, const char *purepath, const char *logicalpath, searchpathfuncs_t *handle, const char *prefix, unsigned int flags, unsigned int loadstuff, enum fs_origin_e kind, quint64_t parentid, unsigned int parentpolicy, const char *name, const char *root)
+{
 	searchpath_t *search, **link;
 
 	if (!handle)
@@ -4723,6 +5585,19 @@ static searchpath_t *FS_AddPathHandle(searchpath_t **oldpaths, const char *purep
 
 	search = (searchpath_t*)Z_Malloc (sizeof(searchpath_t));
 	search->handle = handle;
+	search->origin_id = (fs_origin_counter == (quint64_t)-1)?0:++fs_origin_counter;
+	search->origin_parent_id = 0;
+	search->origin_kind = FSORIGIN_OPAQUE;
+	*search->origin_name = *search->origin_root = 0;
+	// Set provenance before recursively constructing child providers.
+	if (strlen(name) < sizeof(search->origin_name) && strlen(root) < sizeof(search->origin_root))
+	{
+		search->origin_parent_id = parentid;
+		search->origin_kind = kind;
+		Q_strncpyz(search->origin_name, name, sizeof(search->origin_name));
+		Q_strncpyz(search->origin_root, root, sizeof(search->origin_root));
+	}
+	FS_TASPolicyConstructor(search, parentpolicy);
 	Q_strncpyz(search->purepath, purepath, sizeof(search->purepath));
 	Q_strncpyz(search->logicalpath, logicalpath, sizeof(search->logicalpath));
 	if (prefix && *prefix)
@@ -5066,7 +5941,7 @@ static searchpath_t *FS_AddSingleGameDirectory (searchpath_t **oldpaths, const c
 	if (!handle)
 		handle = VFSOS_OpenPath(NULL, NULL, dir, dir, "");
 
-	return FS_AddPathHandle(oldpaths, puredir, dir, handle, "", flags|keptflags|SPF_ISDIR, loadstuff);
+	return FS_AddPathHandleOrigin(oldpaths, puredir, dir, handle, "", flags|keptflags|SPF_ISDIR, loadstuff, FSORIGIN_DIRECTORY, 0, 0, dir, "");
 }
 static void FS_AddGameDirectory (searchpath_t **oldpaths, const char *puredir, unsigned int loadstuff, unsigned int flags)
 {
@@ -6127,7 +7002,7 @@ static void FS_ReloadPackFilesFlags(unsigned int reloadflags)
 			if (!dlhandle)
 				dlhandle = VFSOS_OpenPath(NULL, NULL, dlpath, dlpath, "");
 			if (dlhandle)
-				FS_AddPathHandle(&oldpaths, dldir, dlpath, dlhandle, "", SPF_ADDON|keptflags|SPF_ISDIR, reloadflags);
+				FS_AddPathHandleOrigin(&oldpaths, dldir, dlpath, dlhandle, "", SPF_ADDON|keptflags|SPF_ISDIR, reloadflags, FSORIGIN_DIRECTORY, 0, 0, dlpath, "");
 		}
 	}
 
@@ -9654,8 +10529,8 @@ static qboolean FS_Addon_MountMomentumPack(const char *syspath, const char *pakn
 	parent->ClosePath(parent);
 	if (!pak)
 		return false;
-	FS_AddPathHandle(&oldpaths, va(FS_MOMENTUM_BASE_SPEC "/%s", pakname), pakpath, pak, "",
-		SPF_ADDON|SPF_COPYPROTECTED|SPF_PRIVATE, 0);
+	FS_AddPathHandleOrigin(&oldpaths, va(FS_MOMENTUM_BASE_SPEC "/%s", pakname), pakpath, pak, "",
+		SPF_ADDON|SPF_COPYPROTECTED|SPF_PRIVATE, 0, FSORIGIN_OSFILE, 0, 0, pakpath, syspath);
 	Con_DPrintf("fs_load: automatic Source pack \"%s\"\n", pakpath);
 	return true;
 }
@@ -9717,7 +10592,7 @@ static qboolean FS_Addon_Mount(const char *arg, unsigned int loadstuff)
 		return false;
 	}
 	//SPF_ADDON => appended at the TAIL (lowest priority); COPYPROTECTED+PRIVATE => not networked/redistributed.
-	FS_AddPathHandle(&oldpaths, arg, syspath, handle, "", SPF_ADDON|SPF_COPYPROTECTED|SPF_PRIVATE|SPF_ISDIR, loadstuff);
+	FS_AddPathHandleOrigin(&oldpaths, arg, syspath, handle, "", SPF_ADDON|SPF_COPYPROTECTED|SPF_PRIVATE|SPF_ISDIR, loadstuff, FSORIGIN_DIRECTORY, 0, 0, syspath, "");
 
 	//nettest: also mount the sibling <syspath>_downloads (Steam/GoldSrc downloads custom
 	//content there, e.g. cstrike -> cstrike_downloads) at the same low addon priority, so
@@ -9738,7 +10613,7 @@ static qboolean FS_Addon_Mount(const char *arg, unsigned int loadstuff)
 			{
 				dlhandle = VFSOS_OpenPath(NULL, NULL, dlpath, dlpath, "");
 				if (dlhandle)
-					FS_AddPathHandle(&oldpaths, arg, dlpath, dlhandle, "", SPF_ADDON|SPF_COPYPROTECTED|SPF_PRIVATE|SPF_ISDIR, loadstuff);
+					FS_AddPathHandleOrigin(&oldpaths, arg, dlpath, dlhandle, "", SPF_ADDON|SPF_COPYPROTECTED|SPF_PRIVATE|SPF_ISDIR, loadstuff, FSORIGIN_DIRECTORY, 0, 0, dlpath, "");
 			}
 		}
 	}
@@ -12129,6 +13004,11 @@ void COM_InitFilesystem (void)
 	Cmd_AddCommandAD("which", COM_Locate_f,	FS_ArbitraryFile_c, "Searches for a named file, and displays where it can be found in the OS's filesystem");	//prints the pak or whatever where this file can be found.
 
 	Cmd_AddCommandAD("fs_hash", COM_CalcHash_f,	FS_ArbitraryFile_c, "Computes a hash of the specified file.");
+	Cmd_AddCommandD("fs_tas_lookup", FS_TASLookup_f, "Operator-only native lookup component; requires -tas-vfs-probe. Not a canonical-world witness.");
+	Cmd_AddCommandD("fs_tas_export", FS_TASExport_f, "Operator-only native namespace/export component into fresh private data/tasnative output. Not a canonical-world witness.");
+	Cmd_AddCommandD("fs_tas_measure", FS_TASExport_f, "Operator-only diagnostic native reported lengths, no body copies/hashes or export/authority. Requires -tas-vfs-probe.");
+	Cmd_AddCommandD("fs_tas_profile_export", FS_TASExport_f, "Bounded operator profile preparation, not replay-job export or authority. Requires -tas-vfs-profile-prepare and -tas-vfs-probe.");
+	Cmd_AddCommandD("fs_tas_begin", FS_TASBegin_f, "Operator-only finite-root policy component marker; requires -tas-vfs-world.");
 
 #ifdef HAVE_DBUS
 	Cmd_AddCommandD("sys_openfile", FS_OpenFilePicker_f,	"Select a file to open/install/etc.");

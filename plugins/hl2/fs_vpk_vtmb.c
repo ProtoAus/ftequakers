@@ -218,7 +218,8 @@ static int QDECL FSVVPK_EnumerateFiles(searchpathfuncs_t *handle, const char *ma
 
 	for (i = 0; i < pak->num_files; i++)
 	{
-		if (filefuncs->WildCmp(match, pak->files[i].name))
+		// NULL is the operator's complete raw inventory request.
+		if (!match || filefuncs->WildCmp(match, pak->files[i].name))
 		{
 			if (!func(pak->files[i].name, pak->files[i].len, 0, parm, handle))
 				return false;
