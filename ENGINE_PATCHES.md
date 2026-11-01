@@ -1,5 +1,20 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1170 — clean lobby disconnect, distinct weapon Drop (mod-side only)
+
+Reserve QW transport drop/disconnect for existing native teardown; weapon
+presentation uses weapon_drop in both CSQC emitters, user Drop/key unchanged.
+No native/header/API/recorder/movement/timeout/backend change or native build.
+Qualified release sourceca4bcbea0 (docs-only over actual Native520/P1162) is a
+parent of this main integration. Main's separately pending native work remains
+untouched and is NOT qualified/adopted by this mod-only release. QC cohort
+6d132181 reproduces exact prior actual SV/CS/MENU then changes only3 feature files.
+Real localhost old native quit exit0 left ghost; candidate weapon drop stayed
+connected, A->B oldA0, B->B exactlyone, normalquitB0. Five actual logs clean.
+Protect CURRENT full Windows/Pi config/data/parts before paired QC-only install;
+MENU6f and all actual Native520 images remain byte-identical. No deployment
+claim in this source note. Crash/lost network packets retain timeout fallback.
+
 ## Patch 1169 — larger native-pixel Maps filter fonts
 
 **Problem.** The Maps filter strip used small shadowed legacy text:12-unit
