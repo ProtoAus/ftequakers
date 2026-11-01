@@ -1,5 +1,40 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1169 — menu map-list refresh waits outside gameplay (mod-side only)
+
+Claimed2026-11-01 after inspecting published1168, both actual installed menus
+and the sole owned source pair. Implemented and actual private running-game
+control/subject qualified; MENU-only guarded installation pending. Native runtime remains exact520ba3ca9/P1162; no C, native header,
+plugin API, mover, recorder, server VM, backend or lobby restart change intended.
+
+The directory reply currently saves rows then synchronously rebuilds the entire
+catalogue inside MENU's callback. Keep HTTP asynchronous, but request/drain/save
+only while disconnected. A late bounded response waits in one owned zone; no
+CRC/tokenization/disk/catalogue pass in a connected session. Coalesce dirty
+notifications, protect initial warm-up and wrong-build file probes too. Existing
+cached rows stay visible while playing. QC/UI state is NOT safe to mutate on a
+new worker thread. Preserve the actual latest P1168 MENU source via whole-binary
+control (including official source-version defines), not the older P1162 menu.
+No owner game process may be stopped or hot-reloaded to install this.
+
+Actual installed8a3705aa is reproduced byte-for-byte from public P1168 MENU
+input closure plus official VERSION0.1.33/DEVELOPMENT1 defines. Candidate MENU
+6f8760a5: actual native listen player armed then RUNNING on bhop_eazy. A delayed
+2179-row HTTP response becomes state5/client2/queued106787: no CRC/write/catalogue
+save; forced refresh and ESC/manual catalogue path remain deferred, timer still
+RUNNING. After disconnect: state2/rows2179/client1/queued0/dirty0, file and full
+catalogue applied. Exact old installed MENU under SAME event schedule saves and
+rebuilds during RUNNING, the acting negative control. Native/client/server VMs
+unchanged and no QC errors. No numerical frame-time/zero-hitch, hardware input,
+GPU geometry or broad HTTP-worker performance claim. Native HTTP was already
+asynchronous; QC/UI shared state is deliberately not moved to an unsafe thread.
+
+Retained original harness failure: CSQC init was before QW prespawn/spawn/begin,
+so an early zone teleport was overwritten and timer was idle. SAME fixture now
+waits actual begin then actual ARMED before moving; still requires RUNNING, not
+idle-as-pass. Public-zone GET in that calibration was read-only; continuation
+sets cl_download_zonesrc empty. No upload/backend mutation or owner-data write.
+
 ## Patch 1162 — individual lobby noclip speed and slow-flight presentation
 
 Delivery candidate: backport the held P1159 runtime delta to the installed
