@@ -1,5 +1,31 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1187 — chat goes to everyone by default
+
+**Problem.** Lex (2 Nov) wanted every lobby and the main menu to share one chat. P1010's
+main-menu room reached a lobby only through TAB or the team key (linked players), so lobby
+chat stayed in its lobby and the menu saw none of it. Asked to choose, Lex picked "everyone
+by default" over mirroring every line (unlinked too) or keeping TAB opt-in.
+
+**Change.** cl_chat.qc: a linked player's draft opens "to everyone" (Chat_PickRoom); Enter
+says the line here and posts it to the room, except a !command (one leading quote stripped,
+as cl_warpop.qc does) or a WarpOp line. TAB or the team key is "to this lobby". sv_social.qc:
+the lobby tags a post with its number ("[#4] " from the hostname, else "[lobby] "), gives
+room posts their own one-a-second gate and request so a quick line or a pending post drops
+only the room's copy without a note and never refuses a friend action, and does not relay
+room lines whose `who` is a player here (*ahash, Social_Set's social_who = surfd who_of).
+cl_friends.qc shows "[#4] name: text", and "[menu]" for an untagged line. Unlinked players
+are unchanged. Backend unchanged. Known: if the engine's flood control drops the lobby line,
+the room still gets it.
+
+**Verified.** tools/p1187chat.py: dedicated socket, a TEST-ONLY server fixture linking the
+client (Social_Set; *phash deliberately not the who), Flask standing in for surfd: draft
+target, posts, the lobby's say, quoted and plain !commands, two quick lines plus a DM, and the
+relayed room lines (other lobby, menu, a menu "[afk]" line, this lobby's own). 16/16 on the
+combined deploy build; the delivered tree before P1187 fails 8 of the first 12 and the
+review-0 build fails exactly the four review checks. One review (non-ranking): its four
+fixes are review 1. %s
+
 ## Patch 1178 — Maps list: snug rows, map authors, a 160x90 thumbnail atlas
 
 **Problem.** Lex (2 Nov): Maps rows had too much vertical room (128 px for a 90 px photo, 29 px
