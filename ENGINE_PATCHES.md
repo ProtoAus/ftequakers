@@ -1,5 +1,22 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1186 — Enter sends the menu chat on every screen that shows it
+
+**Problem.** Lex (2 Nov): "allow enter key for main menu lobby chat". Menu_InputEvent sent the
+chat field on Enter only on SCREEN_CHAT and SCREEN_MAIN, but MH_Sidebar draws the chat on every
+ui_browser_screen (Maps, Story and Stats as well), so Enter there did nothing; keypad Enter was
+never handled.
+
+**Change.** Menu only (m_main.qc): Enter or keypad Enter with `mc_text` focused calls MC_Send on
+SCREEN_CHAT or any ui_browser_screen, MC_Active's own screen test, so stale focus on another
+screen still leaves Enter alone. MC_Send's guards (linked, online, not in a lobby) are unchanged.
+
+**Verified.** Builds 0 warnings (fteqcc c24ede65); on the delivered branch qwprogs/csprogs come
+out byte-identical to live (f0e66da4/310caf73), so only menu.dat changed (21934e39, both
+installs, `.prev` 14ecde0a; QC origin/deploy/p1186-menuchat 5f4293a7, main 8d61d912). Not run
+end to end: a send needs a linked account and posts to the live public room, so the send is
+an owner check (lextest). Public players get it with the next release (menu.dat is client-local).
+
 ## Patch 1177 — hud_player colours survive a restart
 
 **Problem.** Lex (2 Nov): the colours picked in hud_player were forgotten every time they joined
