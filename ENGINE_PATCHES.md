@@ -23,8 +23,16 @@ ranks after seeking, course selection and picture-opened profile. Screenshots
 inspected; a detached menu crown was caught and fixed with SUI point transforms.
 Seven of nine old source guards pass on baseline and subject, with identical two
 stale expectations. Native-table Previous is compile/source-only; real counter
-collection, live totals and Windows/fleet/backend delivery are separate gates.
-No manual owner acceptance or deployment is inferred from synthetic fixtures.
+collection and live totals remain unfinished. A real catalogue200/old-path404
+caught the fixture's invented endpoint; the query-form URL and strict GUI fixture
+now act two canonical200 requests. At1Nov2026 05:43:15UTC both Windows MENU/LNO
+were adopted from clean public fba5b68f after exact published fea6969b MENU baseline
+matching; destination/rollback hashes verified, native/CSQC/SSQC/config bytes
+unchanged. Lobby/game-program source ownership remains unresolved. Inventory-only
+frozen schema25 backend candidates qualify, but protected namespace install needs
+owner sudo authentication; live predecessor OPEN, prepared fences CLOSED, shared
+fixture restored and health200. No candidate production import/migration/restart.
+No manual owner acceptance or real counter collection is inferred from fixtures.
 
 ## Patch 1167 — opt-in content epochs at map and zone publication
 
