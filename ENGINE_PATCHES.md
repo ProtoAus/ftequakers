@@ -124,9 +124,11 @@ hidupload.py's mkstemp in the lobbies' data/evidence/<map>/ failed. Receipts wer
 surfd/surfd-hid-evidence.conf), adds the evidence tree to ReadWritePaths. The P1115 installer
 rewrites only 10-guarded-startup.conf, so it needs one root install.
 
-**Verified.** Diagnosis only: staged on the Pi, waiting on Lex's sudo; then daemon-reload,
-surfd stop/start and the worker's mountinfo. Journals that failed meanwhile are not recoverable
-(the client does not retry; only the player's PC holds the key).
+**Verified.** Lex installed the drop-in; daemon-reload and surfd stop/start at 1 Nov 18:57Z
+(same generation 58dbbf40). The new worker's mountinfo shows data/evidence rw; lobbies.json
+answers 200 with 12 rows; an empty POST /api/hid answers 413 (its length guard), and
+zonepub's WAL sidecars came back. A signed upload is the owner's check (lextest). Journals that
+failed meanwhile are not recoverable (the client does not retry; only the player's PC holds the key).
 
 ## Patch 1187 — chat goes to everyone by default
 
