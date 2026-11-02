@@ -177,7 +177,12 @@ static struct {
 		texid_t tex_sourcedepth;
 		texid_t tex_reflectcube;/*used where $reflectcube was invalid or failed*/
 		fbostate_t fbo_2dfbo;
-		fbostate_t fbo_reflectrefrac[R_MAX_RECURSE];
+		fbostate_t fbo_reflectrefrac[R_MAX_RECURSE];	//the reflection's
+		//FTESurf Patch 1233: one FBO per kind of target. Sharing one, a frame's reflection (depth
+		//renderbuffer) and Source water's refraction (depth texture) switched its attachments, so
+		//GLBE_FBO_Update destroyed and re-created it, renderbuffer storage included, twice a frame.
+		fbostate_t fbo_refract[R_MAX_RECURSE][2];	//[0] depth texture, [1] depth renderbuffer
+		fbostate_t fbo_ripple[R_MAX_RECURSE];
 		fbostate_t fbo_lprepass;
 		texid_t tex_reflection[R_MAX_RECURSE];	/*basically a portal rendered to texture*/
 		texid_t tex_refraction[R_MAX_RECURSE];	/*the (culled) underwater view*/
@@ -2006,6 +2011,9 @@ void GLBE_DestroyFBOs(void)
 			shaderstate.tex_waterdepth[i] = r_nulltex;
 		}
 		GLBE_FBO_Destroy(&shaderstate.fbo_reflectrefrac[i]);
+		GLBE_FBO_Destroy(&shaderstate.fbo_refract[i][0]);
+		GLBE_FBO_Destroy(&shaderstate.fbo_refract[i][1]);
+		GLBE_FBO_Destroy(&shaderstate.fbo_ripple[i]);
 		if (shaderstate.tex_reflection[i])
 		{
 			Image_DestroyTexture(shaderstate.tex_reflection[i]);
@@ -7406,6 +7414,7 @@ static qboolean GLBE_GenerateBatchTextures(batch_t *batch, shader_t *bs)
 			float renderscale = min(1, cs->portalfboscale);
 			vrect_t ovrect = r_refdef.vrect;
 			pxrect_t oprect = r_refdef.pxrect;
+			fbostate_t *refractfbo;
 			BE_WaterCaptureRect(renderscale, (cf & SHADER_HASPORTAL) != 0);
 
 			if (!shaderstate.tex_refraction[r_refdef.recurse])
@@ -7449,13 +7458,15 @@ static qboolean GLBE_GenerateBatchTextures(batch_t *batch, shader_t *bs)
 					qglTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
 					qglTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 				}
-				oldfbo = GLBE_FBO_Update(&shaderstate.fbo_reflectrefrac[r_refdef.recurse], FBO_TEX_DEPTH, &shaderstate.tex_refraction[r_refdef.recurse], 1, shaderstate.tex_refractiondepth[r_refdef.recurse], r_refdef.pxrect.width, r_refdef.pxrect.height, 0);
+				refractfbo = &shaderstate.fbo_refract[r_refdef.recurse][0];
+				oldfbo = GLBE_FBO_Update(refractfbo, FBO_TEX_DEPTH, &shaderstate.tex_refraction[r_refdef.recurse], 1, shaderstate.tex_refractiondepth[r_refdef.recurse], r_refdef.pxrect.width, r_refdef.pxrect.height, 0);
 			}
 			else
 			{
-				oldfbo = GLBE_FBO_Update(&shaderstate.fbo_reflectrefrac[r_refdef.recurse], FBO_RB_DEPTH, &shaderstate.tex_refraction[r_refdef.recurse], 1, r_nulltex, r_refdef.pxrect.width, r_refdef.pxrect.height, 0);
+				refractfbo = &shaderstate.fbo_refract[r_refdef.recurse][1];
+				oldfbo = GLBE_FBO_Update(refractfbo, FBO_RB_DEPTH, &shaderstate.tex_refraction[r_refdef.recurse], 1, r_nulltex, r_refdef.pxrect.width, r_refdef.pxrect.height, 0);
 			}
-			r_refdef.pxrect.maxheight = shaderstate.fbo_reflectrefrac[r_refdef.recurse].rb_size[1];
+			r_refdef.pxrect.maxheight = refractfbo->rb_size[1];
 			GL_ViewportUpdate();
 
 			GL_ForceDepthWritable();
@@ -7571,8 +7582,8 @@ static qboolean GLBE_GenerateBatchTextures(batch_t *batch, shader_t *bs)
 			qglTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
 			qglTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 		}
-		oldfbo = GLBE_FBO_Update(&shaderstate.fbo_reflectrefrac[r_refdef.recurse], 0, &shaderstate.tex_ripplemap[r_refdef.recurse], 1, r_nulltex, r_refdef.pxrect.width, r_refdef.pxrect.height, 0);
-		r_refdef.pxrect.maxheight = shaderstate.fbo_reflectrefrac[r_refdef.recurse].rb_size[1];
+		oldfbo = GLBE_FBO_Update(&shaderstate.fbo_ripple[r_refdef.recurse], 0, &shaderstate.tex_ripplemap[r_refdef.recurse], 1, r_nulltex, r_refdef.pxrect.width, r_refdef.pxrect.height, 0);
+		r_refdef.pxrect.maxheight = shaderstate.fbo_ripple[r_refdef.recurse].rb_size[1];
 		GL_ViewportUpdate();
 
 		qglClearColor(0, 0, 0, 1);
