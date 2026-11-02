@@ -491,6 +491,7 @@ cvar_t r_graphics							= CVARFD("r_graphics", "1", CVAR_ARCHIVE, "Turning this 
 cvar_t r_postprocshader						= CVARD("r_postprocshader", "", "Specifies a custom shader to use as a post-processing shader");
 //FTESurf Patch 1230: machine-set by CSQC while a pass tests against the scene (the aura glow).
 cvar_t r_scenedepth							= CVARD("r_scenedepth", "0", "1 keeps the 3D view's depth as the texture rt/$lastgameviewdepth, rendering through a texture if nothing else does, so CSQC passes can test against the scene. Set by the game while it needs it.");
+cvar_t r_scenedepth_drawn					= CVARFD("r_scenedepth_drawn", "0", CVAR_NOSAVE|CVAR_NOTFROMSERVER, "Set by the engine at every screen view: 1 when that view wrote rt/$lastgameviewdepth. A pass that tests against it must not trust an older frame's depth.");
 /*
 FTESurf Patch 288: the colour-correction stage's shader name.
 
@@ -1549,6 +1550,7 @@ void Renderer_Init(void)
 	Cvar_Register (&r_refractreflect_scale, GRAPHICALNICETIES);
 	Cvar_Register (&r_postprocshader, GRAPHICALNICETIES);
 	Cvar_Register (&r_scenedepth, GRAPHICALNICETIES);	//FTESurf Patch 1230
+	Cvar_Register (&r_scenedepth_drawn, GRAPHICALNICETIES);
 	Cvar_Register (&r_colourcorrection, GRAPHICALNICETIES);	//FTESurf Patch 288
 	Cvar_Register (&r_underwateroverlay, GRAPHICALNICETIES);	//FTESurf Patch 1013
 	Cvar_Register (&r_fxaa, GRAPHICALNICETIES);
