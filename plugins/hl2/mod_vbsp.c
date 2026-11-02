@@ -143,8 +143,9 @@ extern int vmt_stat_twoframes, vmt_stat_twoframesdecl;	//FTESurf Patch 286
 extern int vmt_stat_imposter;
 extern int vmt_stat_hdrenvmap;	//FTESurf Patch 264
 extern int vmt_stat_ignorez;	//FTESurf Patch 290
-extern int vmt_stat_addprog, vmt_stat_addpass;	//FTESurf Patch 300
+extern int vmt_stat_addprog, vmt_stat_addpass, vmt_stat_unlitprog;	//FTESurf Patch 300, 1213
 extern cvar_t *hl2_additivefog;	//FTESurf Patch 300
+extern cvar_t *hl2_unlitprogram;	//FTESurf Patch 1213
 extern int vmt_stat_unknown;	//FTESurf Patch 263, materials whose shader class is unimplemented
 extern char vmt_stat_unknown_name[4][64];
 extern char vmt_stat_waterargs[];	//Water program diagnostics (owned by mat_vmt.c)
@@ -8910,9 +8911,9 @@ static void VBSP_BuildBIHMain(void *ctx, void *unusedp, size_t unuseda, size_t u
 	patch is active on a map will get the wrong answer on exactly the map it was
 	written for; read the per-material [shader] lines instead.
 	*/
-	if (vmt_stat_addprog || vmt_stat_addpass)
-		Con_DPrintf("%s: %i additive material(s) on vmt/unlit so they fog to black, %i left on a pass (world materials only, so far)\n",
-			mod->name, vmt_stat_addprog, vmt_stat_addpass);
+	if (vmt_stat_addprog || vmt_stat_addpass || vmt_stat_unlitprog)
+		Con_DPrintf("%s: %i additive material(s) on vmt/unlit so they fog to black, %i left on a pass, %i other UnlitGeneric on vmt/unlit (world materials only, so far)\n",
+			mod->name, vmt_stat_addprog, vmt_stat_addpass, vmt_stat_unlitprog);
 
 	if (vmt_stat_unknown)
 	{
@@ -13715,6 +13716,7 @@ qboolean VBSP_Init(void)
 		cvarfuncs->GetNVFDG("hl2_colour_luts", "0", CVAR_NOSAVE, "Active global Source LUT count for the current map (loader output).", MAPOPTIONS);
 		cvarfuncs->GetNVFDG("hl2_colour_maphue", "0", CVAR_NOSAVE, "Default hue rotation for the current Source map (loader output).", MAPOPTIONS);
 		hl2_additivefog = cvarfuncs->GetNVFDG("hl2_additivefog", "1", CVAR_SHADERSYSTEM, "Draw ADDITIVE Source materials with a real GLSL program, so that fog fades them toward BLACK instead of toward the fog colour.\nA shader with no top-level program gets fixed-function GL fog, which mixes toward GL_FOG_COLOR on RGB and cannot know the surface is additive.  On a gl_one/gl_one sprite the only mask is black -- light_glow02/03.vtf are BGR888 with no alpha channel at all -- so a masked-out texel picks up fogcolour*(1-f) and is then ADDED, and the sprite draws as a flat translucent rectangle instead of a glow.  surf_tensor2 is the reported case: a negative fogstart (-2500) makes its fog factor 0.857 even at zero depth, so the lift is there at every distance.\nOnly ADDITIVE materials move, which is what keeps surf_boreas's cloud layer (Patch 266) out of it -- cloods.vmt has its $additive line commented out and is alpha-blended, so it never enters this path.\n0: keep every additive material on a pass, i.e. the pre-P300 behaviour, fog artefact included.\n1: give them vmt/unlit and the correct fog4additive (default).  1,659 additive UnlitGeneric and 838 additive Sprite materials in the library are eligible.", MAPOPTIONS);
+		hl2_unlitprogram = cvarfuncs->GetNVFDG("hl2_unlitprogram", "1", CVAR_SHADERSYSTEM, "Draw non-additive UnlitGeneric materials with vmt/unlit rather than a fixed-function pass, so they fog per pixel (by distance from the eye, see r_fog_radial) and on maps with a fogmaxdensity cap.\n0: keep them on a pass (pre-P1213).", MAPOPTIONS);	//FTESurf Patch 1213
 
 		hl2_twoframes = cvarfuncs->GetNVFDG("hl2_twoframes", "1", CVAR_SHADERSYSTEM, "The DISTANCE-DRIVEN FLIPBOOK on an UnlitTwoTexture material.  comshieldwall.vtf is 31 frames and its proxy chain picks one by how far away you are -- frame 0 inside 120 units, frame 30 beyond 270 -- so a combine shield gets DENSER as you approach and not merely brighter.\nOnly materials that point $basetexture and $texture2 at the SAME file can take it (7 of the 48 in the mounted packs), because a 2DArray sampler has to be filled by a pass and only a one-sampler shader has ever worked here; the rest are counted as declined in the map's census line.\n0: draw frame 0, which is the close-up frame and the right one to be stuck on.\n1: sample the frame the distance asks for (default).", MAPOPTIONS);
 
