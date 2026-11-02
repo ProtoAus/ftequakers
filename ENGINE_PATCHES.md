@@ -1,5 +1,33 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1207 — prederror reports skip a game this PC hosts; a reset sent unpredicted says why
+
+**Problem.** Lex's first report (surf_anubis, 2 Nov 17:18 local): `!r` at seq 429 moved him
+2992 u to the start; the client had him standing still. It was a local game, and there the client
+predicts nothing the QC drives: pr_csqc.c returns from CSQC_PredictPlayerPreMove (and every CSQC
+prediction hook) while sv.state != ss_dead. So P753's warp op, which needs the pre-move hook within
+0.5 s, fell back to the plain command, and the meter called the reset a prederror. P1195's local
+guard read cvar("sv_running"), which the engine does not have (always 0), so the box was offered and
+F6 sent the report to his own listen server. The report named the cause but not why the reset was
+not predicted.
+
+**Change.** CSQC only (cl_prederr.qc, cl_warpop.qc). No report while this PC hosts the game
+(serverkey("ip") is QLoopBack), or while cl_predict_qchook is on and the hook has not run for 0.5 s;
+a context note says which. The box and F6 skip a QLoopBack server. WarpOp_Reset (now a wrapper
+round WarpOp_ResetTry) notes why it fell back, one reason per gate (wop_why). The context file
+names the csprogs (*csprogs crc and size), whether the game was local, and cl_predict_qchook.
+
+**Verified.** fteqcc c24ede65, 0 warnings x3. Lex's case reproduced with copies of his Desktop 0.1.35
+exe and progs and his zone file: every `reset` snapped ~3000 u, with or without his saves; a
+diagnostic-only csprogs showed fs_wop 1, the destination published (WOPRANG z 2) and the pre-move
+hook 3.7 then 23.7 s old. Over the network (dedicated server, sv_minping 80) the same `reset`
+rode warp op 201 with no prederror. With this patch: the local game prints the engine's prederr
+lines but keeps no report (the 0.1.35 progs kept one each time); over the network with cl_warpop 0
+the report is kept, its context reads "warpop 201 not predicted: off (cl_warpop 0, or the server
+has no fs_wop)" at the error's seq, plus the csprogs line; with cl_predict_qchook 0 too it is still
+kept. One review (predicate, callers, engine paths) found the hosting rule above and two smaller
+issues (qchook 0 suppressed real reports; a predicting flag always 1); both fixed and re-measured.
+
 ## Patch 1202 — the 3D skybox's entities are sent; sky props animate (surf_shape)
 
 **Problem.** Lex (2 Nov): surf_shape's moving 3D-sky background never showed. It is one prop_dynamic in
