@@ -424,6 +424,12 @@ static void BE_PolyOffset(void)
 		po.unit += r_polygonoffset_submodel_offset.value;
 	}
 #endif
+	if ((shaderstate.flags & BEF_DECALDEPTH) && !(shaderstate.curshader->flags & SHADER_POLYGONOFFSET))
+	{	//FTESurf Patch 1218: Source lifts an overlay 0.1 off its face; ours lay on it and z-fought
+		//(surf_sinsane_ez's credits). A step count holds at any distance, as for `polygonoffset 1`.
+		po.factor += -0.05;
+		po.unit += -25;
+	}
 	po.factor += shaderstate.polyoffset.factor;
 	po.unit += shaderstate.polyoffset.unit;
 	if ((shaderstate.flags & BEF_SKYDEPTH) && r_sky_forcedepth_push.value > 0)

@@ -5356,7 +5356,7 @@ static void CL_EmitPersistDecalTris(persistdecal_t *rec)
 	persistdecaltri_t *tri;
 	for (tri = rec->tris; tri; tri = tri->next)
 	{
-		scenetris_t *t = CL_Decal_OpenStrip(rec->shader, BEF_NODLIGHT|BEF_NOSHADOWS, tri->lightmap);
+		scenetris_t *t = CL_Decal_OpenStrip(rec->shader, BEF_NODLIGHT|BEF_NOSHADOWS|BEF_DECALDEPTH, tri->lightmap);
 		int k;
 		if (cl_numstrisvert + 3 > cl_maxstrisvert)
 			cl_stris_ExpandVerts(cl_numstrisvert + 3 + 256);

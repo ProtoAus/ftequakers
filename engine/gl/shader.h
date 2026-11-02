@@ -842,6 +842,7 @@ mfog_t *Mod_FogForOrigin(model_t *wmodel, vec3_t org);
 #define BEF_FORCETWOSIDED		(1u<<10) //more evilness.s
 #define BEF_SKYDEPTH			(1u<<11) //FTESurf Patch 768: GL_SkyForceDepth's mask, pushed away from the eye (r_sky_forcedepth_push)
 #define BEF_UNDERBLEND			(1u<<12) //FTESurf Patch 847: a scene poly sorted before SHADER_SORT_BLEND (DRAWFLAG_UNDERBLEND)
+#define BEF_DECALDEPTH			(1u<<13) //FTESurf Patch 1218: a map's static decal; `polygonoffset`'s pull when its shader has none
 //#define	BEFF_POLYHASNORMALS		(1u<<31) //false flag - for cl_scenetries and not actually used by the backend.
 
 typedef struct
