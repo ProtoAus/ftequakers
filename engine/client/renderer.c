@@ -796,6 +796,8 @@ cvar_t gl_texturemode2d						= CVARFCD("gl_texturemode2d", "GL_LINEAR",
 												CVAR_ARCHIVE | CVAR_RENDERERCALLBACK, Image_TextureMode_Callback,
 												"Specifies how 2d images are sampled. format is a 3-tupple ");
 cvar_t r_font_linear						= CVARF("r_font_linear", "1", CVAR_ARCHIVE);
+//FTESurf Patch 1236: coverage curve for antialiased glyphs, applied when a glyph is baked (vid_reload to see a change).
+cvar_t r_font_gamma						= CVARFD("r_font_gamma", "1", CVAR_ARCHIVE, "Exponent for antialiased glyph coverage: 1 leaves it as rasterised, above 1 fills edges in so light text on dark reads as if blended in linear light. Applies to glyphs baked after a change; vid_reload re-bakes.");
 cvar_t r_font_postprocess_outline			= CVARFD("r_font_postprocess_outline", "0", 0, "Controls the number of pixels of dark borders to use around fonts.");
 cvar_t r_font_postprocess_mono				= CVARFD("r_font_postprocess_mono", "0", 0, "Disables anti-aliasing on fonts.");
 
@@ -1656,6 +1658,7 @@ void Renderer_Init(void)
 	Cvar_Register (&gl_texturemode, GLRENDEREROPTIONS);
 	Cvar_Register (&gl_texturemode2d, GLRENDEREROPTIONS);
 	Cvar_Register (&r_font_linear, GLRENDEREROPTIONS);
+	Cvar_Register (&r_font_gamma, GLRENDEREROPTIONS);	//FTESurf Patch 1236
 	Cvar_Register (&r_font_postprocess_outline, GLRENDEREROPTIONS);
 	Cvar_Register (&r_font_postprocess_mono, GLRENDEREROPTIONS);
 #if defined(HAVE_LEGACY) && defined(AVAIL_FREETYPE)

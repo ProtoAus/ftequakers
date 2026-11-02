@@ -395,6 +395,7 @@ static float curfont_scale[2];
 //static qboolean curfont_scaled;
 
 extern cvar_t r_font_linear;
+extern cvar_t r_font_gamma;	//FTESurf Patch 1236
 
 //^Ue2XX
 static struct
@@ -733,6 +734,17 @@ static struct charcache_s *Font_LoadGlyphData(font_t *f, CHARIDXTYPE charidx, FT
 	out = &fontplanes.plane[c->bmx+((int)c->bmy-pad)*PLANEWIDTH];
 	if (pixelmode == FT_PIXEL_MODE_GRAY)
 	{	//8bit font
+		//FTESurf Patch 1236: r_font_gamma's coverage curve, once per glyph at bake time (nothing per frame).
+		static unsigned char gammalut[256];
+		static float gammafor = -1;
+		float g = bound(0.5f, r_font_gamma.value, 3.0f);
+		if (gammafor != g)
+		{
+			int i;
+			for (i = 0; i < 256; i++)
+				gammalut[i] = (g == 1) ? i : (unsigned char)bound(0, (int)(255 * pow(i / 255.0, 1.0 / g) + 0.5), 255);
+			gammafor = g;
+		}
 		for (y = -pad; y < 0; y++)
 		{
 			for (x = -pad; x < (int)bmw+pad; x++)
@@ -744,7 +756,7 @@ static struct charcache_s *Font_LoadGlyphData(font_t *f, CHARIDXTYPE charidx, FT
 			for (x = -pad; x < 0; x++)
 				out[x].c = BORDERCOLOUR;
 			for (; x < bmw; x++)
-				out[x].c = 0x01010101 * ((unsigned char*)data)[x];
+				out[x].c = 0x01010101 * gammalut[((unsigned char*)data)[x]];
 			for (; x < bmw+pad; x++)
 				out[x].c = BORDERCOLOUR;
 			data = (char*)data + pitch;
@@ -2856,7 +2868,7 @@ void Font_Free(struct font_s *f)
 //maps a given virtual screen coord to a pixel coord, which matches the font's height/width values
 void Font_BeginString(struct font_s *font, float vx, float vy, int *px, int *py)
 {
-	if (R2D_Flush && (R2D_Flush != Font_Flush || curfont != font || font_be_flags != r2d_be_flags))
+	if (R2D_Flush && (R2D_Flush != Font_Flush || font_be_flags != r2d_be_flags))	//FTESurf Patch 1236: not on a font change (Font_Flush reads no font; tints are per vertex, a new atlas flushes in Font_BeginChar)
 		R2D_Flush();
 	R2D_Flush = Font_Flush;
 	font_be_flags = r2d_be_flags;
@@ -2878,7 +2890,7 @@ void Font_Transform(float vx, float vy, int *px, int *py)
 void Font_BeginScaledString(struct font_s *font, float vx, float vy, float szx, float szy, float *px, float *py)
 {
 	float nearest;
-	if (R2D_Flush && (R2D_Flush != Font_Flush || curfont != font || font_be_flags != r2d_be_flags))
+	if (R2D_Flush && (R2D_Flush != Font_Flush || font_be_flags != r2d_be_flags))	//FTESurf Patch 1236: not on a font change (Font_Flush reads no font; tints are per vertex, a new atlas flushes in Font_BeginChar)
 		R2D_Flush();
 	R2D_Flush = Font_Flush;
 	font_be_flags = r2d_be_flags;
