@@ -3073,12 +3073,14 @@ static const char *CLQ1_OverlayStyleName (int style)
 	static const char *names[4] = {"dither", "dither + edges", "translucent", "translucent + edges"};
 	return names[style & 3];
 }
-//a blended plane: no depth write, sorted after the opaque world
+//a blended plane, no depth write.  `sort additive`: after BLEND, so glass or water behind a plane
+//cannot paint over it; polygonoffset alone makes it a DECAL (Shader_Finish), drawn before them.
 static shader_t *CLQ1_OverlayBlend (const char *name, qboolean twosided)
 {
 	return R_RegisterShader(name, SUF_NONE, twosided ?
 		"{\n"
 			"polygonoffset\n"
+			"sort additive\n"
 			"cull disable\n"
 			"{\n"
 				"map $whiteimage\n"
@@ -3089,6 +3091,7 @@ static shader_t *CLQ1_OverlayBlend (const char *name, qboolean twosided)
 		"}\n" :
 		"{\n"
 			"polygonoffset\n"
+			"sort additive\n"
 			"{\n"
 				"map $whiteimage\n"
 				"rgbgen vertex\n"
