@@ -138,21 +138,51 @@ texid_t R_GetDefaultEnvmap(void)
 	return r_nulltex;
 }
 
+static void R_LoadSky(const char *sky);
+//no forced sky, or a six-face one where every face is missing (Shader_ParseSkySides fills
+//each with r_blackimage, so the "even one face" test in R_LoadSky keeps it)
+static qboolean R_ForcedSkyEmpty(void)
+{
+	extern texid_t missing_texture, r_blackimage;
+	int i;
+	if (!forcedsky)
+		return true;
+	if (!forcedsky->skydome)
+		return false;	//an equirect or cubemap image loaded
+	for (i = 0; i < 6; i++)
+		if (forcedsky->skydome->farbox_textures[i] != missing_texture && forcedsky->skydome->farbox_textures[i] != r_blackimage)
+			return false;
+	return true;
+}
 void R_SetSky(const char *sky)
 {
-	int i;
-	const char *shadername;
 	extern cvar_t r_skyboxname;
+	qboolean mapsky;
 	if (sky)
 		Q_strncpyz(cl.skyname, sky, sizeof(cl.skyname));
 	else
 		sky = cl.skyname;
 	if (qrenderer <= QR_NONE)
 		return;	//not ready yet...
+	mapsky = !*r_skyboxname.string && *sky;
 	if (*r_skyboxname.string)	//override it with the user's preference
 		sky = r_skyboxname.string;
 	else if (!*sky)				//FTESurf Patch 211: the map declared none -- fill the hole
 		sky = r_skybox_default.string;
+
+	R_LoadSky(sky);
+	//FTESurf Patch 1191: a declared sky with not one face found (surf_utopia's TF2 sky
+	//without TF2) gets the same fill as a map that declares none.
+	if (R_ForcedSkyEmpty() && mapsky && *r_skybox_default.string && Q_strcasecmp(sky, r_skybox_default.string))
+	{
+		Con_DPrintf("sky %s: no face found; drawing r_skybox_default %s\n", sky, r_skybox_default.string);
+		R_LoadSky(r_skybox_default.string);
+	}
+}
+static void R_LoadSky(const char *sky)
+{
+	int i;
+	const char *shadername;
 
 	shadername = va("skybox_%s", sky);
 	if (!forcedsky || strcmp(shadername, forcedsky->name))
@@ -326,7 +356,8 @@ static void R_ForceSky_f(void)
 		if (*r_skyboxname.string)
 			Con_Printf("Current user skybox is %s\n", r_skyboxname.string);
 		else if (*cl.skyname)
-			Con_Printf("Current per-map skybox is %s\n", cl.skyname);
+			Con_Printf("Current per-map skybox is %s%s\n", cl.skyname,
+				(forcedsky && Q_strcasecmp(forcedsky->name+7, cl.skyname)) ? " (not found; drawing r_skybox_default)" : "");	//+7: "skybox_"
 		else if (*r_skybox_default.string)
 			Con_Printf("Map declares no sky; using r_skybox_default %s (loaded: %s)\n", r_skybox_default.string, forcedsky?"yes":"no");
 		else
