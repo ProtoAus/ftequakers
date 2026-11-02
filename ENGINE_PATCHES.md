@@ -1,5 +1,42 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1219 — console completion keeps copies of names, not the owners' pointers
+
+**Problem.** Lex's 0.1.37 (Desktop release copy, exe 6fbf7e74) crashed on 3 Nov, 02:20 local, with
+c0000005 at rva 0x32e5dd. Symbolised with `nm -n` against the release build's unstripped
+`engine/release/fteqw64.exe.db`: Hash_KeyInsensitive+0x5 (`mov (%rcx),%r8b`, the name's first byte)
+under Cvar_FindVar, Con_BuildCompletion, Con_DrawInput, Con_DrawConsole. The frames at rva 0x2454...
+above the fault are the exception dispatch into nettest_CrashAddrLogger, not driver frames.
+Cmd_Complete memoises on the partial string, and Cmd_Complete_Check stored the owners' pointers:
+cmd->name, alias names and values, and cvar names and descriptions. Owners free those at runtime.
+CSQC_Shutdown's Cmd_RemoveCommands frees FTESurf's 144 csprogs commands at every map change. Alias
+redefinition or removal, Alias_WipeStuffedAliases, Cvar_Free and Cvar_GamedirChange free the rest.
+So a console left open across a map change, with a line such as `chat_`, read freed names every frame.
+
+**Change.** Tag patch-1219 = d65de8f91 (3 commits on patch-1211, the 0.1.37 line).
+- cmd.c Cmd_Complete_Set: every memo entry owns a copy of its text and description, in both the
+  normal path and the "steal the last slot" path. The arg-completion path already copied.
+- After the Patch 215 duplicate collapse, the slots it vacates are zeroed, so every slot past num
+  stays zero. CompleteCommand (keys.c) indexes by the highlight without checking num.
+- Cost: a rebuild (a changed partial) copies up to 256 names and descriptions; nothing per frame.
+
+**Measured.** p1219arm.py, a probe-only build: a removed command's name is overwritten with '#' and
+its memory kept mapped, and the dropdown counts rows that start with '#'. The run hosts surf_dune with
+the 0.1.37 progs, does `con_settext chat_`, and reloads the map.
+- Control (patch-1211 + probe): 144 commands freed; 968 and then 928 dropdown rows read a freed name.
+- Fix (f708d8565 + probe): 0. Final (d65de8f91 + probe): 0.
+- con_selftest passes on control and final. FTESurf p1219-complete-20261103/artifacts/RESULTS.md.
+
+Reviewed in two lenses (memory lifetime; consumers and behaviour), two rounds. Round 1 found the
+leftover slots (fixed). Round 2 found no defects.
+
+**Residuals.**
+- Cmd_AddCommandAD stores the description pointer without copying it. A server-QC `registercommand`
+  description outlives PR_Deinit, and a native menu DLL's outlives the DLL. FTESurf has neither,
+  but now that the memo copies descriptions, they are read when the list is built.
+- The memo is not dropped when a name is freed: removed names stay listed until the line changes.
+- `repl` leaks on each rebuild (pre-existing).
+
 ## Patch 1211 — gravity and delayed player writes predicted; the mover takes the edict's gravity each command
 
 **Problem.** Lex (2 Nov): bhop_decimus's launch pads (OnJump `!activator AddOutput gravity -2`, back
