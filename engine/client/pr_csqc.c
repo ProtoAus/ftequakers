@@ -2660,12 +2660,14 @@ void QCBUILTIN PF_R_SetViewFlag(pubprogfuncs_t *prinst, struct globalvars_s *pr_
 
 	case VF_ORIGIN:
 		VectorCopy(p, r_refdef.vieworg);
-		if (csqc_playerview)
+		//FTESurf Patch 1230: a view into a render target (the aura's mask) is not the player's
+		//view, and zeroing its stair smoothing every frame stopped the smoothing. screenshot_mega's is.
+		if (csqc_playerview && (!*r_refdef.rt_destcolour[0].texname || !strcmp(r_refdef.rt_destcolour[0].texname, "megascreeny")))
 			csqc_playerview->crouch = 0;
 		break;
 
 	case VF_ORIGIN_Z:
-		if (csqc_playerview)
+		if (csqc_playerview && (!*r_refdef.rt_destcolour[0].texname || !strcmp(r_refdef.rt_destcolour[0].texname, "megascreeny")))
 			csqc_playerview->crouch = 0;
 	case VF_ORIGIN_X:
 	case VF_ORIGIN_Y:
@@ -2867,6 +2869,10 @@ void R_DrawNameTags(void);
 static void QCBUILTIN PF_R_RenderScene(pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
 {
 	qboolean scissored;
+	//FTESurf Patch 1230: not screenshot_mega's target, which is the screen view at another size
+	qboolean rtview = *r_refdef.rt_destcolour[0].texname && strcmp(r_refdef.rt_destcolour[0].texname, "megascreeny");
+	vrect_t oldvrect = r_refdef.vrect;
+	pxrect_t oldpxrect = r_refdef.pxrect;
 
 	if (R2D_Flush)
 		R2D_Flush();
@@ -2963,6 +2969,12 @@ static void QCBUILTIN PF_R_RenderScene(pubprogfuncs_t *prinst, struct globalvars
 			R2D_Flush();
 
 		BE_Scissor(NULL);
+	}
+	if (rtview)
+	{	//FTESurf Patch 1230: project() before the next screen view reads vrect; leave it the screen's.
+		r_refdef.vrect = oldvrect;
+		r_refdef.pxrect = oldpxrect;
+		csqc_rebuildmatricies = true;
 	}
 }
 

@@ -58,6 +58,12 @@ extern cvar_t	r_stereo_separation;
 extern cvar_t	r_stereo_convergence;
 extern cvar_t	r_stereo_method;
 extern cvar_t	r_postprocshader, r_fxaa, r_graphics;
+extern cvar_t	r_scenedepth, r_scenedepth_drawn;	//FTESurf Patch 1230
+static void R_SceneDepthDrawn(int v)
+{	//only on change: this runs every screen view
+	if (r_scenedepth_drawn.ival != v)
+		Cvar_ForceSetValue(&r_scenedepth_drawn, v);
+}
 extern cvar_t	r_colourcorrection;	//FTESurf Patch 288
 extern cvar_t	r_underwateroverlay;	//FTESurf Patch 1013
 static qboolean r_uwnowarp;	//FTESurf Patch 1013: a Source volume with no overlay draws neither warp
@@ -2786,7 +2792,13 @@ void GLR_RenderView (void)
 	qboolean forcedfb = false;
 	qboolean fbdepth = false;
 
+	qboolean rtview = dofbo;	//FTESurf Patch 1230: dofbo is set again below for the post-process target
+
 	checkglerror();
+
+	//FTESurf Patch 1230: every screen view (and the screenshot_mega one) starts as "depth not written".
+	if (!rtview || !strcmp(r_refdef.rt_destcolour[0].texname, "megascreeny"))
+		R_SceneDepthDrawn(0);
 
 	if (r_norefresh.value || !vid.fbpwidth || !vid.fbpwidth)
 		return;
@@ -2992,6 +3004,9 @@ void GLR_RenderView (void)
 					break;
 				}
 		}
+		//FTESurf Patch 1230: CSQC samples $rt:rt/$lastgameviewdepth after this view (cl_inventory.qc's glow).
+		if (r_scenedepth.ival)
+			fbdepth = forcedfb = true;
 		if (V_UseSceneGamma() && (v_gamma.value != 1 || v_contrast.value != 1 || v_contrastboost.value != 1 || v_brightness.value != 0 || v_shadows.value > 0))
 			r_refdef.flags |= RDF_SCENEGAMMA;
 	}
@@ -3207,6 +3222,11 @@ void GLR_RenderView (void)
 		// render normal view
 		GLBudget_Set(GPUB_WAIT);	//FTESurf Patch 782: the world walk is CPU; the first batch ends the wait
 		R_RenderScene ();
+		//FTESurf Patch 1230: this view's depth is in rt/$lastgameviewdepth -- unless its camera is one a
+		//target view cannot match (the underwater fov wobble above, which target views skip; stereo).
+		if (!rtview && r_scenedepth.ival && TEXVALID(sourcedepth) && r_refdef.stereomethod == STEREO_OFF &&
+			!((r_refdef.flags & RDF_UNDERWATER) && !(r_refdef.flags & RDF_WATERWARP) && !r_uwnowarp))
+			R_SceneDepthDrawn(1);
 	}
 
 //	qglDisable(GL_FOG);

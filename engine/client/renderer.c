@@ -489,6 +489,9 @@ cvar_t r_renderscale						= CVARFD("r_renderscale", "1", CVAR_ARCHIVE, "Provides
 cvar_t r_fxaa								= CVARFD("r_fxaa", "0", CVAR_ARCHIVE, "Runs a post-procesing pass to strip the jaggies.");
 cvar_t r_graphics							= CVARFD("r_graphics", "1", CVAR_ARCHIVE, "Turning this off will result in ascii-style rendering.");
 cvar_t r_postprocshader						= CVARD("r_postprocshader", "", "Specifies a custom shader to use as a post-processing shader");
+//FTESurf Patch 1230: machine-set by CSQC while a pass tests against the scene (the aura glow).
+cvar_t r_scenedepth							= CVARD("r_scenedepth", "0", "1 keeps the 3D view's depth as the texture rt/$lastgameviewdepth, rendering through a texture if nothing else does, so CSQC passes can test against the scene. Set by the game while it needs it.");
+cvar_t r_scenedepth_drawn					= CVARFD("r_scenedepth_drawn", "0", CVAR_NOSAVE|CVAR_NOTFROMSERVER, "Set by the engine at every screen view: 1 when that view wrote rt/$lastgameviewdepth. A pass that tests against it must not trust an older frame's depth.");
 /*
 FTESurf Patch 288: the colour-correction stage's shader name.
 
@@ -1546,6 +1549,8 @@ void Renderer_Init(void)
 	Cmd_AddCommandD("r_viewstats", R_ViewStats_f, "FTESurf Patch 850: per top-level view since the last call -- views by depth, 3D skies drawn and skipped, entities a nested view passed over, 3D skies from the sky camera, screen copies and their megapixels.");
 	Cvar_Register (&r_refractreflect_scale, GRAPHICALNICETIES);
 	Cvar_Register (&r_postprocshader, GRAPHICALNICETIES);
+	Cvar_Register (&r_scenedepth, GRAPHICALNICETIES);	//FTESurf Patch 1230
+	Cvar_Register (&r_scenedepth_drawn, GRAPHICALNICETIES);
 	Cvar_Register (&r_colourcorrection, GRAPHICALNICETIES);	//FTESurf Patch 288
 	Cvar_Register (&r_underwateroverlay, GRAPHICALNICETIES);	//FTESurf Patch 1013
 	Cvar_Register (&r_fxaa, GRAPHICALNICETIES);
