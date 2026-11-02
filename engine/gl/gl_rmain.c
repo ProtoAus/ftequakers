@@ -58,7 +58,12 @@ extern cvar_t	r_stereo_separation;
 extern cvar_t	r_stereo_convergence;
 extern cvar_t	r_stereo_method;
 extern cvar_t	r_postprocshader, r_fxaa, r_graphics;
-extern cvar_t	r_scenedepth;	//FTESurf Patch 1230
+extern cvar_t	r_scenedepth, r_scenedepth_drawn;	//FTESurf Patch 1230
+static void R_SceneDepthDrawn(int v)
+{	//only on change: this runs every screen view
+	if (r_scenedepth_drawn.ival != v)
+		Cvar_ForceSetValue(&r_scenedepth_drawn, v);
+}
 extern cvar_t	r_colourcorrection;	//FTESurf Patch 288
 extern cvar_t	r_underwateroverlay;	//FTESurf Patch 1013
 static qboolean r_uwnowarp;	//FTESurf Patch 1013: a Source volume with no overlay draws neither warp
@@ -2787,7 +2792,13 @@ void GLR_RenderView (void)
 	qboolean forcedfb = false;
 	qboolean fbdepth = false;
 
+	qboolean rtview = dofbo;	//FTESurf Patch 1230: dofbo is set again below for the post-process target
+
 	checkglerror();
+
+	//FTESurf Patch 1230: every screen view (and the screenshot_mega one) starts as "depth not written".
+	if (!rtview || !strcmp(r_refdef.rt_destcolour[0].texname, "megascreeny"))
+		R_SceneDepthDrawn(0);
 
 	if (r_norefresh.value || !vid.fbpwidth || !vid.fbpwidth)
 		return;
@@ -3211,6 +3222,8 @@ void GLR_RenderView (void)
 		// render normal view
 		GLBudget_Set(GPUB_WAIT);	//FTESurf Patch 782: the world walk is CPU; the first batch ends the wait
 		R_RenderScene ();
+		if (!rtview && r_scenedepth.ival && TEXVALID(sourcedepth))
+			R_SceneDepthDrawn(1);	//FTESurf Patch 1230: this view's depth is in rt/$lastgameviewdepth
 	}
 
 //	qglDisable(GL_FOG);
