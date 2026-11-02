@@ -3222,8 +3222,11 @@ void GLR_RenderView (void)
 		// render normal view
 		GLBudget_Set(GPUB_WAIT);	//FTESurf Patch 782: the world walk is CPU; the first batch ends the wait
 		R_RenderScene ();
-		if (!rtview && r_scenedepth.ival && TEXVALID(sourcedepth))
-			R_SceneDepthDrawn(1);	//FTESurf Patch 1230: this view's depth is in rt/$lastgameviewdepth
+		//FTESurf Patch 1230: this view's depth is in rt/$lastgameviewdepth -- unless its camera is one a
+		//target view cannot match (the underwater fov wobble above, which target views skip; stereo).
+		if (!rtview && r_scenedepth.ival && TEXVALID(sourcedepth) && r_refdef.stereomethod == STEREO_OFF &&
+			!((r_refdef.flags & RDF_UNDERWATER) && !(r_refdef.flags & RDF_WATERWARP) && !r_uwnowarp))
+			R_SceneDepthDrawn(1);
 	}
 
 //	qglDisable(GL_FOG);
