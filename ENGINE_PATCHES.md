@@ -1,5 +1,22 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1210, surfd half — served KSF runs carry the inferred ducked body
+
+**Change.** surfd generation 833c8c58 (ac's 470ab7c9 + only tools/ksfconvert.py) live 10:36:08Z
+at /srv/nvme/agent-work/ksfduck-1210-37d486c9 with ac's kit (stage, qualify, install, activate;
+maps=1 identical, hid 413, evidence rw). Then the data step: for every kind='ksf' replays row the
+OLD converter re-ran on the kept original and had to reproduce the row's exact sha, bytes and leaf
+(6,838 of 6,838 did), the NEW conversion was written beside the old leaf, and one BEGIN IMMEDIATE
+transaction switched 6,440 rows (leaf, bytes, sha) at 10:50:05Z, each guarded on its old values
+(398 had no duck and stay). Row ids are unchanged, so runs.replay_id links hold; old leaves stay
+on disk. 8,219 ramp holds across 3,075 runs.
+
+**Verified.** 80 sampled new files differ from the old only by DUCKED added to sample lines
+(44,027 lines); all 6,440 rows resolve to files of their recorded size; /api/replay/21014 serves
+the new body (565 of 4,229 samples ducked). surfd's test_ksfgrab.py 62/62 on 833c8c58. One review
+of the re-conversion script: no corruption path; the commit skips a row that clashes with a live
+insert rather than aborting. Rollback: p1210_reconvert.py rollback in that root.
+
 ## Patch 1212 — World of Surf version info in the launcher and game; wrapper .\; updater tests repaired
 
 **Problem.** Lex (2 Nov): players report Windows Defender calling the launcher a trojan. On this PC
