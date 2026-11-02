@@ -1,5 +1,37 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1201 — surf_view_style: edges and translucent planes for surf_view and ent_view
+
+**Problem.** Lex (2 Nov): surf_view is "sort of hurt by the dithering, it's hard to tell depth".
+Patch 776's fill is Patch 331's screen-space Bayer stipple: every face at one coverage lights the
+same screen pixels, so a ramp in front of another merges with it into one flat pattern, and at the
+default 4/16 it is close to invisible on a textured wall. Lex asked for edges on the dither, flat
+translucent planes as an option, the same setting for ent_view, and whether the dither is faster.
+
+**Change.** cl_ents.c only. `surf_view_style` (archived, default 1): 0 dither, 1 dither and every
+face's edges, 2 translucent planes, 3 translucent planes and edges. `surf_view_fill` is the
+coverage or the opacity. ent_view's clip hulls, hover and in-view set use the same fill; style 1/3
+also edges the in-view set (the hover and the clip hulls were always edged). r_showbrushes keeps
+the dither. The planes are `blendfunc blend` with no depth write and `sort additive`: with
+`polygonoffset` alone Shader_Finish makes them SHADER_SORT_DECAL, drawn before glass and water,
+which then painted over any plane in front of them. CLQ1_DrawPolyEdges draws a winding as one
+closed loop of lines, each vertex pulled 1/512 of the way to the eye: `polygonoffset` only offsets
+filled polygons, so an edge lying on a drawn face would z-fight it. surf_view draws every fill and
+then every edge, so batches do not alternate per face.
+
+**Verified.** Owned listen arms (1920x1200) on surf_kitsune, surf_dune and surf_skyhaven: each
+style prints its own line (faces filled and edged that frame); at 1:1 the edges on surf_dune's spawn
+ramps are continuous, and ent_view's trigger fills show in every style. Cost on surf_dune's stage
+pose (389 faces), the engine's show_fps counter read from screenshots 2.5 s apart (`wait N` counts
+66.7 Hz input frames, not render frames), 6 interleaved readings each: off 1.125 ms, dither 1.300,
+dither + edges 1.408, translucent 1.303, translucent + edges 1.263 (sd 0.09-0.22 on a shared
+machine): the dither is not measurably faster than translucent planes at this face count. One
+review (predicate, batching, state) found the decal sort; surf_skyhaven's glass poses, decal build
+against the fix: surf_view off identical (mean |d| 0.00-0.02), translucent styles differ on 16-47%
+of the frame, planes in front of the glass now keep their colour. Known: blended surfaces are not
+sorted per pixel, so a plane behind glass is now drawn over the glass at full strength instead of
+dimmed by it.
+
 ## Patch 1193 — surf_sirena's script barriers open for the player who earned them
 
 **Problem.** Lex (2 Nov): surf_sirena's barriercollision is never disabled. Its three barriers are
