@@ -436,7 +436,9 @@ varying vec4 light;
 	#endif
 
 
-		diffuse_f.a *= float(ALPHA);
+		//FTESurf Patch 1218: and the entity's, as unlit.glsl: a static prop's distance fade (VBSP_DrawStaticProps
+		//sets shaderRGBAf[3]) drew solid until culled -- surf_remeanian's end box popped to black.
+		diffuse_f.a *= float(ALPHA) * e_colourident.a;
 
 	//FTESurf Patch 255: was #if 1, so the fog branch was dead and EVERY Source
 	//prop drew unfogged. NOFOG was declared above and never used; animated,

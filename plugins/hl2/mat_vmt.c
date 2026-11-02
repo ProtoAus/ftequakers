@@ -2029,6 +2029,10 @@ static char *VMT_ParseBlock(const char *fname, vmtstate_t *st, char *line)
 			}
 		}
 
+		//FTESurf Patch 1218: a path written from the root ("/brophis/gate/horizonb", surf_eternity's
+		//42-frame stargate screens) is relative in Source; ours asked for "materials//..." and got nothing.
+		while (*key == '$' && (*value == '/' || *value == '\\'))
+			memmove(value, value + 1, strlen(value));
 		if (!*key || !st)
 			;
 		else if (!Q_strcasecmp(key, "include"))
