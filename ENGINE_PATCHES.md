@@ -1,5 +1,27 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1189 — the Maps menu sees a new zone within a minute
+
+**Problem.** Lex (2 Nov), after P1180: the in-game Maps menu took up to ~6 minutes to show a map
+as zoned. The menu polls surfd's /api/board?maps=1 every 60 s, and its zoned/enabled columns come
+from map_index() and zone_file_index(), both cached MAPS_TTL (300 s).
+
+**Change.** surfd only (generation 0d72a27c = live 58dbbf40 + P1189; FTESurf main d0b4dc01,
+0ac1c88c). Each read stats the three zone folders (dev, inode, mtime_ns) and rescans when one
+changed; the zone service writes by rename, which moves the folder's mtime. A listing taken while
+a folder's mtime is within 2 s of now is redone after at most 1 s, because a second change in the
+same timestamp tick (3.33 ms on the Pi's ext4) leaves the mtime equal. A map rescan lists the zone
+files itself rather than zone_file_index's cache. MAPS_TTL stays as the backstop and for BSPs.
+
+**Verified.** New test_web/test_mappool checks fail 4 and 1 on 58dbbf40 and pass on Windows and
+on the Pi; five mutants (signature read after the listing, scan via the other cache, settling or
+signature ignored, the waiter's lower bound back) each fail their check. Review round 1 found an
+overtaken map_index waiter scanning again (P829's one scan); fixed in 0d72a27c, round 2 found
+nothing. Code-only generation swap 01:53:23-46Z with the P1175 kit plus the drop-in slot's
+reservation protocol; the maps=1 body was byte-identical across it. Live: touching the lobbies'
+zones/local folder rescanned on the next read, settled after two more, then held. Limit: a copy
+that restores a folder's mtime can hide an added zone until MAPS_TTL (BACKLOG).
+
 ## Patch 1188 — Momentum's platform/ folder as a per-map mount (surf_skyhaven's glass)
 
 **Problem.** Lex (2 Nov): surf_skyhaven has a missing texture. Its 55 glass faces name
