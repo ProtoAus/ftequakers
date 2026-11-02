@@ -2817,6 +2817,17 @@ static void Cmd_Complete_CheckArg(const char *value, const char *desc, const cha
 	res->num++;
 }
 
+//FTESurf Patch 1219: copies, not the owners' pointers. Cmd_Complete memoises on the partial, and
+//CSQC_Shutdown's Cmd_RemoveCommands, unalias, alias redefinition and Cvar_GamedirChange free names
+//and descriptions the memo held: 0.1.37 faulted in Hash_KeyInsensitive under Con_BuildCompletion.
+static void Cmd_Complete_Set(struct cmd_completion_opt_s *o, const char *text, const char *desc)
+{
+	o->text_alloced = true;
+	o->text = Z_StrDup(text);
+	o->desc_alloced = desc != NULL;
+	o->desc = desc?Z_StrDup(desc):NULL;
+	o->repl = NULL;
+}
 static void Cmd_Complete_Check(const char *check, cmd_completion_t *res, const char *desc)	//compare cumulative strings and join the result
 {
 	const char *c;
@@ -2847,22 +2858,14 @@ static void Cmd_Complete_Check(const char *check, cmd_completion_t *res, const c
 				Z_Free((char*)res->completions[last].text);
 			if (res->completions[last].desc_alloced)
 				Z_Free((char*)res->completions[last].desc);
-			res->completions[last].text_alloced = false;
-			res->completions[last].text = check;
-			res->completions[last].desc_alloced = false;
-			res->completions[last].desc = desc;
-			res->completions[last].repl = NULL;
+			Cmd_Complete_Set(&res->completions[last], check, desc);
 		}
 		else
 			res->extra++;	//nettest: only count it as omitted if we actually omitted it
 		return;	//no more space for more options
 	}
 
-	res->completions[res->num].text_alloced = false;
-	res->completions[res->num].text = check;
-	res->completions[res->num].desc_alloced = false;
-	res->completions[res->num].desc = desc;
-	res->completions[res->num].repl = NULL;
+	Cmd_Complete_Set(&res->completions[res->num], check, desc);
 	res->num++;
 }
 static void Cmd_Complete_End(cmd_completion_t *c)
