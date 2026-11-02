@@ -111,8 +111,8 @@ void SV_FS_ResetFieldCaches(void)
 /*
   FTESurf Patch 346 -- THE PIN: every value PM_PlayerMove is handed that the usercmd
   does not carry, snapshotted per move from the variables the mover actually reads
-  (movevars/pmove after SV_SetSourceMoveVars), never from cvars: entgravity/maxspeed
-  lag by a send frame (six movevars were spawn-latched until Patch 977).  One table, one
+  (movevars/pmove after SV_SetSourceMoveVars), never from cvars: maxspeed
+  lags by a send frame (entgravity did until P1211, SV_ClientGravityRefresh) (six movevars were spawn-latched until Patch 977).  One table, one
   order, one text form, shared by the recorder's infokeys and by pm_recsim.
   APPEND ONLY: a reader matches tokens by name, but the fill order is the table.
 */
