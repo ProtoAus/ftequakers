@@ -1,5 +1,78 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patches 1217, 1218, 1215 — Lex's map list of 3 Nov: mirror water, sky leaks, fades, map decals, reset spawns
+
+**Problem.** Lex's paste of 3 Nov (Desktop 0.1.37, r_renderscale 2, hl2_water 2), with CS:S shots:
+surf_eternity's rivers and pools flat pink, its "walls not animating", things in its sky; surf_sidelines'
+doorway grey where CS:S goes black, grey, clear; surf_remeanian's end "fades the world to black as you
+fly closer, ours is an instant switch"; surf_sinsane_ez's credits "z-fight"; and zone_edit should show
+the start's teleport location, and reset should use it.
+
+**Measured.** A face ray tool over each save (which material is where on screen) and the rig:
+- eternity's water is a func_reflective_glass (LightmappedReflective, glass/reflectiveglass001) under a
+  Refract sheet tinted {165 120 120}. LightmappedReflective was an unknown class: vmt/unlit $whiteimage.
+- eternity save 12's dashes are point_spotlight shafts 7-9k units out, the sky brush at ~4.5k: P990's
+  sky mask sits at 2x. CSQC polygons get no PVS. remeanian save 18's "window" is the same mechanism with
+  func_illusionary *27/*54 at ~6.1k behind a sky at ~3.6k (r_sky_forcedepth_scale 1 hides them).
+- sidelines' fades/mipmap_black: mip 0 clear, 1 white, 2-8 black. The chain reaches the GPU intact;
+  r_renderscale 2 picks one level finer, so each stage happens at twice Source's distance.
+- remeanian's end box is a static prop, FadeMin 832 / FadeMax 2144, VertexLitGeneric effects\black.
+  The plugin set the fade as entity alpha, but vertexlit.glsl never read e_colourident.a.
+- eternity's 42-frame stargate texture is named "/brophis/gate/horizonb": "materials//..." failed.
+- eternity saves 5/13's "walls" are screen props (models/propper/surf_eternity/eternity/screen,
+  VertexLitGeneric, 331 frames at 24): the animated arm never took VertexLitGeneric, so frame 0.
+- sinsane_ez's credits are lump-45 overlay 0, re-placed as a static decal exactly on face 5819 with no
+  depth offset (Source lifts overlays 0.1). Not reproduced as flicker at the save, either build; the
+  "grey bar" in Lex's shot sits at the same screen spot in four of Lex's shots (a HUD element).
+
+**Change.**
+- P1217 plugin: vmt/lmreflect, Momentum's lightmappedreflective_ps20b without the $basetexture combo:
+  refraction*(1-F) + reflection*F, F = R + (1-R)(1-N.V)^5, R = $minreflectivity, else $reflectance
+  (0.25). hl2_water 2 renders both captures; 1 and 5 reflect the nearest baked cubemap; 0, 3, 4 blend
+  that cubemap over the framebuffer by F.
+- P1218 plugin: VMT_MipFade (DXT1/5 level means move by a quarter between two of levels 0-3) adds
+  #MIPFADE to translucent LightmappedGeneric, which samples with bias log2(r_renderscale); a leading
+  slash on a $ key's value is dropped; vertexlit.glsl applies the entity's alpha; a $model
+  VertexLitGeneric flipbook takes vmt/animated #UNLIT #MODELLIT (ambient + diffuse toward
+  e_light_dir; no ambient cube, VRAD bake or $vertexcolor).
+- P1218 engine: persistent map decals are lifted 0.25 along their face's normal
+  (CL_AddDecalStatic_Callback). A first cut pulled them by `polygonoffset 1`'s 25 depth steps; review
+  1 showed that grows to tens of units at range and replaced it.
+- P1218 CSQC: a sprite, glow or shaft whose line from the eye meets a sky side first is skipped
+  (vbsp_sprite_skyrays traces a frame, round-robin; ones seen from sky_camera are kept).
+- P1215 CSQC/SSQC: an automatic spawn (xy centre, or none) with exactly one info_teleport_destination
+  inside its zone stands there too, if that point's floor is in the zone; zone_edit draws every
+  start/stage spawn and the map's destinations, and names the one an automatic spawn uses.
+
+**Verified** (fixture install, one client, Lex's water/glass/render-scale settings):
+- eternity save 4: reflected trees and arches, pink-tinted; save 10 with Glass "Refracting" matches
+  Lex's CS:S shot. reflectiveglass001 compiles to vmt/lmreflect with $refraction + $reflection.
+- eternity save 12: `vbsp_sprite_debug` 84 of 97 shafts skipped, dashes gone; skyrays 0 brings them
+  back; the start room's shafts still draw (0 skipped).
+- sidelines from the lobby destination: black at spawn, see-through grey at 300 units, clear past it.
+  `[vmt] fades/mipmap_black: mip fade` printed.
+- eternity reset: Lex's own file lands on his spawn (-5616 -672, 94); with the spawn removed, `!r`
+  lands on s1 (-5632 -704 13824, 90) and the log names s2/s3 for stages 2-3. zone_edit draws
+  "start spawn: s1" and the inspector says "automatic spawn at the map teleport s1".
+- sinsane_ez credits: control (installed exe) and fix both clean at four eye positions.
+- remeanian past save 19: screen luma 73, 72, 66, 56, 46, 39, 28, 16, 11 at 0..1300 units on, where
+  it switched to ~0 within 100 units before.
+- eternity saves 13 / 5: 69% / 6.5% of pixels change in a second (0.2% / 0.3% before).
+- First cut crashed the client (QC && evaluates both sides: ZoneEdit_SpawnDest(-1)); fixed and re-run.
+- Two review rounds (code only). Round 1: no crash paths; fixed the sky test's tolerance, shaft source
+  point, sky-room rule and post-teleport flash, the editor's stamped-file and destination-cap mirror,
+  the decal pull, a black mirror without a cubemap, VTF 7.3 mip fades. Known and kept: a TAS
+  legal-start project saved at a start whose automatic spawn moved no longer loads (its message says
+  the spawn may have changed).
+
+**Not done.** P990's 2x sky mask still shows brush entities 1x-2x behind a sky (remeanian save 18's
+func_illusionary panes; `r_sky_forcedepth_scale 1` hides them and may cut props elsewhere); eternity
+save 7's cubemap reflections are far weaker than CS:S (same single LDR cubemap); dragonfall's
+visualizer sky against its lava was looked at, not diagnosed.
+
+Native: tag patch-1218 = 13f6a55a5 on patch-1222 (P1219, P1222 under it), merged to main. Client exe
+53c01d27 (git-8101-patch-1218-0-g13f6a55a5) and hl2 plugin 1a3c9737; rides the next release.
+
 ## Patch 1222 — an unlit map's faces stop rebuilding their lightmaps every frame (client exe)
 
 **Problem.** Lex (3 Nov): surf_leet_xl_beta7z, a plain map, ran at 86-100 fps; he asked for a frame-rate
