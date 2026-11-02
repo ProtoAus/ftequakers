@@ -166,6 +166,7 @@ qboolean Mat_VMT_CensusMissing(const char *name);
 void Mat_VMT_CensusForget(const char *name);
 static cvar_t *hl2_bottommaterial;
 static cvar_t *hl2_missinggrid;	//FTESurf Patch 780
+static cvar_t *hl2_missingtint;	//FTESurf Patch 1191
 static cvar_t *hl2_lt_blend, *hl2_lt_illumpos;	//FTESurf Patch 780, read by VBSP_LeafAmbientCube / VBSP_PropSamplePoint
 cvar_t *hl2_skinfallback;		//FTESurf Patch 234: read by Mod_LoadHL2Model in mod_hl2.c, registered here with the rest
 extern cvar_t *hl2_dither_alpha, *hl2_bumpmap, *hl2_envmap;	//FTESurf Build 13, all owned by mat_vmt.c
@@ -517,6 +518,7 @@ typedef struct vbspinfo_s
 		vec4_t lmvecs[2];
 		qboolean bumped;	//FTESurf Patch 268 D1: SURF_BUMPLIGHT -- VRAD wrote NUM_BUMP_VECTS+1 = 4 luxel sets per lightstyle for this face
 		float missingtile;	//FTESurf Patch 780: material did not resolve; world units per checker tile (0 = texinfo scale)
+		vec3_t reflect;		//FTESurf Patch 1191: dtexdata reflectivity (linear albedo VBSP read from the VTF); -1 = none or 0x0 texdata
 	} *texinfo;
 
 	qbyte			*leafflags;			//FTESurf Patch 880: dleaf_t's flags (LEAF_FLAGS_SKY 0x01, SKY2D 0x04), [numleafs]
@@ -2712,6 +2714,8 @@ static qboolean VBSP_LoadTexInfo (model_t *mod, qbyte *mod_base, vlump_t *lumps,
 		for (j=0 ; j<4 ; j++)
 			prv->texinfo[i].lmvecs[1][j] = LittleFloat (in->lmvecs[1][j]);
 		prv->texinfo[i].bumped = !!(flags & TIHL2_BUMPLIGHT);	//FTESurf Patch 268 D1
+		for (j=0 ; j<3 ; j++)	//0x0: VBSP never found the material, and wrote 0 0 0 (surf_olivia's grassdirt_blend_wvt_patch)
+			prv->texinfo[i].reflect[j] = (texture && texture->width && texture->height) ? LittleFloat(texture->reflectivity[j]) : -1;
 
 		if (flags & (TIHL2_SKYBOX|TIHL2_SKYROOM))
 			Q_snprintfz(sname, sizeof(sname), "sky/%s", texturename);
@@ -6216,6 +6220,54 @@ static qboolean VBSP_DiffuseMissing(texture_t *tx)
 	return probe && probe->status == TEX_FAILED;
 }
 
+/*
+FTESurf Patch 1191: texture t's image will not load; draw it as one colour, the texture's
+average that VBSP copied from the VTF header into dtexdata (linear), under its lightmap.
+Momentum shows that on a map whose game is not installed: surf_utopia without TF2, 14,564
+of 16,966 faces.  A VMT that loaded keeps the checker: tinted solid, a translucent one
+would wall off what it shows.
+*/
+static qboolean VBSP_MissingTint(model_t *mod, size_t t)
+{
+	vbspinfo_t *prv = (vbspinfo_t*)mod->meshinfo;
+	texture_t *tx = mod->textures[t];
+	shader_t *sh = tx->shader, *tsh;
+	const float *refl = NULL;
+	qbyte px[4*4*4], c[3];
+	char name[32];
+	int i;
+
+	//Only the engine's own wall (no VMT, or one that would not parse): opaque by construction.
+	//A VMT's shader is not finished here (sort is still 0), so its blending cannot be read.
+	if (!sh || !sh->prog || !sh->prog->name || Q_strncasecmp(sh->prog->name, "defaultwall", 11) || strchr(tx->name, '#'))
+		return false;
+	for (i = 0; i < mod->numtexinfo && !refl; i++)
+		if (mod->texinfo[i].texture == tx)
+			refl = prv->texinfo[i].reflect;
+	if (!refl)
+		return false;
+	for (i = 0; i < 3; i++)
+	{
+		if (!(refl[i] >= 0 && refl[i] <= 1))	//-1 (no texdata) and NaN too
+			return false;
+		c[i] = (qbyte)(255 * pow(refl[i], 1/2.2) + 0.5);	//back to the sRGB the texture's bytes were
+	}
+	Q_snprintfz(name, sizeof(name), "hl2tint_%02x%02x%02x", c[0], c[1], c[2]);	//no '/': the VMT census skips it
+	for (i = 0; i < 16; i++)
+	{
+		px[i*4+0] = c[0];
+		px[i*4+1] = c[1];
+		px[i*4+2] = c[2];
+		px[i*4+3] = 255;
+	}
+	tsh = modfuncs->RegisterBasicShader(mod, name, SUF_LIGHTMAP, NULL, PTI_RGBX8, 4, 4, px, NULL);
+	if (!tsh)
+		return false;
+	Con_DPrintf("%s: %s draws its reflectivity colour %s\n", mod->name, tx->name, name+8);
+	tx->shader = tsh;
+	return true;
+}
+
 static void VBSP_GenerateMaterials(void *ctx, void *data, size_t a, size_t b)
 {
 	model_t *mod = ctx;
@@ -6345,19 +6397,26 @@ static void VBSP_GenerateMaterials(void *ctx, void *data, size_t a, size_t b)
 		for the absent texture -- a 1024 texture at 0.25 gave 128-unit squares.  Decided
 		here because VBSP_BuildSurfMesh runs from Batches_Build below.  See
 		VBSP_DiffuseMissing for why the material census cannot decide it.
+		Patch 1191: one the engine's default wall draws (no VMT) takes its reflectivity
+		colour instead (VBSP_MissingTint); only the rest keep the checker.
 		*/
 		{
 			vbspinfo_t *prv = (vbspinfo_t*)mod->meshinfo;
 			float grid = hl2_missinggrid ? hl2_missinggrid->value : 32;
-			qbyte *miss = grid > 0 && mod->numtextures ? plugfuncs->Malloc(mod->numtextures) : NULL;
+			qboolean tint = !hl2_missingtint || hl2_missingtint->ival;
+			qbyte *miss = (grid > 0 || tint) && mod->numtextures ? plugfuncs->Malloc(mod->numtextures) : NULL;
 			size_t t;
 			for (t = 0; miss && t < (size_t)mod->numtextures; t++)
+			{
 				miss[t] = VBSP_DiffuseMissing(mod->textures[t]);
+				if (miss[t] && tint && VBSP_MissingTint(mod, t))
+					miss[t] = 0;
+			}
 			for (t = 0; t < (size_t)mod->numtexinfo; t++)
 			{
 				size_t k;
 				prv->texinfo[t].missingtile = 0;
-				if (mod->texinfo[t].flags & TI_WARP)
+				if (grid <= 0 || (mod->texinfo[t].flags & TI_WARP))
 					continue;	//water: its ripple normal map shares these coordinates
 				for (k = 0; miss && k < (size_t)mod->numtextures; k++)
 					if (mod->textures[k] == mod->texinfo[t].texture)
@@ -6369,7 +6428,7 @@ static void VBSP_GenerateMaterials(void *ctx, void *data, size_t a, size_t b)
 			if (miss)
 			{
 				for (t = 0; t < (size_t)mod->numtextures; t++)
-					if (miss[t])
+					if (miss[t] && grid > 0)
 						Con_DPrintf("%s: %s draws the missing checker, %g units a square\n", mod->name, mod->textures[t]->name, grid);
 				plugfuncs->Free(miss);
 			}
@@ -13563,6 +13622,7 @@ qboolean VBSP_Init(void)
 		hl2_refract = cvarfuncs->GetNVFDG("hl2_refract", "2", CVAR_SHADERSYSTEM, "How Source's Refract materials (glass, windows) are drawn.\n0: no framebuffer copy -- what is behind the pane tinted by $refracttint (and its tint texture), plus its $envmap reflection: Source's look without the warp.\n1: Source's refraction, which copies the framebuffer once per batch.\n2: dithered flat (default) -- the pane keeps its own texture, $alpha sets the coverage, and it becomes opaque geometry that writes depth. A pane with no texture of its own draws as 0.", MAPOPTIONS);
 		hl2_vertexcolor = cvarfuncs->GetNVFDG("hl2_vertexcolor", "1", CVAR_SHADERSYSTEM, "FTESurf Patch 232: $vertexcolor / $vertexalpha on LightmappedGeneric and WorldVertexTransition materials -- the per-vertex tint and opacity a mapper paints onto a DISPLACEMENT (every other surface carries white at alpha 1, so this cannot change them).\n0: ignore both keys, which is what every build before P232 did.\n1: draw what the material asks for (default). 41 transition materials in 20 maps and 494 LightmappedGeneric ones in 111 maps carry them; surf_rise's ivy is the reported case.", MAPOPTIONS);
 		hl2_bottommaterial = cvarfuncs->GetNVFDG("hl2_bottommaterial", "1", CVAR_SHADERSYSTEM, "FTESurf Patch 233: a water material's $bottommaterial -- the underside of the water -- when the map names one and does not ship it.\n0: leave it unresolved, which is what every build before P233 did; the underside draws with the default wall shader and the map reports a missing material.\n1: draw it as the water material that names it (default). surf_aesthetic's water/clear_beneath is 325 faces and surf_demise's water_tar_beneath 7; neither exists in any pack, in either spelling.", MAPOPTIONS);
+		hl2_missingtint = cvarfuncs->GetNVFDG("hl2_missingtint", "1", 0, "FTESurf Patch 1191: a world face whose material has no VMT (or one that would not parse) draws one flat colour: the map's own record of that texture's average colour (dtexdata reflectivity), lit by the lightmap, as Momentum draws a map whose game is not installed.\n0: the missing checker (hl2_missinggrid). A VMT that loaded but whose image is missing, and a face with no usable reflectivity, keep the checker either way. Takes effect on the next map load.", MAPOPTIONS);
 		hl2_missinggrid = cvarfuncs->GetNVFDG("hl2_missinggrid", "32", 0, "FTESurf Patch 780: the size, in world units, of one square of the missing-texture checker on a world face whose material did not resolve.\n0: scale it like the texture it stands in for, which is what every build before P780 did (a 1024 texture at 0.25 drew 128-unit squares).\n32 (default): one square per 32 units -- Hammer's grid -- whatever the face's texture scale. Takes effect on the next map load.", MAPOPTIONS);
 		hl2_skinfallback = cvarfuncs->GetNVFDG("hl2_skinfallback", "1", CVAR_SHADERSYSTEM, "FTESurf Patch 234: what a model does when one of its skins names a material that was never shipped.\n0: nothing -- that skin draws with the default wall shader, and the map reports a missing material.\n1: use another skin of the same slot that did resolve (default). surf_demise ships three of its four bone skins and one of its two fir-branch skins; no prop on the map selects the missing ones, so this silences two reports and changes nothing on screen.", MAPOPTIONS);
 		hl2_translucent = cvarfuncs->GetNVFDG("hl2_translucent", "1", CVAR_SHADERSYSTEM, "$translucent world materials (windows, grates, railings).\n0: draw them OPAQUE -- they keep their texture and lightmap but stop being sorted, which is what they actually cost on a map with a lot of glazing.\n1: as the material author wrote them (default).", MAPOPTIONS);
