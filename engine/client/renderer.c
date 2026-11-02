@@ -944,7 +944,7 @@ cvar_t r_fog_permutation					= CVARFD ("r_fog_permutation", "1", CVAR_SHADERSYST
 cvar_t r_fog_progless						= CVARFD ("r_fog_progless", "1", CVAR_ARCHIVE, "Fog surfaces whose material has no GLSL program (Source UnlitGeneric, q3 shaders, anything drawn through the fixed-function path) using fixed-function fog. 0 restores the pre-Patch-266 behaviour, in which those surfaces took no distance fog.");
 //FTESurf Patch 1213: Source fogs by distance from the eye (common_fxc.h CalcRangeFogFactorNonFixedFunction:
 //distance(eyePos, worldPos)), FTE by view depth; they part toward the screen edges.
-cvar_t r_fog_radial						= CVARFD ("r_fog_radial", "1", CVAR_ARCHIVE, "Fog distance. 0: view depth (FTE). 1: distance from the eye, as Source, on Source maps only. 2: distance from the eye everywhere.");
+cvar_t r_fog_radial						= CVARFD ("r_fog_radial", "1", CVAR_ARCHIVE, "Fog distance. 0: view depth (FTE). 1: distance from the eye, as Source, on Source maps only. 2: distance from the eye everywhere. GLSL passes only; a pass with no program keeps view depth.");
 
 extern cvar_t gl_dither;
 cvar_t	gl_screenangle = CVAR("gl_screenangle", "0");

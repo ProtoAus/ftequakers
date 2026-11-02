@@ -5482,6 +5482,28 @@ void GLBE_Scissor(srect_t *rect)
 	GLBE_ApplyScissor(rect);
 }
 
+//FTESurf Patch 1213: w_fog[2] for sys/fog.h fogdepth(), so GLSL fog runs on the distance from the eye as
+//Source does (r_fog_radial). eye xy / depth = gl_FragCoord.xy * xy + zw, from x/d = (ndc.x + p[8]) / p[0] and
+//ndc = (frag - viewport) * 2 / size - 1, viewport as GLBE_ViewportUpdate. Needs clip w = -z: zeros otherwise
+//(an orthographic VF_PERSPECTIVE 0 view has p[11] 0). Passes with no program keep GL fog's view depth:
+//GL_NV_fog_distance's radial is interpolated per vertex on NVIDIA (a wall 616 units ahead fogged as >1000).
+static void GLBE_FogRadial(float *out)
+{
+	extern cvar_t r_fog_radial;
+	const float *p = r_refdef.m_projection_std;
+	float vx = r_refdef.pxrect.x, vy = r_refdef.pxrect.maxheight - (r_refdef.pxrect.y + r_refdef.pxrect.height);
+	float vw = r_refdef.pxrect.width, vh = r_refdef.pxrect.height;
+	qboolean on = r_fog_radial.ival >= 2 || (r_fog_radial.ival == 1 && r_worldentity.model &&
+		(r_worldentity.model->engineflags & MDLF_SOURCEBSP));
+	out[0] = out[1] = out[2] = out[3] = 0;
+	if (!on || vw <= 0 || vh <= 0 || !p[0] || !p[5] || p[11] != -1 || p[15] != 0)
+		return;
+	out[0] = 2 / (vw * p[0]);
+	out[1] = 2 / (vh * p[5]);
+	out[2] = (p[8] - 1 - 2 * vx / vw) / p[0];
+	out[3] = (p[9] - 1 - 2 * vy / vh) / p[5];
+}
+
 /*
   FTESurf Patch 208: was a bare qglViewport macro in glquake.h.
 
@@ -5499,29 +5521,6 @@ void GLBE_Scissor(srect_t *rect)
   clhl_game.c -- each of which sets a scissor and may cross a GL_Set2D -- behave
   as they always did.
 */
-//FTESurf Patch 1213: Source fogs by distance from the eye, FTE by view depth (r_fog_radial).
-qboolean GLBE_FogIsRadial(void)
-{
-	extern cvar_t r_fog_radial;
-	return r_fog_radial.ival >= 2 || (r_fog_radial.ival == 1 && r_worldentity.model &&
-		(r_worldentity.model->engineflags & MDLF_SOURCEBSP));
-}
-//w_fog[2] for sys/fog.h fogdepth(): eye xy / depth = gl_FragCoord.xy * xy + zw, from
-//x/d = (ndc.x + p[8]) / p[0] and ndc = (frag - viewport) * 2 / size - 1 (viewport as GLBE_ViewportUpdate).
-static void GLBE_FogRadial(float *out)
-{
-	const float *p = r_refdef.m_projection_std;
-	float vx = r_refdef.pxrect.x, vy = r_refdef.pxrect.maxheight - (r_refdef.pxrect.y + r_refdef.pxrect.height);
-	float vw = r_refdef.pxrect.width, vh = r_refdef.pxrect.height;
-	out[0] = out[1] = out[2] = out[3] = 0;
-	if (!GLBE_FogIsRadial() || vw <= 0 || vh <= 0 || !p[0] || !p[5])
-		return;
-	out[0] = 2 / (vw * p[0]);
-	out[1] = 2 / (vh * p[5]);
-	out[2] = (p[8] - 1 - 2 * vx / vw) / p[0];
-	out[3] = (p[9] - 1 - 2 * vy / vh) / p[5];
-}
-
 void GLBE_ViewportUpdate(void)
 {
 	qglViewport(r_refdef.pxrect.x,
@@ -5820,8 +5819,6 @@ static qboolean BE_ProglessFogBegin(void)
 		qglFogi(GL_FOG_MODE, r_fog_exp2.ival?GL_EXP2:GL_EXP);
 		qglFogf(GL_FOG_DENSITY, r_refdef.globalfog.density);
 	}
-	if (gl_config.nv_fog_distance)	//FTESurf Patch 1213: GL_EYE_RADIAL_NV / GL_EYE_PLANE_ABSOLUTE_NV
-		qglFogi(0x855A, GLBE_FogIsRadial() ? 0x855B : 0x855C);
 	qglEnable(GL_FOG);
 	return true;
 }

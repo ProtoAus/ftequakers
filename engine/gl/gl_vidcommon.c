@@ -753,7 +753,6 @@ static qboolean GL_CheckExtensions (void *(*getglfunction) (char *name))
 		qglDrawRangeElements = GL_DrawRangeElementsEmul;
 
 	gl_config.ext_packed_depth_stencil = GL_CheckExtension("GL_EXT_packed_depth_stencil");
-	gl_config.nv_fog_distance = !gl_config_gles && GL_CheckExtension("GL_NV_fog_distance");	//FTESurf Patch 1213
 
 	if ((!gl_config.gles && gl_config.glversion >= 4.6) || GL_CheckExtension("GL_EXT_texture_filter_anisotropic") || GL_CheckExtension("GL_ARB_texture_filter_anisotropic"))
 	{

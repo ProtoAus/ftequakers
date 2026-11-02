@@ -91,6 +91,7 @@ cvar_t *hl2_imposter;	//FTESurf Patch 263, WindowImposter -- Source's fake-secon
 cvar_t *hl2_twotexture;	//FTESurf: UnlitTwoTexture's second layer + its proxy chain
 cvar_t *hl2_twoframes;	//FTESurf Patch 286: ...and its distance-driven flipbook
 cvar_t *hl2_additivefog;	//FTESurf Patch 300, additive materials onto a program so they fog toward black
+cvar_t *hl2_unlitprogram;	//FTESurf Patch 1213, the rest of UnlitGeneric onto a program
 
 //How many of each this map actually loaded, for the census mod_vbsp.c prints.
 int vmt_stat_water, vmt_stat_refract, vmt_stat_translucent;
@@ -100,6 +101,7 @@ int vmt_stat_hdrenvmap;	//FTESurf Patch 264, $envmap resolved via the .hdr.vtf f
 int vmt_stat_ignorez;	//FTESurf Patch 290, $ignorez materials that could not be honoured
 int vmt_stat_addprog;	//FTESurf Patch 300, additive materials moved from a pass onto vmt/unlit
 int vmt_stat_addpass;	//...and those that had to stay on a pass, so the census says which
+int vmt_stat_unlitprog;	//FTESurf Patch 1213, non-additive UnlitGeneric onto vmt/unlit
 /*
 FTESurf Patch 263: materials whose SHADER CLASS this file does not implement.
 
@@ -545,7 +547,7 @@ void Mat_VMT_ResetStats(void)
 	vmt_stat_hdrenvmap = 0;	//FTESurf Patch 264
 	vmt_stat_flowwater = 0;
 	vmt_stat_ignorez = 0;	//FTESurf Patch 290
-	vmt_stat_addprog = vmt_stat_addpass = 0;	//FTESurf Patch 300
+	vmt_stat_addprog = vmt_stat_addpass = vmt_stat_unlitprog = 0;	//FTESurf Patch 300, 1213
 	vmt_stat_unknown = 0;
 	memset(vmt_stat_unknown_name, 0, sizeof(vmt_stat_unknown_name));
 	vmt_unsupported_count = 0;
@@ -2441,6 +2443,21 @@ static qboolean VMT_AdditiveProgramOK(vmtstate_t *st)
 	return true;
 }
 
+//FTESurf Patch 1213: a non-additive UnlitGeneric onto vmt/unlit too. A pass gets fixed-function fog, which
+//is view depth where Source fogs by distance from the eye (see GLBE_FogRadial), and none at all on maps whose
+//fogmaxdensity cap BE_ProglessFogBegin declines (Patch 266). Bases a program cannot sample stay, as above;
+//so does $translucent under hl2_translucent 0, which the pass blends anyway and the tail would make opaque.
+static qboolean VMT_UnlitProgramOK(vmtstate_t *st)
+{
+	if (st->additive || (hl2_unlitprogram && !hl2_unlitprogram->ival))
+		return false;
+	if (st->nobasetex || *st->hdrbasetex || *st->hdrcompressedtex)
+		return false;
+	if (st->translucent && hl2_translucent && !hl2_translucent->ival)
+		return false;
+	return true;
+}
+
 /*
 FTESurf Patch 783: the blend an $additive material gets.  Source's
 SetAdditiveBlendingShadowState (shaderlib/BaseShader.cpp:632-668) uses SRC_ALPHA ONE
@@ -3280,17 +3297,22 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 		Q_strlcatfz(script, &offset, sizeof(script), "\tprogram \"%s%s%s%s%s\"\n",
 			st->type, progargs, envmaptint, envmapsat, envmapcontrast);
 	}
-	else if (!Q_strcasecmp(st->type, "UnlitGeneric") && VMT_AdditiveProgramOK(st))
+	else if (!Q_strcasecmp(st->type, "UnlitGeneric") && (VMT_AdditiveProgramOK(st) || VMT_UnlitProgramOK(st)))
 	{
 		if (st->vertexcolor)
 			VMT_AddVertexColourArgs(progargs, sizeof(progargs));
+		else if (st->vertexalpha && !st->additive)	//Patch 1213: the pass's alphaGen vertex
+			Q_strlcat(progargs, "#VERTEXALPHA", sizeof(progargs));
 		Q_strlcpy(st->type, "vmt/unlit", sizeof(st->type));
 		Q_strlcatfz(script, &offset, sizeof(script),	"\tprogram \"%s%s\"\n", st->type, progargs);
 		Q_strlcatfz(script, &offset, sizeof(script),	"\tdiffusemap \"%s\"\n", VMT_BaseImage(st));
 		//The blend itself still comes from the shared tail: st->additive makes it
 		//write `progblendfunc add` (:3913), which is the top-level spelling and the
 		//only pass-state directive a program with no pass block can use.
-		vmt_stat_addprog++;
+		if (st->additive)
+			vmt_stat_addprog++;
+		else
+			vmt_stat_unlitprog++;
 	}
 	//Patch 990: base + $envmap, which the pass below has never drawn (bhop_ceaseless's labels and logos).
 	else if (!Q_strcasecmp(st->type, "UnlitGeneric") && *st->envmap && !*st->hdrbasetex && !*st->hdrcompressedtex)
@@ -5071,9 +5093,9 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 	everywhere -- an opaque material prints nothing.
 	*/
 	if (st->translucent || st->additive || st->alphaval)
-		Con_DPrintf("[vmt] %s: alpha %.3f translucent %i additive %i animpass %i blendfunc %s\n",
+		Con_DPrintf("[vmt] %s: alpha %.3f translucent %i additive %i animpass %i blendfunc %s type %s\n",
 			shortname, st->alphaval, st->translucent, st->additive, st->animpass,
-			st->blendfunc ? st->blendfunc : "(NONE -- will not blend)");
+			st->blendfunc ? st->blendfunc : "(NONE -- will not blend)", st->type);	//type: Patch 1213, vmt/unlit or the pass's UnlitGeneric
 
 	/*
 	FTESurf: the generated script, verbatim, for the material types whose
