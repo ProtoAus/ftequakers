@@ -1,5 +1,138 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1229 — surfd: a new board row's cap count walks runs_live; momboards commits 500 rows at a time
+
+**Problem.** Lex (3 Nov): record uploads are slow. Each /api/run that adds a board row first asks
+_runs_full whether the network's cap is reached: `COUNT(*) ... WHERE leg=0 AND tier NOT IN (?,?)`.
+With no sqlite_stat1 the planner scanned runs_board's 3.47M entries, imports included: 2.1 s cold
+(0.37 s warm, an earlier note) for a main row, 0.65 s for a stage row, measured on a backup-API
+snapshot of the live DB (2 Nov). momboards' flush() also set a whole chunk (up to 20,000 rows) in one
+write transaction (BACKLOG: 1.83 s of lock on the PC).
+
+**Change.** FTESurf surfd/surfd.py `_runs_full` counts `INDEXED BY runs_live` (the partial index of
+non-imported rows, 718 of 3.47M) with the tier names written as runs_live's own WHERE; a missing index
+falls back to the plain count. surfd/momboards.py flush() commits every 500 rows (FLUSH_TX); a re-run
+upserts the same rows, so a partial pass is safe.
+
+**Verified.** Snapshot: the plain and indexed counts agree (220 main, 498 stage) at 2.117 s against
+0.010 s. surfd tests board, story, web, momboards, momrequest, momwatch, ranked pass. The rest of the
+audit (combined-board sort, the player directory scan, rank counts, replay count, 15 GB of old DB
+backups, 67,800 leaked test homes in %TEMP%) is in FTESurf BACKLOG.
+
+## Patch 1228 — the completed-maps list loads with the game
+
+**Problem.** Lex (3 Nov): map progress should be the account's and loaded in time. Completion already
+comes from surfd by account, but the Maps cards asked for it 16 at a time as they scrolled into view,
+and the all-maps completed list (completed=<me>) was asked only for the Completed sort.
+
+**Change.** FTESurf menu: MH_Poll asks MCard_DoneWant from the title screen (beside P905's story
+prefetch); screen_create keeps it fresh whatever the sort; MCard_Complete and MCard_Draw read it until
+a card's own row lands ("Loading times..."); the filters say "loading your progress..." while pending.
+
+**Verified.** lexui_arm: the subject asks completed= from the title screen; main does not.
+
+## Patch 1227 — a tapped load key holds for a lead-in and until the server answered
+
+**Problem.** Lex (3 Nov): tapping the load key, the server snaps the view forward. The release went at
+once, a round trip before the server had answered the load, so the body was let go at the save's
+speed early and the view jumped to where the server had it.
+
+**Change.** FTESurf cl_saveloc.qc: the load key's release goes through SaveLoc_KeyUp; SaveLoc_LeadDone
+holds until cl_sl_leadin (archived, 0.1 s, 0..2) has passed and the server answered the load
+(WarpOp_LoadAnswered: the load's command acknowledged; or STAT_FS_SLACK for the stringcmd pair), at
+most a second past the lead-in. A press during the wait continues the hold. hud_edit: a Save & load
+pane (cycle and typed ms).
+
+**Verified.** lead_arm (hosted, stringcmd path, down and up in one frame): the tap held 0.093-0.126 s and
+let go after the server's hold stat was seen; main's control let go in the same frame. A 0.6 s hold
+still lets go at once. Reviews: the deferred-load restore, the practice-return cancel and the rewind
+countdown now carry the wait (review 1).
+
+## Patch 1226 — boards refresh when a run is stored, and on TAB
+
+**Problem.** Lex (3 Nov): display the time right away and refresh boards. A board was fetched again
+only after the viewer's own finish (ob_gen), so other players never saw a new time until a map change.
+
+**Change.** FTESurf sv_lobby.qc: each stored row bumps serverinfo *boardgen. cl_online.qc Online_Need
+marks boards stale on a change (3 s floor). +showscores marks rows over 15 s old stale. The board's
+status line says "your run: submitting..." while the finisher's answer is owed.
+
+**Verified.** lexui_arm against main: TAB after 17 s re-asks (8 -> 9; main 8 -> 8); a *boardgen bump
+re-asks the open board (9 -> 10; main 8 -> 8). Review fixes: the counter continues across maps
+(serverinfo), each client acts 0-2 s after a bump, and the seed runs once a map at the top of
+Online_Prefetch (review 1's sat after obp_i's increment and never ran: every map's first TAB refetched).
+
+## Patch 1225 — colour and inventory sooner after a join
+
+**Problem.** Lex (3 Nov): player colour and inventory should update on connect. The account hello
+waited 3-7 s after CSQC loaded (a map change's crowd), the inventory follows it; the lobby re-read a
+new player's colour once a second; the menu kept a profile for 60 s across connects.
+
+**Change.** FTESurf cl_account.qc: a join to a server other than the last hello's (_acct_server) asks
+in 0.3-1 s. sv_lobby.qc: the colour pass runs at 4 Hz for 30 s after a connect. m_main.qc: a
+clientstate change marks the menu's profile stale.
+
+**Verified.** Build only; by reading (needs a lobby with accounts). Owner check in lextest.
+
+## Patch 1224 — a drag-selection let go off its field keeps the field
+
+**Problem.** Lex (3 Nov): in the map search, dragging a selection left and letting go off the box
+dropped it. sui_text_input dropped the anchor when the release was not on the field.
+
+**Change.** FTESurf sui_sys.qc: that release makes the field last-clicked (no click fires) and keeps
+the selection.
+
+**Verified.** lexui_arm: drag left out of the map search after typing "surf": caret 0, selection 4
+(main: -1). The claim needs a drag live this frame or the last (a panel closed mid-drag).
+
+## Patch 1223 — zone_edit double-click teleports to an unsaved zone
+
+**Problem.** Lex (3 Nov): the zone list's double-click teleported only when the zones were saved
+(zone_edit_goto refused a table CRC the server did not have).
+
+**Change.** FTESurf sv_entities.qc publishes serverinfo fs_zegoto 1; then cl_zoneedit_extra.qc sends
+the zone's drawn middle on its floor with the table crc ("-" if empty), and sv_player.qc places it as
+setpos (a run cheat, as setpos already is) when the crc differs, else uses its own zone. An older
+server gets the 3-word form.
+
+**Verified.** lexui_arm, one zone deleted unsaved, double-click on zone 0: subject "an unsaved zone,
+now at -416 -352 50"; main control "zones differ".
+
+## Patch 1221 — key letters centred on caps; rounded report box, name screen and keys display
+
+**Problem.** Lex (3 Nov): some boxes square or different, the key letter high on the key hints, the
+inventory hint tiny and ON/OWNED poor. Measured on Lex's 1920x1200 shot: Z's ink 2.5 px above its
+chip's centre (text centred by its em box; the UI face's capitals are the em's top 0.64).
+
+**Change.** FTESurf FONT_CAPDROP 0.18 (sh_font.qc) on the key hint strip, the digit menus' rows, the
+link box's caps and code cells. The prederror box takes the digit menus' card; the keys panel and the
+name gate are rounded; inventory badges are pills on the font ladder, the hint at the panel's size.
+
+**Verified.** lexui_arm shots against main: Z within 0.5 px of centre (main 2.5 px high). startup_arm:
+the name gate was the one square startup panel (fill + border); terms, Steam sign-in and the journal
+already drew sui_style_panel. The link box, report box and inventory badges photographed.
+
+## Patch 1220 — in-game chat: a recipient tag instead of the field's prefix
+
+**Problem.** Lex (3 Nov): remove "To everyone" and "Enter sends, Esc closes" from the chat field; a
+small indicator at the top right instead.
+
+**Change.** FTESurf cl_chat.qc Chat_DrawTo: "To everyone" / "To this lobby" / "To <name>" at the
+panel's top right while typing; the field holds only the text.
+
+**Verified.** lexui_arm shot.
+
+## Patch 1214 — menu chat rows as tall as their text
+
+**Problem.** Lex (3 Nov): too much space between main-menu chat messages (each row a fixed 96 px),
+and the "saved for 30 days" and "not end-to-end encrypted" lines to go.
+
+**Change.** FTESurf m_chat.qc: MC_Row measures or draws a message; MC_Layout keeps row tops per
+rebuild and width; a scroll view replaces the fixed-pitch list. The two notes are gone.
+
+**Verified.** lexui_arm against main, a synthetic surfd room of 24 lines: one-line messages 50 px apart
+(main 102), the two notes gone.
+
 ## Patch 1219 — console completion keeps copies of names, not the owners' pointers
 
 **Problem.** Lex's 0.1.37 (Desktop release copy, exe 6fbf7e74) crashed on 3 Nov, 02:20 local, with
