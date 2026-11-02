@@ -1,5 +1,27 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1234 — surfd: a Steam sign-in fetches the player's KSF and Momentum bests (P1117/P1142 collectors live)
+
+**Problem.** Lex (3 Nov): fetch all the records of a player who links their Steam account. Main had
+the code since P1117/P1142 (KSF and Momentum personal-best walks queued at sign-in and daily by
+steamsync, paced inside the crawlers; momwatch's stalest-board rotation; per-walk parks), but the live
+backend's guarded closure was 83 files and the walks need momprofile.py.
+
+**Change.** FTESurf tools/surfd_transition_guard.py gains runtime profile collectors84-v1
+(activity83-v1 plus momprofile.py, schema 26, the same converter closure). The generation (372e4854)
+carries main's collector files byte for byte over P1232; mapwatch drops main's tascontent lease (unset
+on the Pi; a configured one makes mapwatch exit 2 before any download). kit1234 adds qualify negatives
+for the new file and profile, reports the walk tables at the boundary (they must not shrink), checks
+momprofiles' DDL and surfd.env, and ships rollback_1234.py: before any rollback, finish stage-phase
+KSF walks (mode 4-7), which the old ksfprofile has no slot for.
+
+**Verified.** Three review rounds. The guard by a 17,280-manifest differential (only the intended
+verdict changes); an AST import trace of the 84 files; state compatibility traced against live state
+(rolling forward safe; rolling back needs rollback_1234.py). Pi suites momprofile, momwatch, ksfimport,
+ksfprofile, mapwatch, accounts (402 checks) pass. Live from 19:11:14Z, nothing moved at the boundary:
+KSF 19:16 tick 8 requests, 103 rows; momwatch 19:14 rotation and re-walk took 6 requests beside its
+stale-board refreshes. A real Steam sign-in has not been observed queueing walks yet (FTESurf BACKLOG).
+
 ## Patch 1233 — water reflection, refraction and ripple captures each keep their own FBO (client exe)
 
 **Problem.** Lex (3 Nov), after P1222: CS:S draws surf_garden and surf_boreas faster; he wanted real fixes, not
