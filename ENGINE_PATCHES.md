@@ -1,5 +1,32 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1197 — zone_edit snaps to the map's own corners and edges
+
+**Problem.** Lex (2 Nov): the corners of surf_sinsane_ez's start could not be hit. Edge snap
+read only existing zones, and the start floor's three corners (11718 8396, 12176 8762.76,
+12176 8029.6) are all off the 16 grid; Lex's local start zone had 11728 8400 for the first.
+
+**Change.** CSQC only (cl_zoneedit*.qc). The world surface under the aim is found with
+getsurfacenearpoint (it walks every world triangle: ~0.5 ms there, so it is asked again only
+when the aim leaves the cached face, at most every 50 ms) and read with getsurfacepoint. A
+corner within 14 screen units of the crosshair and within max(32, 0.2 x distance) of the aim
+wins, its own or an existing zone's (the nearer on screen); else the nearest edge point. A
+corner or edge the compiler cut into one flat floor is refused: a short trace just beyond it
+lands on the same plane (surf_sinsane_ez's x 12176 seam; the floor's real end is the slope at
+x 12198). XY are the face's exactly; with the grid on an edge point is the grid point's foot
+on the edge, and Z keeps the floor-down rule. Displacements (not rings) do not snap. The face
+is outlined, the snap point gets a square on screen, and the placing hint names what the next
+click takes with its coordinates. Edge snap is on by default and `zone_edit edges 0|1` works
+while placing. Read-only hooks: `zone_edit snapprobe`, `wsurf`, `snapcost`.
+
+**Verified.** tools/p1197snap.py, one listen client on surf_sinsane_ez: every corner aim takes
+that corner exactly and the same aims with Edge snap off miss all three; real edges take the
+grid (or surface) point's foot; the seam is refused in both modes; the slope edge snaps on the
+grid; one search per face; a real click places the corner; polygon placing snaps the same;
+screenshots looked at. 15/15 on the review-1 build; the review-0 build fails exactly the four
+review checks. Shipped as deploy/p1197-zonesnap 7bfe2807 (lobbies, both installs; release 0.1.36). One review (non-ranking): grid lost along
+edges, splits snapped, search-rate traps, probes tainting saves -- fixed as review 1.
+
 ## Patch 1193 — surf_sirena's script barriers open for the player who earned them
 
 **Problem.** Lex (2 Nov): surf_sirena's barriercollision is never disabled. Its three barriers are
