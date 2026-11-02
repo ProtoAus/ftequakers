@@ -2315,6 +2315,11 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "#if defined(VERTEXCOL) || defined(VERTEXALPHA)\n"
 "varying vec4 vex_color;\n"
 "#endif\n"
+// FTESurf Patch 1218: MODELLIT, a VertexLitGeneric model's flipbook, lit as the engine lights a
+// model (ambient plus diffuse toward e_light_dir): no ambient cube, no VRAD bake, no $vertexcolor.
+"#ifdef MODELLIT\n"
+"varying vec3 mlight;\n"
+"#endif\n"
 
 "#ifndef UNLIT\n"
 "varying vec2 lm0;\n"
@@ -2335,6 +2340,9 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "#endif\n"
 "#endif\n"
 "tex_c = v_texcoord + e_time * vec2(SCROLL);\n"
+"#ifdef MODELLIT\n"
+"mlight = e_light_ambient + max(dot(v_normal, e_light_dir), 0.0) * e_light_mul;\n"
+"#endif\n"
 "#if defined(VERTEXCOL) || defined(VERTEXALPHA)\n"
 "vex_color = v_colour;\n"
 "#endif\n"
@@ -2382,7 +2390,9 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 
 "diffuse_f = texture2D(s_anim, vec3(tex_c, layer));\n"
 "diffuse_f.rgb *= e_colourident.rgb * vec3(COLOR);\n"
-"#ifdef VERTEXCOL\n"
+"#ifdef MODELLIT\n"
+"diffuse_f.rgb *= mlight;\n"
+"#elif defined(VERTEXCOL)\n"
 "diffuse_f.rgb *= vex_color.rgb;\n"
 "#endif\n"
 "#ifdef VERTEXALPHA\n"

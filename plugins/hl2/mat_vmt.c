@@ -3272,7 +3272,9 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 	          is left alone, because vmt/animated has no blend and quietly
 	          dropping the crossover would be worse than not animating.
 	          */
-	          (!Q_strcasecmp(st->type, "WorldVertexTransition") && !*st->tex[1].name)))
+	          (!Q_strcasecmp(st->type, "WorldVertexTransition") && !*st->tex[1].name) ||
+	          //FTESurf Patch 1218: a model's (surf_eternity's 331-frame screens drew frame 0)
+	          (!Q_strcasecmp(st->type, "VertexLitGeneric") && st->modelmaterial)))
 	{
 		char anim[64];
 		/*
@@ -3290,12 +3292,13 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 		"the flipbook is too dim", not as a lighting bug, and it is exactly the
 		class of thing a screenshot of the smoke could never show.
 		*/
-		qboolean animunlit = !Q_strcasecmp(st->type, "UnlitGeneric") || !Q_strcasecmp(st->type, "Sprite");	//FTESurf: a sprite is unlit -- keep it off the lightmap (the lit path binds s_lightmap it has no coords for)
+		qboolean animmodel = !Q_strcasecmp(st->type, "VertexLitGeneric");
+		qboolean animunlit = animmodel || !Q_strcasecmp(st->type, "UnlitGeneric") || !Q_strcasecmp(st->type, "Sprite");	//FTESurf: a sprite is unlit -- keep it off the lightmap (the lit path binds s_lightmap it has no coords for)
 		Q_snprintfz(anim, sizeof(anim), "#ANIMRATE=%f", st->animrate);
 		Q_strlcat(progargs, anim, sizeof(progargs));
 		if (animunlit)
 		{
-			Q_strlcat(progargs, "#UNLIT=1", sizeof(progargs));
+			Q_strlcat(progargs, animmodel ? "#UNLIT=1#MODELLIT" : "#UNLIT=1", sizeof(progargs));
 			vmt_stat_animunlit++;
 		}
 		Q_strlcpy(st->type, "vmt/animated", sizeof(st->type));
