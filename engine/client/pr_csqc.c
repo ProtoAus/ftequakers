@@ -2867,6 +2867,9 @@ void R_DrawNameTags(void);
 static void QCBUILTIN PF_R_RenderScene(pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
 {
 	qboolean scissored;
+	qboolean rtview = !!*r_refdef.rt_destcolour[0].texname;	//FTESurf Patch 1230
+	vrect_t oldvrect = r_refdef.vrect;
+	pxrect_t oldpxrect = r_refdef.pxrect;
 
 	if (R2D_Flush)
 		R2D_Flush();
@@ -2963,6 +2966,12 @@ static void QCBUILTIN PF_R_RenderScene(pubprogfuncs_t *prinst, struct globalvars
 			R2D_Flush();
 
 		BE_Scissor(NULL);
+	}
+	if (rtview)
+	{	//FTESurf Patch 1230: project() before the next screen view reads vrect; leave it the screen's.
+		r_refdef.vrect = oldvrect;
+		r_refdef.pxrect = oldpxrect;
+		csqc_rebuildmatricies = true;
 	}
 }
 

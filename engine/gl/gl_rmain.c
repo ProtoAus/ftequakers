@@ -58,6 +58,7 @@ extern cvar_t	r_stereo_separation;
 extern cvar_t	r_stereo_convergence;
 extern cvar_t	r_stereo_method;
 extern cvar_t	r_postprocshader, r_fxaa, r_graphics;
+extern cvar_t	r_scenedepth;	//FTESurf Patch 1230
 extern cvar_t	r_colourcorrection;	//FTESurf Patch 288
 extern cvar_t	r_underwateroverlay;	//FTESurf Patch 1013
 static qboolean r_uwnowarp;	//FTESurf Patch 1013: a Source volume with no overlay draws neither warp
@@ -2992,6 +2993,9 @@ void GLR_RenderView (void)
 					break;
 				}
 		}
+		//FTESurf Patch 1230: CSQC samples $rt:rt/$lastgameviewdepth after this view (cl_inventory.qc's glow).
+		if (r_scenedepth.ival)
+			fbdepth = forcedfb = true;
 		if (V_UseSceneGamma() && (v_gamma.value != 1 || v_contrast.value != 1 || v_contrastboost.value != 1 || v_brightness.value != 0 || v_shadows.value > 0))
 			r_refdef.flags |= RDF_SCENEGAMMA;
 	}
