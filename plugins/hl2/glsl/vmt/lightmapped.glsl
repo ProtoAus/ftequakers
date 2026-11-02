@@ -18,6 +18,7 @@
 
 !!permu FAKESHADOWS
 !!cvardf r_glsl_pcf
+!!cvarf r_renderscale
 !!samps =FAKESHADOWS shadowmap
 
 #ifndef ENVTINT
@@ -175,6 +176,7 @@ varying vec2 lm1, lm2, lm3;
 #endif
 
 #ifdef FRAGMENT_SHADER
+uniform float cvar_r_renderscale;
 	#include "sys/fog.h"
 	
 #ifdef FAKESHADOWS
@@ -225,7 +227,13 @@ varying vec2 lm1, lm2, lm3;
 	{
 		vec4 diffuse_f;
 
+#ifdef MIPFADE
+		//FTESurf Patch 1218 (mat_vmt.c VMT_MipFade): the level the screen would pick at r_renderscale 1;
+		//a supersampled buffer picks finer ones and moves the fade out by that factor.
+		diffuse_f = texture2D(s_diffuse, tex_c, log2(max(abs(cvar_r_renderscale), 1.0)));
+#else
 		diffuse_f = SEAMSAMP(s_diffuse);
+#endif
 		diffuse_f.rgb *= e_colourident.rgb * vec3(COLOR);
 
 #ifdef MASKLT

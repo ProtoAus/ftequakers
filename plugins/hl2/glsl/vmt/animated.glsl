@@ -2,6 +2,8 @@
 !!permu FOG
 !!permu LIGHTSTYLED
 !!permu NOFOG
+!!permu VC			// FTESurf Patch 1218: MODELLIT's VRAD bake, as vertexlit.glsl's
+!!cvardf hl2_lt_fold=1
 !!samps anim:2DArray=0
 
 !!samps !UNLIT lightmap
@@ -73,6 +75,11 @@ varying vec2 tex_c;
 #if defined(VERTEXCOL) || defined(VERTEXALPHA)
 varying vec4 vex_color;
 #endif
+// FTESurf Patch 1218: MODELLIT, a VertexLitGeneric model's flipbook, lit as vertexlit.glsl lights
+// one without its ambient cube: half-lambert under hl2_lt_fold, the VRAD bake (VC). No $vertexcolor.
+#ifdef MODELLIT
+varying vec3 mlight;
+#endif
 
 #ifndef UNLIT
 varying vec2 lm0;
@@ -93,6 +100,16 @@ varying vec2 lm1, lm2, lm3;
 	#endif
 	#endif
 		tex_c = v_texcoord + e_time * vec2(SCROLL);
+	#ifdef MODELLIT
+		#if hl2_lt_fold
+		mlight = e_light_ambient + max(0.0, dot(v_normal, e_light_dir) * 0.5 + 0.5) * e_light_mul;
+		#else
+		mlight = e_light_ambient + max(dot(v_normal, e_light_dir), 0.0) * e_light_mul;
+		#endif
+		#ifdef VC
+		mlight *= v_colour.rgb;
+		#endif
+	#endif
 	#if defined(VERTEXCOL) || defined(VERTEXALPHA)
 		vex_color = v_colour;
 	#endif
@@ -140,7 +157,9 @@ varying vec2 lm1, lm2, lm3;
 
 		diffuse_f = texture2D(s_anim, vec3(tex_c, layer));
 		diffuse_f.rgb *= e_colourident.rgb * vec3(COLOR);
-	#ifdef VERTEXCOL
+	#ifdef MODELLIT
+		diffuse_f.rgb *= mlight;
+	#elif defined(VERTEXCOL)
 		diffuse_f.rgb *= vex_color.rgb;
 	#endif
 	#ifdef VERTEXALPHA
@@ -160,7 +179,7 @@ varying vec2 lm1, lm2, lm3;
 	#ifndef UNLIT
 		diffuse_f.rgb *= lightmap_fragment();
 	#endif
-		diffuse_f.a *= float(ALPHA);
+		diffuse_f.a *= float(ALPHA) * e_colourident.a;	//FTESurf Patch 1218: a fading prop or brush entity, as unlit.glsl
 
 	#ifdef NOFOG
 		gl_FragColor = diffuse_f;

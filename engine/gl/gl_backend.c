@@ -424,6 +424,8 @@ static void BE_PolyOffset(void)
 		po.unit += r_polygonoffset_submodel_offset.value;
 	}
 #endif
+	if ((shaderstate.flags & BEF_DECALDEPTH) && !(shaderstate.curshader->flags & SHADER_POLYGONOFFSET))
+		po.unit += -2;	//FTESurf Patch 1218: past ~2k units the 0.25 lift (cl_ents.c) is under one depth step
 	po.factor += shaderstate.polyoffset.factor;
 	po.unit += shaderstate.polyoffset.unit;
 	if ((shaderstate.flags & BEF_SKYDEPTH) && r_sky_forcedepth_push.value > 0)

@@ -5218,6 +5218,13 @@ static void CL_AddDecalStatic_Callback(void *vctx, vec3_t *fte_restrict points, 
 	const msurface_t *surf = Mod_Decal_CurrentSurface;
 	int page = (ctx->dolm && surf && surf->sbatch) ? surf->sbatch->lightmap[0] : -1;
 	size_t tr, k;
+	vec3_t lift = {0, 0, 0};
+	//FTESurf Patch 1218: off the face, as Source lifts an overlay (0.1 there, at a near plane of 7;
+	//ours is 1) -- clipped from the face's own polygon, the decal lay on it and could z-fight.
+	//Out of the face is against axis[0] (the decal's normal, negated): a VBSP face stores its own
+	//plane, a BSP one the node's (SURF_PLANEBACK), and this reads right for both.
+	if (surf && surf->plane)
+		VectorScale(surf->plane->normal, (DotProduct(surf->plane->normal, ctx->axis[0]) > 0) ? -0.25f : 0.25f, lift);
 	for (tr = 0; tr < numtris; tr++)
 	{
 		persistdecaltri_t *tri = CL_PersistTri_Alloc();
@@ -5226,6 +5233,7 @@ static void CL_AddDecalStatic_Callback(void *vctx, vec3_t *fte_restrict points, 
 		{
 			VectorAdd(points[tr*3+k], cc->shift, tri->vertex[k]);
 			CL_Decal_VertexAttribs(ctx, surf, page, points[tr*3+k], tri->vertex[k], tri->texcoord[k], tri->lmcoord[k], &tri->valpha[k]);
+			VectorAdd(tri->vertex[k], lift, tri->vertex[k]);
 		}
 		tri->next = cc->rec->tris;
 		cc->rec->tris = tri;
@@ -5356,7 +5364,7 @@ static void CL_EmitPersistDecalTris(persistdecal_t *rec)
 	persistdecaltri_t *tri;
 	for (tri = rec->tris; tri; tri = tri->next)
 	{
-		scenetris_t *t = CL_Decal_OpenStrip(rec->shader, BEF_NODLIGHT|BEF_NOSHADOWS, tri->lightmap);
+		scenetris_t *t = CL_Decal_OpenStrip(rec->shader, BEF_NODLIGHT|BEF_NOSHADOWS|BEF_DECALDEPTH, tri->lightmap);
 		int k;
 		if (cl_numstrisvert + 3 > cl_maxstrisvert)
 			cl_stris_ExpandVerts(cl_numstrisvert + 3 + 256);

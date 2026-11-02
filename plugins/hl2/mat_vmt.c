@@ -963,6 +963,8 @@ typedef struct
 	char normalmapkey[MAX_QPATH];	//FTESurf Patch 878: $normalmap's own value; normalmap also takes $bumpmap
 	qboolean normalmapgone;			//FTESurf Patch 1045: normalmapkey names a file that is not installed
 	qboolean refractamount_set, reflectamount_set;
+	float reflectance;		//FTESurf Patch 1217: LightmappedReflective's fresnel floor
+	qboolean reflectance_set, minreflectivity_set;
 	qboolean waterfog_disabled, water_below;
 	float refracttint[3], reflecttint[3];
 	qboolean refracttint_set, reflecttint_set;
@@ -1392,6 +1394,108 @@ static qboolean VMT_TextureHasAlpha(const char *name)
 		VFS_CLOSE(f);
 	}
 	return alpha;
+}
+
+/*
+FTESurf Patch 1218: a "mipmap fade" -- mip levels drawn to differ, so a pane changes with distance
+(surf_sidelines' fades/mipmap_black: clear, then white, then black from level 2).  A box filter keeps
+a level's mean, so neighbouring levels of an ordinary texture agree; a mean that moves by a quarter
+between two of the first four levels was authored.  DXT1/DXT5, one frame, not a cubemap; level 0
+is skipped past 256 KB (levels 1-3 still see the fade).  Block endpoints stand in for the texels.
+The image ends the file before v7.3; from it, it ends where the high-res resource entry says.
+*/
+static qboolean VMT_MipFade(const char *name)
+{
+	char path[MAX_QPATH];
+	unsigned char hdr[80], *buf;
+	vfsfile_t *f;
+	int w, h, fmt, mips, bs, lv, frames;
+	unsigned int flags;
+	size_t n, k, sz;
+	qofs_t off;
+	float m[4][4], prev[4] = {0};
+	qboolean fade = false, have = false;
+
+	Q_snprintfz(path, sizeof(path), "%s%s.vtf", strcmp(name, "materials/")?"materials/":"", name);
+	f = fsfuncs->OpenVFS(path, "rb", FS_GAME);
+	if (!f)
+		return false;
+	if (VFS_READ(f, hdr, sizeof(hdr)) != sizeof(hdr) || memcmp(hdr, "VTF", 4))
+	{
+		VFS_CLOSE(f);
+		return false;
+	}
+	w = hdr[16] | (hdr[17] << 8);
+	h = hdr[18] | (hdr[19] << 8);
+	flags = hdr[20] | (hdr[21] << 8) | (hdr[22] << 16) | ((unsigned int)hdr[23] << 24);
+	frames = hdr[24] | (hdr[25] << 8);
+	fmt = hdr[52] | (hdr[53] << 8) | (hdr[54] << 16) | (hdr[55] << 24);
+	mips = hdr[56];
+	bs = (fmt == 13) ? 8 : (fmt == 15) ? 16 : 0;	//IMAGE_FORMAT_DXT1, DXT5
+	if (!bs || frames != 1 || (flags & 0x4000) || mips < 2)	//0x4000 TEXTUREFLAGS_ENVMAP
+	{
+		VFS_CLOSE(f);
+		return false;
+	}
+	off = VFS_GETLEN(f);	//the largest level is last
+	if (hdr[8] >= 3)	//VTF 7.3+: resource entries follow the 80-byte header
+	{
+		unsigned int nres = hdr[68] | (hdr[69] << 8) | (hdr[70] << 16) | ((unsigned int)hdr[71] << 24), r;
+		unsigned char ent[8];
+		qofs_t total = 0;
+		for (lv = 0; lv < mips; lv++)
+			total += (qofs_t)((max(1, w >> lv) + 3) / 4) * ((max(1, h >> lv) + 3) / 4) * bs;
+		for (r = 0; r < nres && r < 32; r++)
+		{
+			VFS_SEEK(f, 80 + r * 8);
+			if (VFS_READ(f, ent, 8) != 8)
+				break;
+			if (ent[0] == 0x30 && !ent[1] && !ent[2])	//VTF_LEGACY_RSRC_IMAGE
+			{
+				off = (ent[4] | (ent[5] << 8) | (ent[6] << 16) | ((unsigned int)ent[7] << 24)) + total;
+				break;
+			}
+		}
+	}
+	for (lv = 0; lv < 4 && lv < mips && !fade; lv++)
+	{
+		n = (size_t)((max(1, w >> lv) + 3) / 4) * ((max(1, h >> lv) + 3) / 4);
+		sz = n * bs;
+		if (off < sz)
+			break;
+		off -= sz;
+		if (sz > 256 * 1024)
+			continue;
+		buf = plugfuncs->Malloc(sz);
+		VFS_SEEK(f, off);
+		if (VFS_READ(f, buf, sz) != sz)
+		{
+			plugfuncs->Free(buf);
+			break;
+		}
+		memset(m[0], 0, sizeof(m[0]));
+		for (k = 0; k < n; k++)
+		{
+			const unsigned char *b = buf + k * bs;
+			const unsigned char *c = b + bs - 8;
+			unsigned int c0 = c[0] | (c[1] << 8), c1 = c[2] | (c[3] << 8);
+			m[0][0] += (((c0 >> 11) & 31) + ((c1 >> 11) & 31)) / 62.0f;
+			m[0][1] += (((c0 >> 5) & 63) + ((c1 >> 5) & 63)) / 126.0f;
+			m[0][2] += ((c0 & 31) + (c1 & 31)) / 62.0f;
+			m[0][3] += (bs == 16) ? (b[0] + b[1]) / 510.0f : 1;
+		}
+		plugfuncs->Free(buf);
+		for (k = 0; k < 4; k++)
+		{
+			m[0][k] /= n;
+			if (have && fabs(m[0][k] - prev[k]) > 0.25f)
+				fade = true;
+			prev[k] = m[0][k];
+		}
+		have = true;
+	}
+	VFS_CLOSE(f);
+	return fade;
 }
 
 /*
@@ -1945,6 +2049,10 @@ static char *VMT_ParseBlock(const char *fname, vmtstate_t *st, char *line)
 			}
 		}
 
+		//FTESurf Patch 1218: a path written from the root ("/brophis/gate/horizonb", surf_eternity's
+		//42-frame stargate screens) is relative in Source; ours asked for "materials//..." and got nothing.
+		while (*key == '$' && (*value == '/' || *value == '\\'))
+			memmove(value, value + 1, strlen(value));
 		if (!*key || !st)
 			;
 		else if (!Q_strcasecmp(key, "include"))
@@ -2310,8 +2418,19 @@ static char *VMT_ParseBlock(const char *fname, vmtstate_t *st, char *line)
 			st->reflecttint_set = VMT_ParseColour(value, st->reflecttint);
 		else if (!Q_strcasecmp(key, "$fresnelpower"))
 			;	//nettest: recognised-but-ignored Source key; silenced (was per-field developer-1 spam)
+		//FTESurf Patch 1217: LightmappedReflective's R; $minreflectivity overrides $reflectance
+		//whichever comes first (lightmappedreflective.cpp SHADER_INIT_PARAMS).
 		else if (!Q_strcasecmp(key, "$minreflectivity"))
-			;	//nettest: recognised-but-ignored Source key; silenced (was per-field developer-1 spam)
+		{
+			st->reflectance = atof(value);
+			st->reflectance_set = st->minreflectivity_set = true;
+		}
+		else if (!Q_strcasecmp(key, "$reflectance"))
+		{
+			if (!st->minreflectivity_set)
+				st->reflectance = atof(value);
+			st->reflectance_set = true;
+		}
 		else if (!Q_strcasecmp(key, "$maxreflectivity"))
 			;	//nettest: recognised-but-ignored Source key; silenced (was per-field developer-1 spam)
 		else if (!Q_strcasecmp(key, "$mod2x"))
@@ -3153,7 +3272,9 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 	          is left alone, because vmt/animated has no blend and quietly
 	          dropping the crossover would be worse than not animating.
 	          */
-	          (!Q_strcasecmp(st->type, "WorldVertexTransition") && !*st->tex[1].name)))
+	          (!Q_strcasecmp(st->type, "WorldVertexTransition") && !*st->tex[1].name) ||
+	          //FTESurf Patch 1218: a model's (surf_eternity's 331-frame screens drew frame 0)
+	          (!Q_strcasecmp(st->type, "VertexLitGeneric") && st->modelmaterial && !st->selfillum)))
 	{
 		char anim[64];
 		/*
@@ -3171,12 +3292,13 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 		"the flipbook is too dim", not as a lighting bug, and it is exactly the
 		class of thing a screenshot of the smoke could never show.
 		*/
-		qboolean animunlit = !Q_strcasecmp(st->type, "UnlitGeneric") || !Q_strcasecmp(st->type, "Sprite");	//FTESurf: a sprite is unlit -- keep it off the lightmap (the lit path binds s_lightmap it has no coords for)
+		qboolean animmodel = !Q_strcasecmp(st->type, "VertexLitGeneric");
+		qboolean animunlit = animmodel || !Q_strcasecmp(st->type, "UnlitGeneric") || !Q_strcasecmp(st->type, "Sprite");	//FTESurf: a sprite is unlit -- keep it off the lightmap (the lit path binds s_lightmap it has no coords for)
 		Q_snprintfz(anim, sizeof(anim), "#ANIMRATE=%f", st->animrate);
 		Q_strlcat(progargs, anim, sizeof(progargs));
 		if (animunlit)
 		{
-			Q_strlcat(progargs, "#UNLIT=1", sizeof(progargs));
+			Q_strlcat(progargs, animmodel ? "#UNLIT=1#MODELLIT" : "#UNLIT=1", sizeof(progargs));
 			vmt_stat_animunlit++;
 		}
 		Q_strlcpy(st->type, "vmt/animated", sizeof(st->type));
@@ -4761,6 +4883,11 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 	}
 	else if (!Q_strcasecmp(st->type, "LightmappedGeneric"))
 	{
+		if (st->translucent && !(st->seamless_set && st->seamless > 0) && VMT_MipFade(st->tex[0].name))	//FTESurf Patch 1218
+		{
+			Q_strlcat(progargs, "#MIPFADE", sizeof(progargs));
+			Con_DPrintf("[vmt] %s: mip fade, sampled at r_renderscale 1's level\n", shortname);
+		}
 		/* reflectmask from diffuse map alpha */
 
 			if (*st->envmap && st->envfrombase)
@@ -4780,6 +4907,61 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 
 		if (*st->normalmap)
 			Q_strlcatfz(script, &offset, sizeof(script),	"\tnormalmap \"%s%s.vtf\"\n", strcmp(st->normalmap, "materials/")?"materials/":"", st->normalmap);
+	}
+	else if (!Q_strcasecmp(st->type, "LightmappedReflective"))
+	{
+		/*
+		FTESurf Patch 1217: func_reflective_glass's material (lightmappedreflective_ps20b.fxc, no
+		$basetexture combo): refraction * $refracttint * (1-F) + reflection * $reflecttint * F,
+		F = R + (1-R)(1-N.V)^5.  It fell to vmt/unlit $whiteimage, so surf_eternity's mirror water
+		drew white under its pink Refract sheet.  hl2_water sets the cost, as for Water: 2 renders
+		both; 1 and 5 refract and reflect the nearest baked cubemap; 0, 3 and 4 blend that cubemap
+		over what is behind by F, with no capture.
+		*/
+		int wmode = hl2_water ? hl2_water->ival : 3;
+		qboolean live = wmode == 1 || wmode == 2 || wmode == 5;
+		const char *nm = (*st->normalmapkey && !st->normalmapgone) ? st->normalmapkey : "dev/water_normal";
+		char args[512];
+		size_t aoff = 0;
+
+		Q_snprintfz(args, sizeof(args), "#REFLECTANCE=%f#REFRAMOUNT=%f#REFLAMOUNT=%f",
+			max(0.0f, min(1.0f, st->reflectance_set ? st->reflectance : 0.25f)),
+			st->refractamount_set ? st->refractamount : 0.0f, st->reflectamount_set ? st->reflectamount : 0.8f);
+		aoff = strlen(args);
+		if (st->refracttint_set)
+			Q_strlcatfz(args, &aoff, sizeof(args), "#REFRTINT=%f,%f,%f", st->refracttint[0], st->refracttint[1], st->refracttint[2]);
+		if (st->reflecttint_set)
+			Q_strlcatfz(args, &aoff, sizeof(args), "#REFLTINT=%f,%f,%f", st->reflecttint[0], st->reflecttint[1], st->reflecttint[2]);
+		if (st->scrollrate != 0 && VMT_ScrollsBump(st->scrollvar, false))
+		{
+			double a = st->scrollangle * (3.14159265358979323846/180.0);
+			Q_strlcatfz(args, &aoff, sizeof(args), "#SCROLL=%f,%f", st->scrollrate*cos(a), st->scrollrate*sin(a));
+		}
+		if (wmode != 2)
+		{
+			Q_strlcat(args, "#CUBEREFL", sizeof(args));
+			if (!hl2_envcubemap || hl2_envcubemap->ival)
+				st->wantenvcube = true;
+		}
+		if (!live)
+			Q_strlcat(args, "#BLENDED", sizeof(args));
+		Q_strlcatfz(script, &offset, sizeof(script),
+			"\t{\n"
+				"\t\tprogram \"vmt/lmreflect%s\"\n"
+				"%s"
+				"\t\tmap %s\n"
+				"\t\tmap %s\n"
+				"\t\tmap \"%s%s.vtf\"\n"
+			"\t}\n", args, live ? "" : "\t\tblendfunc blend\n",
+			!live ? "$null" : wmode == 5 ? "$currentrender" : "$refraction",
+			wmode == 2 ? "$reflection" : "$null",
+			strcmp(nm, "materials/")?"materials/":"", nm);
+		if (wmode == 5)	//after the opaque world, as Water's mode 5: $currentrender must hold it
+			Q_strlcatfz(script, &offset, sizeof(script), "\tsort seethrough\n");
+		Q_strlcatfz(script, &offset, sizeof(script), "\tsurfaceparm nodlight\n");
+		st->translucent = 0;
+		st->additive = 0;
+		st->alphaval = 0;
 	}
 	else
 	{
