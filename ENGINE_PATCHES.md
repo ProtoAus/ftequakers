@@ -1,5 +1,26 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1188 — Momentum's platform/ folder as a per-map mount (surf_skyhaven's glass)
+
+**Problem.** Lex (2 Nov): surf_skyhaven has a missing texture. Its 55 glass faces name
+fallback/default_glass, and rj_tattarrattat's grate names fallback/default_grate. Both ship as
+loose files in Momentum's platform/materials/fallback/. Nothing mounts platform/, and
+FS_MapDepsNetSpec only lets a per-map table name five fixed specs.
+
+**Change.** fs.c (branch p1188-momplatform 9e8daa0d0 on the installed 117124a41): the allowed
+specs gain "steam:Momentum Mod Playtest/platform". FTESurf tools/mapdeps.py gets the same pack in
+ADDONS, as a loose-files addon (installed means the folder exists; it has no *_dir.vpk).
+mapmedia_refresh's gap check knows that, and the changed addon list forces one full mapdeps scan.
+The menu keeps the new line (Mmm_KnownMount) and labels it MOM. A 0.1.34 menu drops the line and
+a 0.1.34 engine refuses it, which is the same as today. The exe reads `patch-1173-1-g9e8daa0d0`
+because it was built before the tag; the release gate checks only the count and the hash.
+
+**Verified.** Owned rig on surf_skyhaven, with a copied mapdeps.txt that names the pack. The new
+exe logs `fs_automount: surf_skyhaven needs "steam:Momentum Mod Playtest/platform"`,
+fs_automount_state 1, and no material that did not resolve. The installed 117124a41 exe, same
+data: state 0 and "fallback/default_glass -- 55 world face(s)". Three camera poses on the
+panes (found from the v25 face lump): framed glass with the fix, the purple checker without it.
+
 ## Patch 1184 — zone editor: a zone's size, typed or wheeled
 
 **Problem.** Lex (2 Nov): "on some maps ... we can't get into the corner to make the zone
