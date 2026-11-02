@@ -8256,14 +8256,22 @@ typedef struct
 	qboolean overlapfull; // GLBLEND_OVERLAP_WORK ran out: later pairs kept their hint
 } glblendplanestats_t;
 
+//FTESurf Patch 1213: except vmt/unlit, which only calls ftetransform() (see GLBE_BlendProgramPlanar) and since
+//P1213 carries the translucent UnlitGeneric world faces Patches 700/701 sort (Kitsune's grids), once passes.
+static qboolean GLBE_BlendWorldProgramOK(const program_t *prog)
+{
+	return !prog || (prog->name && !prog->tess && !prog->geom && !strncmp(prog->name, "vmt/unlit", 9) &&
+		(!prog->name[9] || prog->name[9] == '#'));
+}
+
 static qboolean GLBE_BlendPlaneShaderEligible(const shader_t *shader)
 {
 	int p;
 	// Even a vertex-only material program can move positions. No CPU-plane proof.
-	if (!shader || shader->numdeforms || shader->prog || shader->numpasses < 0 || shader->numpasses > SHADER_PASS_MAX)
+	if (!shader || shader->numdeforms || !GLBE_BlendWorldProgramOK(shader->prog) || shader->numpasses < 0 || shader->numpasses > SHADER_PASS_MAX)
 		return false;
 	for (p = 0; p < shader->numpasses; p++)
-		if ((shader->passes[p].shaderbits & SBITS_TESSELLATION) || shader->passes[p].prog)
+		if ((shader->passes[p].shaderbits & SBITS_TESSELLATION) || !GLBE_BlendWorldProgramOK(shader->passes[p].prog))
 			return false;
 	return true;
 }

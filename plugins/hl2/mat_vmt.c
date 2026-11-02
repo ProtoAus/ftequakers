@@ -2447,9 +2447,10 @@ static qboolean VMT_AdditiveProgramOK(vmtstate_t *st)
 //is view depth where Source fogs by distance from the eye (see GLBE_FogRadial), and none at all on maps whose
 //fogmaxdensity cap BE_ProglessFogBegin declines (Patch 266). Bases a program cannot sample stay, as above;
 //so does $translucent under hl2_translucent 0, which the pass blends anyway and the tail would make opaque.
+//$envmap is Patch 990's arm below (vmt/unlitreflect#BASE), which this one is tested before.
 static qboolean VMT_UnlitProgramOK(vmtstate_t *st)
 {
-	if (st->additive || (hl2_unlitprogram && !hl2_unlitprogram->ival))
+	if (st->additive || *st->envmap || (hl2_unlitprogram && !hl2_unlitprogram->ival))
 		return false;
 	if (st->nobasetex || *st->hdrbasetex || *st->hdrcompressedtex)
 		return false;
