@@ -6012,7 +6012,8 @@ static qboolean VBSP_LoadStaticProps(model_t *mod, qbyte *offset, size_t size, i
 			unsigned int *cl = plugfuncs->GMalloc(&mod->memgroup, sizeof(*cl) * leafcount), n = 0, k;
 			for (l = 0; l < leafcount; l++)
 			{
-				int c = mod->leafs[VBSP_SprpLeafRef(leafref, leafrefsize, leafrefidx + l)].cluster;
+				unsigned int lf = VBSP_SprpLeafRef(leafref, leafrefsize, leafrefidx + l);
+				int c = (lf < (unsigned int)mod->numleafs) ? mod->leafs[lf].cluster : -1;
 				if (c < 0)
 					continue;
 				for (k = 0; k < n && cl[k] != (unsigned int)c; k++)
@@ -6020,8 +6021,8 @@ static qboolean VBSP_LoadStaticProps(model_t *mod, qbyte *offset, size_t size, i
 				if (k == n)
 					cl[n++] = c;
 			}
-			prv->staticprops[i].pvsclusters = cl;
-			prv->staticprops[i].numpvsclusters = n;
+			sent->pvsclusters = cl;	//the packed slot: skipped props put it behind i (bhop_maya, what_is_this)
+			sent->numpvsclusters = n;
 		}
 		if (leafcount > countof(ent->pvscache.leafnums) ||
 			leafrefidx + leafcount > numleafrefs)
