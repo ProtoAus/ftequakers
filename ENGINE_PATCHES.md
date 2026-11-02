@@ -1,5 +1,35 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1235 — a static prop past MAX_ENT_LEAFS is culled by the lump's own clusters (hl2 plugin)
+
+**Problem.** Lex (3 Nov): surf_remeanian save 18 shows a window frame in the sky. It is static prop 57,
+models/fs/windows1.mdl (radius 4452). Its sprp leaf list names 138 clusters, none in the PVS from save 18,
+so Source never draws it. The plugin kept a prop's lump list only up to MAX_ENT_LEAFS (32); past that it
+re-derived one from the radius box at first draw, which overflowed to the headnode test and passed.
+11 of remeanian's 66 props, and 2,217 props on 386 of the library's 2,204 maps, take that path.
+
+**Change.** plugins/hl2/mod_vbsp.c: the sprp loader keeps such a prop's deduplicated cluster list on its
+packed slot (GMalloc in mod->memgroup; leaf refs past numleafs dropped), and VBSP_DrawStaticProps tests it
+against the view's cluster PVS (VBSP_PropClustersVisible) instead of VBSP_EdictInFatPVS. prop_census shows
+"own clusters". The area walk is not applied to these props, so a prop behind a closed areaportal whose
+clusters are in the PVS can still draw; it cannot hide a prop Source shows.
+
+**Verified.** Rig at remeanian save 18: windows1 "PVS culled -- rejected by the cluster list", map census 1
+drawn, 3 faded, 62 PVS culled; the frames are gone from the shot, and windows1 still draws from inside and
+near it. An A/B over remeanian, eternity, sidelines and dragonfall views (fix plugin against the installed
+1a3c9737) differs only in animated water and scrolling textures. Review 1 (one reviewer, a 2,204-map sprp
+census) found the list stored by lump index `i` instead of the packed slot: on bhop_maya (20 props skipped
+by the dx/cpu/gpu rules) and what_is_this (4) it landed on another prop. Fixed; bhop_maya's slots 647/648
+now carry no list. Open, outside this patch: the collision transform at the same site is also written by
+lump index, so on those two maps solid props after the first skip collide through another prop's
+transform (FTESurf BACKLOG).
+
+The same report's surf_dragonfall flicker is CSQC, FTESurf P1235: a 2D draw into a render target leaves
+r_refdef.time on realtime (gl_draw.c GL_Set2D) and only clearscene sets it back, so the visualizer sky's
+passes now run before clearscene (122 of 200 renderscenes off the server clock before, 0 after).
+
+Tag patch-1235 (9fd62fe61) on patch-1233; exe git-8104-patch-1235-0-g9fd62fe61.
+
 ## Patch 1234 — surfd: a Steam sign-in fetches the player's KSF and Momentum bests (P1117/P1142 collectors live)
 
 **Problem.** Lex (3 Nov): fetch all the records of a player who links their Steam account. Main had
