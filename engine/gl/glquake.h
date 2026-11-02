@@ -239,6 +239,7 @@ typedef struct {
 	qboolean arb_depth_texture;
 	qboolean ext_stencil_wrap;
 	qboolean ext_packed_depth_stencil;
+	qboolean nv_fog_distance;	//FTESurf Patch 1213: GL_FOG_DISTANCE_MODE_NV for program-less fog
 	qboolean arb_depth_clamp;
 	int ext_texture_filter_anisotropic;
 
