@@ -1808,6 +1808,21 @@ static void Surf_BuildLightMap_Worker (model_t *wmodel, msurface_t *surf, int sh
 			{
 				blocklights[i] = r_fullbright.value*255*256;
 			}
+			//FTESurf Patch 1222: recorded as Surf_BuildLightMap does, or r_fullbright 0 leaves a face cached
+			//before it fullbright (R_AnimateLight restores the same style 0 value and key)
+			if (!surf->samples)
+			{
+				surf->cached_light[0] = d_lightstylevalue[0];
+				surf->cached_colour[0] = cl_lightstyle[0].colourkey;
+			}
+			else
+			{
+				for (maps = 0 ; maps < MAXCPULIGHTMAPS && surf->styles[maps] != INVALID_LIGHTSTYLE ; maps++)
+				{
+					surf->cached_light[maps] = d_lightstylevalue[surf->styles[maps]];
+					surf->cached_colour[maps] = cl_lightstyle[surf->styles[maps]].colourkey;
+				}
+			}
 		}
 		else if (!wmodel->lightdata)
 		{	/*fullbright if map is not lit. but not overbright*/
@@ -1935,6 +1950,19 @@ static void Surf_BuildLightMap_Worker (model_t *wmodel, msurface_t *surf, int sh
 		{
 			for (i=0 ; i<size ; i++)
 				blocklights[i] = 255*256;
+			if (!surf->samples)	//FTESurf Patch 1222, as the RGB branch above
+			{
+				surf->cached_light[0] = d_lightstylevalue[0];
+				surf->cached_colour[0] = cl_lightstyle[0].colourkey;
+			}
+			else
+			{
+				for (maps = 0 ; maps < MAXCPULIGHTMAPS && surf->styles[maps] != INVALID_LIGHTSTYLE ; maps++)
+				{
+					surf->cached_light[maps] = d_lightstylevalue[surf->styles[maps]];
+					surf->cached_colour[maps] = cl_lightstyle[surf->styles[maps]].colourkey;
+				}
+			}
 		}
 		else if (!wmodel->lightdata)
 		{
