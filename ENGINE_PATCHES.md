@@ -1,5 +1,43 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1195 — prederror reports: kept, offered, sent to the lobby
+
+**Problem.** Lex (2 Nov): "when we get prederrors, the game logs it, asks the player if they want
+to upload it, with a side menu box, logs the recording, uploads it, so that we can fix every
+prederror and cause. It sometimes isn't ent related, could be load save related or other game
+mechanics." Patch 335's meter printed one console line per snap and kept nothing around it.
+
+**Change.** Engine (tag patch-1195 = fb3e181d6 on the installed 9e8daa0d0, cl_pred.c only). The
+meter's comparison runs on every pass of the prediction loop, but only the first pass compares the
+server's state; the later ones compare predicted with predicted and are zero by construction. Each
+first-pass comparison now goes into a 512-row ring per seat (origins, velocities, ground flags,
+pm_type, the command), which resets when cl.servercount changes or the sequence falls back on a new
+connection. cl_prederror_count and _last (NOSET) let QC see each printed line.
+`prederr_dump <name>.txt` writes the ring to data/prederr/ only: plain names, 200 per session,
+FS hash flushed so QC can read it back, and the newest 120 files kept by mtime. QC (FTESurf main 9289915f;
+deploy/p1195-prederr 935a7dd3): CSQC waits 1.5 s after a line of 32 u or more, dumps the ring and writes a
+context file (server prints, mirror triggers by seq, gates, warp ops). It then shows a 20 s box,
+and F6 sends both to the lobby in sendevent chunks paced by prederr_ack. The lobby streams the
+report to data/prederr/ with its own header. Caps: 400 x 1 KB; per connection 3 per map, 20 s
+apart; per lobby 12 per map, 10 s apart; nothing past 600 stored files.
+tools/prederr_triage.py reads the reports.
+
+**Verified.** Engine build: one stamp, git-8076-patch-1195-0-gfb3e181d6 (16 hits; 8076 = count +
+29), no warning from cl_pred.c. QC: fteqcc c24ede65, 0 warnings x3. Owned server + client rigs on
+surf_network2008, run without P1196 so it still snaps. Arm 1 caught the upload missing the ring
+(an engine write never flushed the FS hash). Arm 2 caught a ring of all zeros (it recorded the
+predicted-vs-predicted passes). Arm 3 was good: the lobby file holds the header, the context and a
+322-row ring, and triage shows seq 334 jumping 2144.57 u from zero, a teleport the client never
+predicted. Arm 4 measured review 1: the ring after a reconnect is the new connection's (seq 14..234,
+newest row 0.05 s old); 130 old files were pruned to 120, oldest first; and `prederr_dump` refuses
+`../`, `sub/` and names without `.txt`. One reviewer covered two lenses (what a client or server
+can do; the client state machine). It found an unlimited upload through a NaN total, the ring
+freezing after a reconnect, caps that a reconnect resets, header injection, %g sequence numbers
+past a million, and smaller edges. All are fixed; the NaN refusal was checked by reading the code,
+not measured.
+Live 2 Nov ~02:41Z: lobbies and both installs qw bb4bf7e1 / cs 7f6adb64 (the bytes arm 5 tested),
+install client exe ba3cfd5d; arm 6 ran the same csprogs on the 0.1.34 exe: no box, no QC error.
+
 ## Patch 1196 — teleports switched by unreplayable outputs follow the server's gate
 
 **Problem.** Lex (2 Nov), surf_network2008: `prederr: seq 464 origin off by 2160.60 (predicted
