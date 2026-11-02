@@ -1,5 +1,63 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1213 — fog by distance from the eye on Source maps; UnlitGeneric on vmt/unlit
+
+**Problem.** Lex (2 Nov), with CS:S screenshots of surf_shape: the horizon over the 3D-sky dunes
+is orange-brown haze in CS:S and a white band here. The band is the sky room's blend-to-sky ring,
+func_brush *13, stained/blendsky: UnlitGeneric $translucent, a white texture with an alpha ramp,
+550 units from the sky camera. Source fogs by eye-to-pixel distance (common_ps_fxc.h
+CalcPixelFogFactor -> common_fxc.h CalcRangeFogFactorNonFixedFunction, distance(eye, worldPos)).
+FTE used view depth. The two agree at the screen centre, but at the edges, where the ring shows,
+CS:S fogs it 60-85% and we fogged it about 53%. The ring was also a program-less pass, so it got GL
+fixed-function fog (Patch 266), and that path declines maps with a fogmaxdensity cap altogether.
+
+**Change.** Tag patch-1213 = 6043414d6 on patch-1212 (3 commits).
+- sys/fog.h fogdepth(): view depth x sqrt(1 + |eye.xy/depth|^2). The eye ray is rebuilt from
+  gl_FragCoord with w_fog[2] (w_fog is now [3]). GLBE_FogRadial derives w_fog[2] from
+  m_projection_std and the GLBE_ViewportUpdate viewport. It returns zeros unless clip w = -z, so an
+  orthographic VF_PERSPECTIVE 0 view keeps view depth, and zero means exactly the old factor.
+- r_fog_radial: 0 view depth, 1 (default) radial on Source maps, 2 radial everywhere. GLSL only.
+  GL_NV_fog_distance was tried for program-less passes and dropped: on an RTX 2080 SUPER it
+  interpolates per vertex, so a wall 616 units ahead, with corners about 2700 away, drew solid fog.
+- hl2 plugin: VMT_UnlitProgramOK puts every non-additive UnlitGeneric with a samplable base onto
+  vmt/unlit, the arm Patch 300 used for additive ones. They now fog per pixel, and on capped maps.
+  Excluded: $whiteimage and HDR bases, $envmap (Patch 990's vmt/unlitreflect#BASE), and $translucent
+  under hl2_translucent 0. hl2_unlitprogram 0 restores the pass.
+- GLBE_BlendPlaneShaderEligible admits vmt/unlit, so the translucent UnlitGeneric world faces that
+  Patches 700/701 order (Kitsune's grids) stay in the world blend sort.
+- The [vmt] developer line names the emitted type.
+
+**Verified.** All A/Bs on one build, map reloaded per path; artifacts in
+C:\FTESurf-worktrees\skyfog1213-20261102\artifacts.
+- Red fog ending at 1000, from inside the ring; row 600 at x = 960/700/400/100. The pass reads
+  98 98 98 98 in both fog modes. The program with radial on reads 98 89 58 13: per pixel, and equal
+  to planar at the centre.
+- surf_shape horizon band, mean colour against Lex's CS:S shot (118,69,45): old and pass 143,101,80;
+  program with radial 124,75,52.
+- Standing still on surf_boreas, the mode switches on the next frame: left edge 71.5 planar, 94.5
+  radial; repeated shots of one state differ by about 1k px of snow.
+- On surf_boreas, surf_tensor2, surf_sidistic and surf_mesa the path change moved only rain and
+  cloud-animation pixels.
+- kitsune_arm (r_blendsort 2, r_blendtrace, two views, every recursion level): before review 2's fix
+  the program path admitted 0 faces where the pass admitted 6/16/47/28/28/36; after it both admit
+  the same.
+- Two independent reviews. Round 1 (fog math, all render paths) found the per-vertex NV question and
+  the orthographic case. Round 2 (material semantics) found the $envmap and blend-sort regressions.
+  All are fixed.
+- tools/test_gl_blend_faces.py no longer compiles on main (GPUB_PORTALS and other symbols added after
+  P748 have no stubs). That predates this patch and was not repaired here.
+
+**Left.**
+- Source lerps by the squared factor in linear light, then applies SRGBOutput; we lerp in gamma
+  space. This is cl_fog.qc's known approximation and most of the 6-level residual above.
+- Program-less passes ($whiteimage/HDR UnlitGeneric, non-additive Sprite passes) keep view depth.
+- RF_DEPTHHACK viewmodels draw with m_projection_view but get m_projection_std's radial terms.
+- Behaviour changes that are Source-like or rare: $translucent with $alphatest now applies both; a
+  $color above 1 is unclamped; $vertexcolor with $color multiplies both; the cut is at
+  $alphatestreference; the alpha test reads texture alpha, not the final alpha; an unmounted named
+  base shows the checker, as other programs do; a static prop of this class stops counting as
+  see-through for light-glow hiding (mod_vbsp.c checks pass alpha-test bits).
+
 ## Patch 1210, surfd half — served KSF runs carry the inferred ducked body
 
 **Change.** surfd generation 833c8c58 (ac's 470ab7c9 + only tools/ksfconvert.py) live 10:36:08Z
