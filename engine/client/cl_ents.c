@@ -2999,6 +2999,107 @@ void CLQ1_DrawPolyFan(shader_t *shader, vecV_t *verts, int n, float r, float g, 
 	t->numidx = cl_numstrisidx - t->firstidx;
 	cl_numstrisvert += n;
 }
+/*FTESurf Patch 1201: a winding's outline, one closed loop of lines (n verts, 2n indices).
+  Each vertex is pulled 1/512 of the way to the eye: the same pixels at a nearer depth, so an
+  edge lying on a drawn face does not z-fight it.  polygonoffset reaches filled polygons only
+  (gl_backend.c enables GL_POLYGON_OFFSET_FILL), never a GL_LINES batch.*/
+void CLQ1_DrawPolyEdges(shader_t *shader, vecV_t *verts, int n, float r, float g, float b, float a)
+{
+	scenetris_t *t;
+	int flags = BEF_NODLIGHT|BEF_NOSHADOWS|BEF_LINES;
+	int i, idx;
+	vec3_t d;
+
+	if (!shader || n < 2)
+		return;
+
+	if (cl_numstris && cl_stris[cl_numstris-1].shader == shader && cl_stris[cl_numstris-1].flags == flags
+		&& cl_stris[cl_numstris-1].numvert + n <= MAX_INDICIES)
+		t = &cl_stris[cl_numstris-1];
+	else
+	{
+		if (cl_numstris == cl_maxstris)
+		{
+			cl_maxstris += 8;
+			cl_stris = BZ_Realloc(cl_stris, sizeof(*cl_stris)*cl_maxstris);
+		}
+		t = &cl_stris[cl_numstris++];
+		t->shader = shader;
+		t->numidx = 0;
+		t->numvert = 0;
+		t->firstidx = cl_numstrisidx;
+		t->firstvert = cl_numstrisvert;
+		t->flags = flags;
+	}
+	if (cl_numstrisvert + n > cl_maxstrisvert)
+		cl_stris_ExpandVerts(cl_numstrisvert + n);
+	if (cl_maxstrisidx < cl_numstrisidx+2*n)
+	{
+		cl_maxstrisidx = cl_numstrisidx+2*n;
+		cl_strisidx = BZ_Realloc(cl_strisidx, sizeof(*cl_strisidx)*cl_maxstrisidx);
+	}
+
+	for (i = 0; i < n; i++)
+	{
+		VectorSubtract(r_refdef.vieworg, verts[i], d);
+		VectorMA(verts[i], 1.0f/512, d, cl_strisvertv[cl_numstrisvert+i]);
+		cl_strisvertt[cl_numstrisvert+i][0] = 0;
+		cl_strisvertt[cl_numstrisvert+i][1] = 0;
+		cl_strisvertc[cl_numstrisvert+i][0] = r;
+		cl_strisvertc[cl_numstrisvert+i][1] = g;
+		cl_strisvertc[cl_numstrisvert+i][2] = b;
+		cl_strisvertc[cl_numstrisvert+i][3] = a;
+	}
+	idx = cl_numstrisvert - t->firstvert;
+	for (i = 0; i < n; i++)
+	{
+		cl_strisidx[cl_numstrisidx++] = idx+i;
+		cl_strisidx[cl_numstrisidx++] = idx+(i+1)%n;
+	}
+
+	t->numvert += n;
+	t->numidx = cl_numstrisidx - t->firstidx;
+	cl_numstrisvert += n;
+}
+
+/*FTESurf Patch 1201: how surf_view and ent_view draw brush faces.  Bit 1: translucent planes
+  instead of Patch 331's ordered dither (the coverage becomes the opacity).  Bit 0: every face
+  edged too; ent_view's hover and clip hulls were always edged, so it adds the in-view set's.*/
+cvar_t surf_view_style = CVARFD("surf_view_style", "1", CVAR_ARCHIVE, "FTESurf Patch 1201. How surf_view and ent_view draw brush faces: 0 = ordered dither, 1 = dither with edges, 2 = translucent planes, 3 = translucent planes with edges. surf_view_fill (and ent_view's own levels) is the dither coverage or the planes' opacity.");
+#define OVERLAY_EDGES(s)	((s) & 1)
+#define OVERLAY_BLEND(s)	((s) & 2)
+static const char *CLQ1_OverlayStyleName (int style)
+{
+	static const char *names[4] = {"dither", "dither + edges", "translucent", "translucent + edges"};
+	return names[style & 3];
+}
+//a blended plane, no depth write.  `sort additive`: after BLEND, so glass or water behind a plane
+//cannot paint over it; polygonoffset alone makes it a DECAL (Shader_Finish), drawn before them.
+static shader_t *CLQ1_OverlayBlend (const char *name, qboolean twosided)
+{
+	return R_RegisterShader(name, SUF_NONE, twosided ?
+		"{\n"
+			"polygonoffset\n"
+			"sort additive\n"
+			"cull disable\n"
+			"{\n"
+				"map $whiteimage\n"
+				"rgbgen vertex\n"
+				"alphagen vertex\n"
+				"blendfunc blend\n"
+			"}\n"
+		"}\n" :
+		"{\n"
+			"polygonoffset\n"
+			"sort additive\n"
+			"{\n"
+				"map $whiteimage\n"
+				"rgbgen vertex\n"
+				"alphagen vertex\n"
+				"blendfunc blend\n"
+			"}\n"
+		"}\n");
+}
 void CLQ1_AddSpriteQuad(shader_t *shader, vec3_t mid, float radius)
 {
 	float r=1, g=1, b=1;
@@ -3767,8 +3868,7 @@ static void CLQ1_DrawOneBrush (void *ctx, const q2cbrush_t *brush)
 		}
 		v->faces++;
 		if (!v->nolines)
-			for (j = 0; j < (int)n; j++)
-				CLQ1_DrawLine(v->shader, verts[j], verts[(j+1)%n], r, g, b, 1);
+			CLQ1_DrawPolyEdges(v->shader, verts, (int)n, r, g, b, 1);	//P1201: was a DrawLine per edge
 		if (v->fill)
 			CLQ1_DrawPolyFan(v->fill, verts, (int)n, r, g, b, v->fillalpha);
 	}
@@ -3811,7 +3911,12 @@ void CLQ1_AddVisibleBrushes(void)
 	/*Patch 331: the dither fill.  Inline script like hullshader's own; the GLSL
 	  program it names lives in the gamedir (glsl/ftesurf_ditherfill.glsl), which
 	  is the half the mod can retune.*/
-	if (entclips || r_showbrushes_fill.value > 0)
+	if (entclips && OVERLAY_BLEND(surf_view_style.ival))
+	{
+		v.fill = CLQ1_OverlayBlend("ftesurf_brushfill_blend", false);	//P1201; r_showbrushes keeps the dither
+		v.fillalpha = 0.25;
+	}
+	else if (entclips || r_showbrushes_fill.value > 0)
 	{
 		v.fill = R_RegisterShader("ftesurf_brushfill", SUF_NONE,
 			"{\n"
@@ -3932,6 +4037,7 @@ void CLQ1_AddHoverBrushes(void)
 	const char *s;
 	char *end;
 	int idx, drawn;
+	int style = surf_view_style.ival & 3;	//Patch 1201
 
 	if (!hm)
 	{
@@ -3954,15 +4060,18 @@ void CLQ1_AddHoverBrushes(void)
 		  face that bounds open space, which is what a trigger volume is made
 		  of, pushed toward the eye by the offset so a face flush with a wall
 		  still wins it.*/
-		fillsh = R_RegisterShader("ftesurf_enthover", SUF_NONE,
-			"{\n"
-				"polygonoffset\n"
+		if (OVERLAY_BLEND(style))
+			fillsh = CLQ1_OverlayBlend("ftesurf_enthover_blend", false);
+		else
+			fillsh = R_RegisterShader("ftesurf_enthover", SUF_NONE,
 				"{\n"
-					"program ftesurf_ditherfill\n"
-					"map $whiteimage\n"
-					"rgbgen vertex\n"
-				"}\n"
-			"}\n");
+					"polygonoffset\n"
+					"{\n"
+						"program ftesurf_ditherfill\n"
+						"map $whiteimage\n"
+						"rgbgen vertex\n"
+					"}\n"
+				"}\n");
 		linesh = R_RegisterShader("hullshader", SUF_NONE,
 			"{\n"
 				"polygonoffset\n"
@@ -3983,11 +4092,12 @@ void CLQ1_AddHoverBrushes(void)
 	  filled": the hover alone made the feature a spotlight, and an inspector
 	  that only lights what you already point at cannot help you FIND the next
 	  one.  No lines for these: 48 hulls of wireframe is the unreadable case,
-	  and the stipple alone reads as a volume.
+	  and the stipple alone reads as a volume.  (Patch 1201: unless
+	  surf_view_style asks for edges.)
 	*/
 	if (vm && *vm->string)
 	{
-		static int lastmodels = -2, lastfaces = -2;
+		static int lastmodels = -2, lastfaces = -2, laststyle = -1;
 		int totfaces = 0;
 		s = vm->string;
 		drawn = 0;
@@ -4027,15 +4137,22 @@ void CLQ1_AddHoverBrushes(void)
 			VectorSet(maxs,  131072,  131072,  131072);
 			BIH_EnumBrushes(mod, mins, maxs, CLQ1_DrawOneBrush, &v);
 			totfaces += v.faces;
+			if (OVERLAY_EDGES(style))
+			{	//P1201: a second walk for the lines, so fill and line batches do not alternate per face
+				v.fill = NULL;
+				v.nolines = 0;
+				BIH_EnumBrushes(mod, mins, maxs, CLQ1_DrawOneBrush, &v);
+			}
 			drawn++;
 		}
 		/*one-shot readout on change, like r_showbrushes' own: a blank screen
 		  should say whether the list arrived empty or the walk found nothing.*/
-		if (drawn != lastmodels || totfaces != lastfaces)
+		if (drawn != lastmodels || totfaces != lastfaces || style != laststyle)
 		{
 			lastmodels = drawn;
 			lastfaces = totfaces;
-			Con_Printf("entview fill: %i model(s), %i face(s) in view\n", drawn, totfaces);
+			laststyle = style;
+			Con_Printf("entview fill: %i model(s), %i face(s) in view, %s\n", drawn, totfaces, CLQ1_OverlayStyleName(style));
 		}
 	}
 
@@ -4087,7 +4204,7 @@ entities the prediction collides with.  ENGINE_PATCHES.md, Patches 776 and 818.
 #define SURFVIEW_TELE	2
 #define SURFVIEW_WALL	0.1f	//pm_source.c's ramp band (Patch 131): below this a face is a wall
 cvar_t surf_view_dist = CVARFD("surf_view_dist", "8192", 0, "FTESurf Patch 776. surf_view draws faces within this many units of the view.");
-cvar_t surf_view_fill = CVARFD("surf_view_fill", "0.25", 0, "FTESurf Patch 776. surf_view's dither coverage, 0..1 in 1/16 steps.");
+cvar_t surf_view_fill = CVARFD("surf_view_fill", "0.25", 0, "FTESurf Patch 776. surf_view's dither coverage (0..1 in 1/16 steps), or the planes' opacity when surf_view_style is translucent (Patch 1201).");
 static qboolean surfview_on;
 
 #if defined(Q2BSPS) || defined(Q3BSPS)
@@ -4441,91 +4558,62 @@ void CLQ1_SurfViewInit (void)
 {
 	Cvar_Register (&surf_view_dist, "GL Renderer Options");	//renderer.c's GLRENDEREROPTIONS
 	Cvar_Register (&surf_view_fill, "GL Renderer Options");
+	Cvar_Register (&surf_view_style, "GL Renderer Options");	//Patch 1201
 	Cmd_AddCommand ("surf_view", SurfView_f);
 }
 
-void CLQ1_AddSurfView (void)
-{
 #if defined(Q2BSPS) || defined(Q3BSPS)
+//Patch 1201: one pass over everything surf_view shows, as dither/translucent fill or as edges
+struct surfviewdraw_s
+{
+	shader_t *sh;
+	qboolean edges;
+	float coverage, dist, conecos, conesin;
+	vec3_t fwd;
+	unsigned int faces;
+};
+
+static void SurfView_Out (struct surfviewdraw_s *d, vecV_t *verts, int n, int kind)
+{
+	vec3_t rgb;
+	SurfView_Colour(kind, rgb);
+	if (d->edges)	//lighter than the fill, so an outline reads over its own colour
+		CLQ1_DrawPolyEdges(d->sh, verts, n, rgb[0]*0.6+0.4, rgb[1]*0.6+0.4, rgb[2]*0.6+0.4, 1);
+	else
+		CLQ1_DrawPolyFan(d->sh, verts, n, rgb[0], rgb[1], rgb[2], d->coverage);
+	d->faces++;
+}
+
+static void SurfView_Pass (struct surfviewdraw_s *dw)
+{
 	struct surfviewcut_s c;
 	const surfviewmodel_t *m;
 	const surfviewlocal_t *l;
-	shader_t *fill;
 	surfviewface_t *f;
 	packet_entities_t *pak;
 	entity_state_t *state;
 	model_t *mod;
 	vecV_t placed[64];
 	vec_t *org, *ang;
-	vec3_t rgb, mid, fwd, right, up, rel, nrm;
-	float dist, coverage, cone, conecos, conesin, along, d, lim;
+	vec3_t mid, rel, nrm;
+	float along, d, lim;
 	size_t i, j, k;
 	int kind;
-
-	if (!surfview_on || !cl.worldmodel || cl.worldmodel->loadstate != MLS_LOADED)
-		return;
-	if (surfview.world != cl.worldmodel || surfview.servercount != cl.servercount)
-		SurfView_Build();
-	if (!surfview.reported)
-	{
-		surfview.reported = true;
-		Con_Printf("surf_view: %u ramp face(s), %u clip face(s), %u teleport(s) in %u face(s), cut in %.0f ms%s\n",
-			surfview.count[SURFVIEW_RAMP], surfview.count[SURFVIEW_CLIP], surfview.teleports, surfview.count[SURFVIEW_TELE],
-			surfview.buildms, cl.worldmodel->cnodes ? "" : " -- this map keeps no collision brushes to read");
-		if (surfview.propsnohull)
-			Con_Printf("surf_view: %u of %u static prop(s) have no hull pieces and are not shown\n", surfview.propsnohull, surfview.props);
-	}
-
-	if (R2D_Flush)
-		R2D_Flush();
-	fill = R_RegisterShader("ftesurf_surfview", SUF_NONE,	//r_showbrushes' fill, two-sided
-		"{\n"
-			"polygonoffset\n"
-			"cull disable\n"
-			"{\n"
-				"program ftesurf_ditherfill\n"
-				"map $whiteimage\n"
-				"rgbgen vertex\n"
-			"}\n"
-		"}\n");
-	dist = (surf_view_dist.value > 0) ? surf_view_dist.value : 8192;
-	coverage = bound(0, surf_view_fill.value, 1);
-
-	/*The view cone through the screen's corners, not R_CullSphere: by now r_refdef.frustum
-	  is whichever view rendered last, and on a map with a 3D sky or a portal that is not this
-	  one (measured: 85992 of 86076 faces culled looking over surf_boreas).  CSQC's clearscene
-	  zeroes fov_x/fov_y until renderscene, so they are rebuilt from afov: applied to the
-	  screen's MINOR pixel axis, which bounds every scr_fov_mode from above.*/
-	AngleVectors(r_refdef.viewangles, fwd, right, up);
-	if (r_refdef.fov_x > 0 && r_refdef.fov_y > 0)
-		cone = atan(sqrt(pow(tan(r_refdef.fov_x*(M_PI/360)), 2) + pow(tan(r_refdef.fov_y*(M_PI/360)), 2)));
-	else
-	{
-		float w = max(vid.pixelwidth, 1), h = max(vid.pixelheight, 1);
-		float ratio = (w > h) ? w/h : h/w;
-		float afov = (r_refdef.afov > 0) ? r_refdef.afov : scr_fov.value;
-		cone = atan(tan(bound(1, afov, 170)*(M_PI/360)) * sqrt(1 + ratio*ratio));
-	}
-	if (!(cone > 0) || cone > 1.56)
-		cone = 1.56;	//just short of pi/2: past it the test would cull nothing anyway
-	conecos = cos(cone);
-	conesin = sin(cone);
 
 	for (i = 0; i < surfview.numfaces; i++)
 	{
 		f = &surfview.faces[i];
 		VectorSubtract(f->mid, r_refdef.vieworg, rel);
 		d = DotProduct(rel, rel);
-		lim = dist + f->rad;
+		lim = dw->dist + f->rad;
 		if (d > lim*lim)
 			continue;
 		d = sqrt(d);
-		along = DotProduct(rel, fwd);
+		along = DotProduct(rel, dw->fwd);
 		//the centre's distance outside the cone's surface, against the radius
-		if (sqrt((d > fabs(along)) ? d*d - along*along : 0)*conecos - along*conesin > f->rad + 32)
+		if (sqrt((d > fabs(along)) ? d*d - along*along : 0)*dw->conecos - along*dw->conesin > f->rad + 32)
 			continue;
-		SurfView_Colour(f->kind, rgb);
-		CLQ1_DrawPolyFan(fill, &surfview.verts[f->firstvert], f->numverts, rgb[0], rgb[1], rgb[2], coverage);
+		SurfView_Out(dw, &surfview.verts[f->firstvert], f->numverts, f->kind);
 	}
 
 	//the brush entities CL_SetSolidEntities hands the prediction, cut once and posed here
@@ -4553,7 +4641,7 @@ void CLQ1_AddSurfView (void)
 		VectorAdd(mod->mins, mod->maxs, mid);
 		VectorMA(org, 0.5, mid, mid);
 		VectorSubtract(mid, r_refdef.vieworg, rel);
-		if (VectorLength(rel) - mod->radius > dist)
+		if (VectorLength(rel) - mod->radius > dw->dist)
 			continue;
 		m = SurfView_Model(mod);
 		memset(&c, 0, sizeof(c));
@@ -4575,9 +4663,95 @@ void CLQ1_AddSurfView (void)
 				else
 					VectorCopy(surfview.lverts[l->firstvert+k], placed[k]);
 			}
-			SurfView_Colour(kind, rgb);
-			CLQ1_DrawPolyFan(fill, placed, l->numverts, rgb[0], rgb[1], rgb[2], coverage);
+			SurfView_Out(dw, placed, l->numverts, kind);
 		}
+	}
+}
+#endif
+
+void CLQ1_AddSurfView (void)
+{
+#if defined(Q2BSPS) || defined(Q3BSPS)
+	static int laststyle = -1;
+	struct surfviewdraw_s dw;
+	vec3_t right, up;
+	float cone;
+	int style = surf_view_style.ival & 3;
+	unsigned int filled;
+
+	if (!surfview_on || !cl.worldmodel || cl.worldmodel->loadstate != MLS_LOADED)
+		return;
+	if (surfview.world != cl.worldmodel || surfview.servercount != cl.servercount)
+		SurfView_Build();
+	if (!surfview.reported)
+	{
+		Con_Printf("surf_view: %u ramp face(s), %u clip face(s), %u teleport(s) in %u face(s), cut in %.0f ms%s\n",
+			surfview.count[SURFVIEW_RAMP], surfview.count[SURFVIEW_CLIP], surfview.teleports, surfview.count[SURFVIEW_TELE],
+			surfview.buildms, cl.worldmodel->cnodes ? "" : " -- this map keeps no collision brushes to read");
+		if (surfview.propsnohull)
+			Con_Printf("surf_view: %u of %u static prop(s) have no hull pieces and are not shown\n", surfview.propsnohull, surfview.props);
+	}
+
+	if (R2D_Flush)
+		R2D_Flush();
+	memset(&dw, 0, sizeof(dw));
+	if (OVERLAY_BLEND(style))
+		dw.sh = CLQ1_OverlayBlend("ftesurf_surfview_blend", true);
+	else
+		dw.sh = R_RegisterShader("ftesurf_surfview", SUF_NONE,	//r_showbrushes' fill, two-sided
+			"{\n"
+				"polygonoffset\n"
+				"cull disable\n"
+				"{\n"
+					"program ftesurf_ditherfill\n"
+					"map $whiteimage\n"
+					"rgbgen vertex\n"
+				"}\n"
+			"}\n");
+	dw.dist = (surf_view_dist.value > 0) ? surf_view_dist.value : 8192;
+	dw.coverage = bound(0, surf_view_fill.value, 1);
+
+	/*The view cone through the screen's corners, not R_CullSphere: by now r_refdef.frustum
+	  is whichever view rendered last, and on a map with a 3D sky or a portal that is not this
+	  one (measured: 85992 of 86076 faces culled looking over surf_boreas).  CSQC's clearscene
+	  zeroes fov_x/fov_y until renderscene, so they are rebuilt from afov: applied to the
+	  screen's MINOR pixel axis, which bounds every scr_fov_mode from above.*/
+	AngleVectors(r_refdef.viewangles, dw.fwd, right, up);
+	if (r_refdef.fov_x > 0 && r_refdef.fov_y > 0)
+		cone = atan(sqrt(pow(tan(r_refdef.fov_x*(M_PI/360)), 2) + pow(tan(r_refdef.fov_y*(M_PI/360)), 2)));
+	else
+	{
+		float w = max(vid.pixelwidth, 1), h = max(vid.pixelheight, 1);
+		float ratio = (w > h) ? w/h : h/w;
+		float afov = (r_refdef.afov > 0) ? r_refdef.afov : scr_fov.value;
+		cone = atan(tan(bound(1, afov, 170)*(M_PI/360)) * sqrt(1 + ratio*ratio));
+	}
+	if (!(cone > 0) || cone > 1.56)
+		cone = 1.56;	//just short of pi/2: past it the test would cull nothing anyway
+	dw.conecos = cos(cone);
+	dw.conesin = sin(cone);
+
+	SurfView_Pass(&dw);
+	filled = dw.faces;
+	dw.faces = 0;
+	if (OVERLAY_EDGES(style))
+	{	//after the fill, so its batches and the lines' do not alternate per face
+		dw.edges = true;
+		dw.sh = R_RegisterShader("hullshader", SUF_NONE,
+			"{\n"
+				"polygonoffset\n"
+				"{\n"
+					"map $whiteimage\n"
+					"rgbgen vertex\n"
+				"}\n"
+			"}\n");
+		SurfView_Pass(&dw);
+	}
+	if (!surfview.reported || style != laststyle)
+	{
+		Con_Printf("surf_view: %s, %u face(s) filled and %u edged this frame\n", CLQ1_OverlayStyleName(style), filled, dw.faces);
+		surfview.reported = true;
+		laststyle = style;
 	}
 #endif
 }
