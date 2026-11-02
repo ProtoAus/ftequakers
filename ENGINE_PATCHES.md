@@ -1,5 +1,31 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1202 — the 3D skybox's entities are sent; sky props animate (surf_shape)
+
+**Problem.** Lex (2 Nov): surf_shape's moving 3D-sky background never showed. It is one prop_dynamic in
+the sky room (skybox_mdl, sand_dunes.mdl, anim "@move", 361 frames at 5 fps). The server sends a client
+only what its PVS sees and a sky room is sealed off from it; Source always sends the sky camera's area
+(gameinterface.cpp CheckTransmit, "Always send entities in the player's 3d skybox"). Props were also static.
+
+**Change.** SSQC only (deploy/p1202-skyroom 90821a52; FTESurf main 5b93ccbe..0f175292). sky_camera's
+origin is kept (the edict still removed at spawn: entity numbers feed the physent digest). On the first
+frame SV_SkyRoomAll gives PVSF_IGNOREPVS to every modelled entity the camera's PVS holds, whose point (a
+model's origin then box centre, a brush's centre) sees the camera and sees no spawn point -- the point
+tests move a model-less spawn point to the camera / the entity's point and back, because checkpvs on a
+big entity falls back to its headnode (VBSP_EdictInFatPVS) and passed main-map triggers. Every point in
+solid keeps the coarse answer; trigger_*, func_occluder, func_clip*, func_areaportal* are skipped; over 256
+or a camera in solid sends none. Point-placed SOLID_NOT sky props play DefaultAnim / SetAnimation
+(frametoname, case-insensitive, "@"+name), so an animation never moves a collision shape.
+
+**Verified.** 0 warnings (fteqcc c24ede65), csprogs/menu unchanged. surf_shape rig of the 0.1.35 files, live
+qwprogs vs the fix: dunes and sculptures behind the map where the control shows the 2D sky; the same view
+4 s apart changes 15298 px (control 73); views aimed at the sky room's real location from the route equal
+the control (no 1:1 copy leaks into the main view; r_ignoreentpvs 0 the same). Two review rounds (no crash
+or corruption): round 1's headnode false marks and round 2's coarse spawn test / buried-prop animation
+fixed and re-measured per entity on 12 maps (surf_ab 21 -> 0, all main-map triggers and bowser_ghost.mdl;
+surf_colony keeps its in-wall sky canister train). Census 179 of 297 sky_camera maps: 113 mark 0, max 217.
+Live on all 12 lobbies 2 Nov 08:30Z (qw e2fa9632). Residuals in FTESurf BACKLOG.
+
 ## Patch 1201 — surf_view_style: edges and translucent planes for surf_view and ent_view
 
 **Problem.** Lex (2 Nov): surf_view is "sort of hurt by the dithering, it's hard to tell depth".
