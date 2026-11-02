@@ -1,5 +1,40 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1230 — r_scenedepth: CSQC passes test against the scene's depth (the aura glow); render-target views leave vrect and the stair smoothing alone
+
+**Problem.** Lex (3 Nov): the inventory Ice aura (P1163, sixteen normal-pushed shells) looked like
+floating panels on the low-poly body and cost sixteen skinned draws a wearer. A screen-space glow
+needs the scene's depth after the main view, and CSQC had no way to keep it.
+
+**Change.** Tag patch-1230 = 122e073d2 (3 commits on patch-1218).
+- renderer.c r_scenedepth (set by CSQC while it needs it): GLR_RenderView renders through
+  rt/$lastgameview with its depth as the texture rt/$lastgameviewdepth (fbdepth, forcedfb).
+- r_scenedepth_drawn (CVAR_NOSAVE|CVAR_NOTFROMSERVER, engine-set): 0 at the start of every screen
+  view and screenshot_mega's, 1 after a view that wrote that depth, with no stereo and not under
+  the underwater fov wobble (which render-target views do not get). CSQC trusts the depth only then.
+- PF_R_RenderScene: a view drawn into a render target puts r_refdef.vrect/pxrect back afterwards
+  (not "megascreeny"). project() before the next screen view reads vrect, and a half-size mask
+  view left every HUD pin projected before the main render at half scale (measured: 280..353
+  against 560..706).
+- VF_ORIGIN / VF_ORIGIN_Z leave the player's crouch (stair) smoothing alone while a render target
+  other than "megascreeny" is bound; the mask view zeroed it every frame.
+
+**FTESurf side** (cl_inventory.qc Inv_GlowPass): each wearer once into a half-size mask whose pixels
+behind the scene's depth are discarded (one unfiltered texel; the engine's main-view target is GL
+way up, CSQC's 3D target views are flipped, so rows mirror), milk_blur twice, an additive ring around
+the visible silhouette. The mask view brings its own depth texture: GLBE_FBO_Update destroys and
+rebuilds the shared game-view FBO whenever the depth kind changes, which cost 0.66 ms a frame.
+
+**Measured** (probe builds, surf_dune, Lex's render scale 2, uncapped). 2 wearers: glow +0.13 ms,
+shells +0.11. 16 wearers: glow +0.18, shells +0.76. A wearer behind a wall: 0 changed pixels.
+r_projection 1 (the cubemap path, no scene depth): the pass skips. A 0.1.37 exe with the same progs
+keeps the shells. Reviewed in one lens set, three rounds (round 1: stale depth failed open, the mega
+screenshot vrect, the pass ending on the screen under an engine target, the cvar cached across maps).
+
+**Residuals** (FTESurf BACKLOG): a second clearscene per frame decays fading dlights and v_dmg_time
+twice and runs the stair smoothing twice; frames that fail closed draw no aura for the first 16
+wearers but shells for the rest; r_scenedepth_drawn flips twice a frame; VR would need !vid.vr.
+
 ## Patch 1235 — a static prop past MAX_ENT_LEAFS is culled by the lump's own clusters (hl2 plugin)
 
 **Problem.** Lex (3 Nov): surf_remeanian save 18 shows a window frame in the sky. It is static prop 57,
