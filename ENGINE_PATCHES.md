@@ -1,5 +1,31 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1233 — water reflection, refraction and ripple captures each keep their own FBO (client exe)
+
+**Problem.** Lex (3 Nov), after P1222: CS:S draws surf_garden and surf_boreas faster; he wanted real fixes, not
+hl2_water 1. A sampling profile of the main thread at garden save 4 (Lex's settings: hl2_water 2,
+r_renderscale 2) put 15% of it under GLBE_FBO_Update, most of that in win32u. The reflection, the refraction
+and the ripple map shared one fbostate_t per recursion level (fbo_reflectrefrac). Source water's reflection
+asks for a depth renderbuffer and its refraction ($refractiondepth) for a depth texture, so GLBE_FBO_Update saw
+the attachments change and destroyed and re-created the FBO, renderbuffer storage included, twice a frame.
+
+**Change.** engine/gl/gl_backend.c: fbo_refract[recurse][depth texture, renderbuffer] and fbo_ripple[recurse]
+beside the reflection's fbo_reflectrefrac, each destroyed where it is.
+
+**Verified (rig, Lex's settings; control the installed patch-1218 exe, both with hl2 plugin 1a3c9737; two
+alternating runs each, three 2 s r_budget windows per view; every fix window faster than every control
+window).** Medians: garden s1 2.99 -> 2.00 ms (335 -> 499 fps), garden s4 2.47 -> 1.74 (405 -> 575), boreas s10
+3.07 -> 2.33 (326 -> 429), boreas s7 3.10 -> 2.53 (323 -> 395). Pictures: control against fix differ only on the
+animated water, by as much as two runs of one build do (garden s4 11.6% against 12.2/14.1%; boreas s7 1.0%
+against 3.7/3.8%).
+
+**Also measured (no change made).** Narrowing a capture's frustum to its water's screen rectangle would not be
+safe on these maps: their water samples the reflection up to $reflectamount x the normal's tilt away
+(garden 0.9, boreas 2.5), so a conservative margin culls little. The 1-2 s drops to 6-74 fps seen in earlier
+runs did not recur on a quiet machine (worst frames on first arrival 31-75 ms, single frames); Lex thinks they
+were the machine's load. surf_demise's 3D sky costs 1.0 ms GPU and 0.7 ms CPU at save 33 (r_fastsky 1: 310 ->
+458 fps), about half a million triangles of skybox foliage; a lower-resolution sky room is the option left.
+
 ## Patch 1232 — surfd: the KSF crawl unparked; Momentum maps the crawl never knew; otherbuild demos re-judged
 
 **Problem.** Lex (3 Nov) asked for an audit of the Momentum and KSF grabbers. The KSF crawl and every
