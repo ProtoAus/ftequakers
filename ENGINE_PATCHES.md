@@ -1,5 +1,44 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1232 — surfd: the KSF crawl unparked; Momentum maps the crawl never knew; otherbuild demos re-judged
+
+**Problem.** Lex (3 Nov) asked for an audit of the Momentum and KSF grabbers. The KSF crawl and every
+KSF demo download had stopped since 30 Oct 03:51Z: ksfprofile.step refused a whole profile page over
+one record dated 0 (surf_commune_too_beta5), the page replayed from cache at each park expiry, and the
+park doubled to 48 h. 349 approved Momentum maps (639 Normal boards) were never crawled: momtracks.tsv
+was a PC export (28 Sep) filtered to the maps that PC held. Of 3,922 demos settled "otherbuild", 1,437
+matched the build the Pi held on 2 Nov (mapwatch replaced those builds after the verdicts).
+
+**Change.** FTESurf surfd: ksfprofile skips and counts a malformed record (a line per page says how
+many) instead of refusing; ksfimport._when returns 0 for an overflowing date and bounds dates to 32
+bits; mapwatch writes momtracks.tsv from Momentum's list (main's P1117 tracks_rows/write_tracks);
+momgrab records each otherbuild verdict's demo build and reopens it when the held BSP is that build
+(pre-P1232 verdicts are read once from the demo on disk); bsp.json saves merge other processes' entries.
+
+**Verified.** Two review lenses and a round 2. Round 1 found that a missing map reopened a verdict and
+filed the demo as nomap, a BSP read error stopped every tick, and an Infinity date wedged the KSF tick;
+all fixed. On the Pi, momgrab (with a fixture demo), ksfprofile, ksfimport, web and board pass;
+test_mapwatch's four port/zone failures predate it. Live from 18:37Z (surfd 988ff315): the 18:45 KSF
+tick skipped 1 of 5 records and filed 67 rows (104 at 18:50); momgrab reopened 1,445 demos at 18:48
+and filed the first 6 from disk. The audit's open items are in FTESurf BACKLOG.
+
+## Patch 1231 — surfd: the combined board merges per-tier pages; the player directory skips unchanged rebuilds
+
+**Problem.** P1229's audit: the combined board sorted the whole three-tier board for every page; the
+player directory rebuilt (about 9.5 s of a Pi core for 69,069 players) every 5 min whether or not
+anything had changed; 67,800 surfd test homes had leaked into the PC's %TEMP%.
+
+**Change.** FTESurf surfd/surfd.py board_rows: a combined page within the first 1000 rows (no name
+search) takes each tier's first offset+limit rows in BOARD_ORDER (runs_board walks them and stops),
+UNION ALL, and one ORDER BY over those. _people_marker (runs' MAX(rowid), the accounts' values,
+play_maps' count and MAX(rowid)) lets a kick inside an hour skip the rebuild; it is kept in
+people.json. Seven surfd suites remove their homes at exit.
+
+**Verified.** 256 combined pages identical old and new on a 2 Nov snapshot, and a reviewer's 4,608
+comparisons with 0 mismatches (a per-tier limit of `limit` alone gives 100). surf_kitsune leg 1 page
+one: 0.130 to 0.029 s of SQL; 0.03-0.10 s a request live. Review 1 found the marker hashed sqlite3.Row
+reprs (addresses); it hashes the values (a test_web case). %TEMP%: 62,592 removed, 5,129 already gone.
+
 ## Patches 1217, 1218, 1215 — Lex's map list of 3 Nov: mirror water, sky leaks, fades, map decals, reset spawns
 
 **Problem.** Lex's paste of 3 Nov (Desktop 0.1.37, r_renderscale 2, hl2_water 2), with CS:S shots:
