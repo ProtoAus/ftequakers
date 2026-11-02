@@ -1,5 +1,43 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1211 — gravity and delayed player writes predicted; the mover takes the edict's gravity each command
+
+**Problem.** Lex (2 Nov): bhop_decimus's launch pads (OnJump `!activator AddOutput gravity -2`, back
+to 1 after 0.5 s) and ~200 other gravity maps snapped the view at every change, and surf_oneiric's
+hub teleport (`RunScriptCode SetAbsVelocity(Vector(0 0 0))` 1 s after the touch) snapped once.
+Measured with a probe-only csprogs meter (the visible correction of re-predicted commands; the
+cl_prederror meter compares one packet's drift and reads ~2 u): 7.7 u at each decimus change and
+8.5 u on oneiric, at sv_minping 80. Three causes: client prediction used one gravity for every
+replayed command (cl.playerview.entgravity); the server's mover used client->entgravity, which
+SV_UpdateToReliableMessages refreshed only at a send, so a write took effect a send frame later at
+a command no client can know; and that value reached the client reliably, behind any other
+reliable message.
+
+**Change.** Tag patch-1211 = 1d0c8c897: P1211 (3 commits on patch-1212) merged with patch-1213.
+- sv_send.c SV_ClientCurGravity (curgrav's exact arithmetic) and SV_ClientGravityRefresh, called
+  in SV_RunCmdPart before both SV_SetQWClientMoveVars calls: client->entgravity from the edict,
+  with SV_BankGravitySelect, so SV_BankGravityUsed's cache test still compares one expression.
+- svc_entgravity goes unreliably in every SV_SendClientDatagram for every QW seat (split seats with
+  svcfte_choosesplitclient); the reliable send is gone.
+- CSQC_PredictPlayerPreMove preloads predinput_entgravity (the gravity this piece would use) and
+  predinput_version (1211) and takes PMPI_GRAVITY (32) for this piece only; PM_ApplyPreInput never
+  sees the bit. An older engine rejects the whole mask over an unknown bit, so QC sets it only
+  when predinput_version >= 1211.
+- FTESURF_SV_GRAVITY_PERCMD (unconditional): SSQC publishes serverinfo fs_grav from it, and CSQC
+  predicts gravity only against a server engine that applies it per command.
+- QC (FTESurf deploy/p1211-gravity): delayed gravity/velocity rows aimed at a player count down in
+  command msec on both sides (SV_PcTick; the mirror's TG_PreMove on an absolute command clock).
+
+**Lobbies.** game/fteqw-svarm64 c284f65b = patch-1173 + P1211's six server and common files only
+(branch p1211-pi 461134547), so P1188's fs.c is still not on the Pi. pigate identical old vs new;
+surf_spacejam and surf_beyond gravity runs still PASS. tools/lobby-engine-p1211-20261102.md.
+
+**Measured.** decimus 7.7 u -> 0 on both pads; oneiric walk-in 8.5 u (pre-P1211 control) -> 0.
+Reviewed in three lenses (parity three rounds, evidence three, engine/compat two).
+
+**Residuals** (FTESurf BACKLOG): trigger_gravity and the START reset are not mirrored; maxspeed
+still lags a send frame; a replay restart is missed when the ack passes every predicted command.
+
 ## Patch 1213 — fog by distance from the eye on Source maps; UnlitGeneric on vmt/unlit
 
 **Problem.** Lex (2 Nov), with CS:S screenshots of surf_shape: the horizon over the 3D-sky dunes
