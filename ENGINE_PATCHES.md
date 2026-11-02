@@ -1,5 +1,35 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1212 — World of Surf version info in the launcher and game; wrapper .\; updater tests repaired
+
+**Problem.** Lex (2 Nov): players report Windows Defender calling the launcher a trojan. On this PC
+Defender found nothing in either launcher, but neither binary is signed, WOS-Launcher.exe carried no
+version resource at all, and the game exe's still read Forethought Entertainment / FTE QW / ftequake.
+Three updater tests had been failing; Lex asked whether the tests or the launcher were broken. They
+were the tests and one wrapper weakness: test_update_wrappers and the batch case of
+test_launcher_dev_handoff ran ftesurf.bat in a shell with NoDefaultCurrentDirectoryInExePath=1 (agent
+shells set it; a hardened PC can too), where cmd does not look in the cwd for a bare
+"ftesurf64.exe"/"WOS-Launcher.exe" (exit 9009); test_update_handoff clicked mu_restart on the title
+screen although P902 moved it to the F2 Updates page, read the restarted game's log the instant the
+launcher exited although P704 detaches the game, and test_update_wrappers expected a detached game's
+stdout.
+
+**Change.** Launcher (Quakers-Launcher 1538d9c): build.rs, MSVC targets only and with no crates, writes
+a VERSIONINFO (CompanyName and ProductName World of Surf, FileDescription World of Surf Launcher,
+FileVersion the crate version, OriginalFilename WOS-Launcher.exe), compiles it with the Windows SDK
+rc.exe and links it into WOS-Launcher alone. Engine (winquake.rc, tag patch-1212 = a0a211465 on
+patch-1209): the StringFileInfo says World of Surf (InternalName ftesurf64, OriginalFilename
+ftesurf64.exe, LegalCopyright crediting FTE under GPL-2.0); DISTRIBUTION/FULLENGINENAME are untouched.
+FTESurf: ftesurf.bat runs .\ explicitly; the three tests follow the current product.
+
+**Verified.** Explorer VersionInfo reads the new strings on the launcher (target/release and the
+release Build-Bootstrap path, warning-free), and on the stamped game exe (git-8083-patch-1212-0,
+a2a97860). cargo test 43+7; a Linux launcher build in WSL is clean. test_update_wrappers PASS with
+the fix and exit 9009 with the old wrapper; test_launcher_dev_handoff passes every case;
+test_update_handoff --arm restart through the real menu (F2 Updates page, "Restart through launcher",
+engine handoff to WOS-Launcher, signed update, returning game) passes on the patch-1212 engine. Defender is
+not cured by this: code signing is the fix, and that is Lex's decision.
+
 ## Patch 1210 — KSF imports get a ducked body (inferred)
 
 **Problem.** Lex (2 Nov): does a KSF demo show a crouch the player released that a slope keeps
