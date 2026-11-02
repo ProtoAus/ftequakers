@@ -1188,6 +1188,7 @@ void GLBE_RenderShadowBuffer(unsigned int numverts, int vbo, vecV_t *verts, unsi
 	shaderstate.sourcevbo = NULL;
 }
 
+static void GLBE_FogRadial(float *out);	//FTESurf Patch 1213
 void GL_CullFace(unsigned int sflags)
 {
 	if (shaderstate.flags & BEF_FORCETWOSIDED)
@@ -4659,7 +4660,12 @@ static void BE_Program_Set_Attributes(const program_t *prog, struct programpermu
 			qglUniform3fvARB(ph, 1, shaderstate.lightcolours);
 			break;
 		case SP_W_FOG:
-			qglUniform4fvARB(ph, 2, r_refdef.globalfog.colour);	//and density
+			{	//FTESurf Patch 1213: w_fog[0..1] as before, w_fog[2] the radial terms
+				float fog[12];
+				memcpy(fog, r_refdef.globalfog.colour, sizeof(float) * 8);
+				GLBE_FogRadial(fog + 8);
+				qglUniform4fvARB(ph, 3, fog);
+			}
 			break;
 		case SP_W_USER:
 			qglUniform4fvARB(ph, countof(r_refdef.userdata), r_refdef.userdata[0]);	//and density
@@ -5474,6 +5480,28 @@ static void GLBE_ApplyScissor(srect_t *rect)
 void GLBE_Scissor(srect_t *rect)
 {
 	GLBE_ApplyScissor(rect);
+}
+
+//FTESurf Patch 1213: w_fog[2] for sys/fog.h fogdepth(), so GLSL fog runs on the distance from the eye as
+//Source does (r_fog_radial). eye xy / depth = gl_FragCoord.xy * xy + zw, from x/d = (ndc.x + p[8]) / p[0] and
+//ndc = (frag - viewport) * 2 / size - 1, viewport as GLBE_ViewportUpdate. Needs clip w = -z: zeros otherwise
+//(an orthographic VF_PERSPECTIVE 0 view has p[11] 0). Passes with no program keep GL fog's view depth:
+//GL_NV_fog_distance's radial is interpolated per vertex on NVIDIA (a wall 616 units ahead fogged as >1000).
+static void GLBE_FogRadial(float *out)
+{
+	extern cvar_t r_fog_radial;
+	const float *p = r_refdef.m_projection_std;
+	float vx = r_refdef.pxrect.x, vy = r_refdef.pxrect.maxheight - (r_refdef.pxrect.y + r_refdef.pxrect.height);
+	float vw = r_refdef.pxrect.width, vh = r_refdef.pxrect.height;
+	qboolean on = r_fog_radial.ival >= 2 || (r_fog_radial.ival == 1 && r_worldentity.model &&
+		(r_worldentity.model->engineflags & MDLF_SOURCEBSP));
+	out[0] = out[1] = out[2] = out[3] = 0;
+	if (!on || vw <= 0 || vh <= 0 || !p[0] || !p[5] || p[11] != -1 || p[15] != 0)
+		return;
+	out[0] = 2 / (vw * p[0]);
+	out[1] = 2 / (vh * p[5]);
+	out[2] = (p[8] - 1 - 2 * vx / vw) / p[0];
+	out[3] = (p[9] - 1 - 2 * vy / vh) / p[5];
 }
 
 /*
@@ -8228,14 +8256,22 @@ typedef struct
 	qboolean overlapfull; // GLBLEND_OVERLAP_WORK ran out: later pairs kept their hint
 } glblendplanestats_t;
 
+//FTESurf Patch 1213: except vmt/unlit, which only calls ftetransform() (see GLBE_BlendProgramPlanar) and since
+//P1213 carries the translucent UnlitGeneric world faces Patches 700/701 sort (Kitsune's grids), once passes.
+static qboolean GLBE_BlendWorldProgramOK(const program_t *prog)
+{
+	return !prog || (prog->name && !prog->tess && !prog->geom && !strncmp(prog->name, "vmt/unlit", 9) &&
+		(!prog->name[9] || prog->name[9] == '#'));
+}
+
 static qboolean GLBE_BlendPlaneShaderEligible(const shader_t *shader)
 {
 	int p;
 	// Even a vertex-only material program can move positions. No CPU-plane proof.
-	if (!shader || shader->numdeforms || shader->prog || shader->numpasses < 0 || shader->numpasses > SHADER_PASS_MAX)
+	if (!shader || shader->numdeforms || !GLBE_BlendWorldProgramOK(shader->prog) || shader->numpasses < 0 || shader->numpasses > SHADER_PASS_MAX)
 		return false;
 	for (p = 0; p < shader->numpasses; p++)
-		if ((shader->passes[p].shaderbits & SBITS_TESSELLATION) || shader->passes[p].prog)
+		if ((shader->passes[p].shaderbits & SBITS_TESSELLATION) || !GLBE_BlendWorldProgramOK(shader->passes[p].prog))
 			return false;
 	return true;
 }
