@@ -260,6 +260,7 @@ static void CSQC_FindGlobals(qboolean nofuncs)
 		csqcg.predinput_apply = csqcg.predinput_origin = csqcg.predinput_velocity = NULL;
 		csqcg.predinput_onground = csqcg.predinput_pmtype = csqcg.predinput_forceduck = NULL;
 		csqcg.predinput_sequence_lo = csqcg.predinput_sequence_hi = csqcg.predinput_held = NULL;
+		csqcg.predinput_entgravity = csqcg.predinput_version = NULL;
 		csqcg.CSQC_PredictGroundVelocity = 0;
 		csqcg.predground_active = NULL;
 		csqcg.CSQC_PredictPlayerMove = 0;	//FTESurf P335: an untrusted module must not rewrite predicted movement
@@ -10678,7 +10679,8 @@ qboolean CSQC_PredictsHeld(void)
 int CSQC_PredictPlayerPreMove(int seat, const usercmd_t *cmd, float offsetmsec)
 {
 	pmpreinput_t input;
-	float flags, value;
+	float flags, value, gravity = 0;
+	qboolean setgravity = false;
 	void *pr_globals;
 	int slot;
 
@@ -10707,6 +10709,12 @@ int CSQC_PredictPlayerPreMove(int seat, const usercmd_t *cmd, float offsetmsec)
 		*csqcg.predinput_pmtype = pmove.pm_type;
 	if (csqcg.predinput_forceduck)
 		*csqcg.predinput_forceduck = 0;
+	/* P1211: the server's gravity (svc_entgravity, sent with every frame since P1211) is
+	   right for the first command after an ack; QC's mirror owns the ones after it. */
+	if (csqcg.predinput_entgravity)
+		*csqcg.predinput_entgravity = movevars.entgravity;
+	if (csqcg.predinput_version)
+		*csqcg.predinput_version = 1211;
 	pr_globals = PR_globals(csqcprogs, PR_CURRENT);
 	((float *)pr_globals)[OFS_PARM0] = seat;
 	((float *)pr_globals)[OFS_PARM1] = cmd->sequence;
@@ -10716,8 +10724,19 @@ int CSQC_PredictPlayerPreMove(int seat, const usercmd_t *cmd, float offsetmsec)
 
 	/* Check floats before casting; NaN/Inf/out-of-range casts are undefined. */
 	flags = *csqcg.predinput_apply;
-	if (IS_NAN(flags) || flags < 0 || flags > PMPI_ALL || flags != (int)flags)
+	if (IS_NAN(flags) || flags < 0 || flags > (PMPI_ALL | PMPI_GRAVITY) || flags != (int)flags)
 		goto invalid;
+	if ((int)flags & PMPI_GRAVITY)
+	{
+		if (!csqcg.predinput_entgravity)
+			goto invalid;
+		value = *csqcg.predinput_entgravity;
+		if (IS_NAN(value) || value < -1000 || value > 1000)
+			goto invalid;
+		gravity = value;
+		setgravity = true;
+		flags = (int)flags & ~PMPI_GRAVITY;
+	}
 	memset(&input, 0, sizeof(input));
 	input.flags = (int)flags;
 	if (input.flags & PMPI_BODY)
@@ -10751,6 +10770,8 @@ int CSQC_PredictPlayerPreMove(int seat, const usercmd_t *cmd, float offsetmsec)
 	}
 	if (!PM_ApplyPreInput(&pmove, &input))
 		goto invalid;
+	if (setgravity)
+		movevars.entgravity = gravity;	/* this piece only: cl_pred.c resets it before the next */
 
 	if (input.flags & PMPI_CLEARCARRIER)
 	{

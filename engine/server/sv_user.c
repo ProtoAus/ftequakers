@@ -8705,6 +8705,7 @@ static void SV_RunCmdPart (usercmd_t *ucmd, qboolean recurse, int kind, float to
 		tas_replay = SV_TASTapeOverlay(host_client, sv_player, &tas_cmd);
 		if (!tas_replay && SV_TASPlanActive(host_client))
 		{
+			SV_ClientGravityRefresh(host_client);	//P1211: as the mover below
 			SV_SetQWClientMoveVars(host_client);
 			tas_planned = SV_TASPlanOverlay(host_client, sv_player, &tas_cmd);
 		}
@@ -9196,6 +9197,9 @@ static void SV_RunCmdPart (usercmd_t *ucmd, qboolean recurse, int kind, float to
 	pmove.skipent = -1;
 	pmove.capsule = (sv_player->xv->geomtype == GEOMTYPE_CAPSULE);
 
+	//FTESurf Patch 1211: the gravity PlayerPreThink and the last move's touches left, not the
+	//last send's: a map's write takes the next move, as Source's does.
+	SV_ClientGravityRefresh(host_client);
 	SV_SetQWClientMoveVars(host_client);
 
 // should already be folded into host_client->maxspeed
