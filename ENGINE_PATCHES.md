@@ -1,5 +1,57 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1192 — the whole 2D sky behind a Source map's 3D sky (surf_olivia's hub)
+
+**Problem.** Lex (2 Nov): surf_olivia draws no sky at map_start/the hub. Its sky_camera stands in
+an area holding the lower box; the sky ceiling is another area of the same cluster, and the
+3D-sky pass enables only the camera's area (R_DrawSkyroom). The 2D sky was then painted only over
+the sky faces that pass kept (R_CalcSkyChainBounds before GL_DrawSkyBox), so the hub showed the
+clear colour, with HUD trails smeared through it.
+
+**Change.** gl_warp.c only. Inside a Source map's 3D-sky view (r_skyroomlevel, fg_new), the
+first sky batch draws all six faces whole (GL_DrawSkyBoxFull), as Source's R_DrawSkyBox does: the
+face images for a six-image sky, or the forced sky's own shader for a cubemap or equirect one.
+Once per sky-room view; the sky depth mask still runs per batch. `r_skyroom_fullbox 0` restores
+the old bounds. The main view and water captures are unchanged. Reaches players with the next
+client release (exe only).
+
+**Verified.** Owned rig, 1280x720 window, one build with the cvar as the switch, matched poses
+(map_start looking up, then level). surf_olivia: `r_skyroom_fullbox 0` and the installed exe draw
+black where the sky is; at 1 the mpa115 sky fills it (58% of the frame's pixels change).
+surf_santorini, spawn looking up and level: 0 and 1 pixels differ between 0 and 1. Cost, same
+pose, six alternating samples of r_budget_dump: olivia frame 1.64/1.60/1.60 ms at 0 against
+1.66/1.53/1.52 at 1, GPU busy 0.75/0.75/0.74 against 0.72/0.72/0.70, the 3D-sky GPU pass 0.40 ms
+both; santorini's 3D-sky pass 0.15 ms both. Nothing measurable. Not reviewed.
+
+## Patch 1191 — a material with no VMT draws its reflectivity colour, not the checker (surf_utopia)
+
+**Problem.** Lex (2 Nov): yesh's surf_utopia, without TF2, draws the missing checker on 14,564 of
+16,966 world faces; Momentum draws them as flat colour. Its TF2 sky (sky_dustbowl_01) found no face
+and drew black: Shader_ParseSkySides fills a missing face with r_blackimage, so R_SetSky's "keep
+the sky if one face loaded" test kept it, and r_skybox_default never applied.
+
+**Change.** hl2 plugin (mod_vbsp.c) and gl_warp.c. VBSP_LoadTexInfo keeps each texinfo's dtexdata
+reflectivity (the linear average VBSP read from the VTF), or none for a 0x0 entry, which VBSP
+writes as 0 0 0 when it could not find the material either. VBSP_GenerateMaterials: a texture
+whose image will not load (VBSP_DiffuseMissing) and whose shader is the engine's default wall (no
+VMT, or one that would not parse) gets a 4x4 image of that colour (sRGB-encoded) under its
+lightmap, shader hl2tint_RRGGBB. A VMT that loaded keeps the P780 checker: its shader is not
+finished at load (sort 0), so a translucent one cannot be told apart, and tinting it solid would
+wall off what it shows. Water (#WARP) keeps the checker too. `hl2_missingtint 0` restores the
+checker. R_SetSky: a declared sky whose six faces are all missing (or black-filled) draws
+r_skybox_default, as a map that declares none does; `sky` says so. Reaches players with the next
+client release (plugin and exe).
+
+**Verified.** Owned rig, basedirs with the install's fs_addons.txt and no mapdeps.txt (no TF2):
+installed exe/plugin against the build, same three poses. utopia: the checker (12 materials, all
+"missing checker" lines) against lit flat walls (concretewall011 b8aea3, computerwall001 b04018,
+...; 98% and 82% of pixels differ); the build at `hl2_missingtint 0` matches the installed one
+(130 and 0 pixels). With TF2 mounted (mapdeps.txt copied) installed and build give the same frame
+(0 and 3 pixels). Sky: the P1191 build without the black-face test draws black sky regions on
+utopia; with it, "sky sky_dustbowl_01: no face found; drawing r_skybox_default sky_cape_hill" and
+cape_hill fills them. surf_olivia's grassdirt_blend_wvt_patch (0x0 texdata) drew black before the
+0x0 rule and keeps the checker after it; santorini's coast_wall01b likewise. Not reviewed.
+
 ## Patch 1195 — prederror reports: kept, offered, sent to the lobby
 
 **Problem.** Lex (2 Nov): "when we get prederrors, the game logs it, asks the player if they want
