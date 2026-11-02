@@ -1520,6 +1520,10 @@ static void Surf_BuildLightMap (model_t *model, msurface_t *surf, int map, int s
 			/*fullbright if map is not lit. but not overbright*/
 			for (i=0 ; i<size*3 ; i++)
 				blocklights[i] = 128*256;
+			//FTESurf Patch 1222: record the style, as the L8 path does, or Surf_RenderDynamicLightmaps
+			//rebuilds every visible face of an unlit map every frame (surf_leet_xl_beta7z: 3.2 ms a frame).
+			surf->cached_light[0] = d_lightstylevalue[0];
+			surf->cached_colour[0] = cl_lightstyle[0].colourkey;
 		}
 		else if (!surf->samples)
 		{
@@ -1811,6 +1815,8 @@ static void Surf_BuildLightMap_Worker (model_t *wmodel, msurface_t *surf, int sh
 			{
 				blocklights[i] = 128*256;
 			}
+			surf->cached_light[0] = d_lightstylevalue[0];	//FTESurf Patch 1222, as Surf_BuildLightMap
+			surf->cached_colour[0] = cl_lightstyle[0].colourkey;
 		}
 		else
 		{
