@@ -635,6 +635,8 @@ typedef struct vbspinfo_s
 	{
 		float fademindist;
 		float fademaxdist;
+		unsigned int *pvsclusters;	//FTESurf Patch 1235: the lump's own clusters, when they overflow pvscache
+		unsigned int numpvsclusters;
 		qboolean solid;
 		struct bihtransform_s transform;
 		vec3_t	lightorg;
@@ -6004,6 +6006,23 @@ static qboolean VBSP_LoadStaticProps(model_t *mod, qbyte *offset, size_t size, i
 		//the end of the lump's own array would otherwise read whatever follows it.
 		//It degrades to the same -2 path as an overflow, which recomputes the leaf
 		//set from the bounding box once the model is up -- a safe answer, not a guess.
+		if (leafcount > countof(ent->pvscache.leafnums) && leafrefidx + leafcount <= numleafrefs)
+		{	//FTESurf Patch 1235: Source culls a big prop by this list. The radius box's headnode test
+			//passed surf_remeanian's windows1 (138 clusters, none in the PVS) through the sky at save 18.
+			unsigned int *cl = plugfuncs->GMalloc(&mod->memgroup, sizeof(*cl) * leafcount), n = 0, k;
+			for (l = 0; l < leafcount; l++)
+			{
+				int c = mod->leafs[VBSP_SprpLeafRef(leafref, leafrefsize, leafrefidx + l)].cluster;
+				if (c < 0)
+					continue;
+				for (k = 0; k < n && cl[k] != (unsigned int)c; k++)
+					;
+				if (k == n)
+					cl[n++] = c;
+			}
+			prv->staticprops[i].pvsclusters = cl;
+			prv->staticprops[i].numpvsclusters = n;
+		}
 		if (leafcount > countof(ent->pvscache.leafnums) ||
 			leafrefidx + leafcount > numleafrefs)
 			ent->pvscache.num_leafs = -2;	//overflow. calculate it later once its loaded.
@@ -7770,6 +7789,22 @@ Collision Stuff.
 ===============================================================================
 */
 
+//FTESurf Patch 1235: a big prop's own clusters (see the loader) against the view's cluster PVS.
+static qboolean VBSP_PropClustersVisible(const struct staticprop_s *sp, const qbyte *pvs)
+{
+	unsigned int i, c;
+	for (i = 0; i < sp->numpvsclusters; i++)
+	{
+		c = sp->pvsclusters[i];
+		if (pvs[c >> 3] & (1 << (c & 7)))
+		{
+			vbsp_pvs_why = VBSP_PVSWHY_VISIBLE;
+			return true;
+		}
+	}
+	vbsp_pvs_why = VBSP_PVSWHY_LEAFS;
+	return false;
+}
 static void VBSP_BuildBIHSubmodel(model_t *mod, int submodel)
 {
 	vbspinfo_t	*prv = (vbspinfo_t*)mod->meshinfo;
@@ -10563,7 +10598,8 @@ static void VBSP_PrepareFrame(model_t *mod, refdef_t *r_refdef, int area, int cl
 			//PVS/area cull, exactly like the displacement loop above (VBSP_EdictInFatPVS at ~3587).
 			//Only valid when we actually have view PVS: surfvis==NULL means portal-recursion / novis / no model vis, where everything must draw.
 			//src->pvscache.leafnums hold CLUSTERS, and surfvis is the cluster-PVS from VBSP_MarkLeaves, so this is index-consistent (same as displacements).
-			if (surfvis && !VBSP_EdictInFatPVS(mod, &src->pvscache, surfvis, areas))
+			if (surfvis && (sent->numpvsclusters ? !VBSP_PropClustersVisible(sent, surfvis) :
+			                !VBSP_EdictInFatPVS(mod, &src->pvscache, surfvis, areas)))
 			{
 				sent->lastpvswhy = vbsp_pvs_why;	//FTESurf Patch 257: set by the call above
 				PROP_VERDICT(PROPV_PVS);
@@ -13084,7 +13120,7 @@ static void VBSP_PropCensus_f(void)
 		if (vbsp_propstat.leafoverflow)
 			Con_Printf("  %6u prop(s) had a lump leaf list longer than MAX_ENT_LEAFS and were re-derived\n"
 					   "         from a bounding box at first draw; %u of those ended up on the weaker\n"
-					   "         headnode visibility test rather than a cluster list.\n",
+					   "         headnode test there.  Their PVS cull uses the lump's own clusters (P1235).\n",
 					   vbsp_propstat.leafoverflow, vbsp_propstat.headnodetested);
 		if (prv->lit_foreign)	//FTESurf Patch 1096
 			Con_Printf("  %6u bake(s) dropped at first light: made for another model (checksum)\n",
@@ -13180,6 +13216,8 @@ static void VBSP_PropCensus_f(void)
 			(src->pvscache.num_leafs == -1) ? " (headnode test -- leaf list overflowed)" :
 			(src->pvscache.num_leafs == -2) ? " (not yet re-derived; prop has never been reached)" :
 			(src->pvscache.num_leafs ==  0) ? " (NO VISIBLE LEAVES -- this prop can never pass the PVS test)" : "");
+		if (sent->numpvsclusters)	//FTESurf Patch 1235
+			Con_Printf("    own clusters       : %u (the PVS test uses these, not the leaf state above)\n", sent->numpvsclusters);
 		{
 			vec3_t sp;
 			VBSP_PropSamplePoint(mod, sent, sp);
