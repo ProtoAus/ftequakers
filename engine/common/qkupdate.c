@@ -443,6 +443,25 @@ static qboolean QKU_FSNoLinks(const char *rel)
 	return true;
 }
 
+//FTESurf Patch 1209: the launcher is WOS-Launcher.  An install from before it keeps ftesurf-launcher:
+//the launcher is not feed-managed, so no update brings the new name.  A link counts as present, so
+//QKU_FSNoLinks refuses it rather than this falling back past it.
+static const char *QKU_LauncherName(void)
+{
+	char path[MAX_OSPATH];
+#ifdef _WIN32
+	wchar_t wide[MAX_OSPATH];
+	QKU_InstallPath(path, sizeof(path), "WOS-Launcher.exe");
+	if (MultiByteToWideChar(CP_UTF8, 0, path, -1, wide, MAX_OSPATH) && GetFileAttributesW(wide) != INVALID_FILE_ATTRIBUTES)
+		return "WOS-Launcher.exe";
+	return "ftesurf-launcher.exe";
+#else
+	struct stat st;
+	QKU_InstallPath(path, sizeof(path), "WOS-Launcher");
+	return lstat(path, &st) ? "ftesurf-launcher" : "WOS-Launcher";
+#endif
+}
+
 static qboolean QKU_FSStageNoLinks(const char *fmt, const char *leaf)
 {
 	char sub[MAX_OSPATH], rel[MAX_OSPATH];
@@ -482,7 +501,7 @@ static void QKU_FSLock(void)
 	QKU_InstallPath(path, sizeof(path), ".ftesurf-updater/pending.json");
 	{
 		vfsfile_t *pending = FS_OpenVFS(path, "rb", FS_SYSTEM);
-		if (pending) { VFS_CLOSE(pending); Sys_Error("Unfinished launcher update. Run ftesurf-launcher to finish installing before starting the game."); }
+		if (pending) { VFS_CLOSE(pending); Sys_Error("Unfinished launcher update. Run WOS-Launcher (ftesurf-launcher in an older install) to finish installing before starting the game."); }
 	}
 }
 
@@ -2579,11 +2598,7 @@ static void QKU_Restart_f(void)
 #ifdef HAVE_CLIENT
 	if (cls.state != ca_disconnected) { QKU_Fail(qku.state, "Restart was not started: disconnect before restarting."); return; }
 #endif
-#ifdef _WIN32
-	launcher = "ftesurf-launcher.exe";
-#else
-	launcher = "ftesurf-launcher";
-#endif
+	launcher = QKU_LauncherName();	//FTESurf Patch 1209
 	if (!QKU_FSNoLinks(launcher) || !QKU_FSNoLinks(".ftesurf-updater/install.lock"))
 	{ QKU_Fail(qku.state, "linked launcher path; restart was not started. Use a regular local launcher beside FTESurf, then retry."); return; }
 	QKU_InstallPath(exe, sizeof(exe), launcher);
