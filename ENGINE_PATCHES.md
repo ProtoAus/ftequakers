@@ -1,5 +1,36 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1210 — KSF imports get a ducked body (inferred)
+
+**Problem.** Lex (2 Nov): does a KSF demo show a crouch the player released that a slope keeps
+ducked? KSF's binary records the duck BUTTON every frame (mask 4) but no body state: 37 of 42
+cached files are v2 with no state cell, and v3's flags bit1 does not follow the button (held
+2,237 frames, bit1 on 29 of them; 482 bit1 frames with the button up).
+
+**Measured.** In the air CS moves the origin +8.5 when a duck completes and -8.5 when an unduck
+does: the residual dz - mean(vz) x 0.015 is 8.4995..8.5005 for 98% of air presses, on the press
+frame or the next (480 of 503). Releases: 386 stood at once, 64 stayed ducked 0.3-2.25 s with
+the button up, 55 unseen. Geometry (point traces from the box's corners on the local BSPs): with
+under 8.5 units below the box -- 1/115 instant releases, 50/64 held releases, 0/64 on the frame
+the hold ended; a ceiling within 8.5 above explained 2 more. surf_devil 8/9 and surf_lore 2/5
+holds have room either way (the local builds likely differ from KSF's; not established). At every
+hold's end vz changes by exactly -12 (one tick of gravity): free-fall unducks, not landings.
+
+**Change.** Native DUCKED (flags bit 2) is set while the button is held and, after a release,
+until the -8.5 shift -- within two frames of the release, else searched from two frames after it
+for 400 frames with the button up (ground, a teleport or a new press ends it); with no shift the
+body stands at the release. tools/ksfconvert.py infer_ducked (surfd's conversion at grab time) and
+cl_ksf.qc KSF_Ducked (the in-game original-binary loader) are the same rule. Consumers already
+read DUCKED: eye height, the ducked model, hull heights in ramp/board/zone inference.
+
+**Verified.** tools/test_ksfconvert.py (14, the rule's cases and bit1-with-button-up never
+ducked); tools/p1210ksfduck.py: 35 KSF files give the same sample and DUCKED counts through the
+converter and `replay ksf` in game (55 holds), 7 refused by both, on the build and the shipped
+lobby bytes; the reviewer's float32 copy of KSF_Ducked matched infer_ducked on every frame of all
+42. One review: no defect (a docstring corrected). Lobby QC live as deploy/p1210-ksfduck e3d324e1.
+NOT yet live: surfd's conversion (needs a generation swap) and the 6,838 KSF .rec it already
+serves (converted before P1210; they need re-converting from data/ksfruns/.originals).
+
 ## Patch 1209 — the launcher is WOS-Launcher; the update handoff falls back to the old name
 
 **Problem.** Lex (2 Nov): rename the launcher to WOS-Launcher, the full rename. The entry point was
