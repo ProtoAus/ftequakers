@@ -2819,7 +2819,8 @@ static void Cmd_Complete_CheckArg(const char *value, const char *desc, const cha
 
 //FTESurf Patch 1219: copies, not the owners' pointers. Cmd_Complete memoises on the partial while
 //owners free names and descriptions (CSQC_Shutdown's Cmd_RemoveCommands at every map change, alias
-//redefinition or removal, Cvar_Free): 0.1.37 faulted in Hash_KeyInsensitive under Con_BuildCompletion.
+//redefinition or removal, Cvar_Free, Cvar_GamedirChange): 0.1.37 faulted in Hash_KeyInsensitive
+//under Con_BuildCompletion. Cmd_Complete_Set must not free a slot: the steal path frees first.
 static void Cmd_Complete_Set(struct cmd_completion_opt_s *o, const char *text, const char *desc)
 {
 	o->text_alloced = true;
