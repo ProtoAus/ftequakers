@@ -4101,6 +4101,8 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 // moved by normal.xy * normal.a * amount.  Gamma space, like refract.glsl.
 //   CUBEREFL  the nearest baked cubemap stands in for the reflection capture
 //   BLENDED   no refraction capture either: blend the reflection over the framebuffer by F
+// With CUBEREFL and no cubemap bound (hl2_envcubemap 0, a map with none) there is nothing to
+// reflect: the refraction alone, or nothing at all when BLENDED, not a black mirror.
 
 "#ifndef REFRTINT\n"
 "#define REFRTINT 1.0,1.0,1.0\n"
@@ -4149,11 +4151,11 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "vec2 sc = (1.0 + tf_c.xy / tf_c.w) * 0.5;\n"
 "float ndv = clamp(dot(normalize(-incident), wn), 0.0, 1.0);\n"
 "float f = float(REFLECTANCE) + (1.0 - float(REFLECTANCE)) * pow(1.0 - ndv, 5.0);\n"
-"#ifdef CUBEREFL\n"
+"#if defined(CUBEREFL) && !defined(REFLECTCUBEMASK)\n"
+"f = 0.0;\n"
 "vec3 refl = vec3(0.0);\n"
-"#ifdef REFLECTCUBEMASK\n"
-"refl = textureCube(s_reflectcube, (m_model * vec4(reflect(incident, wn), 0.0)).xyz).rgb;\n"
-"#endif\n"
+"#elif defined(CUBEREFL)\n"
+"vec3 refl = textureCube(s_reflectcube, (m_model * vec4(reflect(incident, wn), 0.0)).xyz).rgb;\n"
 "#else\n"
 "vec3 refl = texture2D(s_reflection, clamp(sc + tn.xy * (nrm.a * float(REFLAMOUNT)), 0.0, 1.0)).rgb;\n"
 "#endif\n"

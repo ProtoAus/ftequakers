@@ -1402,11 +1402,12 @@ FTESurf Patch 1218: a "mipmap fade" -- mip levels drawn to differ, so a pane cha
 a level's mean, so neighbouring levels of an ordinary texture agree; a mean that moves by a quarter
 between two of the first four levels was authored.  DXT1/DXT5, one frame, not a cubemap; level 0
 is skipped past 256 KB (levels 1-3 still see the fade).  Block endpoints stand in for the texels.
+The image ends the file before v7.3; from it, it ends where the high-res resource entry says.
 */
 static qboolean VMT_MipFade(const char *name)
 {
 	char path[MAX_QPATH];
-	unsigned char hdr[64], *buf;
+	unsigned char hdr[80], *buf;
 	vfsfile_t *f;
 	int w, h, fmt, mips, bs, lv, frames;
 	unsigned int flags;
@@ -1437,6 +1438,25 @@ static qboolean VMT_MipFade(const char *name)
 		return false;
 	}
 	off = VFS_GETLEN(f);	//the largest level is last
+	if (hdr[8] >= 3)	//VTF 7.3+: resource entries follow the 80-byte header
+	{
+		unsigned int nres = hdr[68] | (hdr[69] << 8) | (hdr[70] << 16) | ((unsigned int)hdr[71] << 24), r;
+		unsigned char ent[8];
+		qofs_t total = 0;
+		for (lv = 0; lv < mips; lv++)
+			total += (qofs_t)((max(1, w >> lv) + 3) / 4) * ((max(1, h >> lv) + 3) / 4) * bs;
+		for (r = 0; r < nres && r < 32; r++)
+		{
+			VFS_SEEK(f, 80 + r * 8);
+			if (VFS_READ(f, ent, 8) != 8)
+				break;
+			if (ent[0] == 0x30 && !ent[1] && !ent[2])	//VTF_LEGACY_RSRC_IMAGE
+			{
+				off = (ent[4] | (ent[5] << 8) | (ent[6] << 16) | ((unsigned int)ent[7] << 24)) + total;
+				break;
+			}
+		}
+	}
 	for (lv = 0; lv < 4 && lv < mips && !fade; lv++)
 	{
 		n = (size_t)((max(1, w >> lv) + 3) / 4) * ((max(1, h >> lv) + 3) / 4);
@@ -4860,7 +4880,7 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 	}
 	else if (!Q_strcasecmp(st->type, "LightmappedGeneric"))
 	{
-		if (st->translucent && VMT_MipFade(st->tex[0].name))	//FTESurf Patch 1218
+		if (st->translucent && !(st->seamless_set && st->seamless > 0) && VMT_MipFade(st->tex[0].name))	//FTESurf Patch 1218
 		{
 			Q_strlcat(progargs, "#MIPFADE", sizeof(progargs));
 			Con_DPrintf("[vmt] %s: mip fade, sampled at r_renderscale 1's level\n", shortname);
