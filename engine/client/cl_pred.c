@@ -87,6 +87,26 @@ cvar_t	cl_predict_listen = CVARD("cl_predict_listen","1", "Run the CSQC trigger 
 cvar_t	cl_predict_angleexact = CVARD("cl_predict_angleexact","1", "Reconcile a predicted teleport's view snap with the server's setangle by absolute target and command sequence (FTESurf Patch 396). 0 restores Patch 335's arithmetic, which rotates twice or not at all depending on frame rate and timing.");
 cvar_t	cl_predict_angledebug = CVARD("cl_predict_angledebug","0", "FTESurf Patch 396: 1 records every predicted-snap and setangle decision into a memory log; 2 also each sent command's yaw and the view yaw for 1 s after each. predangle_dump prints and clears it. Nothing prints while recording.");
 static cvar_t	cl_prederror = CVARD("cl_prederror","4", "Print one line per acked command whose server origin differs from what this client predicted for it by more than this many units (FTESurf Patch 335). 0 disables. The line IS the snap-back report: it names the sequence and both origins, so a disagreement between the client's trigger mirror and the server's is a quotable number instead of a feeling.");
+//FTESurf Patch 1195: the prederror report.  QC watches the count; prederr_dump writes the ring.
+static cvar_t	cl_prederror_count = CVARFD("cl_prederror_count","0", CVAR_NOSAVE|CVAR_NOSET, "How many cl_prederror lines this session has printed, so QC can see one happen (FTESurf Patch 1195). Read-only.");
+static cvar_t	cl_prederror_last = CVARFD("cl_prederror_last","", CVAR_NOSAVE|CVAR_NOSET, "The last cl_prederror line as numbers: seat seq error predicted-xyz server-xyz (FTESurf Patch 1195). Read-only.");
+#define PRING_MAX 512		//about 7 s of acks at 72 server frames a second
+#define PRING_DUMPS 200		//per session: a server can stuffcmd prederr_dump
+typedef struct
+{
+	double			t;
+	int				seq;
+	vec3_t			porg, sorg, pvel, svel;
+	qbyte			pground, sground, pmtype;
+	float			msec;
+	short			ang[3];
+	int				fm, sm, um;
+	unsigned int	buttons;
+} pring_t;
+static pring_t pring[MAX_SPLITS][PRING_MAX];
+static int pring_head[MAX_SPLITS], pring_n[MAX_SPLITS], pring_lastseq[MAX_SPLITS], pring_dumps, pring_firsti;
+static int pring_server[MAX_SPLITS];	//cl.servercount the rows belong to
+#define PRING_KEEP 120		//report files kept in data/prederr/ (a report is two)
 static cvar_t	cl_pushlatency = CVAR("pushlatency","-999");
 
 extern float	pm_airaccelerate;
@@ -2119,6 +2139,7 @@ void CL_PredictMovePNum (int seat)
 		int validsequence = cl.inframes[cl.validsequence&UPDATE_MASK].ackframe;
 		from.frame = cl.inframes[from.frame&UPDATE_MASK].ackframe;
 		to.frame = cl.inframes[to.frame&UPDATE_MASK].ackframe;
+		pring_firsti = to.frame+1;	//FTESurf Patch 1195
 		for (i=to.frame+1, stopframe=min(from.frame+UPDATE_BACKUP, cl.movesequence) ; i < stopframe; i++)
 		{
 			outframe_t *of = &cl.outframes[i & UPDATE_MASK];
@@ -2154,6 +2175,47 @@ void CL_PredictMovePNum (int seat)
 				  disagree by construction (5.2 or 10.4 units between 4x and 6x, measured, hosted game or not);
 				  only a per-command speed would remove it.  Noclip voids the run, and this line is for
 				  disagreements nobody has explained.*/
+				/*FTESurf Patch 1195: every comparison, printed or not, once per acked command.  Only the
+				  loop's first pass compares the server's state: later passes match a prop this loop just
+				  saved, predicted against predicted (zero by construction; P1195 arm 2's ring was all such).*/
+				if (i == pring_firsti && (pring_server[seat] != cl.servercount || from.frame + UPDATE_BACKUP < pring_lastseq[seat]))
+				{	//a new connection restarts the sequence (Netchan_Setup), and the old rows are another game's
+					pring_server[seat] = cl.servercount;
+					pring_n[seat] = pring_head[seat] = pring_lastseq[seat] = 0;
+				}
+				if (i == pring_firsti && (from.frame > pring_lastseq[seat] || !pring_n[seat]))
+				{
+					pring_t *r = &pring[seat][pring_head[seat]];
+					pring_lastseq[seat] = from.frame;
+					pring_head[seat] = (pring_head[seat] + 1) % PRING_MAX;
+					if (pring_n[seat] < PRING_MAX)
+						pring_n[seat]++;
+					r->t = realtime;
+					r->seq = from.frame;
+					VectorCopy(pv->prop.origin, r->porg);
+					VectorCopy(from.state->origin, r->sorg);
+					VectorCopy(pv->prop.velocity, r->pvel);
+					VectorCopy(from.state->velocity, r->svel);	//not maintained for the local player under replacement deltas
+					r->pground = pv->prop.onground;
+					r->sground = from.state->onground;
+					r->pmtype = from.state->pm_type;
+					if (from.cmd)
+					{
+						r->msec = from.cmd->msec;
+						VectorCopy(from.cmd->angles, r->ang);
+						r->fm = from.cmd->forwardmove;
+						r->sm = from.cmd->sidemove;
+						r->um = from.cmd->upmove;
+						r->buttons = (unsigned int)from.cmd->buttons;
+					}
+					else
+					{
+						r->msec = 0;
+						VectorClear(r->ang);
+						r->fm = r->sm = r->um = 0;
+						r->buttons = 0;
+					}
+				}
 				static float pt_ncspeed;
 				static double pt_ncchanged = -1;
 				if (movevars.noclipspeed != pt_ncspeed)
@@ -2176,6 +2238,11 @@ void CL_PredictMovePNum (int seat)
 								from.frame, sqrt(e),
 								pv->prop.origin[0], pv->prop.origin[1], pv->prop.origin[2],
 								from.state->origin[0], from.state->origin[1], from.state->origin[2]);
+						Cvar_ForceSet(&cl_prederror_last, va("%i %i %.2f %.1f %.1f %.1f %.1f %.1f %.1f",
+								seat, from.frame, sqrt(e),
+								pv->prop.origin[0], pv->prop.origin[1], pv->prop.origin[2],
+								from.state->origin[0], from.state->origin[1], from.state->origin[2]));
+						Cvar_ForceSet(&cl_prederror_count, va("%i", cl_prederror_count.ival + 1));
 					}
 				}
 				if (!(cls.z_ext & Z_EXT_PF_ONGROUND))
@@ -2712,6 +2779,99 @@ void CL_PredictMove (void)
 }
 
 
+//FTESurf Patch 1195: keep the newest PRING_KEEP files in data/prederr/, by mtime (a server can pick names).
+typedef struct { char name[MAX_QPATH]; time_t mtime; } pfile_t;
+struct pprune_s { pfile_t f[1024]; int n; };
+static int QDECL CL_PredErrPruneAdd(const char *fname, qofs_t fsize, time_t mtime, void *parm, searchpathfuncs_t *spath)
+{
+	struct pprune_s *p = parm;
+	if (p->n < (int)countof(p->f))
+	{
+		Q_strncpyz(p->f[p->n].name, fname, sizeof(p->f[0].name));
+		p->f[p->n].mtime = mtime;
+		p->n++;
+	}
+	return true;
+}
+static int QDECL CL_PredErrPruneCmp(const void *a, const void *b)
+{
+	time_t x = ((const pfile_t *)a)->mtime, y = ((const pfile_t *)b)->mtime;
+	return (x > y) - (x < y);
+}
+static void CL_PredErrPrune(void)
+{
+	struct pprune_s *p = Z_Malloc(sizeof(*p));
+	int i;
+	COM_EnumerateFiles("data/prederr/*.txt", CL_PredErrPruneAdd, p);
+	if (p->n > PRING_KEEP)
+	{
+		qsort(p->f, p->n, sizeof(p->f[0]), CL_PredErrPruneCmp);
+		for (i = 0; i < p->n - PRING_KEEP; i++)
+			FS_Remove(p->f[i].name, FS_GAMEONLY);
+	}
+	Z_Free(p);
+}
+
+//FTESurf Patch 1195: the ring, oldest first.  Only a plain name, only under data/prederr/.
+static void CL_PredErrDump_f(void)
+{
+	const char *name = Cmd_Argv(1);
+	int seat = (Cmd_Argc() > 2) ? atoi(Cmd_Argv(2)) : 0;
+	size_t len = strlen(name), i;
+	char path[MAX_QPATH];
+	vfsfile_t *f;
+	int n, k;
+
+	if (len < 5 || len > 64 || strcmp(name + len - 4, ".txt") || name[0] == '.' || strstr(name, ".."))
+	{
+		Con_Printf("prederr_dump <name>.txt [seat]: a plain name, written to data/prederr/\n");
+		return;
+	}
+	for (i = 0; i < len; i++)
+	{
+		char c = name[i];
+		if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '-' || c == '.'))
+		{
+			Con_Printf("prederr_dump: letters, digits, _ - . only\n");
+			return;
+		}
+	}
+	if (pring_dumps >= PRING_DUMPS)
+	{
+		Con_Printf("prederr_dump: %i dumps this session; restart to write more\n", PRING_DUMPS);
+		return;
+	}
+	if (seat < 0 || seat >= MAX_SPLITS)
+		seat = 0;
+	Q_snprintfz(path, sizeof(path), "data/prederr/%s", name);
+	FS_CreatePath(path, FS_GAMEONLY);
+	f = FS_OpenVFS(path, "wb", FS_GAMEONLY);
+	if (!f)
+	{
+		Con_Printf("prederr_dump: cannot write %s\n", path);
+		return;
+	}
+	pring_dumps++;
+	n = pring_n[seat];
+	VFS_PRINTF(f, "FTESURF-PREDRING 1\n# engine %s\n# rows %i seat %i now %.4f\n"
+		"# t seq porg(3) sorg(3) pvel(3) svel(3) pground sground pmtype msec pitch yaw roll fwd side up buttons\n",
+		version_string(), n, seat, realtime);
+	for (k = 0; k < n; k++)
+	{
+		const pring_t *r = &pring[seat][(pring_head[seat] - n + k + 2 * PRING_MAX) % PRING_MAX];
+		VFS_PRINTF(f, "%.4f %i %.2f %.2f %.2f %.2f %.2f %.2f %.1f %.1f %.1f %.1f %.1f %.1f %i %i %i %.2f %.3f %.3f %.3f %i %i %i %u\n",
+			r->t, r->seq, r->porg[0], r->porg[1], r->porg[2], r->sorg[0], r->sorg[1], r->sorg[2],
+			r->pvel[0], r->pvel[1], r->pvel[2], r->svel[0], r->svel[1], r->svel[2],
+			r->pground, r->sground, r->pmtype, r->msec,
+			SHORT2ANGLE(r->ang[0]), SHORT2ANGLE(r->ang[1]), SHORT2ANGLE(r->ang[2]),
+			r->fm, r->sm, r->um, r->buttons);
+	}
+	VFS_CLOSE(f);
+	FS_FlushFSHashWritten(path);	//as COM_WriteFile: else QC's fopen cannot see the new file (P1195 arm 1)
+	Con_Printf("prederr_dump: %i rows to %s\n", n, path);
+	CL_PredErrPrune();
+}
+
 /*
 ==============
 CL_InitPrediction
@@ -2720,6 +2880,9 @@ CL_InitPrediction
 void CL_InitPrediction (void)
 {
 	extern char cl_predictiongroup[];
+	Cvar_Register (&cl_prederror_count,	cl_predictiongroup);	//FTESurf Patch 1195
+	Cvar_Register (&cl_prederror_last,	cl_predictiongroup);	//FTESurf Patch 1195
+	Cmd_AddCommandD ("prederr_dump", CL_PredErrDump_f, "Writes the last ~7 s of prediction comparisons to data/prederr/<name>.txt (FTESurf Patch 1195).");
 	Cvar_Register (&cl_pushlatency, cl_predictiongroup);
 	Cvar_Register (&cl_nopred,	cl_predictiongroup);
 	Cvar_Register (&cl_source_practice_lerp, cl_predictiongroup);
