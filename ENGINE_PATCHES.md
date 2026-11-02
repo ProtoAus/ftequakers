@@ -1,5 +1,37 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1203 — zone_edit handles: drag a zone's corners, edges and faces
+
+**Problem.** Lex (2 Nov), after P1197: "highlight and grab vertex points with your mouse, and
+then drag it around in 3d, with unit snap 16x16x16 8x8x8 ect and also edge snap ... same with
+grabbing edges and faces".
+
+**Change.** CSQC only (cl_zoneedit*.qc). Panel "Edit shape" (`zone_edit edit`) puts the
+selected zone in a crosshair edit state: a corner within 14 screen units lights, else an edge
+(a corner's vertical edge counts as the corner), else the face the aim passes through; Mouse1
+held drags, Mouse2 cancels, Esc returns, a click on another zone selects it. A zone is a flat
+ring pulled up, so corners and edges move in XY and the top and bottom faces move the whole
+ceiling or floor. A dragged corner takes Edge snap's point (P1197) when that is near its level,
+else the aim on its level, on the grid; a corner's vertical edge, or a side taken above the
+eye, takes the world hit; an edge moves by the grab's rounded offset, a side along its outward
+normal, top/bottom by the height the aim passes nearest (bottom floored to the grid). A move
+that would leave the outline not simple is refused. The drag holds its zone index and the
+table it began on (count, points, first point, zone_crc) and is cancelled and restored on every
+way out of the state; a replaced table lets it go unwritten. Handles are drawn on screen
+(filled squares, dotted edges and outline): a zone's bottom is at or under the floor, and
+ftesurf_zone_xray lines did not show through it in the arm's screenshots (cause not found).
+
+**Verified.** tools/p1203handles.py on surf_sinsane_ez with `zone_edit aimfix` standing in for
+the view: 23/23 graded on the final build and on the shipped lobby bytes (handle per aim,
+map-corner snap exact, grid 16/8, edge, side, top, bottom, crossing refused, Mouse2 cancel,
+pick, real view lit/held with screenshots looked at, and the review cases). Each review round's
+fixes failed on the build before them: review 1's four (top corner jumped to the floor's map
+corner; another panel left the zone moved; zone_reload got the dragged corner written into the
+reloaded zone; close then reopen mid-drag: "Progs boundcheck failed. Value is -1", csqc error),
+review 2's vertical-edge snap, review 3's floor aim (the corner had jumped to the eye), review
+4's side above the eye. Review 4's bottom-face gate is unmeasured (its case did not discriminate).
+Four review rounds; shipped as deploy/p1203-handles b826c9ba.
+
 ## Patch 1207 — prederror reports skip a game this PC hosts; a reset sent unpredicted says why
 
 **Problem.** Lex's first report (surf_anubis, 2 Nov 17:18 local): `!r` at seq 429 moved him
