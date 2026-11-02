@@ -1,5 +1,52 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1209 — the launcher is WOS-Launcher; the update handoff falls back to the old name
+
+**Problem.** Lex (2 Nov): rename the launcher to WOS-Launcher, the full rename. The entry point was
+ftesurf-launcher(.exe) in the launcher build, the release stage and its archive, the public download
+(R2 Content-Disposition, the page's `download`), the wrappers and the tests, and QKU_Restart_f ran
+it by that fixed name. The launcher is not feed-managed (updatefeed.py omits it), so no update ever
+brings a new name to an existing install: those keep ftesurf-launcher.
+
+**Change.** Launcher (Quakers-Launcher 2ad05bc): the Cargo bin is WOS-Launcher. Engine (qkupdate.c,
+tag patch-1209 = 40ac435b7 on patch-1201): QKU_LauncherName() takes WOS-Launcher(.exe) when it
+exists beside the game, else ftesurf-launcher(.exe); a link counts as present, so QKU_FSNoLinks still
+refuses it. The unfinished-update error names both. FTESurf: release.ps1, bootstrap.ps1,
+linux-bootstrap.sh and linux-pack.sh build, stage, require and serve WOS-Launcher (artifacts
+WOS-Launcher-<ver>.exe / -linux-x86_64); the page template follows; ftesurf.bat/.sh prefer
+WOS-Launcher and fall back; updatefeed.py omits both names; the tests use the new name.
+test_update_handoff.py gains --bootstrap-name and --restart-by command.
+
+**Verified.** cargo build/test (43+7). The release's own Windows bootstrap (Build-Bootstrap) built
+x86_64-pc-windows-msvc/release/WOS-Launcher.exe with no warnings, and Assert-BootstrapEntries refuses
+an archive with only the old name. release.ps1 -PreflightOnly -Bump patch passes (target 0.1.37) on a
+tree with the release inputs copied in. test_updatefeed (13), test_update_default_https_unit (13),
+the POSIX unit (15, 2 skipped, in WSL), test_site_copy (7) and test_prepared (20) pass. Handoff,
+restart arm through update_restart, owned loopback feed and adapter: this engine ran
+`WOS-Launcher.exe --dir <install>/. --wait-for-game --yes` (the real launcher then printed "Updated
+World of Surf 0.1.24 → 0.1.26."), ran ftesurf-launcher.exe when only that was present, and the
+P1201 engine started nothing in a WOS-Launcher-only install. Not run: the Linux bootstrap and the
+POSIX archive/HTTPS acceptance tests (release time). Known stale, not P1209: test_update_handoff's
+mu_restart click and its returning-game step, test_update_wrappers (exit 9009) and
+test_launcher_dev_handoff fail the same on an untouched main with the published 0.1.36 launcher.
+
+## Patch 1208 — the launcher names the installed release and the one it updates to
+
+**Problem.** Lex (2 Nov): the launcher should tell you your version and the version you are
+updating to. It said only "Download update?" with a size, and "World of Surf X is ready." after.
+
+**Change.** Launcher only (Quakers-Launcher 371aab2; src/ftesurf.rs, ftesurf_ui.rs, ui.rs). Checking
+line "Installed: World of Surf 0.1.25."; prompt "Update World of Surf?" with "World of Surf 0.1.25 →
+0.1.26 · <size>"; download title "Updating World of Surf 0.1.25 → 0.1.26" (fresh install
+"Downloading World of Surf 0.1.26"; the plain title when the line is narrow); finish "Updated World
+of Surf 0.1.25 → 0.1.26." or "World of Surf 0.1.26 is up to date.". The UI Header gains `from`.
+
+**Verified.** cargo build 0 warnings, cargo test 43+7 (a new download_title test).
+tools/test_update_launcher.py 17 PASS; tools/test_launcher_ui_windows.py 4 cases (captured title
+"Downloading World of Surf 0.1.25"). A plain-update loopback arm (fresh 0.1.25, the same again, dry
+run, 0.1.26, after) passes 7/7; the published 0.1.36 launcher fails 6 of the 7. Reaches players
+with a launcher downloaded after the next release: the launcher does not update itself.
+
 ## Patch 1203 — zone_edit handles: drag a zone's corners, edges and faces
 
 **Problem.** Lex (2 Nov), after P1197: "highlight and grab vertex points with your mouse, and
