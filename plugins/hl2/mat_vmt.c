@@ -3274,7 +3274,7 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 	          */
 	          (!Q_strcasecmp(st->type, "WorldVertexTransition") && !*st->tex[1].name) ||
 	          //FTESurf Patch 1218: a model's (surf_eternity's 331-frame screens drew frame 0)
-	          (!Q_strcasecmp(st->type, "VertexLitGeneric") && st->modelmaterial)))
+	          (!Q_strcasecmp(st->type, "VertexLitGeneric") && st->modelmaterial && !st->selfillum)))
 	{
 		char anim[64];
 		/*
