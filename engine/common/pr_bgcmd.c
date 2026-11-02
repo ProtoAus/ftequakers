@@ -8870,6 +8870,7 @@ qc_extension_t QSG_Extensions[] = {
 	{"FTE_CSQC_HL2_WATER_SCREEN", check_hl2_waterscreen, 0,{NULL}, "FTESurf Patch 1020: hl2_water 5 (screen-space Source water) works here: GL with $currentdepth and a material loader whose vmt/water has the SCREEN branch."},
 	{"FTESURF_PREDICT_BVSET", NULL, 0,{NULL}, "FTESurf Patch 1025: CSQC_PredictPlayerMove may write predmove_bvset/predmove_bvsetflag, an AddOutput basevelocity the next predicted command pays exactly, as the server's carrier does."},
 #endif
+	{"FTESURF_SV_GRAVITY_PERCMD", NULL, 0,{NULL}, "FTESurf Patch 1211: a player's .gravity reaches the mover on the next command, not the next network send, and svc_entgravity rides every frame. SSQC publishes it so CSQC predicts gravity only against a server that does this."},
 	{"FTE_CSQC_WINDOWCAPTION",			NULL,	1,{"setwindowcaption"}, "Provides csqc with the ability to change the window caption as displayed when running windowed or in the task bar when switched out."},
 	{"FTE_ENT_SKIN_CONTENTS",			NULL,	0,{NULL}, "self.skin = CONTENTS_WATER; makes a brush entity into water. use -16 for a ladder."},
 	{"FTE_ENT_UNIQUESPAWNID"},

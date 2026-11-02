@@ -1293,6 +1293,8 @@ enum
 	globalfloat (predinput_sequence_lo)       /*P675: read-only exact sequence low 16 bits*/ \
 	globalfloat (predinput_sequence_hi)       /*P675: read-only exact sequence high 16 bits*/ \
 	globalfloat (predinput_held)              /*P754: nonzero lets the replay run through PM_NONE*/ \
+	globalfloat (predinput_entgravity)        /*P1211 GRAVITY: this piece's entity gravity, preloaded with the server's*/ \
+	globalfloat (predinput_version)           /*P1211: read-only; 1211+ when PMPI_GRAVITY is honoured*/ \
 	\
 	globalfloat (predmove_offset)			/*P924: seconds into this logical input; split continuation, not a new replay (ro)*/ \
 	globalvector(predmove_org0)				/*FTESurf P335: origin at the START of the predicted command (ro)*/ \

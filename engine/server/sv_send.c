@@ -2696,6 +2696,27 @@ qboolean SV_SendClientDatagram (client_t *client)
 				for (c = client->controlled; c; c = c->controlled,pnum++)
 					SV_UpdateClientStats(c, pnum, &msg, frame);
 			}
+			/*FTESurf Patch 1211: entity gravity with every frame, so it arrives with the state
+			  it belongs to (a predicting client starts each replay from it). Reliably it could
+			  queue behind any other reliable message for a round trip.*/
+			if (ISQWCLIENT(client) && movevars.gravity &&
+				(svs.gametype == GT_PROGS || svs.gametype == GT_Q1QVM))
+			{
+				int pnum = 0;
+				client_t *c;
+				for (c = client; c; c = c->controlled, pnum++)
+				{
+					if (!c->edict)
+						continue;
+					if (pnum)
+					{	//one message only: the client resets its destination per message
+						MSG_WriteByte(&msg, svcfte_choosesplitclient);
+						MSG_WriteByte(&msg, pnum);
+					}
+					MSG_WriteByte(&msg, svc_entgravity);
+					MSG_WriteFloat(&msg, SV_ClientCurGravity(c)/movevars.gravity);
+				}
+			}
 
 			// add the client specific data to the datagram
 			SV_WriteClientdataToMessage (client, &msg);
@@ -2959,6 +2980,31 @@ Con_DLPrintf(2, "%s: blob %u:%s@%u-%u\n", client->name, pl, key, (unsigned int)b
 	return true;
 }
 
+/*FTESurf Patch 1211: a progs client's entity gravity, computed exactly as
+  SV_UpdateToReliableMessages computes curgrav, so the mover and the wire agree to the bit.*/
+float SV_ClientCurGravity(client_t *client)
+{
+	float g;
+	if (!client->edict || (svs.gametype != GT_PROGS && svs.gametype != GT_Q1QVM))
+		return sv_gravity.value;
+	g = client->edict->xv->gravity*sv_gravity.value;
+	if (progstype != PROG_QW && !g)
+		g = sv_gravity.value;
+	return g;
+}
+
+/*FTESurf Patch 1211: before each move. The send used to be the only refresh, so a map's
+  gravity write waited up to a send frame -- a delay no predicting client can know. The
+  bank's cache is re-selected with it, as the load path does (SV_BankGravityUsed compares
+  the two).*/
+void SV_ClientGravityRefresh(client_t *client)
+{
+	if (!client->edict || (svs.gametype != GT_PROGS && svs.gametype != GT_Q1QVM))
+		return;
+	client->entgravity = SV_ClientCurGravity(client);
+	SV_BankGravitySelect(client);
+}
+
 /*
 =======================
 SV_UpdateToReliableMessages
@@ -2967,7 +3013,7 @@ SV_UpdateToReliableMessages
 void SV_UpdateToReliableMessages (void)
 {
 	int			i, j;
-	client_t *client, *sp;
+	client_t *client;
 	edict_t *ent;
 	const char *name;
 
@@ -3200,15 +3246,8 @@ void SV_UpdateToReliableMessages (void)
 			}
 
 			{
-				if (host_client->entgravity != curgrav)
-				{
-					if (ISQWCLIENT(host_client))
-					{
-						sp = SV_SplitClientDest(host_client, svc_entgravity, 5);
-						ClientReliableWrite_Float(sp, curgrav/movevars.gravity);	//lie to the client in a cunning way
-					}
-					host_client->entgravity = curgrav;
-				}
+				//P1211: no reliable svc_entgravity; every seat's rides each frame (SV_SendClientDatagram)
+				host_client->entgravity = curgrav;
 				SV_BankGravitySelect(host_client);
 
 				if (host_client->maxspeed != curspeed)

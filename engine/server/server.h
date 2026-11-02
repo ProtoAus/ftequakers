@@ -1482,6 +1482,8 @@ void SV_New_f (void);
 void SV_PreRunCmd(void);
 void SV_RunCmd (usercmd_t *ucmd, qboolean recurse);
 void SV_SetQWClientMoveVars(client_t *client);
+float SV_ClientCurGravity(client_t *client);	//FTESurf Patch 1211
+void SV_ClientGravityRefresh(client_t *client);	//FTESurf Patch 1211: before each move
 void SV_PostRunCmd(void);
 void SV_HeldFrameBoundary(held_boundary_t boundary);
 void SV_HeldEffectAll(void);
