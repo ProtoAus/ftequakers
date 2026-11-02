@@ -1,5 +1,53 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1193 — surf_sirena's script barriers open for the player who earned them
+
+**Problem.** Lex (2 Nov): surf_sirena's barriercollision is never disabled. Its three barriers are
+faceless func_brushes that scripts/vscripts/barriercollision.nut (map pak) opens per player:
+SetPlayerNoCollideBarrier sets the player's m_hOwnerEntity to the barrier, which Source's collision
+filter skips; ClearPlayerNoCollideBarrier clears it. Triggers call it as
+`alpha_script,RunScriptCode,...`. logic_script had no spawn function and nothing ran RunScriptCode,
+so the barriers were solid for everyone.
+
+**Change.** QC only (sv_entities.qc, sv_player.qc, sv_main.qc). logic_script is kept; RunScriptCode
+on it runs that script's two calls (the emissive viewmodel calls are dropped). A grant opens the
+barrier only when the player's own touch made it in their current bank attempt. The barrier is
+SOLID_NOT from the end of that player's PlayerPreThink to the start of their PlayerPostThink
+(StartFrame, the next PreThink, SV_IOEnable and Toggle restore it first; the engine pmove's
+AddLinksToPmove skips owned entities but not owners, so .owner could not do this), and it is not
+sent to that client (customizeentityforclient), so prediction agrees. No engine change.
+
+**Verified.** Listen arm, air-walking at barriercollision_s1, live progs vs the deploy bytes: live
+blocked in every phase; this build blocked before the grant, passed after it, blocked after a save
+load (a new attempt), passed after re-touching the window, blocked after the clear trigger. One
+prederr per walk in both arms (the arm's setpos). Two review rounds (predicate, evidence, attacker):
+round 1 found an end-of-move taint test that fast low-rate crossings skipped on an old grant, a
+Toggle reading the lent solidity and find() returning players; round 2 found the lend running before
+the tick's warp op. All fixed and re-measured. Known: pm_verify rebuilds physents with the barrier
+solid, so a granted pass reads HOLD; saves and resumes do not carry the grant (Lex's call, BACKLOG).
+Live 2 Nov 03:01Z, deploy/p1193-sirena 96f009ed (qw 6955e756).
+
+## Patch 1190 — the server sends a teleport's destination before the crossing
+
+**Problem.** Lex (2 Nov): teleports pop assets in late. The client predicts a teleport at once; the
+destination's networked entities waited for a snapshot built from the new origin (the server's PVS
+is the edict's), a command interval plus a round trip later.
+
+**Change.** QC only (sv_warpop.qc, sv_player.qc, sv_timer.qc). Each playing client gets an
+invisible `tp_view_eye` in `.view2`, which SV_AddCameraEntity unions into its PVS (sv_ents.c ~4382),
+at the destination of a trigger_teleport inside the player's swept box (lookahead
+0.2-0.8 s from the ping), held 1 s after it leaves the sweep, else at the `!r` stat (wop_rorg). The
+replay/ghost/spectate eye outranks it. 20 Hz; the teleport list is rebuilt once a second.
+`sv_tp_pvs 0` detaches it, 2 keeps teleports only.
+
+**Verified.** Listen arm with an arm-only csprogs that counts, per frame after a predicted jump, the
+networked entities that were not there on the jump frame. surf_diverge_css floor teleport,
+sv_minping 150: live progs, 62 arrive after the crossing (144 ms) and 65 by settle; this build, none
+of the destination's (3 at the landing spot 353 ms later, as with `sv_tp_pvs 2`). surf_fortum_fix
+sends all 510 entities everywhere, so it cannot show it. One review (ownership of .view2 sound; it
+fixed an unthrottled path without an eye and tool teleports read as live). Bandwidth not measured.
+Live 2 Nov 03:01Z with P1193.
+
 ## Patch 1192 — the whole 2D sky behind a Source map's 3D sky (surf_olivia's hub)
 
 **Problem.** Lex (2 Nov): surf_olivia draws no sky at map_start/the hub. Its sky_camera stands in
