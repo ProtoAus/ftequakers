@@ -2817,9 +2817,9 @@ static void Cmd_Complete_CheckArg(const char *value, const char *desc, const cha
 	res->num++;
 }
 
-//FTESurf Patch 1219: copies, not the owners' pointers. Cmd_Complete memoises on the partial, and
-//CSQC_Shutdown's Cmd_RemoveCommands, unalias, alias redefinition and Cvar_GamedirChange free names
-//and descriptions the memo held: 0.1.37 faulted in Hash_KeyInsensitive under Con_BuildCompletion.
+//FTESurf Patch 1219: copies, not the owners' pointers. Cmd_Complete memoises on the partial while
+//owners free names and descriptions (CSQC_Shutdown's Cmd_RemoveCommands at every map change, alias
+//redefinition or removal, Cvar_Free): 0.1.37 faulted in Hash_KeyInsensitive under Con_BuildCompletion.
 static void Cmd_Complete_Set(struct cmd_completion_opt_s *o, const char *text, const char *desc)
 {
 	o->text_alloced = true;
@@ -3051,6 +3051,9 @@ cmd_completion_t *Cmd_Complete(const char *partial, qboolean caseinsens)
 				c.completions[w] = c.completions[r];
 			w++;
 		}
+		//P1219: the vacated slots hold moved or freed copies; keep every slot past num zeroed
+		//(CompleteCommand, keys.c, indexes by the highlight without checking num)
+		memset(&c.completions[w], 0, sizeof(c.completions[0])*(c.num-w));
 		c.num = w;
 	}
 	return &c;

@@ -201,7 +201,8 @@ typedef struct
 	number rather than a claim of completeness.
 
 	Cost is one static: Cmd_Complete caches a single cmd_completion_t (cmd.c),
-	so this is ~5KB of .bss, not per-call.
+	so this is ~5KB of .bss, not per-call.  Since P1219 each rebuild (a changed
+	partial) also copies the matched names and descriptions.
 	*/
 	} completions[256];
 } cmd_completion_t;
