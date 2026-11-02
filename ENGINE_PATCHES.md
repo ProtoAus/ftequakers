@@ -1,5 +1,35 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1222 — an unlit map's faces stop rebuilding their lightmaps every frame (client exe)
+
+**Problem.** Lex (3 Nov): surf_leet_xl_beta7z, a plain map, ran at 86-100 fps; he asked for a frame-rate
+audit of it, surf_demise, surf_boreas and surf_garden. r_budget at his settings (copy of his cfg:
+r_renderscale 2, hl2_water 2; 1920x1200; rig, local game) put 3.2 ms of leet's 5.2 ms frame in "lightmap
+updates" at the spawn. The map has no lighting lump (LDR and HDR both empty; 28 of the 2,204 library
+maps). Surf_BuildLightMap's RGB path filled such a face with flat fullbright without recording
+cached_light[0]/cached_colour[0] (the L8 path did), so Surf_RenderDynamicLightmaps found every visible
+face changed and rebuilt and re-uploaded it on every frame.
+
+**Change.** engine/client/r_surf.c: the unlit branch records style 0's value and colour key, in
+Surf_BuildLightMap and in the threaded Q1/Q2 worker. Review 1: with that cached, the worker's
+r_fullbright branches (which never recorded the cache) left a threaded-world unlit map fullbright after
+r_fullbright 1 -> 0, since R_AnimateLight restores the same style 0 value; both now record it as the main
+path does, which also closes that hole for lit faces under the worker.
+
+**Verified (rig, Lex's settings).** leet spawn 5.15/3.96 ms -> 1.01 ms (194/253 -> 990 fps), looking down
+4.71/4.19 -> 1.01 ms; lightmap updates 2.8-3.2 ms -> gone. Lit maps unchanged: garden s1 2.82 -> 2.73,
+demise s33 3.25 -> 3.31 ms. Pictures identical outside the r_budget panel (0 pixels, both views). The
+installed build (patch-1222 on patch-1219, git-8095) 790 fps at the spawn. The worker's r_fullbright path
+is not runtime-tested (Q1/HL maps under r_temporalscenecache, cheat cvar).
+
+**Audit, no change made (FTESurf BACKLOG has the table).** At Lex's settings demise 294-668 fps, boreas
+308-496, garden 333-399, eternity 372-753. Water at hl2_water 2 costs garden s1 1.2 ms CPU and boreas s10
+1.6 ms (hl2_water 5: 333 -> 521 and 314 -> 428 fps); Source's water_lod_control would not cut it at
+reflect-all detail (viewrender.cpp: no LOD with a local reflection). r_renderscale 2 makes demise
+GPU-bound (3D sky 1.2 ms). CSQC is 0.5 ms with no hotspot. Lex's 11 fps on eternity's stair room is
+419 fps there steadily; one 2 s window of 6 fps on demise (163 ms in present, props 28 ms GPU) after a
+teleport, not repeated, is the only stall the rig saw.
+
 ## Patch 1229 — surfd: a new board row's cap count walks runs_live; momboards commits 500 rows at a time
 
 **Problem.** Lex (3 Nov): record uploads are slow. Each /api/run that adds a board row first asks
