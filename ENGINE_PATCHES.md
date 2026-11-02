@@ -1,5 +1,29 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1196 — teleports switched by unreplayable outputs follow the server's gate
+
+**Problem.** Lex (2 Nov), surf_network2008: `prederr: seq 464 origin off by 2160.60 (predicted
+1609.6 3048.6 4044.3, server 1952.0 4048.0 5929.0)`. The server position is fall2, the destination
+of the ct_filter trigger_teleport under the spawn. A logic_timer disables both `spawn` teleports
+(and enables `jail`) 30 s after the map loads. The client mirror demotes any trigger that an
+unreplayable Enable/Disable writes, so the server teleported and the client did not.
+
+**Change.** QC only (FTESurf main 86982072; deploy/p1196-telegate 483a0398). Each named brush
+trigger_teleport sends P670's typed gate entity. SV_TrigStateSend also reads StartDisabled, because
+a teleport that is StartDisabled at spawn stays SOLID_BSPTRIGGER. On the client, Trig_NetState takes
+teleports, and a named teleport is netgated when one of its Enable/Disable writers cannot be
+replayed. Its replayable writers still win through the post-ack ring. Every netgated slot is now
+gated: before this, a push whose only writers were unreplayable fired even while the server had it
+off. Zone-tool boxes are never netgated, since they have no model to match.
+
+**Verified.** fteqcc c24ede65, 0 warnings x3. Owned dedicated server + client rig on
+surf_network2008, cfg-driven: a setpos above Lex's point inside the first 30 s, then the same drop
+after the timer. Unfixed (main fe73d3b0): 2144.57 u at the spawn teleport and 1284.71 u at the jail.
+Fixed: the client fires both teleports itself (#19, #14) and logs no prederr. The arm's own setpos
+correction (~1100-1240 u) shows in both builds. One reviewer (control flow, compatibility, cost)
+found steady state correct; it found the mixed-writer staleness and the zone-tool boxes, both fixed
+and re-measured. Two fail-safe notes went to BACKLOG.
+
 ## Patch 1189 — the Maps menu sees a new zone within a minute
 
 **Problem.** Lex (2 Nov), after P1180: the in-game Maps menu took up to ~6 minutes to show a map
