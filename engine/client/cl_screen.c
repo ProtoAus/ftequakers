@@ -3714,6 +3714,23 @@ void SCR_BeginLoadingPlaque (void)
 	scr_disabled_time = Sys_DoubleTime();	//realtime tends to change... Hmmm....
 }
 
+//FTESurf Patch 1258: a download mid-load releases the plaque, so frames and the console run.  A
+//gamecode loading screen keeps its stage and gets a step naming the file, so it stays up and shows
+//the download: with the stage ended, con_stayhidden opened the menu over it (SCR_SetUpToDrawConsole).
+void SCR_ReleaseLoadingPlaque(const char *dlname)
+{
+#ifdef MENU_DAT
+	if (loading_stage != LS_NONE && MP_UsingGamecodeLoadingScreen())
+	{
+		scr_disabled_for_loading = false;
+		scr_drawloading = false;
+		SCR_SetLoadingFile(va("download %s", dlname));
+		return;
+	}
+#endif
+	SCR_EndLoadingPlaque();
+}
+
 void SCR_EndLoadingPlaque (void)
 {
 //	if (!scr_initialized)

@@ -1057,7 +1057,7 @@ qboolean	CL_CheckOrEnqueDownloadFile (const char *filename, const char *localnam
 //	if (cls.demoplayback && cls.demoplayback != DPB_EZTV)
 //		return true;
 
-	SCR_EndLoadingPlaque();	//release console.
+	SCR_ReleaseLoadingPlaque(localname);	//release console.  FTESurf Patch 1258: the gamecode loading screen stays
 
 	if (flags & DLLF_ALLOWWEB)
 	{
