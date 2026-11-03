@@ -2152,6 +2152,10 @@ void CL_RequestNextDownload (void)
 			}
 		}
 
+		{
+			extern void SCR_ResumeLoadingPlaque(void);
+			SCR_ResumeLoadingPlaque();	//FTESurf Patch 1258: no download is running past the top of this function
+		}
 		stage = 0;
 		stage = CL_LoadModels(stage, false);
 		current_loading_size = cl.contentstage;
@@ -3232,7 +3236,7 @@ static void CL_ParseDownload (qboolean zlib)
 			CL_RequestNextDownload ();
 			return;
 		}
-		SCR_EndLoadingPlaque();
+		SCR_ReleaseLoadingPlaque(dl->localname);	//FTESurf Patch 1258, as in CL_CheckOrEnqueDownloadFile
 	}
 
 	if (zlib)

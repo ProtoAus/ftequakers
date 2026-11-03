@@ -3314,6 +3314,7 @@ SCR_DrawLoading
 
 int			total_loading_size, current_loading_size, loading_stage;
 char		*loadingfile;
+static qboolean scr_loadingreleased;	//FTESurf Patch 1258: SCR_ReleaseLoadingPlaque dropped the plaque for a download
 int CL_DownloadRate(void);
 
 int SCR_GetLoadingStage(void)
@@ -3330,6 +3331,7 @@ void SCR_SetLoadingStage(int stage)
 		loadingfile = NULL;
 		Cvar_ForceSet(&scr_loadingstep, "");	//FTESurf Patch 1244: no load in progress
 		scr_disabled_for_loading = scr_drawloading = false;
+		scr_loadingreleased = false;	//Patch 1258
 		break;
 	case LS_CONNECTION:
 		SCR_SetLoadingFile("waiting for connection...");
@@ -3422,7 +3424,7 @@ void SCR_LoadingPump(void)
 #endif
 	now = Sys_DoubleTime();
 	//where GLSCR_UpdateScreen would leave the loading branch for a full frame: not mid-function
-	if (now - scr_disabled_time > 60 || Key_Dest_Has(~kdm_game))
+	if (now - scr_disabled_time > 59 || Key_Dest_Has(~kdm_game))	//59: GLSCR_UpdateScreen re-reads the clock for its 60 (Patch 1259 review)
 		return;
 	if (now - scr_loadingswap < 1.0/60 && now >= scr_loadingswap)
 		return;
@@ -3434,11 +3436,12 @@ void SCR_LoadingPump(void)
 	r_refdef.warndraw = oldwarndraw;
 }
 
-void SCR_SetLoadingFile(char *str)
+//The step's bookkeeping, without a redraw.  No va(): callers hold va() strings across this
+//(Sound_CheckDownload's name, through CL_CheckOrEnqueDownloadFile; FTESurf Patch 1258 review).
+static void SCR_LoadingStepSet(const char *str)
 {
 	static int seq;
-	if (loadingfile && !strcmp(loadingfile, str))
-		return;
+	char num[16];
 	SCR_LoadTimesStage(str);
 
 	if (loadingfile)
@@ -3446,7 +3449,14 @@ void SCR_SetLoadingFile(char *str)
 	loadingfile = Z_Malloc(strlen(str)+1);
 	strcpy(loadingfile, str);
 	Cvar_ForceSet(&scr_loadingstep, str);	//FTESurf Patch 1244
-	Cvar_ForceSet(&scr_loadingseq, va("%i", ++seq));
+	Q_snprintfz(num, sizeof(num), "%i", ++seq);
+	Cvar_ForceSet(&scr_loadingseq, num);
+}
+void SCR_SetLoadingFile(char *str)
+{
+	if (loadingfile && !strcmp(loadingfile, str))
+		return;
+	SCR_LoadingStepSet(str);
 
 	if (scr_loadingrefresh.ival)
 	{
@@ -3722,13 +3732,29 @@ void SCR_ReleaseLoadingPlaque(const char *dlname)
 #ifdef MENU_DAT
 	if (loading_stage != LS_NONE && MP_UsingGamecodeLoadingScreen())
 	{
+		char step[MAX_OSPATH+16];
 		scr_disabled_for_loading = false;
 		scr_drawloading = false;
-		SCR_SetLoadingFile(va("download %s", dlname));
+		scr_loadingreleased = true;
+		Q_snprintfz(step, sizeof(step), "download %s", dlname);	//not va(): dlname may be one
+		if (!loadingfile || strcmp(loadingfile, step))
+			SCR_LoadingStepSet(step);	//no redraw: menu builtins call this, and MP_Draw does not nest
 		return;
 	}
 #endif
 	SCR_EndLoadingPlaque();
+}
+//The downloads are done: the plaque comes back for the loads after them, or no loading pump runs
+//on a first visit that downloaded its map (Patch 1258 review).
+void SCR_ResumeLoadingPlaque(void)
+{
+	if (!scr_loadingreleased)
+		return;
+	scr_loadingreleased = false;
+	if (loading_stage == LS_NONE || scr_disabled_for_loading || !qrenderer || Key_Dest_Has(~kdm_game))
+		return;
+	scr_disabled_for_loading = true;
+	scr_disabled_time = Sys_DoubleTime();
 }
 
 void SCR_EndLoadingPlaque (void)
