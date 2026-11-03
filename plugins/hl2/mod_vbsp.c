@@ -468,12 +468,12 @@ typedef struct vbspinfo_s
 		qbyte *vis;
 		pvsbuffer_t visbuf;
 		int viewcluster[2];
-		//FTESurf Patch 1261 (VBSP_PVSMemo): the static props' then the displacements' VBSP_EdictInFatPVS answers
-		//against this vis, 0 unknown or 1 + vbsp_pvs_why, while the view's vis, clusters, area and area
-		//connections (floodvalid) are the ones they were taken for
+		//FTESurf Patch 1261 (VBSP_PVSMemo): the static props' then the displacements' PVS/area answers against
+		//this vis, 0 unknown or 1 + vbsp_pvs_why, while the view's vis, clusters, area, area connections
+		//(floodvalid) and map_noareas are the ones they were taken for
 		qbyte *memo;
 		const qbyte *memovis;
-		int memocluster[2], memoarea, memoflood;
+		int memocluster[2], memoarea, memoflood, memonoareas;
 	} vcache[R_MAX_RECURSE];
 
 	/*
@@ -10122,7 +10122,7 @@ static qbyte *VBSP_PVSMemo(model_t *mod, int area, const int clusters[2], const 
 		prv->vcache[lvl].memo = plugfuncs->GMalloc(&mod->memgroup, n);
 	if (prv->vcache[lvl].memovis != surfvis || prv->vcache[lvl].memocluster[0] != clusters[0] ||
 		prv->vcache[lvl].memocluster[1] != clusters[1] || prv->vcache[lvl].memoarea != area ||
-		prv->vcache[lvl].memoflood != prv->floodvalid)
+		prv->vcache[lvl].memoflood != prv->floodvalid || prv->vcache[lvl].memonoareas != !!map_noareas->value)
 	{
 		memset(prv->vcache[lvl].memo, 0, n);
 		prv->vcache[lvl].memovis = surfvis;
@@ -10130,6 +10130,7 @@ static qbyte *VBSP_PVSMemo(model_t *mod, int area, const int clusters[2], const 
 		prv->vcache[lvl].memocluster[1] = clusters[1];
 		prv->vcache[lvl].memoarea = area;
 		prv->vcache[lvl].memoflood = prv->floodvalid;
+		prv->vcache[lvl].memonoareas = !!map_noareas->value;	//VBSP_AreasConnected's override
 	}
 	return prv->vcache[lvl].memo;
 }
