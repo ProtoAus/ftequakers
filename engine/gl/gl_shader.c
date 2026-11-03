@@ -47,11 +47,17 @@ qboolean shader_reload_needed;
 static qboolean shader_rescan_needed;
 //FTESurf Patch 1267: Shader_NeedReload(true) is a filesystem change, and a shader parsed after the last
 //one read the files as they are now.  A reload asked for by the filesystem alone (no cvar or other full
-//request since the last reload) leaves those alone unless the rescanned scripts now define them.
+//request since the last reload) leaves those alone unless a script defined them then (the cache is only
+//rescanned at the reload) or defines them now.  Generators' other inputs ask for full reloads: shader
+//cvars, and the watervis permission (CL_CheckServerInfo).
 //Measured on map changes: only shaders from before the change differ (the old map's, losing their pack).
 static unsigned int shader_fsgen = 1;
 static qboolean shader_reload_full = true;
-static unsigned int *shader_parsegen;	//by shader id: the shader_fsgen its last parse saw
+static struct
+{
+	unsigned int gen;	//the shader_fsgen its last parse saw
+	qboolean script;	//that parse read a script
+} *shader_parsegen;	//by shader id
 static int shader_parsegen_max;
 static void Shader_StampParse(int id)
 {
@@ -64,7 +70,8 @@ static void Shader_StampParse(int id)
 		memset(shader_parsegen + shader_parsegen_max, 0, (n - shader_parsegen_max) * sizeof(*shader_parsegen));
 		shader_parsegen_max = n;
 	}
-	shader_parsegen[id] = shader_fsgen;
+	shader_parsegen[id].gen = shader_fsgen;
+	shader_parsegen[id].script = false;
 }
 
 sh_config_t sh_config;
@@ -8686,6 +8693,8 @@ static qboolean Shader_ParseShader(parsestate_t *ps, const char *parsename)
 			}
 
 			Shader_Reset(ps);
+			if (ps->s->id < shader_parsegen_max)
+				shader_parsegen[ps->s->id].script = true;	//Patch 1267
 
 			Shader_ReadShader(ps, file, sourcefile);
 
@@ -9450,6 +9459,19 @@ void Shader_TouchTextures(void)
 */
 const char *shader_reload_why = "?";
 
+//Patch 1267: whether the scripts define a shader under a name its reparse tries.
+static qboolean Shader_HasScript(const char *cleanname, const char *shortname)
+{
+	if (sh_config.shadernamefmt)
+	{
+		char drivername[MAX_QPATH];
+		Q_snprintfz(drivername, sizeof(drivername), sh_config.shadernamefmt, cleanname);
+		if (Shader_LocateSource(drivername, NULL, NULL, NULL, NULL))
+			return true;
+	}
+	return Shader_LocateSource(cleanname, NULL, NULL, NULL, NULL) || Shader_LocateSource(shortname, NULL, NULL, NULL, NULL);
+}
+
 void Shader_DoReload(void)
 {
 	shader_t *s;
@@ -9530,8 +9552,8 @@ void Shader_DoReload(void)
 		if (argsstart)
 			*argsstart = 0;
 		COM_StripExtension (cleanname, shortname, sizeof(shortname));
-		if (targeted && s->id < shader_parsegen_max && shader_parsegen[s->id] == shader_fsgen
-			&& !Shader_LocateSource(cleanname, NULL, NULL, NULL, NULL) && !Shader_LocateSource(shortname, NULL, NULL, NULL, NULL))
+		if (targeted && s->id < shader_parsegen_max && shader_parsegen[s->id].gen == shader_fsgen
+			&& !shader_parsegen[s->id].script && !Shader_HasScript(cleanname, shortname))
 		{
 			skipped++;	//Patch 1267: parsed after the last filesystem change
 			continue;

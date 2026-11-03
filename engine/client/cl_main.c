@@ -7908,6 +7908,8 @@ double Host_Frame (double time)
 				//Until then this is at least a choice you can make: set
 				//r_shader_reload_afterframe 0 to skip it and take the ~600ms, at the
 				//cost of water that stays stale until the next reload.
+				//Patch 1267: off by default. After the activation reload it changed no shader, water
+				//included (a first connect onto surf_hourglass, bikini_bottom, frey_remake).
 				if (r_shader_reload_afterframe.ival
 					&& cls.state == ca_active && cls.shader_reload_servercount != cl.servercount
 					&& cl.worldmodel && cl.worldmodel->loadstate == MLS_LOADED)
