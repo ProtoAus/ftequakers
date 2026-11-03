@@ -792,6 +792,7 @@ qboolean Mod_PurgeModel(model_t	*mod, enum mod_purge_e ptype)
 	}
 	ZG_FreeGroup(&mod->memgroup);
 	mod->loadstate = MLS_NOTLOADED;
+	BIH_CollisionChanged();	//FTESurf Patch 1266: cached traces may have walked it
 
 	mod->submodelof = NULL;
 	mod->pvs = NULL;

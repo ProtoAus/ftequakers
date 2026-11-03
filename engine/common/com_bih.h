@@ -143,6 +143,9 @@ void BIH_EnumCollision (model_t *mod, const vec3_t mins, const vec3_t maxs, stru
 qboolean BIH_HeldAirBoxEmpty(model_t *mod, const vec3_t mins, const vec3_t maxs);
 unsigned int BIH_HeldAirBoxTest(unsigned int *checks);
 #endif
+void BIH_CollisionChanged(void);	//Patch 1266: a tree or a model it may nest was built or freed
+void BIH_TraceStats_f(void);		//Patch 1266: print and reset the trace cache's counters
+extern int bih_probe_readers;		//Patch 1266: nonzero while a caller reads the probe record; traces skip the cache
 void BIH_BuildAlias (model_t *mod, struct galiasinfo_s *meshes);
 
 //FTESurf Patch 317: print the identity of whatever stopped the last trace --
