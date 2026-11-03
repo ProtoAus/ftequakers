@@ -751,8 +751,9 @@ cvar_t gl_max_size							= CVARFD  ("gl_max_size", "8192", CVAR_RENDERERLATCH, "
 cvar_t gl_menutint_shader					= CVARD  ("gl_menutint_shader", "1", "Controls the use of GLSL to desaturate the background when drawing the menu, like quake's dos software renderer used to do before the ugly dithering of winquake.");
 
 //by setting to 64 or something, you can use this as a wallhack
-//FTESurf Patch 1257: 4 (the clamp's top, view.c), 4x the depth precision of 1; Source's main view uses 7
-cvar_t gl_mindist							= CVARAD ("gl_mindist", "4", "r_nearclip",
+//FTESurf Patch 1257: 2, twice the depth precision of 1 and Source's 3D-sky value (main view: 7); review 1:
+//4 put the rewind chase camera's and replay eyes' near walls and ceilings through the near plane
+cvar_t gl_mindist							= CVARAD ("gl_mindist", "2", "r_nearclip",
 												"Distance to the near clip plane. Smaller values may damage depth precision, high values can potentialy be used to see through walls...");
 
 cvar_t gl_motionblur						= CVARF ("gl_motionblur", "0",
