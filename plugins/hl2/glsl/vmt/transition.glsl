@@ -191,18 +191,8 @@ varying vec2 lm1, lm2, lm3;
 #else
 		lightmaps  = LIGHTMAP * e_lmscale.rgb;
 #endif
-
-		/* the light we're getting is always too bright */
-		lightmaps *= 0.75;
-
-		/* clamp at 1.5 */
-		if (lightmaps.r > 1.5)
-			lightmaps.r = 1.5;
-		if (lightmaps.g > 1.5)
-			lightmaps.g = 1.5;
-		if (lightmaps.b > 1.5)
-			lightmaps.b = 1.5;
-
+		//Patch 1269: no 0.75 scale or 1.5 clamp, as lightmapped.glsl since e4c4938ef: a blended
+		//displacement drew at 3/4 of the flat face beside it (surf_starvald's floor seam).
 		return lightmaps;
 	}
 
