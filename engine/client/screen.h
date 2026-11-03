@@ -315,6 +315,9 @@ enum
 int SCR_GetLoadingStage(void);
 void SCR_SetLoadingStage(int stage);
 void SCR_SetLoadingFile(char *str);
+qboolean SCR_LoadingPumpWanted(void);	//FTESurf Patch 1244
+void SCR_LoadingPump(void);
+extern qboolean scr_loadingdraw;
 void SCR_LoadTimesBegin(const char *label);	//FTESurf Patch 1022, scr_loadtimes
 void SCR_LoadTimesStage(const char *next);
 void SCR_LoadTimesEnd(void);

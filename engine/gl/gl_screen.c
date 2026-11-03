@@ -122,6 +122,7 @@ qboolean GLSCR_UpdateScreen (void)
 			return false;	//don't refresh if we can't do so safely.
 		else
 		{
+			scr_loadingdraw = true;	//FTESurf Patch 1244: SCR_LoadingPump must not re-enter this
 			SCR_DrawLoading (true);
 			SCR_SetUpToDrawConsole();
 			if (Key_Dest_Has(kdm_console))
@@ -129,6 +130,7 @@ qboolean GLSCR_UpdateScreen (void)
 			if (R2D_Flush)
 				R2D_Flush();
 			VID_SwapBuffers();
+			scr_loadingdraw = false;
 			return true;
 		}
 	}

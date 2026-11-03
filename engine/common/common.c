@@ -6668,6 +6668,26 @@ void COM_WorkerPartialSync(void *priorityctx, int *address, int value)
 		}
 	}
 
+#ifdef HAVE_CLIENT
+	{	//FTESurf Patch 1244: while a gamecode loading screen is up, poll instead of sleeping on
+		//the condition, so the screen keeps moving through a long worker job.
+		extern qboolean SCR_LoadingPumpWanted(void);
+		extern void SCR_LoadingPump(void);
+		if (SCR_LoadingPumpWanted())
+		{
+			while (*address == value && !com_workererror)
+			{
+				if (!COM_DoWork(WG_MAIN, false))
+				{
+					SCR_LoadingPump();
+					Sys_Sleep(0.004);
+				}
+			}
+			return;
+		}
+	}
+#endif
+
 	Sys_LockConditional(com_workercondition[WG_MAIN]);
 	do
 	{
