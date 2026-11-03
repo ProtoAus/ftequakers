@@ -1025,7 +1025,7 @@ static void BIH_ClipBoxToBrush (struct bihtrace_s *fte_restrict tr, const q2cbru
 	float		f;
 	q2cbrushside_t	*side, *leadside;
 	qboolean	geopick;	//Patch 1248
-	float		entergeo;
+	float		entergeo, geofrac;
 
 	float nearfrac=0;
 	enterfrac = bih_sourceclip ? NEVER_UPDATED : -1;
@@ -1042,11 +1042,14 @@ static void BIH_ClipBoxToBrush (struct bihtrace_s *fte_restrict tr, const q2cbru
 	  hull meets the next piece's top face at a grazing angle and an added side plane head on; the
 	  adjusted entry times then tie inside float noise and the side plane could win, throwing the
 	  surfer off (surf_sedona ramp 3: (2169,718,-1175) -> (2169,-279,-334) in Lex's own session).
-	  For pieces at mover 12 only the REPORTED plane changes, to the one the hull really meets
-	  last (unadjusted entry): whether it is a hit, and where it stops, stay mover 11's (taking the
-	  stop from that plane let enter < leave pass on faces the box never touches -- review).*/
+	  For pieces at mover 12 the reported plane is the one the hull really meets last (unadjusted
+	  entry) and the box stops DIST_EPSILON in front of it; whether it is a hit stays mover 11's
+	  (testing the reported plane's entry instead let hits stand on faces the box never reaches).
+	  Stopping where mover 11 does instead left a grazed reported plane closer than eps, and the
+	  slide along it hit the same piece again at fraction 0 (review 2: 1,485 per 2M traces).*/
 	geopick = bih_sourceclip && tr->inphy && bih_phypick;
 	entergeo = -1;
+	geofrac = 0;
 	leadside = NULL;
 
 	for (i=0 ; i<brush->numsides ; i++)
@@ -1087,6 +1090,7 @@ static void BIH_ClipBoxToBrush (struct bihtrace_s *fte_restrict tr, const q2cbru
 			if (geopick && d1 / (d1-d2) > entergeo)
 			{
 				entergeo = d1 / (d1-d2);
+				geofrac = f;
 				clipplane = plane;
 				leadside = side;
 			}
@@ -1108,6 +1112,8 @@ static void BIH_ClipBoxToBrush (struct bihtrace_s *fte_restrict tr, const q2cbru
 	}
 	if (bih_sourceclip ? enterfrac < leavefrac : enterfrac <= leavefrac)
 	{
+		if (geopick && enterfrac > NEVER_UPDATED && geofrac < enterfrac)
+			enterfrac = (geofrac < 0) ? 0 : geofrac;	//Patch 1248: eps in front of the reported plane
 		if (enterfrac > (bih_sourceclip ? NEVER_UPDATED : -1) && (bih_sourceclip ? enterfrac < tr->trace.truefraction : enterfrac <= tr->trace.truefraction))
 		{
 			if (enterfrac < 0)
