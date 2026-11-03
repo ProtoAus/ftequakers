@@ -230,10 +230,10 @@ void GLSLWarm_Save(void)
 		FS_Remove(GLSLWARM_TEMP, FS_GAMEONLY);
 		return;
 	}
-	if (FS_Rename(GLSLWARM_TEMP, GLSLWARM_FILE, FS_GAMEONLY))
-	{	//0 is success; Windows will not rename over an existing file
+	if (!FS_Rename(GLSLWARM_TEMP, GLSLWARM_FILE, FS_GAMEONLY))
+	{	//true is success (fs.c FS_Rename2; common.h says otherwise); MoveFileW will not replace a file
 		FS_Remove(GLSLWARM_FILE, FS_GAMEONLY);
-		if (FS_Rename(GLSLWARM_TEMP, GLSLWARM_FILE, FS_GAMEONLY))
+		if (!FS_Rename(GLSLWARM_TEMP, GLSLWARM_FILE, FS_GAMEONLY))
 			return;	//the .tmp stays and is read back
 	}
 	glslwarm_dirty = false;
