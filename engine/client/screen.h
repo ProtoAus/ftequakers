@@ -327,6 +327,7 @@ qboolean Font_TrackerValid(unsigned int imid);
 struct font_s *Font_LoadFont(const char *fontfilename, float height, float scale, int outline, unsigned int flags);
 #define FONT_MONO 1
 void Font_Free(struct font_s *f);
+void Font_KernDump_f(void);	//FTESurf Patch 1236
 void Font_BeginString(struct font_s *font, float vx, float vy, int *px, int *py);
 void Font_BeginScaledString(struct font_s *font, float vx, float vy, float szx, float szy, float *px, float *py); /*avoid using*/
 void Font_Transform(float vx, float vy, int *px, int *py);

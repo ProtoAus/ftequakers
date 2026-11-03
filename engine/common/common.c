@@ -4369,7 +4369,7 @@ conchar_t *COM_ParseFunString(conchar_t defaultflags, const char *str, conchar_t
 					ext = extstack[extstackdepth];
 				}
 			}
-			else if (str[1] == 'U')	//unicode (16bit) char ^Uxxxx
+			else if (str[1] == 'U' && ishexcode(str[2]) && ishexcode(str[3]) && ishexcode(str[4]) && ishexcode(str[5]))	//unicode (16bit) char ^Uxxxx. FTESurf Patch 1236: all four digits, else "^U" at a string's end read and skipped past it
 			{
 				if (!keepmarkup)
 				{

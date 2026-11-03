@@ -796,6 +796,9 @@ cvar_t gl_texturemode2d						= CVARFCD("gl_texturemode2d", "GL_LINEAR",
 												CVAR_ARCHIVE | CVAR_RENDERERCALLBACK, Image_TextureMode_Callback,
 												"Specifies how 2d images are sampled. format is a 3-tupple ");
 cvar_t r_font_linear						= CVARF("r_font_linear", "1", CVAR_ARCHIVE);
+//FTESurf Patch 1236: coverage curve for antialiased glyphs, applied when a glyph is baked (vid_reload to see a change).
+cvar_t r_font_gamma						= CVARFD("r_font_gamma", "1.4", CVAR_ARCHIVE, "Exponent for antialiased glyph coverage: 1 leaves it as rasterised, above 1 fills edges in (light text on dark then reads as if blended in linear light; dark text on light gets heavier too). Not applied while vid_srgb 1 or 2 has the renderer blend in linear light. Applies to glyphs baked after a change; vid_reload re-bakes.");
+cvar_t r_font_kerning						= CVARFD("r_font_kerning", "1", CVAR_ARCHIVE, "Pair kerning from the font's GPOS kern feature (U+0020 to U+00FF) for QC drawstring and stringwidth. Takes effect at once.");	//FTESurf Patch 1236
 cvar_t r_font_postprocess_outline			= CVARFD("r_font_postprocess_outline", "0", 0, "Controls the number of pixels of dark borders to use around fonts.");
 cvar_t r_font_postprocess_mono				= CVARFD("r_font_postprocess_mono", "0", 0, "Disables anti-aliasing on fonts.");
 
@@ -1656,6 +1659,9 @@ void Renderer_Init(void)
 	Cvar_Register (&gl_texturemode, GLRENDEREROPTIONS);
 	Cvar_Register (&gl_texturemode2d, GLRENDEREROPTIONS);
 	Cvar_Register (&r_font_linear, GLRENDEREROPTIONS);
+	Cvar_Register (&r_font_gamma, GLRENDEREROPTIONS);	//FTESurf Patch 1236
+	Cvar_Register (&r_font_kerning, GLRENDEREROPTIONS);	//FTESurf Patch 1236
+	Cmd_AddCommandD("r_font_kerndump", Font_KernDump_f, "Lists each loaded face's baked kerning pairs (codepoint, codepoint, font units), optionally only faces whose name contains the argument.");	//FTESurf Patch 1236
 	Cvar_Register (&r_font_postprocess_outline, GLRENDEREROPTIONS);
 	Cvar_Register (&r_font_postprocess_mono, GLRENDEREROPTIONS);
 #if defined(HAVE_LEGACY) && defined(AVAIL_FREETYPE)
