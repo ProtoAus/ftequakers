@@ -1,5 +1,76 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1271 — an unvised Source map culled by area, as Source (hl2 plugin)
+
+**Problem.** Lex (3 Nov), surf_voyager saves 3 and 4: "reverse LOD for things outside the skybox? cutting off
+z-distance". The far stations past the x -3008 sky wall drew partly, and less of them the nearer the wall. The map
+has no vis data, so VBSP_PrepareFrame emitted every world surface and only the sky depth mask
+(r_sky_forcedepth 2 at r_sky_forcedepth_scale 2) hid what lay behind the sky, cut at twice the wall's distance.
+Source culls such a map by area: R_CullNode draws a node of area > 0 only if R_IsAreaVisible, and never
+area-culls area 0. The stations are alone in area 3, the player in area 1, with no areaportal between them.
+
+**Change.** mod_vbsp.c only. When the world has no vis (and not r_novis or a forced vis), the leaves of areas
+in r_refdef->areabits, plus area-0 leaves, mark their surfaces; displacements and static props draw unless every
+area their pair names is hidden (an overflowed record draws; area 0 and an area past numareas never cull);
+the marked surfaces are emitted in surface order. Leaf order split the batches (surf_sunset 77 -> 796 draws). A
+first cut skipped the sky mask on unvised maps instead; review 2 found it drew other areas through the sky
+(surf_sunset's area-19 room over the spawn) and it was reverted. Review 3 added the props and displacements.
+
+**Verified.** Rig, exe_p1268, old plugin against this: voyager s3/s4 the area-3 stations are gone rather than cut;
+surf_sunset's spawn (y90/y180) no longer shows the floating room and is otherwise unchanged. Draws
+1211/1195/95/77 -> 1140/1124/83/65; sunset 673/679 -> 757/775 fps. Sunset's area-19 prop 14 (prop_census):
+drawn -> "rejected by the area walk", 4 props culled, 14 frustum-culled unchanged; surf_pure's spawn 30 -> 29
+draws. 68 of 2204 library maps are unvised. Not compared with a CS:S screenshot.
+
+**Left.** A static prop's pair is its first and last leaf (the loader's FIXME), so one spanning three areas can
+be culled wrongly. Detail props, static entities and PVSF_IGNOREPVS entities are not area-culled here. The sky
+mask still cuts same-area geometry behind a sky face where Source shows it.
+
+Shipped: tag patch-1271 (d32bc2d3e, on patch-1277), both installs exe 2151546b
+(git-8186-patch-1271-0-gd32bc2d3e) and hl2 plugin 02cb49fb.
+
+## Patch 1270 — Modulate reads vertex colour only under $vertexcolor/$vertexalpha (hl2 plugin)
+
+**Problem.** Lex (3 Nov), surf_voyager save 2: "blackness isn't masked". The combine balls' comball_glow1 ($mod2x)
+drew black squares: the generated Modulate pass always took rgbGen vertex, and a model's vertex colours are
+its lighting, dark in space. Source's modulate_dx9.cpp:133 reads vertex colour only under those two flags.
+
+**Change.** mat_vmt.c: rgbGen vertex only when $vertexcolor or $vertexalpha is set to a non-zero value
+(vertexcolor_on, read by value as vertexalpha_on is), otherwise rgbGen identity.
+
+**Verified.** Rig, voyager s2: the squares are gone and the glow keeps its shape.
+
+**Left.** The other arms that read $vertexcolor still switch on the key alone.
+
+## Patch 1269 — a blended displacement lit as the flat face beside it (hl2 plugin)
+
+**Problem.** Lex (3 Nov), surf_starvald save 8: the displacement floor's lightmap "less blended in compared to
+Source" -- a sharp darker wedge. vmt/transition scaled its lightmap by 0.75 and clamped it at 1.5, lines upstream
+removed from vmt/lightmapped in e4c4938ef; the flat _wvt_patch faces (lightmapped) matched CS:S, the displacements
+(transition) drew at 3/4 of them.
+
+**Change.** transition.glsl drops the scale and the clamp; mat_vmt_progs.h regenerated (the plugin compiles the
+header, not the .glsl).
+
+**Verified.** Rig, s8: the displacement region 24.8 -> 33.1, the patch face 24.4 unchanged, and the seam is
+gone; against Lex's CS:S shot the displacement went from 0.66 to about 0.87 of its brightness (poses differ a
+little).
+
+## Patch 1268 — a model's translucent meshes after its Refract mesh draw after the pane (client exe)
+
+**Problem.** Lex (3 Nov), surf_starvald save 7: the start platform's ice differs from Source. Source draws a
+translucent model whole after its own screen copy, meshes in model order (viewrender.cpp:4339-4380); FTE drew
+every refraction pane in the NEAREST sort after all blend batches, so the model's later translucent meshes drew
+under their own pane.
+
+**Change.** gl_backend.c: GLBE_DeferPaneLayers unlinks a pane model's later alias batches from the blend sorts,
+GLBE_SubmitNearest draws them after their pane, GLBE_RestorePaneLayers draws leftovers and relinks; a stack keeps
+nested views apart, reset where the frame's batches restart.
+
+**Verified.** Rig, s7 against Lex's CS:S shot: the layers draw over the ice as in Source.
+
+**Left.** The held-back meshes draw after every blend batch, so translucent things in front of such a model draw
+under them (the pane has done this since Patch 878); two Refract meshes on one model draw in reverse order.
 ## Patch 1277 — shader permutations a run had to compile are compiled at the next load instead (client exe)
 
 **Problem.** Lex (4 Nov): "I would love if the game was stable and not randomly loading in shaders and assets
