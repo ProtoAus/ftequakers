@@ -4112,7 +4112,12 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 		} else {
 			Q_strlcatfz(script, &offset, sizeof(script),"\t\tblendFunc gl_dst_color gl_zero\n");
 		}
-		Q_strlcatfz(script, &offset, sizeof(script),	"\trgbGen vertex\n");
+		//Patch 1270: only $vertexcolor/$vertexalpha read vertex colour (modulate_dx9.cpp:133). A model's vertex colours
+		//are its lighting, so surf_voyager's combine balls (comball_glow1, grey under $mod2x) drew black squares in space.
+		if (st->vertexcolor || st->vertexalpha)
+			Q_strlcatfz(script, &offset, sizeof(script),	"\trgbGen vertex\n");
+		else
+			Q_strlcatfz(script, &offset, sizeof(script),	"\trgbGen identity\n");
 
 		Q_strlcatfz(script, &offset, sizeof(script),	"\t}\n");
 		st->translucent = 0;
