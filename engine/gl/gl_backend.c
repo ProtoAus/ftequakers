@@ -1574,6 +1574,7 @@ typedef struct
 {
 	GLuint fbo, rbcolour, rbdepth;
 	int w, h, samples, key;	//key: the targets' upload formats
+	int uw, uh;				//the part this use draws: the reflection target only grows
 	int colnum, depnum;		//and their texture names
 	int ssfbo;				//the single-sample FBO it resolves into (gl_rmain.c's fbo_gameview, or a capture's)
 	int maxsamples;
@@ -1619,8 +1620,8 @@ static GLint GLBE_TexInternalFormat(texid_t t)
 static void MSAA_Blit(bemsaa_t *t, int x, int y, int w, int h, unsigned int bits)
 {
 	qboolean check = (t->checked & bits) != bits;
-	w = min(w, t->w - x);
-	h = min(h, t->h - y);
+	w = min(w, t->uw - x);
+	h = min(h, t->uh - y);
 	if (w <= 0 || h <= 0)
 		return;
 	if (check)
@@ -1686,6 +1687,8 @@ static int MSAA_Samples(bemsaa_t *t, int s)
 int GLBE_SceneMSAA_Samples(void)
 {
 #ifndef GL_STATIC
+	if (be_reflmsaa.fbo && !be_reflmsaa.active)	//Patch 1276: turned off since the last capture: freed now, not at the next one
+		MSAA_Samples(&be_reflmsaa, (r_reflectmultisample.ival < 0) ? vid_multisample.ival : r_reflectmultisample.ival);
 	return MSAA_Samples(&be_msaa, vid_multisample.ival);
 #else
 	return 0;
@@ -1693,7 +1696,7 @@ int GLBE_SceneMSAA_Samples(void)
 }
 #ifndef GL_STATIC
 //called with the single-sample target bound (col and depth attached); binds the multisampled one in its place
-static qboolean MSAA_Begin(bemsaa_t *t, int samples, texid_t col, texid_t depth, int key, int w, int h)
+static qboolean MSAA_Begin(bemsaa_t *t, int samples, texid_t col, texid_t depth, int key, int w, int h, qboolean grow)
 {
 	int depnum = TEXVALID(depth) ? depth->num : 0;
 	t->active = false;
@@ -1703,6 +1706,9 @@ static qboolean MSAA_Begin(bemsaa_t *t, int samples, texid_t col, texid_t depth,
 			MSAA_Free(t);	//off or refused: give the storage back
 		return false;
 	}
+	int uw = w, uh = h;
+	if (grow && t->fbo)
+		w = max(w, t->w), h = max(h, t->h);
 	if (!t->fbo || t->w != w || t->h != h || t->samples != samples || t->key != key ||
 		t->colnum != col->num || t->depnum != depnum)
 	{
@@ -1746,6 +1752,8 @@ static qboolean MSAA_Begin(bemsaa_t *t, int samples, texid_t col, texid_t depth,
 		t->depnum = depnum;
 		t->checked = 0;
 	}
+	t->uw = uw;
+	t->uh = uh;
 	t->ssfbo = shaderstate.fbo_current;
 	qglBindFramebufferEXT(GL_FRAMEBUFFER_EXT, t->fbo);
 	shaderstate.fbo_current = t->fbo;
@@ -1766,12 +1774,12 @@ static void MSAA_End(bemsaa_t *t)
 	}
 	bits = GL_COLOR_BUFFER_BIT | (t->depnum ? GL_DEPTH_BUFFER_BIT : 0);
 	if ((t->checked & bits) == bits)
-		MSAA_Blit(t, 0, 0, t->w, t->h, bits);
+		MSAA_Blit(t, 0, 0, t->uw, t->uh, bits);
 	else
 	{	//checked one buffer at a time, so a refused depth resolve still delivers the colour
-		MSAA_Blit(t, 0, 0, t->w, t->h, GL_COLOR_BUFFER_BIT);
+		MSAA_Blit(t, 0, 0, t->uw, t->uh, GL_COLOR_BUFFER_BIT);
 		if (bits & GL_DEPTH_BUFFER_BIT)
-			MSAA_Blit(t, 0, 0, t->w, t->h, GL_DEPTH_BUFFER_BIT);
+			MSAA_Blit(t, 0, 0, t->uw, t->uh, GL_DEPTH_BUFFER_BIT);
 	}
 	qglBindFramebufferEXT(GL_FRAMEBUFFER_EXT, t->ssfbo);
 	shaderstate.fbo_current = t->ssfbo;
@@ -1781,7 +1789,7 @@ static void MSAA_End(bemsaa_t *t)
 void GLBE_SceneMSAA_Begin(texid_t col, texid_t depth, int key)
 {
 #ifndef GL_STATIC
-	MSAA_Begin(&be_msaa, GLBE_SceneMSAA_Samples(), col, depth, key, vid.fbpwidth, vid.fbpheight);
+	MSAA_Begin(&be_msaa, GLBE_SceneMSAA_Samples(), col, depth, key, vid.fbpwidth, vid.fbpheight, false);
 #endif
 }
 void GLBE_SceneMSAA_End(void)
@@ -1796,7 +1804,7 @@ static qboolean GLBE_ReflectMSAA_Begin(texid_t col)
 #ifndef GL_STATIC
 	int s = (r_reflectmultisample.ival < 0) ? vid_multisample.ival : r_reflectmultisample.ival;
 	return MSAA_Begin(&be_reflmsaa, MSAA_Samples(&be_reflmsaa, s), col, r_nulltex,
-		vid.flags & (VID_FP16|VID_SRGBAWARE), col->width, col->height);	//the flags that pick tex_reflection's format
+		vid.flags & (VID_FP16|VID_SRGBAWARE), col->width, col->height, true);	//the flags that pick tex_reflection's format
 #else
 	return false;
 #endif
@@ -1805,6 +1813,14 @@ static void GLBE_ReflectMSAA_End(void)
 {
 #ifndef GL_STATIC
 	MSAA_End(&be_reflmsaa);
+#endif
+}
+static int GLBE_ReflectMSAA_Samples(void)
+{
+#ifndef GL_STATIC
+	return be_reflmsaa.active ? be_reflmsaa.samples : 0;
+#else
+	return 0;
 #endif
 }
 
@@ -7838,6 +7854,9 @@ static qboolean GLBE_GenerateBatchTextures(batch_t *batch, shader_t *bs)
 		oldfbo = GLBE_FBO_Update(&shaderstate.fbo_reflectrefrac[r_refdef.recurse], FBO_RB_DEPTH, &shaderstate.tex_reflection[r_refdef.recurse], 1, r_nulltex, shaderstate.tex_reflection[r_refdef.recurse]->width, shaderstate.tex_reflection[r_refdef.recurse]->height, 0);
 		r_refdef.pxrect.maxheight = shaderstate.fbo_reflectrefrac[r_refdef.recurse].rb_size[1];
 		reflmsaa = !r_refdef.recurse && GLBE_ReflectMSAA_Begin(shaderstate.tex_reflection[0]);	//FTESurf Patch 1276: the main view's
+		if (GLBE_CaptureLogging())
+			Con_Printf("[capture]  level %i reflect target %ix%i, %i samples\n", r_refdef.recurse,
+				shaderstate.tex_reflection[r_refdef.recurse]->width, shaderstate.tex_reflection[r_refdef.recurse]->height, GLBE_ReflectMSAA_Samples());
 		GL_ViewportUpdate();
 		GL_ForceDepthWritable();
 		qglClearColor(0, 0, 0, 1);
