@@ -4593,8 +4593,13 @@ sum(basis)/flat runs 1.8-3.8 (median 2.2-2.6 on bhop_ceaseless, surf_4am, surf_f
 so the flat set is 0.6-1.3x what Source shows there.  The deluxemap gets one tangent-space direction a
 luxel, sum(lum_i * bumpBasis[i]): the basis is orthonormal, so vmt/lightmapped.glsl gets each map's
 share back as dot(dir, bumpBasis[i]) and weights it by the normal map (or the ssbump).  Per-direction
-colour is lost; the mean colour is kept.  Every other luxel points straight out (equal shares).
+colour is lost; the mean colour is kept.  Every other luxel is the zero vector, which the shader reads
+as "no basis data" and leaves alone (an ssbump material on an unbumped face, an unlit luxel).
 Read from the raw lump in linear RGBE and converted by VBSP_ConvertLuxel, as the flat set was.
+Nothing is built with r_deluxemapping 0 or no bumped face (the deluxe pages double the lightmaps),
+and a face off the 4-byte grid (the nine trailer maps under hl2_lightmap_repack 0) is left as it was.
+The 2/5 layout's sets are [flat][b0][b1][b2][extra]: over 40 such maps the non-RGBE record sat in the
+last set on 5180 single-style bumped faces and elsewhere on under 20.
 */
 static const float vbsp_bumpbasis[3][3] = {	//common_fxc.h:36
 	{ 0.81649661064147949f, 0.0f, 0.57735025882720947f },
@@ -4625,17 +4630,11 @@ static void VBSP_BuildRNM(model_t *mod)
 	qbyte		*dx;
 	int			k, b, c;
 
-	if (!hl2_rnm || !hl2_rnm->ival || !mod->lightdata || !prv->lightraw || prv->lightrepacked ||
-		mod->lightmaps.fmt != LM_E5BGR9 || (mod->lightdatasize & 3))
+	if (!hl2_rnm || !hl2_rnm->ival || !cvarfuncs->GetFloat("r_deluxemapping") || !mod->lightdata ||
+		!prv->lightraw || prv->lightrepacked || mod->lightmaps.fmt != LM_E5BGR9 || (mod->lightdatasize & 3))
 		return;
 	words = mod->lightdatasize / 4;
-	dx = plugfuncs->GMalloc(&mod->memgroup, words * 3);
-	for (i = 0; i < words; i++)
-	{
-		dx[i*3+0] = 127;
-		dx[i*3+1] = 127;
-		dx[i*3+2] = 254;
-	}
+	dx = NULL;
 	for (si = 0; si < mod->numsurfaces; si++)
 	{
 		msurface_t *surf = mod->surfaces + si;
@@ -4647,12 +4646,17 @@ static void VBSP_BuildRNM(model_t *mod)
 			continue;
 		smax = (surf->extents[0]>>surf->lmshift)+1;
 		tmax = (surf->extents[1]>>surf->lmshift)+1;
-		if (smax <= 0 || tmax <= 0)
+		ofs = surf->samples - mod->lightdata;	//== the file's lightofs (VBSP_LoadLighting keeps offsets)
+		if (smax <= 0 || tmax <= 0 || (ofs & 3))
 			continue;
 		lux = (size_t)smax*tmax;
 		for (ns = 0; ns < MAXCPULIGHTMAPS && surf->styles[ns] != INVALID_LIGHTSTYLE; ns++)
 			;
-		ofs = surf->samples - mod->lightdata;	//== the file's lightofs (VBSP_LoadLighting keeps offsets)
+		if (!dx)
+		{
+			dx = plugfuncs->GMalloc(&mod->memgroup, words * 3);
+			memset(dx, 127, words * 3);	//the zero vector: no basis data
+		}
 		for (k = 0; k < ns; k++)
 		{
 			size_t blk = ofs + (size_t)k*lux*(4+extra);	//bytes: style k, set 0
@@ -4686,6 +4690,8 @@ static void VBSP_BuildRNM(model_t *mod)
 		}
 		faces++;
 	}
+	if (!dx)
+		return;
 	mod->deluxdata = dx;
 	Con_DPrintf("VBSP: %s: %u bumped faces lit by their basis maps (hl2_rnm 1)\n", mod->name, (unsigned)faces);
 }
@@ -13616,7 +13622,7 @@ qboolean VBSP_Init(void)
 		which walk was used either way.  MAPLATCH: the tags are written while the BSP is
 		read, so a map reload is when a change takes effect.
 		*/
-		hl2_rnm = cvarfuncs->GetNVFDG("hl2_rnm", "1", CVAR_MAPLATCH, "Light bumped Source brush faces as Source does (radiosity normal mapping): the three basis lightmaps VRAD stores for a $bumpmap face, weighted by the normal map or $ssbump, where 0 shows the flat lightmap and no bump. Takes effect on a map reload.", MAPOPTIONS);
+		hl2_rnm = cvarfuncs->GetNVFDG("hl2_rnm", "1", CVAR_MAPLATCH, "Light bumped Source brush faces as Source does (radiosity normal mapping): the three basis lightmaps VRAD stores for a $bumpmap face, weighted by the normal map or $ssbump; needs r_deluxemapping. 0 shows the flat lightmap and no bump lighting (an $ssbump material still reflects off its own normal). Takes effect on a map reload.", MAPOPTIONS);
 		hl2_bumpstride = cvarfuncs->GetNVFDG("hl2_bumpstride", "1", CVAR_MAPLATCH, "Walk a Source map's lightstyles at the stride VRAD wrote them: a $bumpmap face stores four luxel sets per style (flat plus three radiosity-normal-map basis maps), and 150 library maps add a non-lightmap record after every style's sets.\n0: the old walk, which summed a basis map in as the next lightstyle at full brightness and never read the real one, on ~67,000 faces across 153 library maps.\n1: probe the layout per map and skip the extra sets (default). Faces then show their real second style -- brighter where it is a bright switchable light, darker where it is dim. Maps whose layout cannot be proven from the lighting lump size fall back to 0 and say so in the console.", MAPOPTIONS);
 		/*
 		FTESurf: hide the brushes Source hides.

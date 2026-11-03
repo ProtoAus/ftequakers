@@ -231,7 +231,9 @@ uniform float cvar_r_renderscale;
 	//deluxemap is the luxel's three basis-map luminances as one direction, so each map's share is
 	//dot(dir, basis); the lightmap is their mean (VBSP_BuildRNM), so Source's weighted sum is the mean
 	//times 3 * dot(weights, share) / sum(share).  A normal map weighs by its squared, clamped dots
-	//with the basis, normalized; an ssbump IS the three weights, unnormalized.
+	//with the basis, normalized; an ssbump IS the three weights, unnormalized.  That ratio is linear
+	//light and the lightmap is sRGB-encoded (VBSP_ConvertLuxel), hence the 1/2.2.  A zero direction is
+	//a luxel with no basis data (or no static light): left alone.
 	float rnm_fragment()
 	{
 		vec3 share = max(vec3(dot(texture2D(s_deluxemap, lm0).rgb * 2.0 - 1.0, rnm_b0),
@@ -244,7 +246,10 @@ uniform float cvar_r_renderscale;
 		w *= w;
 		w /= max(dot(w, vec3(1.0)), 0.0001);
 	#endif
-		return 3.0 * dot(w, share) / max(dot(share, vec3(1.0)), 0.0001);
+		float total = dot(share, vec3(1.0));
+		if (total < 0.01)
+			return 1.0;
+		return pow(3.0 * dot(w, share) / total, 1.0 / 2.2);
 	}
 #endif
 
