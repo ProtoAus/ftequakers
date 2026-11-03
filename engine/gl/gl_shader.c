@@ -88,12 +88,13 @@ cvar_t r_glsl_warm = CVARFD("r_glsl_warm", "1", CVAR_ARCHIVE, "FTESurf Patch 127
 //FTESurf Patch 1277: the warm list. A program permutation first drawn mid-run compiles in that frame: 25-190 ms when
 //the driver's shader cache lacks it (the first play after an update changes the GLSL; NVIDIA's OpenGL cache also
 //evicts at its size cap), ~1 ms when it holds it (RTX 2080 SUPER: boreas, phantasia, monolith). Each permutation
-//compiled lazily is remembered, and a program loaded while a map loads compiles its remembered ones then. Written
-//at CL_MakeActive and shutdown only: opening a file mid-run is a stall too. data/glslwarm.txt: a header line, then
+//compiled lazily is remembered; CL_MakeActive, after its shader reload and behind the loading screen, compiles the
+//remembered ones of every program the loaded shaders use (GLSLWarm_MapActive). The file is written there and at
+//shutdown only: opening a file mid-run is a stall too. data/glslwarm.txt: a header line, then
 //"<permutation hex> <program name>" (the name is the rest of the line).
 #define GLSLWARM_FILE "data/glslwarm.txt"
-#define GLSLWARM_TEMP "data/glslwarm.tmp"
 #define GLSLWARM_MAX 65536					//permutations kept, all programs together
+#define GLSLWARM_BUDGET 2.0					//seconds of compiling per load; the rest compile at first draw, as before
 typedef struct glslwarm_s
 {
 	bucket_t bucket;
@@ -104,7 +105,7 @@ typedef struct glslwarm_s
 static hashtable_t glslwarm_hash;
 static void *glslwarm_mem;
 static glslwarm_t *glslwarm_list;
-static int glslwarm_count, glslwarm_warmed;
+static int glslwarm_count;
 static qboolean glslwarm_loaded, glslwarm_dirty;
 static void GLSLWarm_Header(char *out, size_t outsize)
 {	//the version and every permutation bit: another build's layout is ignored, not misread
@@ -139,12 +140,9 @@ static qboolean GLSLWarm_Add(const char *name, unsigned int perm)
 	return true;
 }
 static void GLSLWarm_Read(void)
-{	//the gamedir's own loose file (a package or download cannot supply it), merged into the list;
-	//else the .tmp a failed rename left
+{	//the gamedir's own loose file (a package or download cannot supply it), merged into the list
 	vfsfile_t *f = FS_OpenVFS(GLSLWARM_FILE, "rb", FS_GAMEONLY);
 	char header[128], *buf, *s, *e, *sp;
-	if (!f)
-		f = FS_OpenVFS(GLSLWARM_TEMP, "rb", FS_GAMEONLY);
 	qofs_t len;
 	size_t l;
 	if (!f)
@@ -161,13 +159,9 @@ static void GLSLWarm_Read(void)
 		return;
 	buf[len] = 0;
 	GLSLWarm_Header(header, sizeof(header));
-	for (s = buf; *s; s = e)
-	{
-		e = strchr(s, '\n');
-		if (e)
-			*e++ = 0;
-		else
-			e = s + strlen(s);
+	for (s = buf; (e = strchr(s, '\n')); s = e)
+	{	//an unterminated last line is a cut one: "defaultwall#BUMP" cut short names another program
+		*e++ = 0;
 		l = strlen(s);
 		if (l && s[l-1] == '\r')
 			s[l-1] = 0;
@@ -203,65 +197,58 @@ void GLSLWarm_Note(const char *name, unsigned int perm)
 	if (GLSLWarm_Add(name, perm))
 		glslwarm_dirty = true;
 }
-//CL_MakeActive (after its shader reload, behind the loading screen) and Shader_Shutdown
+//GLSLWarm_MapActive and Shader_Shutdown
 void GLSLWarm_Save(void)
 {
 	vfsfile_t *f;
 	glslwarm_t *w;
-	unsigned int p;
-	char header[128];
-	if (glslwarm_warmed)
-		Con_DPrintf("glslwarm: %i remembered permutations compiled while loading\n", glslwarm_warmed);
-	glslwarm_warmed = 0;
+	unsigned int p, salt;
+	char tmp[64], *buf;
+	size_t size, len;
+	qboolean ok;
 	if (!glslwarm_dirty)
 		return;
 	GLSLWarm_Read();	//another instance may have written since: keep its entries too
-	f = FS_OpenVFS(GLSLWARM_TEMP, "wb", FS_GAMEONLY);
-	if (!f)
-		return;	//still dirty: tried again at the next load
-	GLSLWarm_Header(header, sizeof(header));
-	VFS_PRINTF(f, "%s\n", header);
+	size = 128;
 	for (w = glslwarm_list; w; w = w->next)
 		for (p = 1; p < PERMUTATIONS; p++)
 			if (w->bits[p >> 5] & (1u << (p & 31)))
-				VFS_PRINTF(f, "%x %s\n", p, w->name);
-	if (!VFS_CLOSE(f))
-	{	//a short write must not replace a whole list
-		FS_Remove(GLSLWARM_TEMP, FS_GAMEONLY);
-		return;
-	}
-	if (!FS_Rename(GLSLWARM_TEMP, GLSLWARM_FILE, FS_GAMEONLY))
-	{	//true is success (fs.c FS_Rename2; common.h says otherwise); MoveFileW will not replace a file
-		FS_Remove(GLSLWARM_FILE, FS_GAMEONLY);
-		if (!FS_Rename(GLSLWARM_TEMP, GLSLWARM_FILE, FS_GAMEONLY))
-			return;	//the .tmp stays and is read back
-	}
-	glslwarm_dirty = false;
-}
-#if defined(GLQUAKE) || defined(D3DQUAKE)
-static void GLSLWarm_Program(program_t *prog)
-{	//only behind the loading screen, CL_MakeActive's reload of the generics included: a mid-map reload (a shader
-	//cvar) compiles permutation 0 alone, as before
-	glslwarm_t *w;
-	unsigned int perm, p;
-	if (!r_glsl_warm.ival || qrenderer != QR_OPENGL || !prog->name || !scr_disabled_for_loading)
-		return;
-	GLSLWarm_Load();
-	if (!glslwarm_mem || !(w = Hash_Get(&glslwarm_hash, prog->name)))
-		return;
-	for (perm = 1; perm < PERMUTATIONS; perm++)
+				size += strlen(w->name) + 16;
+	buf = BZ_Malloc(size);
+	GLSLWarm_Header(buf, size);
+	len = strlen(buf);
+	buf[len++] = '\n';
+	for (w = glslwarm_list; w; w = w->next)
+		for (p = 1; p < PERMUTATIONS; p++)
+			if (w->bits[p >> 5] & (1u << (p & 31)))
+			{
+				Q_snprintfz(buf + len, size - len, "%x %s\n", p, w->name);
+				len += strlen(buf + len);
+			}
+	//one write, checked (VFSW32_Close cannot report a short one); a temp of this process's own (two clients can share
+	//a gamedir)
+	if (!Sys_RandomBytes((qbyte*)&salt, sizeof(salt)))
+		salt = (unsigned int)(Sys_DoubleTime() * 1000000) ^ (unsigned int)(size_t)buf;
+	Q_snprintfz(tmp, sizeof(tmp), "data/glslwarm.%08x.tmp", salt);
+	f = FS_OpenVFS(tmp, "wb", FS_GAMEONLY);
+	if (!f)
 	{
-		if (!(w->bits[perm >> 5] & (1u << (perm & 31))))
-			continue;
-		p = perm & prog->supportedpermutations;
-		if (p && !prog->permu[p])
-		{
-			prog->permu[p] = Shader_LoadPermutation(prog, p);	//a failure is left to the draw, as before
-			glslwarm_warmed++;
-		}
+		BZ_Free(buf);
+		return;	//still dirty: tried again at the next load
 	}
+	ok = VFS_WRITE(f, buf, len) == (int)len;
+	VFS_CLOSE(f);
+	BZ_Free(buf);
+	if (ok && !FS_Rename(tmp, GLSLWARM_FILE, FS_GAMEONLY))
+	{	//true is success; MoveFileW will not replace a file
+		FS_Remove(GLSLWARM_FILE, FS_GAMEONLY);
+		ok = FS_Rename(tmp, GLSLWARM_FILE, FS_GAMEONLY);
+	}
+	if (!ok)
+		FS_Remove(tmp, FS_GAMEONLY);	//still dirty: the list in memory is tried again at the next load
+	else
+		glslwarm_dirty = false;
 }
-#endif
 cvar_t r_halfrate = CVARFD("r_halfrate", "0", CVAR_ARCHIVE|CVAR_SHADERSYSTEM, "Use half-rate shading (where supported by gpu).");
 
 extern cvar_t r_glsl_offsetmapping_reliefmapping;
@@ -2906,8 +2893,6 @@ static qboolean Shader_LoadPermutations(char *name, program_t *prog, char *scrip
 			}
 		}
 	}
-	else
-		GLSLWarm_Program(prog);	//FTESurf Patch 1277
 	return true;
 #else
 	return false;
@@ -5665,6 +5650,49 @@ static void Shader_Regenerate(parsestate_t *ps, const char *shortname)
 		ps->s->generator(ps, shortname, ps->s->genargs);
 }
 
+//FTESurf Patch 1277: CL_MakeActive, after its shader reload (which rebuilds the generics with permutation 0), before
+//the loading screen ends. Every protocol, a demo and a reconnect pass through it; nothing compiled here is reloaded
+//away before play.
+void GLSLWarm_MapActive(void)
+{
+	unsigned int i, j, perm, p;
+	int warmed = 0;
+	double start = Sys_DoubleTime();
+	shader_t *s;
+	program_t *prog;
+	glslwarm_t *w;
+	if (r_glsl_warm.ival && qrenderer == QR_OPENGL && r_shaders)
+	{
+		GLSLWarm_Load();
+		for (i = 0; glslwarm_mem && i < r_numshaders && Sys_DoubleTime() - start < GLSLWARM_BUDGET; i++)
+		{
+			s = r_shaders[i];
+			if (!s || s->uses <= 0)
+				continue;
+			for (j = 0; j <= (unsigned int)s->numpasses && j <= SHADER_PASS_MAX; j++)
+			{	//the shader's program, then each pass's
+				prog = j ? s->passes[j-1].prog : s->prog;
+				if (!prog || !prog->name || !prog->permu[0] || !(w = Hash_Get(&glslwarm_hash, prog->name)))
+					continue;
+				for (perm = 1; perm < PERMUTATIONS; perm++)
+				{
+					if (!(w->bits[perm >> 5] & (1u << (perm & 31))))
+						continue;
+					p = perm & prog->supportedpermutations;
+					if (p && !prog->permu[p])
+					{
+						prog->permu[p] = Shader_LoadPermutation(prog, p);	//a failure is left to the draw, as before
+						warmed++;
+					}
+				}
+			}
+		}
+		if (warmed)
+			Con_DPrintf("glslwarm: %i remembered permutations compiled while loading, %.0f ms\n", warmed,
+				(Sys_DoubleTime() - start) * 1000);
+	}
+	GLSLWarm_Save();
+}
 void Shader_Shutdown (void)
 {
 	int i;
