@@ -815,6 +815,15 @@ typedef struct
 #define plugq3vmfuncs_name "Quake3 QVM"
 } plugq3vmfuncs_t;
 
+//FTESurf Patch 1259: a long main-thread load step lets a gamecode loading screen redraw.  Absent
+//before 1259 and on servers; cheap (throttled to 60 Hz, a no-op off the main thread or with no
+//loading screen up), so it can sit in a per-item loop.
+typedef struct
+{
+	F(void,			Pump,			(void));
+#define plugloadingfuncs_name "FTESurfLoading/1"
+} plugloadingfuncs_t;
+
 #undef F
 
 extern plugcorefuncs_t *plugfuncs;

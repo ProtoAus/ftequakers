@@ -55,6 +55,8 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 static plugfsfuncs_t		*filefuncs;
 static plugmodfuncs_t		*modfuncs;
 static plugthreadfuncs_t	*threadfuncs;
+static plugloadingfuncs_t	*loadingfuncs;	//FTESurf Patch 1259: NULL before engine 1259 and on servers
+#define VBSP_LoadingPump() do { if (loadingfuncs) loadingfuncs->Pump(); } while (0)
 
 #define Q_strncpyz Q_strlcpy
 float VectorNormalize2(const vec3_t in,vec3_t out) {float l = sqrt(DotProduct(in,in)); if (l) l = 1.0/l; VectorScale(in,l,out); return l;}
@@ -6319,6 +6321,7 @@ static void VBSP_GenerateMaterials(void *ctx, void *data, size_t a, size_t b)
 	{	//submodels share textures, so only do this if 'a' is 0 (inline index, 0 = world).
 		for(a = 0; a < mod->numtextures; a++)
 		{
+			VBSP_LoadingPump();	//FTESurf Patch 1259: with Batches_Build below, 0.5 s on surf_eternity
 			script = NULL;
 			if (!strncmp(mod->textures[a]->name, "sky/", 4))
 				script =
@@ -8403,6 +8406,7 @@ static void VBSP_BuildBIHMain(void *ctx, void *unusedp, size_t unuseda, size_t u
 		unsigned int contents = d->contents;
 
 		size_t j;
+		VBSP_LoadingPump();	//FTESurf Patch 1259: this function is one main-thread job, 1.7 s on surf_eternity
 
 		/*
 		FTESurf Patch 250: the mapper's opt-out, applied.
@@ -8448,6 +8452,7 @@ static void VBSP_BuildBIHMain(void *ctx, void *unusedp, size_t unuseda, size_t u
 	if (hl2_propcollision->ival)
 	for (i = 0; i < prv->numstaticprops; i++)
 	{
+		VBSP_LoadingPump();	//Patch 1259: VBSP_PhyBrushes below is most of it
 		if (!prv->staticprops[i].solid)
 			continue;
 
@@ -13417,6 +13422,7 @@ qboolean VBSP_Init(void)
 	if (modfuncs && modfuncs->version != MODPLUGFUNCS_VERSION)
 		modfuncs = NULL;
 	threadfuncs = plugfuncs->GetEngineInterface(plugthreadfuncs_name, sizeof(*threadfuncs));
+	loadingfuncs = plugfuncs->GetEngineInterface(plugloadingfuncs_name, sizeof(*loadingfuncs));
 
 	//nettest: a dedicated/headless server has no client Image/renderer interface (the same condition the
 	//"hl2: VTF/VMT/TTH support unavailable" banners report).  Mark qrenderer QR_NONE so the renderer-only

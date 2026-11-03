@@ -1532,10 +1532,13 @@ const char *PF_cl_serverkey_internal(const char *keyname)
 			ret = "connecting";
 	}
 	else if (!strcmp(keyname, "loadstate"))
-	{
+	{	//FTESurf Patch 1258 review: not va() -- a gamecode loading screen reads this from inside a loading
+		//pump, whose interrupted caller may hold va() strings
+		static char lsbuf[MAX_QPATH+48];
 		extern int			total_loading_size, current_loading_size, loading_stage;
 		extern char			levelshotname[MAX_QPATH];
-		ret = va("%i %u %u \"%s\"", loading_stage, current_loading_size, total_loading_size, levelshotname);
+		Q_snprintfz(lsbuf, sizeof(lsbuf), "%i %u %u \"%s\"", loading_stage, current_loading_size, total_loading_size, levelshotname);
+		ret = lsbuf;
 	}
 	else if (!strcmp(keyname, "transferring"))
 	{
@@ -1553,14 +1556,16 @@ const char *PF_cl_serverkey_internal(const char *keyname)
 			ret = "";	//nothing being downloaded right now
 		else
 		{
+			static char dlbuf[MAX_OSPATH*2+128];	//not va(), as "loadstate"
 			unsigned int fcount;
 			qofs_t tsize;
 			qboolean sizeextra;
 			CL_GetDownloadSizes(&fcount, &tsize, &sizeextra);
 			if (cls.download)	//downloading something
-				ret = va("%u %g %u \"%s\" \"%s\" %g %i %g %g", fcount, (float)tsize, sizeextra?1u:0u, cls.download->localname, cls.download->remotename, cls.download->percent, cls.download->rate, (float)cls.download->completedbytes, (float)cls.download->size);
+				Q_snprintfz(dlbuf, sizeof(dlbuf), "%u %g %u \"%s\" \"%s\" %g %i %g %g", fcount, (float)tsize, sizeextra?1u:0u, cls.download->localname, cls.download->remotename, cls.download->percent, cls.download->rate, (float)cls.download->completedbytes, (float)cls.download->size);
 			else	//not downloading anything right now
-				ret = va("%u %g %u", fcount, (float)tsize, sizeextra?1u:0u);
+				Q_snprintfz(dlbuf, sizeof(dlbuf), "%u %g %u", fcount, (float)tsize, sizeextra?1u:0u);
+			ret = dlbuf;
 		}
 	}
 	else if (!strcmp(keyname, "pausestate"))

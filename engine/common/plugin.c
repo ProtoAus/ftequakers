@@ -2669,6 +2669,17 @@ static void *QDECL PlugBI_GetEngineInterface(const char *interfacename, size_t s
 			return &funcs;
 	}
 #endif
+#ifdef HAVE_CLIENT
+	if (!strcmp(interfacename, plugloadingfuncs_name))	//FTESurf Patch 1259
+	{
+		static plugloadingfuncs_t funcs =
+		{
+			SCR_LoadingPump,
+		};
+		if (structsize == sizeof(funcs))
+			return &funcs;
+	}
+#endif
 #ifdef VM_ANY
 	if (!strcmp(interfacename, plugq3vmfuncs_name))
 	{
