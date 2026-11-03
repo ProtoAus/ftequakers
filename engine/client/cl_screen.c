@@ -3724,37 +3724,38 @@ void SCR_BeginLoadingPlaque (void)
 	scr_disabled_time = Sys_DoubleTime();	//realtime tends to change... Hmmm....
 }
 
-//FTESurf Patch 1258: a download mid-load releases the plaque, so frames and the console run.  A
-//gamecode loading screen keeps its stage and gets a step naming the file, so it stays up and shows
-//the download: with the stage ended, con_stayhidden opened the menu over it (SCR_SetUpToDrawConsole).
+//FTESurf Patch 1258: a menu QC loading screen keeps its stage through a load's downloads; ending it
+//at the enqueue ("release console") let con_stayhidden show a black screen over the load.  Its plaque
+//drops only while a download runs (frames and the menu's m_draw keep going) and is back for the loads
+//between them, where the loading pumps need it.
+qboolean SCR_GamecodeLoadingActive(void)
+{
+#ifdef MENU_DAT
+	return loading_stage != LS_NONE && MP_UsingGamecodeLoadingScreen();
+#else
+	return false;
+#endif
+}
+//A download starts.  No va() (callers' names may be va() strings) and no redraw (menu builtins start
+//downloads, and MP_Draw does not nest).
 void SCR_ReleaseLoadingPlaque(const char *dlname)
 {
-#ifdef MENU_DAT
-	if (loading_stage != LS_NONE && MP_UsingGamecodeLoadingScreen())
-	{
-		char step[MAX_OSPATH+16];
-		scr_disabled_for_loading = false;
-		scr_drawloading = false;
-		scr_loadingreleased = true;
-		Q_snprintfz(step, sizeof(step), "download %s", dlname);	//not va(): dlname may be one
-		if (!loadingfile || strcmp(loadingfile, step))
-			SCR_LoadingStepSet(step);	//no redraw: menu builtins call this, and MP_Draw does not nest
+	char step[MAX_OSPATH+16];
+	if (!SCR_GamecodeLoadingActive())
 		return;
-	}
-#endif
-	SCR_EndLoadingPlaque();
+	scr_disabled_for_loading = false;
+	scr_drawloading = false;
+	scr_loadingreleased = true;
+	Q_snprintfz(step, sizeof(step), "download %s", dlname);
+	if (!loadingfile || strcmp(loadingfile, step))
+		SCR_LoadingStepSet(step);
 }
-//A download finished, or none is left: the plaque comes back for the loads after it, or no loading
-//pump runs on a first visit that downloaded its map (Patch 1258 review).  The flag lasts the load
-//(LS_NONE clears it), so a plaque that a later download outlived (GLSCR's 60 s) comes back too.
+//A download finished, or none is left: the plaque is back, with a fresh 60 s, for the loads after it
+//(CL_DownloadFinished loads a downloaded world on the spot: 22 s for surf_eternity).
 void SCR_ResumeLoadingPlaque(void)
 {
-	if (!scr_loadingreleased || loading_stage == LS_NONE || scr_disabled_for_loading || !qrenderer || Key_Dest_Has(~kdm_game))
+	if (!scr_loadingreleased || scr_disabled_for_loading || !SCR_GamecodeLoadingActive() || !qrenderer || Key_Dest_Has(~kdm_game))
 		return;
-#ifdef MENU_DAT
-	if (!MP_UsingGamecodeLoadingScreen())
-		return;
-#endif
 	scr_disabled_for_loading = true;
 	scr_disabled_time = Sys_DoubleTime();
 }

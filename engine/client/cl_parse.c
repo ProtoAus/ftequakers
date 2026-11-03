@@ -787,6 +787,7 @@ static void CL_SendDownloadStartRequest(downloadlist_t *pending)
 	//don't download multiple things at once... its leaky if nothing else.
 	if (cls.download)
 		return;
+	SCR_ReleaseLoadingPlaque(localname);	//FTESurf Patch 1258: a gamecode loading screen's plaque drops while this runs
 
 #ifdef WEBCLIENT
 	if (flags & DLLF_TRYWEB)
@@ -1059,7 +1060,11 @@ qboolean	CL_CheckOrEnqueDownloadFile (const char *filename, const char *localnam
 //	if (cls.demoplayback && cls.demoplayback != DPB_EZTV)
 //		return true;
 
-	SCR_ReleaseLoadingPlaque(localname);	//release console.  FTESurf Patch 1258: the gamecode loading screen stays
+	{
+		extern qboolean SCR_GamecodeLoadingActive(void);
+		if (!SCR_GamecodeLoadingActive())	//FTESurf Patch 1258: that screen keeps its plaque until a download starts
+			SCR_EndLoadingPlaque();	//release console.
+	}
 
 	if (flags & DLLF_ALLOWWEB)
 	{
@@ -3238,7 +3243,11 @@ static void CL_ParseDownload (qboolean zlib)
 			CL_RequestNextDownload ();
 			return;
 		}
-		SCR_ReleaseLoadingPlaque(dl->localname);	//FTESurf Patch 1258, as in CL_CheckOrEnqueDownloadFile
+		{
+			extern qboolean SCR_GamecodeLoadingActive(void);
+			if (!SCR_GamecodeLoadingActive())	//FTESurf Patch 1258: CL_SendDownloadStartRequest released that screen's plaque
+				SCR_EndLoadingPlaque();
+		}
 	}
 
 	if (zlib)
