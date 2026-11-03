@@ -60,6 +60,8 @@ void main()
 	vec3 wn = normalize(invsurface * tn);
 #ifdef FTE_CAPTUREFIX
 	vec4 ctf = m_capturefix * tf_c;	// FTESurf Patch 1245: where a reused capture saw this point
+	if (ctf.w <= 0.5)
+		ctf = tf_c;	// behind that camera: this frame's
 	vec2 sc = (1.0 + ctf.xy / ctf.w) * 0.5;
 #else
 	vec2 sc = (1.0 + tf_c.xy / tf_c.w) * 0.5;

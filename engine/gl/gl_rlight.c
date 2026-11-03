@@ -590,7 +590,12 @@ void R_RenderDlights (void)
 
 					//FIXME: in terms of performance, mixing reads+draws is BAD BAD BAD. SERIOUSLY BAD
 					//it would be an improvement to calculate all of these at once.
-					qglReadPixels(out[0], out[1], 1, 1, GL_DEPTH_COMPONENT, GL_FLOAT, &depth);
+					{	//FTESurf Patch 1260: a multisampled scene is read through its resolve target
+						qboolean msread = GLBE_SceneMSAA_ReadBegin(out[0], out[1], 1, 1, true);
+						qglReadPixels(out[0], out[1], 1, 1, GL_DEPTH_COMPONENT, GL_FLOAT, &depth);
+						if (msread)
+							GLBE_SceneMSAA_ReadEnd();
+					}
 					if (depth < out[2])
 						continue;
 					break;

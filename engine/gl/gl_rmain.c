@@ -3021,7 +3021,7 @@ void GLR_RenderView (void)
 		forcedfb = false;
 	else if (renderscale != 1)
 		forcedfb = gl_config.ext_framebuffer_objects && sh_config.texture_non_power_of_two_pic;
-	else if (!(r_refdef.flags & RDF_NOWORLDMODEL) && GLBE_SceneMSAA_Samples())	//FTESurf Patch 1260: the samples live in an FBO
+	else if (!(r_refdef.flags & RDF_NOWORLDMODEL) && r_refdef.stereomethod != STEREO_QUAD && GLBE_SceneMSAA_Samples())	//FTESurf Patch 1260: the samples live in an FBO (quad stereo draws to the window's buffers)
 		forcedfb = sh_config.texture_non_power_of_two_pic;
 
 	/* FTESurf Patch 208: belt and braces.  A portal clip only ever lives inside

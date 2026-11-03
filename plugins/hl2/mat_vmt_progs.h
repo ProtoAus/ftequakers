@@ -1753,11 +1753,14 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "float depth = 0.0;\n"
 "stc = (1.0 + (tf.xy / tf.w)) * 0.5;\n"
 "#if defined(FTE_CAPTUREFIX) && !defined(SCREEN)\n"
-// FTESurf Patch 1245: a reused capture (r_capturehalfrate) saw this point at m_capturefix * tf;
-// the ripple map is this frame's.
+// FTESurf Patch 1245: a reused capture (r_capturehalfrate) saw this point at m_capturefix * tf
+// (identity when fresh; a point behind that camera keeps this frame's). The ripple map is this frame's.
 "vec2 rstc = stc;\n"
 "vec4 ctf = m_capturefix * tf;\n"
+"if (ctf.w > 0.5)\n"
 "stc = (1.0 + (ctf.xy / ctf.w)) * 0.5;\n"
+"else\n"
+"ctf = tf;\n"
 "#else\n"
 "#define rstc stc\n"
 "#endif\n"
@@ -1807,6 +1810,9 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 
 "#ifdef DEPTH\n"
 "float surfaceDepth = eyeDepth(gl_FragCoord.z);\n"
+"#if defined(FTE_CAPTUREFIX) && !defined(SCREEN)\n"
+"surfaceDepth *= ctf.w / tf.w; // along the capture's forward, as s_refractdepth is (exactly 1 when fresh)\n"
+"#endif\n"
 // P877: 1/depth is affine across the plane in screen space, so this gives the surface's depth
 // on the refracted sample's own ray, the ray Source's alpha was computed for (water_ps2x_helper.h:161).
 "float invs = 1.0 / surfaceDepth;\n"
@@ -3543,11 +3549,14 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "float depth = 0.0;\n"
 "stc = (1.0 + (tf.xy / tf.w)) * 0.5;\n"
 "#if defined(FTE_CAPTUREFIX) && !defined(SCREEN)\n"
-// FTESurf Patch 1245: a reused capture (r_capturehalfrate) saw this point at m_capturefix * tf;
-// the ripple map is this frame's.
+// FTESurf Patch 1245: a reused capture (r_capturehalfrate) saw this point at m_capturefix * tf
+// (identity when fresh; a point behind that camera keeps this frame's). The ripple map is this frame's.
 "vec2 rstc = stc;\n"
 "vec4 ctf = m_capturefix * tf;\n"
+"if (ctf.w > 0.5)\n"
 "stc = (1.0 + (ctf.xy / ctf.w)) * 0.5;\n"
+"else\n"
+"ctf = tf;\n"
 "#else\n"
 "#define rstc stc\n"
 "#endif\n"
@@ -3597,6 +3606,9 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 
 "#ifdef DEPTH\n"
 "float surfaceDepth = eyeDepth(gl_FragCoord.z);\n"
+"#if defined(FTE_CAPTUREFIX) && !defined(SCREEN)\n"
+"surfaceDepth *= ctf.w / tf.w; // along the capture's forward, as s_refractdepth is (exactly 1 when fresh)\n"
+"#endif\n"
 // P877: 1/depth is affine across the plane in screen space, so this gives the surface's depth
 // on the refracted sample's own ray, the ray Source's alpha was computed for (water_ps2x_helper.h:161).
 "float invs = 1.0 / surfaceDepth;\n"
@@ -4187,6 +4199,8 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "vec3 wn = normalize(invsurface * tn);\n"
 "#ifdef FTE_CAPTUREFIX\n"
 "vec4 ctf = m_capturefix * tf_c; // FTESurf Patch 1245: where a reused capture saw this point\n"
+"if (ctf.w <= 0.5)\n"
+"ctf = tf_c; // behind that camera: this frame's\n"
 "vec2 sc = (1.0 + ctf.xy / ctf.w) * 0.5;\n"
 "#else\n"
 "vec2 sc = (1.0 + tf_c.xy / tf_c.w) * 0.5;\n"
