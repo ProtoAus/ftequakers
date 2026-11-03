@@ -45,6 +45,34 @@ texid_t r_whiteimage, r_blackimage;
 texid_t r_envcubemap_tex;
 qboolean shader_reload_needed;
 static qboolean shader_rescan_needed;
+//FTESurf Patch 1267: Shader_NeedReload(true) is a filesystem change, and a shader parsed after the last
+//one read the files as they are now.  A reload asked for by the filesystem alone (no cvar or other full
+//request since the last reload) leaves those alone unless a script defined them then (the cache is only
+//rescanned at the reload) or defines them now.  Generators' other inputs ask for full reloads: shader
+//cvars, and the watervis permission (CL_CheckServerInfo).
+//Measured on map changes: only shaders from before the change differ (the old map's, losing their pack).
+static unsigned int shader_fsgen = 1;
+static qboolean shader_reload_full = true;
+static struct
+{
+	unsigned int gen;	//the shader_fsgen its last parse saw
+	qboolean script;	//that parse read a script
+} *shader_parsegen;	//by shader id
+static int shader_parsegen_max;
+static void Shader_StampParse(int id)
+{
+	if (id < 0)
+		return;
+	if (id >= shader_parsegen_max)
+	{
+		int n = max(max(id + 1, shader_parsegen_max * 2), 256);
+		shader_parsegen = BZ_Realloc(shader_parsegen, n * sizeof(*shader_parsegen));
+		memset(shader_parsegen + shader_parsegen_max, 0, (n - shader_parsegen_max) * sizeof(*shader_parsegen));
+		shader_parsegen_max = n;
+	}
+	shader_parsegen[id].gen = shader_fsgen;
+	shader_parsegen[id].script = false;
+}
 
 sh_config_t sh_config;
 
@@ -5171,6 +5199,7 @@ qboolean Shader_Init (void)
 	}
 
 	Shader_NeedReload(true);
+	Shader_NeedReload(false);	//Patch 1267: everything, not only what predates a filesystem change
 	shader_reload_why = "Shader_Init";
 	Shader_DoReload();
 	return true;
@@ -5426,6 +5455,7 @@ static void Shader_Reset(parsestate_t *ps)
 
 	s->remapto = s;
 	s->id = id;
+	Shader_StampParse(id);	//Patch 1267
 	s->width = w;
 	s->height = h;
 	s->model = mod;
@@ -8663,6 +8693,8 @@ static qboolean Shader_ParseShader(parsestate_t *ps, const char *parsename)
 			}
 
 			Shader_Reset(ps);
+			if (ps->s->id < shader_parsegen_max)
+				shader_parsegen[ps->s->id].script = true;	//Patch 1267
 
 			Shader_ReadShader(ps, file, sourcefile);
 
@@ -9427,6 +9459,19 @@ void Shader_TouchTextures(void)
 */
 const char *shader_reload_why = "?";
 
+//Patch 1267: whether the scripts define a shader under a name its reparse tries.
+static qboolean Shader_HasScript(const char *cleanname, const char *shortname)
+{
+	if (sh_config.shadernamefmt)
+	{
+		char drivername[MAX_QPATH];
+		Q_snprintfz(drivername, sizeof(drivername), sh_config.shadernamefmt, cleanname);
+		if (Shader_LocateSource(drivername, NULL, NULL, NULL, NULL))
+			return true;
+	}
+	return Shader_LocateSource(cleanname, NULL, NULL, NULL, NULL) || Shader_LocateSource(shortname, NULL, NULL, NULL, NULL);
+}
+
 void Shader_DoReload(void)
 {
 	shader_t *s;
@@ -9460,8 +9505,9 @@ void Shader_DoReload(void)
 	one clock read otherwise.
 	*/
 	double t0 = Sys_DoubleTime();
-	unsigned int reparsed = 0, regenerated = 0, live = 0;
+	unsigned int reparsed = 0, regenerated = 0, live = 0, skipped = 0;
 	qboolean rescanned = shader_rescan_needed;
+	qboolean targeted = shader_rescan_needed && !shader_reload_full;	//Patch 1267
 
 	if (shader_rescan_needed)
 	{
@@ -9506,6 +9552,12 @@ void Shader_DoReload(void)
 		if (argsstart)
 			*argsstart = 0;
 		COM_StripExtension (cleanname, shortname, sizeof(shortname));
+		if (targeted && s->id < shader_parsegen_max && shader_parsegen[s->id].gen == shader_fsgen
+			&& !shader_parsegen[s->id].script && !Shader_HasScript(cleanname, shortname))
+		{
+			skipped++;	//Patch 1267: parsed after the last filesystem change
+			continue;
+		}
 		TRACE(("reparsing %s\n", s->name));
 		if (ruleset_allow_shaders.ival && !(s->usageflags & SUR_FORCEFALLBACK))
 		{
@@ -9543,9 +9595,10 @@ void Shader_DoReload(void)
 	}
 
 	if (developer.ival)
-		Con_Printf("^5shaders^7 %6.0fms  %s from %s, %u live of %u ever: %u reparsed, %u regenerated\n",
+		Con_Printf("^5shaders^7 %6.0fms  %s from %s, %u live of %u ever: %u reparsed, %u regenerated, %u parsed since the files changed\n",
 			(Sys_DoubleTime() - t0) * 1000, rescanned?"RESCAN+reload":"reload",
-			shader_reload_why, live, (unsigned)r_numshaders, reparsed, regenerated);
+			shader_reload_why, live, (unsigned)r_numshaders, reparsed, regenerated, skipped);
+	shader_reload_full = false;
 }
 
 /*
@@ -9569,7 +9622,12 @@ void Shader_NeedReload(qboolean rescanfs)
 		Con_DPrintf("^5shaders^7 reload requested by %s%s\n",
 			shader_needreload_why, rescanfs?" (+filesystem rescan)":"");
 	if (rescanfs)
+	{
 		shader_rescan_needed = true;
+		shader_fsgen++;	//Patch 1267
+	}
+	else
+		shader_reload_full = true;
 	shader_reload_needed = true;
 }
 

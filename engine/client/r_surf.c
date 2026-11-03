@@ -622,6 +622,7 @@ static void Surf_BuildDeluxMap (model_t *wmodel, msurface_t *surf, qbyte *dest, 
 	vec3_t temp;
 
 	int stride;
+	size_t lmextra;
 
 	if (!dest)
 		return;
@@ -630,6 +631,9 @@ static void Surf_BuildDeluxMap (model_t *wmodel, msurface_t *surf, qbyte *dest, 
 	tmax = (surf->extents[1]>>surf->lmshift)+1;
 	size = smax*tmax;
 	lightmap = surf->samples;
+	//FTESurf Patch 1264: the per-style stride Surf_BuildLightMap walks (Patch 268 D1); a bumped Source
+	//face's deluxe data (mod_vbsp.c VBSP_BuildRNM) is one set per style, so only the lightmap skips.
+	lmextra = size * (size_t)((surf->flags & SURF_LMSTRIDE_MASK) >> SURF_LMSTRIDE_SHIFT);
 
 	// set to full bright if no light data
 	if (!wmodel->deluxdata)
@@ -669,7 +673,7 @@ static void Surf_BuildDeluxMap (model_t *wmodel, msurface_t *surf, qbyte *dest, 
 					blocknormals[i][1] += intensity*(deluxmap[i*3+1]-127);
 					blocknormals[i][2] += intensity*(deluxmap[i*3+2]-127);
 				}
-				lightmap += size*4;	// skip to next lightmap
+				lightmap += size*4 + lmextra;	// skip to next lightmap
 				deluxmap += size*3;
 			}
 			break;

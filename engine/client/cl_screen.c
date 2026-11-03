@@ -1419,6 +1419,7 @@ cvar_t	scr_loadingrefresh = CVARD("scr_loadingrefresh", "0", "Force redrawing of
 //FTESurf Patch 1244: what the load is doing, for a gamecode loading screen (menu QC's m_drawloading).
 static cvar_t	scr_loadingstep = CVARFD("scr_loadingstep", "", CVAR_NOSAVE|CVAR_NOSET, "The loading screen's current step: a resource name or a phase such as \"receiving map info\" (FTESurf Patch 1244). Read-only.");
 static cvar_t	scr_loadingseq = CVARFD("scr_loadingseq", "0", CVAR_NOSAVE|CVAR_NOSET, "Counts loading steps, so a repeated name still reads as a new step (FTESurf Patch 1244). Read-only.");
+static cvar_t	scr_loadingmap = CVARFD("scr_loadingmap", "", CVAR_NOSAVE|CVAR_NOSET, "The map a load in progress is for, no path or extension; set at the load's start (SCR_ImageName), cleared with the step (FTESurf Patch 1265). Read-only.");
 cvar_t	scr_loadtimes = CVARD("scr_loadtimes", "0", "Print each stage of a map load that took this many milliseconds or more, and the load's total. A stage is the label the loading screen showed while the time passed (a model, a sound, newmap, csqc init, a wait on the server), from the server's map change to the first frame. 0 is off. (FTESurf Patch 1022)");
 cvar_t	scr_showloading	= CVAR("scr_showloading", "1");
 //things to configure the legacy loading screen
@@ -1449,6 +1450,7 @@ void CLSCR_Init(void)
 	Cvar_Register(&scr_loadingrefresh, cl_screengroup);
 	Cvar_Register(&scr_loadingstep, cl_screengroup);	//FTESurf Patch 1244
 	Cvar_Register(&scr_loadingseq, cl_screengroup);
+	Cvar_Register(&scr_loadingmap, cl_screengroup);	//FTESurf Patch 1265
 	Cvar_Register(&scr_loadtimes, cl_screengroup);
 	Cvar_Register(&scr_showloading, cl_screengroup);
 	Cvar_Register(&scr_loadingscreen_picture, cl_screengroup);
@@ -3330,6 +3332,7 @@ void SCR_SetLoadingStage(int stage)
 			Z_Free(loadingfile);
 		loadingfile = NULL;
 		Cvar_ForceSet(&scr_loadingstep, "");	//FTESurf Patch 1244: no load in progress
+		Cvar_ForceSet(&scr_loadingmap, "");	//Patch 1265
 		scr_disabled_for_loading = scr_drawloading = false;
 		scr_loadingreleased = false;	//Patch 1258
 		break;
@@ -3777,6 +3780,8 @@ void SCR_ImageName (const char *mapname)
 	//assume levelshots/foo
 	strcpy(levelshotname, "levelshots/");
 	COM_FileBase(mapname, levelshotname + strlen(levelshotname), sizeof(levelshotname)-strlen(levelshotname));
+	if (strcmp(scr_loadingmap.string, levelshotname + 11))	//FTESurf Patch 1265: the base name, for a gamecode loading screen
+		Cvar_ForceSet(&scr_loadingmap, levelshotname + 11);
 
 	if (qrenderer && scr_loadingscreen_aspect.ival >= 0 && *mapname)
 	{
