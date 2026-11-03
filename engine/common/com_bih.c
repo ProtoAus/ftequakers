@@ -1912,8 +1912,7 @@ static qboolean BIH_Trace(model_t *model, int forcehullnum, const framestate_t *
 {
 	struct bihtracekey_s key;
 	model_t *m = (bih_phyfix && model && model->phyfixed) ? model->phyfixed : model;	//as BIH_TraceUncached resolves it
-	unsigned int h, k, i;
-	const unsigned int *w;
+	unsigned int h, k, i, w;
 	qboolean hit;
 
 	if (!bih_tracecache.ival || pm_dispprobe.ival || bih_probe_readers || !m || !m->cnodes || m->terrain || !Sys_IsMainThread())
@@ -1937,8 +1936,11 @@ static qboolean BIH_Trace(model_t *model, int forcehullnum, const framestate_t *
 		VectorCopy(axis[1], key.v+15);
 		VectorCopy(axis[2], key.v+18);
 	}
-	for (h = 2166136261u, w = (const unsigned int*)&key, k = 0; k < sizeof(key)/sizeof(*w); k++)
-		h = (h ^ w[k]) * 16777619u;
+	for (h = 2166136261u, k = 0; k < sizeof(key); k += sizeof(w))
+	{
+		memcpy(&w, (const qbyte*)&key + k, sizeof(w));	//not an unsigned int* over the struct: strict aliasing
+		h = (h ^ w) * 16777619u;
+	}
 	i = (h ^ (h >> 15)) & (BIH_TRACECACHE-1);
 	if (bih_tracecache_e[i].valid && !memcmp(&bih_tracecache_e[i].key, &key, sizeof(key)))
 	{
