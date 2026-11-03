@@ -1,5 +1,25 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1247 — surfd: one bad KSF file no longer ends a tick; a converter change re-asks its set-asides
+
+**Problem.** Lex (3 Nov), "yes please to all" on P1240's open items: a file-level download failure
+ended the tick's downloads (~1.7 percent of downloads), and a converter regression or a KSF format
+change would set every replay aside for a week with recovery by hand. The third item, Momentum Beta
+boards, was split out: Momentum drops a map's testing runs when it approves it (surf_solitude,
+approved 24 Oct 11:22Z, oldest of its top 100 11:30Z), so collecting them needs a purge of runs,
+board cache and recordings at approval.
+
+**Change.** FTESurf surfd/ksfgrab.py: a 404/500/broken body sets that file aside and the tick goes on
+(FILESTREAK in a row still parks the host); the converter's set-asides (Unconvertible, a third
+ValueError strike; ledger or terminal) are recorded with a hash of ksfconvert + ksfreplay_info, and a
+tick that sees another hash asks them all again. A brake on mass refusals was tried and removed in
+review: once the backlog is done the queue is mostly known refusals, so it would park tick after tick.
+
+**Verified.** Two review rounds, two lenses each; mutants for every rule fail the suite; Pi
+test_ksfgrab 78 OK. Live 3 Nov 04:48:43Z (generation 12e362a5) after a 7 min outage: the activation
+stopped surfd, then timed out its 60 s drain on a ~3 min KSF tick (since P1240) and stopped; finished
+by hand (kit1247/finish_1247.py). Start surfd activations after a KSF tick, or with a longer drain.
+
 ## Patch 1244 — the loading step for gamecode, and a gamecode loading screen redrawn through long loads (client exe)
 
 **Problem.** Lex (3 Nov): replace the loading screen (a centred line and a % box) with one that shows
