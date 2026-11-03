@@ -10389,7 +10389,37 @@ static void VBSP_PrepareFrame(model_t *mod, refdef_t *r_refdef, int area, int cl
 	entvis = surfvis = VBSP_MarkLeaves(mod, clusters);
 	memo = VBSP_PVSMemo(mod, area, clusters, surfvis);
 	VectorCopy (r_refdef->vieworg, modelorg);
-	if (!surfvis)
+	if (!surfvis && !mod->vis && !hl2_novis->ival && !r_refdef->forcevis)
+	{	//Patch 1271: an unvised map is still culled by area in Source (R_CullNode: a node whose area > 0 draws
+		//only if R_IsAreaVisible; area 0 never), so surf_voyager's stations, alone in area 3, are hidden from
+		//area 1 rather than drawn and cut at r_sky_forcedepth_scale's distance. Displacements are not culled.
+		//Marked by leaf, emitted in surface order: leaf order split sunset's batches, 77 -> 796 draws.
+		size_t i;
+		int k;
+		msurface_t *surf, **mark;
+		vbsp_surfsequence++;
+		for (i = 0; i < (size_t)mod->numleafs; i++)
+		{
+			mleaf_t *leaf = &mod->leafs[i];
+			if (leaf->contents == FTECONTENTS_SOLID)
+				continue;
+			if (leaf->area > 0 && !(r_refdef->areabits[leaf->area>>3] & (1<<(leaf->area&7))))
+				continue;
+			for (mark = leaf->firstmarksurface, k = leaf->nummarksurfaces; k > 0; k--)
+				(*mark++)->visframe = vbsp_surfsequence;
+		}
+		for (i = 0; i < prv->numdisplacements; i++)
+			prv->displacements[i].surf->visframe = vbsp_surfsequence;
+		for (i = 0; i < mod->nummodelsurfaces; i++)
+		{
+			surf = &mod->surfaces[i];
+			if (surf->visframe != vbsp_surfsequence)
+				continue;
+			modfuncs->RenderDynamicLightmaps (surf);
+			VBSP_EMIT_SURF(surf);
+		}
+	}
+	else if (!surfvis)
 	{
 		size_t i;
 		msurface_t *surf;
