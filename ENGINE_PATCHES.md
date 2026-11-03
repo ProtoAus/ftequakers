@@ -1,5 +1,24 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1238 — the local player's movetype rides every entity update (lobby server)
+
+**Problem.** Prederror reports of 2-3 Nov (surf_crucible, a player at ~345 ms): after a save-lock
+release the client kept predicting the player held while the server moved them. SVFTE_DeltaCalcBits
+sends pmovetype only when it changes, so when the snapshot carrying the release's change is lost the
+client's copy stays PM_NONE until the server resends it after learning of the loss, a round trip
+later; prediction through PM_NONE moves nothing. A lost hold start does the reverse.
+
+**Change.** engine/server/sv_ents.c, SVFTE_EmitPacketEntities: the client's own entity gets
+UF_PREDINFO|UF_SV_MOVETYPE in every update. About five bytes a snapshot for a standing player, one
+for a moving one; released clients already read the byte (cl_ents.c).
+
+**Verified.** Local arm (FTESurf P1238, arms/p1238hold.py): 30 load/release cycles with 25% packet
+loss on the server. Stock server, live csprogs: 23 rows where the client's copy said PM_NONE while
+the server's velocity moved the player, 18 mispredicted; this server, the same csprogs: 0. Pi build
+of p1238-pi (8e4dfc24d = p1211-pi + this commit; stamp git-8076-patch-1173-2-g8e4dfc24d): the gate
+printed identical lines on the old and new binaries (60 pm_dettest lines, the two known HOLDs).
+FTESurf's QC also stops trusting a moving PM_NONE after the client's own release (cl_warpop.qc).
+
 ## Patch 1237 — the 3D sky at r_skyroom_scale; Source's 2D sky drawn whole; r_instancing 2 names its refusals
 
 **Problem.** Lex (3 Nov) asked whether the skybox rendering is wrong, to try a lower-resolution 3D sky,
