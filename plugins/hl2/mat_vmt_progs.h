@@ -26,7 +26,7 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 
 "!!permu FAKESHADOWS\n"
 "!!cvardf r_glsl_pcf\n"
-"!!cvardf r_lightmap_bicubic=0\n"
+"!!cvardf r_lightmap_bicubic_world=0\n"
 "!!cvarf r_renderscale\n"
 "!!samps =FAKESHADOWS shadowmap\n"
 
@@ -194,7 +194,7 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 
 //FTESurf Patch 1275: a cubic B-spline over the lightmap in four bilinear taps, as HL2's 20th-anniversary
 //update filters it. Each face's block has a one-texel copy of its edge around it (r_surf.c SURF_LMPAD).
-"#if r_lightmap_bicubic\n"
+"#if r_lightmap_bicubic_world\n"
 "vec3 lm_bicubic(sampler2D s, vec2 c)\n"
 "{\n"
 "vec2 p = c * e_lmsize.xy - 0.5;\n"
@@ -639,7 +639,7 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 
 "!!permu FAKESHADOWS\n"
 "!!cvardf r_glsl_pcf\n"
-"!!cvardf r_lightmap_bicubic=0\n"
+"!!cvardf r_lightmap_bicubic_world=0\n"
 "!!samps =FAKESHADOWS shadowmap\n"
 
 "#include \"sys/defs.h\"\n"
@@ -769,7 +769,7 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 
 //FTESurf Patch 1275: a cubic B-spline over the lightmap in four bilinear taps, as HL2's 20th-anniversary
 //update filters it. Each face's block has a one-texel copy of its edge around it (r_surf.c SURF_LMPAD).
-"#if r_lightmap_bicubic\n"
+"#if r_lightmap_bicubic_world\n"
 "vec3 lm_bicubic(sampler2D s, vec2 c)\n"
 "{\n"
 "vec2 p = c * e_lmsize.xy - 0.5;\n"
@@ -2379,7 +2379,7 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "!!permu NOFOG\n"
 "!!permu VC   // FTESurf Patch 1218: MODELLIT's VRAD bake, as vertexlit.glsl's\n"
 "!!cvardf hl2_lt_fold=1\n"
-"!!cvardf r_lightmap_bicubic=0\n"
+"!!cvardf r_lightmap_bicubic_world=0\n"
 "!!samps anim:2DArray=0\n"
 
 "!!samps !UNLIT lightmap\n"
@@ -2499,7 +2499,7 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "#ifndef UNLIT\n"
 //FTESurf Patch 1275: a cubic B-spline over the lightmap in four bilinear taps, as HL2's 20th-anniversary
 //update filters it. Each face's block has a one-texel copy of its edge around it (r_surf.c SURF_LMPAD).
-"#if r_lightmap_bicubic\n"
+"#if r_lightmap_bicubic_world\n"
 "vec3 lm_bicubic(sampler2D s, vec2 c)\n"
 "{\n"
 "vec2 p = c * e_lmsize.xy - 0.5;\n"
