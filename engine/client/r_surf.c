@@ -2799,6 +2799,11 @@ void Surf_GenBrushBatches(batch_t **batches, entity_t *ent)
 		bef |= BEF_FORCETRANSPARENT;
 	if (ent->flags & RF_NODEPTHTEST)
 		bef |= BEF_FORCENODEPTH;
+	//FTESurf Patch 1250: a Source brush entity's rendercolor (QC colormod, RF_FORCECOLOURMOD) reaches
+	//e_colourident only with BEF_FORCECOLOURMOD; brush draws never set it, so func_brush tints were
+	//dropped (surf_bikini_bottom's cyan water windows drew grey). Quake/HL brush content unchanged.
+	if ((ent->flags & RF_FORCECOLOURMOD) && (model->engineflags & MDLF_SOURCEBSP))
+		bef |= BEF_FORCECOLOURMOD;
 	if (ent->flags & RF_NOSHADOW)
 		bef |= BEF_NOSHADOWS;
 	//nettest: r_shadows_bmodels 0 - only MODELS cast shadows, not brush entities.
