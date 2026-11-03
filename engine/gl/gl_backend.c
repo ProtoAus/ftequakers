@@ -4396,10 +4396,7 @@ static void BE_Program_Set_Attributes(const program_t *prog, struct programpermu
 			qglUniformMatrix3x4fv(ph, shaderstate.sourcevbo->numbones, false, shaderstate.sourcevbo->bones);
 			break;
 		case SP_M_CAPTUREFIX:	//FTESurf Patch 1245: only the top-level view samples a reused capture
-			{
-				extern cvar_t r_p1245_nofix;	//P1245 TEST ONLY
-				qglUniformMatrix4fvARB(ph, 1, false, (be_capfixframe == host_framecount && !r_refdef.recurse && !r_p1245_nofix.ival) ? be_capfix : be_identity16);
-			}
+			qglUniformMatrix4fvARB(ph, 1, false, (be_capfixframe == host_framecount && !r_refdef.recurse) ? be_capfix : be_identity16);
 			break;
 		case SP_M_INVVIEWPROJECTION:
 			{
