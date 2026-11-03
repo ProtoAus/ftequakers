@@ -4308,10 +4308,11 @@ static unsigned long long SV_DetTraceHash(model_t *world, unsigned int *seed, co
 #define PMDET_RIDETICKS 132
 typedef struct { unsigned long long h; int changed, npts; vec3_t pts[PMDET_PROPPTS], ptn[PMDET_PROPPTS]; } detpick_t;
 
-//One sample both ways; true when a prop piece decided the pick.
+//One sample both ways; true when a prop piece decided the pick.  FTESurf's hull (origin at the feet),
+//so a contact is a place the colliding mover can stand.
 static qboolean SV_DetPickOne(model_t *world, const vec3_t s1, const vec3_t e1, detpick_t *dp, trace_t *tr)
 {
-	vec3_t tmins = {-16,-16,-24}, tmaxs = {16,16,32};
+	vec3_t tmins = {-16,-16,0}, tmaxs = {16,16,62};
 	trace_t t0;
 	memset(&t0, 0, sizeof(t0));
 	memset(tr, 0, sizeof(*tr));
@@ -4363,13 +4364,25 @@ static int SV_DetPickHash(model_t *world, unsigned int *seed, const int *lo, con
 }
 
 //The mover's state and movevars as every pass pins them -- not the running config (the header).
-static void SV_DetPinMover(model_t *world, int fixrampbugs, int sourceversion)
+//Patch 1255 review: passes 0-4 left skipent 0, the world physent's info, so PM_PlayerTrace skipped the
+//world and they measure free fall (pmovetst.c:1168).  Kept for their recorded values; collide is what
+//pm_recsim sets up.
+static void SV_DetPinMover(model_t *world, int fixrampbugs, int sourceversion, qboolean collide)
 {
 	memset(&pmove, 0, sizeof(pmove));
 	pmove.numphysent = 1;
 	pmove.physents[0].model = world;
-	VectorSet(pmove.player_mins, -16, -16, -24);
-	VectorSet(pmove.player_maxs,  16,  16,  32);
+	if (collide)
+	{
+		pmove.skipent = -1;
+		VectorSet(pmove.player_mins, -16, -16,  0);
+		VectorSet(pmove.player_maxs,  16,  16, 62);
+	}
+	else
+	{
+		VectorSet(pmove.player_mins, -16, -16, -24);
+		VectorSet(pmove.player_maxs,  16,  16,  32);
+	}
 	pmove.pm_type = PM_NORMAL;
 	pmove.surfacefriction = 1.0f;
 
@@ -4479,7 +4492,7 @@ static void SV_DetTest_f (void)
 	   Patch 764: both at mover 6, which they had run at live; pass 2 is
 	   `propmover`, the walk at 2 on mover 7.  Patch 813: pass 3 is `pinmover`,
 	   the same walk on mover 8.  Patch 888: pass 4 is `fixmover`, on mover 9.
-	   Patch 1255: pass 5 is `pickmover`, on mover 12. */
+	   Patch 1255: pass 5 is `pickmover`, on mover 12, and the only one that collides. */
 	seedrerun = seed;
 	for (pass = 0; pass < 6; pass++)
 	{
@@ -4490,7 +4503,7 @@ static void SV_DetTest_f (void)
 		if (pass)
 			seed = seedrerun;
 
-		SV_DetPinMover(world, pass ? 2 : 1, (pass == 5) ? 12 : (pass == 4) ? 9 : (pass == 3) ? 8 : (pass == 2) ? 7 : 6);
+		SV_DetPinMover(world, pass ? 2 : 1, (pass == 5) ? 12 : (pass == 4) ? 9 : (pass == 3) ? 8 : (pass == 2) ? 7 : 6, pass == 5);
 
 		/* Start in the middle of the world's box, well above the floor, so the
 		   first few ticks are a fall onto whatever is there rather than a
@@ -4546,7 +4559,7 @@ static void SV_DetTest_f (void)
 
 	/* Patch 1255: from each prop contact, PMDET_RIDES hands-off rides at 2000 u/s along the face
 	   (a random integer direction with its normal part removed), on mover 11 and then 12.  Rides
-	   that end apart are mover 12's rule at work; the hashes are what two machines compare. */
+	   that differ are mover 12's rule at work; the hashes are what two machines compare. */
 	{
 		movevars_t savemv = movevars;
 		playermove_t savepm = pmove;
@@ -4570,7 +4583,7 @@ static void SV_DetTest_f (void)
 				unsigned long long hw = SV_DETHASH_INIT;
 				if (DotProduct(dir[c], dir[c]) == 0)
 					continue;
-				SV_DetPinMover(world, 2, pass ? 12 : 11);
+				SV_DetPinMover(world, 2, pass ? 12 : 11, true);
 				VectorCopy(dp.pts[c / PMDET_RIDES], pmove.origin);
 				VectorScale(dir[c], 2000, pmove.velocity);
 				for (i = 0; i < PMDET_RIDETICKS; i++)
@@ -4692,12 +4705,13 @@ static void SV_DetTest_f (void)
 	Con_Printf("^5pm_dettest^7 fixtrace %016llx  unwrapped hulls decided %i traces, wrapped %i at proptrace\n",
 	           hfixtrace, fixwins, wrapwins);
 	Con_Printf("^5pm_dettest^7 fixmover %016llx\n", hfixmover);
-	/* Patch 1255.  "0 rides" compares nothing about mover 12 on this map; "0 end apart" says its
-	   rides never met the rule. */
+	/* Patch 1255.  "0 rides" compares nothing about mover 12 on this map; "0 differ" says its rides
+	   never met the rule.  pickmover and the rides read unpinned movevars (maxvelocity...): compare
+	   them only between servers on the same config. */
 	Con_Printf("^5pm_dettest^7 picktrace %016llx  pick changed %i of %i traces, %i near %i prop contacts\n",
 	           dp.h, dp.changed, picksamples, picksamples - ntrace*4, dp.npts);
 	Con_Printf("^5pm_dettest^7 pickmover %016llx\n", hpickmover);
-	Con_Printf("^5pm_dettest^7 ride11 %016llx  ride12 %016llx  rides %i, %i end apart\n",
+	Con_Printf("^5pm_dettest^7 ride11 %016llx  ride12 %016llx  rides %i, %i differ\n",
 	           hride[0], hride[1], rides, ridediff);
 }
 
