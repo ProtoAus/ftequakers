@@ -171,6 +171,15 @@ void main (void)
 	float fres;
 	float depth = 0.0;
 	stc = (1.0 + (tf.xy / tf.w)) * 0.5;
+#if defined(FTE_CAPTUREFIX) && !defined(SCREEN)
+	// FTESurf Patch 1245: a reused capture (r_capturehalfrate) saw this point at m_capturefix * tf;
+	// the ripple map is this frame's.
+	vec2 rstc = stc;
+	vec4 ctf = m_capturefix * tf;
+	stc = (1.0 + (ctf.xy / ctf.w)) * 0.5;
+#else
+	#define rstc stc
+#endif
 #ifdef ANIMBUMP
 	int bumplayers = textureSize(s_bumpanim, 0).z;
 	float bumplayer = bumplayers > 0 ? floor(mod(e_time * float(ANIMBUMP), float(bumplayers))) : 0.0;
@@ -206,7 +215,7 @@ void main (void)
 #endif
 
 #ifdef RIPPLEMAP
-	n += texture2D(s_ripplemap, stc).rgb*3.0;
+	n += texture2D(s_ripplemap, rstc).rgb*3.0;
 #endif
 	n = normalize(n);
 

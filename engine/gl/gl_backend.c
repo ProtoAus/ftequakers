@@ -317,6 +317,21 @@ static struct {
 //world view or its last, and its target exists (a resize frees them).
 enum {BE_CAPREFL, BE_CAPREFR, BE_CAPDEPTH, BE_CAPKINDS};
 static int be_capstamp[R_MAX_RECURSE][BE_CAPKINDS], be_capseat[R_MAX_RECURSE][BE_CAPKINDS];
+//FTESurf Patch 1245: what the top-level view's chosen water plane last rendered into the level-0 targets,
+//for r_capturehalfrate. frame 0: nothing to reuse (reused already, or another capture overwrote them).
+static struct
+{
+	int frame, views;		//host_framecount, and how many top-level views rendered captures in it
+	unsigned int kinds;		//SHADER_HASREFLECT etc. actually written to a target
+	plane_t plane;
+	entity_t *ent;			//the batch's: the world for water, a func_reflective_glass for glass
+	int fbw, fbh;
+	playerview_t *pv;
+	float vp[16];			//the view-projection they were rendered for
+} be_capkeep;
+static int be_capfixframe;	//host_framecount whose top-level draws sample a reused capture through be_capfix
+static float be_capfix[16];	//its view-projection times the inverse of this frame's (SP_M_CAPTUREFIX)
+static const float be_identity16[16] = {1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1};
 static int be_seatviews[MAX_SPLITS];	//world-drawing top-level views begun, per seat
 static int BE_Seat(void)
 {
@@ -4379,6 +4394,9 @@ static void BE_Program_Set_Attributes(const program_t *prog, struct programpermu
 		case SP_M_ENTBONES_MAT3X4:
 			qglUniformMatrix3x4fv(ph, shaderstate.sourcevbo->numbones, false, shaderstate.sourcevbo->bones);
 			break;
+		case SP_M_CAPTUREFIX:	//FTESurf Patch 1245: only the top-level view samples a reused capture
+			qglUniformMatrix4fvARB(ph, 1, false, (be_capfixframe == host_framecount && !r_refdef.recurse) ? be_capfix : be_identity16);
+			break;
 		case SP_M_INVVIEWPROJECTION:
 			{
 				float m16[16], inv[16];
@@ -7271,6 +7289,38 @@ static void GLBE_WaterViewsEnd(void)
 	}
 }
 
+extern cvar_t r_capturehalfrate;
+extern int host_framecount;
+//FTESurf Patch 1245: last frame's captures of this plane, if nothing has written those targets since
+static qboolean GLBE_CaptureKeep(const plane_t *p, entity_t *ent, unsigned int need)
+{
+	if (!need || (need & ~be_capkeep.kinds) || be_capkeep.frame != host_framecount - 1 || be_capkeep.views != 1 || be_capkeep.ent != ent ||
+		be_capkeep.pv != r_refdef.playerview || be_capkeep.fbw != vid.fbpwidth || be_capkeep.fbh != vid.fbpheight ||
+		!GLBE_WaterSamePlane(p, &be_capkeep.plane))
+		return false;
+	if (((need & SHADER_HASREFLECT) && !TEXVALID(shaderstate.tex_reflection[0])) ||
+		((need & SHADER_HASREFRACT) && !TEXVALID(shaderstate.tex_refraction[0])) ||
+		((need & SHADER_HASREFRACTDEPTH) && !TEXVALID(shaderstate.tex_refractiondepth[0])))
+		return false;
+	if (need & SHADER_HASREFLECT)
+		BE_StampCapture(BE_CAPREFL);
+	if (need & SHADER_HASREFRACT)
+		BE_StampCapture(BE_CAPREFR);
+	if (need & SHADER_HASREFRACTDEPTH)
+		BE_StampCapture(BE_CAPDEPTH);
+	be_capkeep.frame = 0;	//once: the next frame renders
+	{	//the water and glass shaders sample it where it saw each point (m_capturefix)
+		float vp[16], inv[16];
+		Matrix4_Multiply(shaderstate.projectionmatrix, r_refdef.m_view, vp);
+		if (Matrix4_Invert(vp, inv))
+			Matrix4_Multiply(be_capkeep.vp, inv, be_capfix);
+		else
+			memcpy(be_capfix, be_identity16, sizeof(be_capfix));
+		be_capfixframe = host_framecount;
+	}
+	return true;
+}
+
 static qboolean GLBE_GenerateBatchTextures(batch_t *batch, shader_t *bs)
 {
 	int oldfbo;
@@ -7280,6 +7330,10 @@ static qboolean GLBE_GenerateBatchTextures(batch_t *batch, shader_t *bs)
 	shader_t *cs = bs;				//the shader whose scale and $reflectentities decide them,
 	batch_t *cb = batch;			//and the batch whose meshes place them
 	qboolean viashare = false;
+	qboolean keepable = false;		//FTESurf Patch 1245: the top-level view's chosen plane, or a glass plane
+	plane_t keepplane = {{0}};
+	entity_t *keepent = NULL;
+	float keepvp[16] = {0};			//this view's view-projection, before any capture runs
 	if (r_refdef.recurse >= r_portalrecursion.ival || r_refdef.recurse == R_MAX_RECURSE)
 		return false;
 	//FTESurf Patch 864: no water capture inside a water capture.  r_portalrecursion 2
@@ -7353,10 +7407,20 @@ static qboolean GLBE_GenerateBatchTextures(batch_t *batch, shader_t *bs)
 				GLBE_CaptureLog(batch, chosenplane ? wv->chosen->shader : bs, "shared", chosenplane ? &wv->combined : &wv->other);
 				return true;
 			}
+			if (chosenplane && !r_refdef.recurse && r_capturehalfrate.ival && GLBE_CaptureKeep(&p, &r_worldentity, need & ~wv->helddone))
+			{
+				wv->helddone |= need;
+				GLBE_CaptureLog(batch, wv->chosen->shader, "kept", &wv->combined);
+				return true;
+			}
 			if (chosenplane)
 			{
 				cs = wv->chosen->shader;
 				cb = &wv->combined;
+				keepable = !r_refdef.recurse;
+				keepplane = p;
+				keepent = &r_worldentity;
+				Matrix4_Multiply(shaderstate.projectionmatrix, r_refdef.m_view, keepvp);
 			}
 			else
 			{
@@ -7372,6 +7436,23 @@ static qboolean GLBE_GenerateBatchTextures(batch_t *batch, shader_t *bs)
 	//anything else captured here overwrites those kinds of the level's targets (a portal's refraction too)
 	if (!viashare)
 		be_waterview[r_refdef.recurse].helddone &= ~(bs->flags & BE_WATERKINDS);
+	//FTESurf Patch 1245: one plane captured outside the water views (surf_eternity's func_reflective_glass)
+	if (!viashare && !r_refdef.recurse && r_capturehalfrate.ival && !(bs->flags & SHADER_HASPORTAL) && (bs->flags & BE_WATERKINDS))
+	{
+		plane_t gp;
+		if (GLR_BatchPlane(batch, &gp))
+		{
+			if (GLBE_CaptureKeep(&gp, batch->ent, bs->flags & BE_WATERKINDS))
+			{
+				GLBE_CaptureLog(batch, bs, "kept", batch);
+				return true;
+			}
+			keepable = true;
+			keepplane = gp;
+			keepent = batch->ent;
+			Matrix4_Multiply(shaderstate.projectionmatrix, r_refdef.m_view, keepvp);
+		}
+	}
 
 	oldbem = shaderstate.mode;
 	oldil = shaderstate.identitylighting;
@@ -7622,6 +7703,36 @@ static qboolean GLBE_GenerateBatchTextures(batch_t *batch, shader_t *bs)
 	}
 	BE_SelectMode(oldbem);
 	shaderstate.identitylighting = oldil;
+	if (!r_refdef.recurse && (cf & BE_WATERKINDS))
+	{	//FTESurf Patch 1245: what reached a level-0 target, as the branches above write them
+		unsigned int written = cf & BE_WATERKINDS;
+		if (!gl_config.ext_framebuffer_objects)
+			written &= ~SHADER_HASREFLECT;
+		if (!(r_refract_fboival || (cf & (SHADER_HASPORTAL|SHADER_HASREFRACTDEPTH))))
+			written &= ~SHADER_HASREFRACT;	//the screen copy writes no target
+		if (keepable && written)
+		{
+			if (be_capkeep.frame != host_framecount)
+			{
+				be_capkeep.kinds = 0;
+				be_capkeep.views = 0;
+			}
+			if (!be_capkeep.kinds)
+				be_capkeep.views++;
+			else if (!GLBE_WaterSamePlane(&keepplane, &be_capkeep.plane) || be_capkeep.pv != r_refdef.playerview || be_capkeep.ent != keepent)
+				be_capkeep.views++;	//a second plane, entity or view this frame: nothing is kept next frame
+			be_capkeep.frame = host_framecount;
+			be_capkeep.kinds |= written;
+			be_capkeep.plane = keepplane;
+			be_capkeep.ent = keepent;
+			be_capkeep.fbw = vid.fbpwidth;
+			be_capkeep.fbh = vid.fbpheight;
+			be_capkeep.pv = r_refdef.playerview;
+			memcpy(be_capkeep.vp, keepvp, sizeof(keepvp));
+		}
+		else if (written)
+			be_capkeep.frame = 0;	//another capture overwrote the level's targets
+	}
 	return true;
 }
 /*

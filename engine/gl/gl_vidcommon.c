@@ -1606,6 +1606,8 @@ static const char *glsl_hdrs[] =
 				"uniform mat4 m_invviewprojection;"
 				"uniform mat4 m_invmodelviewprojection;"
 				"uniform mat3 m_invmodelview;"
+				"uniform mat4 m_capturefix;\n"	//FTESurf Patch 1245
+				"#define FTE_CAPTUREFIX 1\n"
 
 				/*viewer properties*/
 				"uniform vec3 v_eyepos;"
