@@ -753,7 +753,7 @@ static struct charcache_s *Font_LoadGlyphData(font_t *f, CHARIDXTYPE charidx, FT
 		//FTESurf Patch 1236: r_font_gamma's coverage curve, once per glyph at bake time (nothing per frame).
 		static unsigned char gammalut[256];
 		static float gammafor = -1;
-		float g = bound(0.5f, r_font_gamma.value, 3.0f);
+		float g = (vid.flags & VID_SRGBAWARE)?1:bound(0.5f, r_font_gamma.value, 3.0f);	//blending in linear light already does it
 		if (gammafor != g)
 		{
 			int i;
@@ -1847,8 +1847,10 @@ qboolean Font_LoadKexFont(struct font_s *f, int fheight, const char *fontfilenam
 //script latn (else DFLT), default LangSys; lookup types 2 and 9->2; value 1's XAdvance. Lookups add in
 //LookupList order and each stops at its first subtable that applies (a format 2 one applies whenever
 //both classes are in range), as HarfBuzz does. Every read is bounds-checked; an array that cannot fit
-//the table is skipped, and more than KERN_MAXSUB subtables drops the face's kerning.
+//the table is skipped, and more than KERN_MAXSUB subtables or KERN_MAXWORK searches drops the face's
+//kerning (Roboto needs 40k, Bebas 33k; the cap keeps a crafted table to a fraction of a second).
 #define KERN_MAXSUB 1024
+#define KERN_MAXWORK (4*1024*1024)
 typedef struct
 {
 	const qbyte *t;
@@ -1948,7 +1950,7 @@ static void Font_LoadKerning(fontface_t *qface)
 	size_t sl, fl, ll, s, ls, f, lk, st, r, ps, recs;
 	size_t *sub;
 	unsigned short *sublookup;
-	unsigned int i, j, k, n, fn, ln, nsub = 0, nlook = 0, pairs = 0, a, b;
+	unsigned int i, j, k, n, fn, ln, nsub = 0, nlook = 0, pairs = 0, a, b, work = 0;
 	unsigned int fmt, vf1, vf2, c1, c2, c1n, c2n, lo, hi, mid;
 	size_t s1, s2, rs;
 	int ci, acc[KERN_COUNT];
@@ -1958,6 +1960,10 @@ static void Font_LoadKerning(fontface_t *qface)
 
 	if (!FT_IS_SFNT(face) || !FT_IS_SCALABLE(face) || !face->units_per_EM)
 		return;
+#ifndef FREETYPE_STATIC
+	if (!pFT_Load_Sfnt_Table)
+		return;
+#endif
 	if (pFT_Load_Sfnt_Table(face, tag, 0, NULL, &len) || len < 10 || len > 16*1024*1024)
 		return;
 	buf = BZ_Malloc(len);
@@ -2065,7 +2071,7 @@ static void Font_LoadKerning(fontface_t *qface)
 	for (i = 0; i < KERN_COUNT; i++)
 	{
 		j = pFT_Get_Char_Index(face, KERN_FIRST+i);
-		gid[i] = (j <= 0xffff && KERN_FIRST+i != 0xad)?j:0;	//the soft hyphen is default-ignorable: HarfBuzz never kerns it
+		gid[i] = (j <= 0xffff)?j:0;	//U+00AD too: HarfBuzz hides the soft hyphen, this engine draws it as a hyphen
 	}
 	kern = Z_Malloc(sizeof(*kern)*KERN_COUNT*KERN_COUNT);
 	for (a = 0; a < KERN_COUNT; a++)
@@ -2078,6 +2084,8 @@ static void Font_LoadKerning(fontface_t *qface)
 			if (!j || sublookup[j] != sublookup[j-1])
 				memset(done, 0, sizeof(done));
 			st = sub[j];
+			if (++work > KERN_MAXWORK)
+				goto toomuch;
 			ci = GPOS_Coverage(&g, st + GPOS_U16(&g, st+2), gid[a]);
 			if (ci < 0)
 				continue;
@@ -2096,6 +2104,7 @@ static void Font_LoadKerning(fontface_t *qface)
 				rs = 2+s1+s2;
 				if (!GPOS_Fits(&g, ps+2, n, rs))
 					continue;
+				work += KERN_COUNT;
 				for (b = 0; b < KERN_COUNT; b++)
 				{
 					if (done[b] || !gid[b])
@@ -2128,6 +2137,7 @@ static void Font_LoadKerning(fontface_t *qface)
 				c1 = GPOS_Class(&g, st + GPOS_U16(&g, st+8), gid[a]);
 				if (c1 >= c1n || !GPOS_Fits(&g, recs, (size_t)c1n*c2n, s1+s2))
 					continue;
+				work += KERN_COUNT;
 				for (b = 0; b < KERN_COUNT; b++)
 				{
 					if (done[b] || !gid[b])
@@ -2146,6 +2156,12 @@ static void Font_LoadKerning(fontface_t *qface)
 			if (kern[a*KERN_COUNT+b])
 				pairs++;
 		}
+	}
+	if (0)
+	{
+toomuch:
+		Con_DPrintf("%s: kerning table too costly, not used\n", qface->name);
+		pairs = 0;
 	}
 done:
 	if (pairs)
@@ -2276,7 +2292,6 @@ qboolean Font_LoadFreeTypeFont(struct font_s *f, int height, const char *fontfil
 			{(void**)&pFT_Init_FreeType, "FT_Init_FreeType"},
 			{(void**)&pFT_Done_Face, "FT_Done_Face"},
 			{(void**)&pFT_Error_String, "FT_Error_String"},
-			{(void**)&pFT_Load_Sfnt_Table, "FT_Load_Sfnt_Table"},
 			{NULL, NULL}
 		};
 		if (triedtoloadfreetype)
@@ -2295,6 +2310,7 @@ qboolean Font_LoadFreeTypeFont(struct font_s *f, int height, const char *fontfil
 			Con_DPrintf("Couldn't load freetype library.\n");
 			return false;
 		}
+		pFT_Load_Sfnt_Table = Sys_GetAddressForName(fontmodule, "FT_Load_Sfnt_Table");	//FTESurf Patch 1236: optional, kerning only
 #endif
 		error = pFT_Init_FreeType(&fontlib);
 		if (error)
