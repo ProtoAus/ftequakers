@@ -1,5 +1,48 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1267 — a map change's shader reload skips what it does not need; the after-frame reload is off (client exe)
+
+**Problem.** Lex (3 Nov), on the loading freezes left after Patch 1259: "do whatever you think you can do". Each map
+load ran two full shader reloads: CL_MakeActive's at activation (the map change's filesystem rescan) and Patch 34a's
+"post-first-frame water fixup" (r_shader_reload_afterframe), a hitch in play. Both re-read every live shader, and
+nothing releases a shader's uses when its model is purged, so every earlier map's materials stay live (1198 by a
+second map).
+
+**Measured first.** A probe build snapshotting each shader before and after each reload (flags, sort, passes'
+programs, bits, blend, gens, tcmods, first texture, base map):
+- the after-frame reload changed 0 of 272, 263 and 1248 shaders over three maps, and 0 of 194 on a first connect
+  onto surf_hourglass (water);
+- the activation reload changed only shaders parsed before the filesystem changed (the previous map's: 58, 52, 860).
+
+**Change.**
+- gl_shader.c: Shader_NeedReload(true) is a filesystem change and bumps shader_fsgen; Shader_Reset stamps each
+  parse with it, and the script branch of Shader_ParseShader marks a parse that read a script.
+- A reload asked for by the filesystem alone (no full request since the last reload) skips a shader stamped in the
+  current generation unless a script defined it then (the cache is rescanned only at the reload) or defines it
+  now, driver name (shadernamefmt) included.
+- Full requests: Shader_NeedReload(false) (shader cvars, the watervis permission), flushshaders, Shader_Init,
+  Vulkan's render-pass rebuild.
+- cl_main.c: r_shader_reload_afterframe defaults 0 (1 brings it back).
+
+**Verified.** Rig, a client joining a dedicated server from the menu onto surf_hourglass, then changelevel to
+surf_bikini_bottom and surf_frey_remake; same route on the installed patch-1264 exe (11994f33) and on 76e78e80:
+
+| map change | before (activation + after-frame) | after |
+|---|---|---|
+| first connect, hourglass | 242 + 227 ms | 248 ms (a first reload is full) |
+| bikini_bottom | 556 + 541 ms | 43 ms (1020 skipped) |
+| frey_remake | 149 + 134 ms | 85 ms (123 skipped; 1062 reparsed are bikini's) |
+
+- A check build that reparses every skipped shader and compares: 0 of 1020 and 0 of 123 changed.
+- Shots of the same viewpoints (hourglass water, bikini glass) differ from the old exe's only at the level two runs
+  of one build do.
+
+**Rejected.** Re-reading old shaders lazily at their next R_LoadShader lookup and skipping them all (frey 85 ->
+36 ms). Review found that shaders held by pointer (world surfaces, fonts, console, post-processing) would stay
+stale after a mid-map file change, and that a resort from inside a lookup could free the world EBO being built.
+
+**Left.** The previous maps' shaders are still re-read at every later map change (~80 ms by the third map): shader
+uses are never released at Mod_Purge.
 ## Patch 1264 — Source radiosity normal mapping on bumped brush faces (hl2 plugin + one r_surf.c line)
 
 **Problem.** Lex (3 Nov): bhop_ceaseless's walls have no bump mapping (save 34). vmt/lightmapped drew the
