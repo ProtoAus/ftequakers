@@ -1,5 +1,36 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1276 — the main view's water and glass reflections drawn multisampled (client exe)
+
+**Problem.** Lex (4 Nov), passing on a chatter: "would it be cheaper to still do the low res but msaa the
+reflection?" Reflection captures draw at r_refractreflect_scale (0.5) of the view, capped at r_watertargetsize:
+960x600 at Lex's 1920x1200, single-sampled, so reflected edges stair-step. Source's own is a fixed
+1024x1024 render target, without MSAA (baseclientrendertargets.cpp:14-22).
+
+**Change.** gl_backend.c: Patch 1260's scene-MSAA code takes a target (bemsaa_t): the scene's, and a second
+bound only while a recurse-0 reflection capture draws, resolved into tex_reflection before the pop.
+- A copy of the screen inside the capture resolves first (GLBE_SceneMSAA_ReadBegin picks the bound target),
+  and alpha-to-coverage applies there too.
+- The reflection target only grows (a smaller capture draws into its corner rather than rebuilding it), and
+  is freed the frame after it is turned off.
+- r_capturelog prints "reflect target WxH, N samples".
+- r_reflectmultisample (archived): -1 follows vid_multisample (the default), 0 none, N samples.
+
+**Verified.** Rig, a copy of Lex's Desktop 0.1.38 install and settings (vid_multisample 4, 1920x1200), r_budget:
+
+| view | GPU ms, off | 4x (default) | 8x | full-size capture, no MSAA |
+|---|---|---|---|---|
+| surf_eternity s4 | 1.68, 1.67 | 1.73, 1.73 | 1.82 | 1.72 |
+| surf_eternity s10 | 2.16, 2.15 | 2.19, 2.22 | 2.34 | 2.22 |
+| surf_boreas s10 | 1.38, 1.38 | 1.44, 1.44 | 1.45 | 1.51 |
+
+The frames are CPU-bound (4.8-5.1 ms), so fps did not move outside noise. Paused at eternity s10 (world
+region, left of the HUD): repeat shots of one setting identical; 4x changed 38,255 pixels by more than 2 levels
+(8,573 by more than 8), all on the river's reflection, where reflected arches and walls lose their steps; 8x
+changed 12,055 more; a full-size 1024x1024 capture changed as many as 4x but stays stepped. The ship exe
+a9b8a2ec repeats those counts and logs 960x600 at 0/4/8 samples and 1024x1024 at 0.
+
+**Left.** A refused first resolve shows one stale frame (under MSAA the capture's own FBO is not cleared).
 ## Patch 1253 — surfd: Momentum Beta boards collected; approval wipes followed only where Momentum's board shows them
 
 **Problem.** Lex (3 Nov), "yes please to all" on P1240's open items, the third of which was split
