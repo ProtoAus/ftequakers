@@ -450,6 +450,17 @@ enables, so the hub showed the clear colour where the sky should be.
 */
 cvar_t r_skyroom_fullbox = CVARD("r_skyroom_fullbox", "1", "FTESurf Patch 1192: inside a Source map's 3D sky, draw the whole 2D skybox behind the sky room, as Source does. 0: only where the sky room's own sky faces drew (surf_olivia's hub then shows no sky).");
 static qboolean r_skyroom_boxdrawn;	//this sky room view has drawn the whole box
+//FTESurf Patch 1237: the main view's 3D sky drawn smaller and stretched (gl_backend.c GLBE_DrawSkyroomScaled)
+//FTESurf Patch 1237: a Source map's 2D sky as Source's R_DrawSkyBox draws it, all six faces whole.
+//R_CalcSkyChainBounds clips every sky triangle on the CPU, in every view, to save a little sky fill
+//(surf_eternity save 4 with its glass reflection: ClipSkyPolygon and the bounds walk, 6% of the frame).
+cvar_t r_skybox_full = CVARD("r_skybox_full", "1", "FTESurf Patch 1237 (OpenGL renderer): on Source maps, draw the 2D skybox's six faces whole, as Source does, instead of clipping every sky polygon on the CPU to find the visible part of each. 0: clip, as before.");
+static qboolean r_skybox_fulldrawn;	//this submit's SKY sort has drawn the whole box
+void R_SkyboxSortBegin(void)	//GLBE_SubmitMeshes: at each submit and at its SKY sort, after any portal view
+{
+	r_skybox_fulldrawn = false;
+}
+cvar_t r_skyroom_scale = CVARFD("r_skyroom_scale", "1", CVAR_ARCHIVE, "FTESurf Patch 1237 (OpenGL renderer): draw the 3D sky (a Source map's sky room) at this fraction of the view's resolution, then stretch it behind the world. 1: full resolution. 0.5 at r_renderscale 2 draws the sky at your screen's own resolution, slightly softer: surf_demise 304 -> 342 fps. A sky that is cheap to draw gains nothing and the stretch costs a little (surf_garden about 3%).");
 static qboolean R_SkyroomFullBox(void)
 {
 	return r_skyroom_fullbox.ival && r_skyroomlevel >= 0 && r_refdef.recurse == r_skyroomlevel &&
@@ -869,6 +880,14 @@ qboolean R_DrawSkyChain (batch_t *batch)
 			if (!r_skyroom_boxdrawn)
 				GL_DrawSkyBoxFull(batch, skyboxtex, skyboxscale, NULL);
 			r_skyroom_boxdrawn = true;
+		}
+		else if (r_skybox_full.ival && qrenderer == QR_OPENGL && r_worldentity.model && r_worldentity.model->fromgame == fg_new &&
+			!cl.skyrotate && !(r_skyroomlevel >= 0 && r_refdef.recurse == r_skyroomlevel))
+		//GL only: only GLBE_SubmitMeshes resets the latch. The sky room keeps r_skyroom_fullbox's choice.
+		{	//Patch 1237: once a view, however many sky batches it has
+			if (!r_skybox_fulldrawn)
+				GL_DrawSkyBoxFull(batch, skyboxtex, skyboxscale, NULL);
+			r_skybox_fulldrawn = true;
 		}
 		else
 		{
@@ -1859,6 +1878,8 @@ void R_Sky_Register(void)
 	Cvar_Register (&r_skyboxname,			groupname);
 	Cvar_Register (&r_skybox_default,		groupname);	//FTESurf Patch 211
 	Cvar_Register (&r_skyroom_fullbox,		groupname);	//FTESurf Patch 1192
+	Cvar_Register (&r_skyroom_scale,		groupname);	//FTESurf Patch 1237
+	Cvar_Register (&r_skybox_full,			groupname);	//FTESurf Patch 1237
 	Cvar_Register (&r_skybox_orientation,	groupname);
 	Cvar_Register (&r_skybox_autorotate,	groupname);
 	Cvar_Register (&gl_skyboxdist,			groupname);
