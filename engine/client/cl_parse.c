@@ -1744,6 +1744,7 @@ static int CL_LoadModels(int stage, qboolean dontactuallyload)
 				skipstage();
 			else if (atstage())
 			{
+				SCR_SetLoadingFile(cl.model_name[i]);	//FTESurf Patch 1244: the step, for the loading screen
 #if 0
 				SCR_SetLoadingFile(cl.model_name[i]);
 #ifdef CSQC_DAT
@@ -1775,6 +1776,7 @@ static int CL_LoadModels(int stage, qboolean dontactuallyload)
 				skipstage();
 			else if (atstage())
 			{
+				SCR_SetLoadingFile(cl.model_name_vwep[i]);	//FTESurf Patch 1244: the step, for the loading screen
 #if 0
 				SCR_SetLoadingFile(cl.model_name_vwep[i]);
 #ifdef CSQC_DAT
@@ -1818,6 +1820,7 @@ static int CL_LoadModels(int stage, qboolean dontactuallyload)
 			skipstage();
 		else if (atstage())
 		{
+			SCR_SetLoadingFile(cl.model_csqcname[i]);	//FTESurf Patch 1244: the step, for the loading screen
 #if 0
 			SCR_SetLoadingFile(cl.model_csqcname[i]);
 #ifdef CSQC_DAT
@@ -1921,6 +1924,7 @@ static int CL_LoadSounds(int stage, qboolean dontactuallyload)
 
 		if (atstage())
 		{
+			SCR_SetLoadingFile(cl.sound_name[i]);	//FTESurf Patch 1244: the step, for the loading screen
 #if 0
 			SCR_SetLoadingFile(cl.sound_name[i]);
 #ifdef CSQC_DAT

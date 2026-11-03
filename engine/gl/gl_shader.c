@@ -1664,6 +1664,14 @@ static void Shader_PolygonOffset (parsestate_t *ps, const char **ptr)
 	shader->flags |= SHADER_POLYGONOFFSET;	//some backends might be lazy and only allow simple values.
 }
 
+//FTESurf Patch 1251: `depthpush N` moves the surface N depth-buffer steps away from the eye (negative:
+//toward it), with no slope term (polygonoffset's -0.05 factor pulls hard at grazing angles). The hl2
+//plugin pulls opaque WindowImposter fake skies by 2 so the shell mappers put behind them never wins.
+static void Shader_DepthPush (parsestate_t *ps, const char **ptr)
+{
+	ps->s->depthpush = Shader_ParseFloat(ps->s, ptr, 0);
+}
+
 static void Shader_EntityMergable (parsestate_t *ps, const char **ptr)
 {
 	shader_t *shader = ps->s;
@@ -3637,6 +3645,7 @@ static shaderkey_t shaderkeys[] =
 	{"entitymergable",		Shader_EntityMergable,		Q3},
 
 	//fte extensions
+	{"depthpush",			Shader_DepthPush,			"fte"},	//FTESurf Patch 1251
 	{"clutter",				Shader_ClutterParms,		"fte"},
 	{"deferredlight",		Shader_Deferredlight,		"fte"},	//(sort = prelight)
 //	{"lpp_light",			Shader_Deferredlight,		"fte"},	//(sort = prelight)
@@ -9326,12 +9335,12 @@ void Shader_ShaderPasses_f(void)
 		if (!s || !strstr(s->name, want))
 			continue;
 		shown++;
-		Con_Printf("^2%s^7  flags=0x%x%s%s  sort=%i  passes=%i  prog=%s\n",
+		Con_Printf("^2%s^7  flags=0x%x%s%s  sort=%i  passes=%i  prog=%s  depthpush=%g\n",
 			s->name, s->flags,
 			(s->flags & SHADER_HASLIGHTMAP)?" HASLIGHTMAP":" ^1noLIGHTMAP^7",
 			(s->flags & SHADER_HASDIFFUSE)?" HASDIFFUSE":"",
 			s->sort, s->numpasses,
-			(s->prog && s->prog->name)?s->prog->name:"<none>");
+			(s->prog && s->prog->name)?s->prog->name:"<none>", s->depthpush);
 		if (s->defaulttextures)
 			Con_Printf("    images: diffuse=%s lower=%s fullbright=%s\n",
 				s->defaulttextures->base?s->defaulttextures->base->ident:"<none>",

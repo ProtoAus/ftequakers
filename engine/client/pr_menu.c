@@ -3895,6 +3895,10 @@ qboolean MP_UsingGamecodeLoadingScreen(void)
 {
 	return menu_world.progs && mpfuncs.drawloading;
 }
+qboolean MP_Executing(void)
+{
+	return inmenuprogs > 0;
+}
 
 int MP_GetServerCategory(int index)
 {

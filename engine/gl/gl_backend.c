@@ -457,6 +457,11 @@ static void BE_PolyOffset(void)
 		extern int gldepthfunc;
 		po.unit += ((gldepthfunc == GL_LEQUAL) ? 1 : -1) * r_sky_forcedepth_push.value;
 	}
+	if (shaderstate.curshader->depthpush)
+	{	//FTESurf Patch 1251: the shader's `depthpush`, the same way round as P768's
+		extern int gldepthfunc;
+		po.unit += ((gldepthfunc == GL_LEQUAL) ? 1 : -1) * shaderstate.curshader->depthpush;
+	}
 
 #ifndef FORCESTATE
 	if (shaderstate.curpolyoffset.factor != po.factor || shaderstate.curpolyoffset.unit != po.unit)

@@ -519,6 +519,7 @@ qboolean MP_Toggle(int mode);
 void MP_RendererRestarted(void);
 void MP_Draw(void);
 qboolean MP_UsingGamecodeLoadingScreen(void);
+qboolean MP_Executing(void);	//FTESurf Patch 1244: the menu's VM is running
 void MP_RegisterCvarsAndCmds(void);
 int MP_BuiltinValid(const char *name, int num);
 qboolean MP_ConsoleCommand(const char *cmdtext);

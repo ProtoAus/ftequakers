@@ -2156,6 +2156,7 @@ void Mod_NowLoadExternal(model_t *loadmodel)
 			continue;
 
 		Mod_FinishTexture(loadmodel, tx, loadname, true);
+		SCR_LoadingPump();	//FTESurf Patch 1244: one texture at a time on the main thread
 	}
 #endif
 }
