@@ -1,5 +1,51 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1277 — shader permutations a run had to compile are compiled at the next load instead (client exe)
+
+**Problem.** Lex (4 Nov): "I would love if the game was stable and not randomly loading in shaders and assets
+or whatnot while you're surfing causing stutters". Replays of eight expensive maps (viewer passes, Lex's
+0.1.38 settings, a 1 ms sampler unwinding the main thread in any frame over 8 ms) found no file opens
+mid-run. The largest stalls were GLSL program permutations compiled at their first draw
+(BE_RenderMeshProgram -> Shader_LoadPermutation -> the driver's compiler): 3 to 11 per map the first time a
+session draws them, 0.2-1.3 ms each when NVIDIA's OpenGL cache holds them, 25-191 ms when it does not.
+That happens on the first play after an update changes the GLSL, and whenever the cache evicts them (this game's
+folder on the PC stayed at 560 MB through a day of new compiles: full, by the look of it). r_glsl_precache cannot help: it compiles every supported
+permutation, which is 1024 for vmt/water alone.
+
+**Change.** gl_shader.c, with one line each in gl_backend.c, renderer.c and cl_main.c.
+- Each permutation compiled lazily is remembered per program name in data/glslwarm.txt. That is the
+  gamedir's own loose file. Its header carries the permutation bit values, so another layout is ignored.
+- CL_MakeActive, after its shader reload and before the loading screen ends, walks the loaded shaders and
+  compiles their programs' remembered permutations (GLSLWarm_MapActive), within 2 s.
+- The file is written there and at shutdown only, in one checked write under a random temp name. The old
+  file steps aside to .bak while the new one is renamed in.
+- r_glsl_warm (archived, default 1); 0 neither records nor warms. OpenGL only.
+- Not warmed: a shader first registered mid-run, programs no shader owns (programfixedemu), and anything a
+  later reload deletes (r_shader_reload_afterframe 1, vid_restart).
+
+**Verified.** Rig, surf_boreas viewer pass, a copy of Lex's Desktop 0.1.38 install and settings. A test-only
+salt define (never shipped) made every compile cold:
+
+| arm (cold driver cache) | compiled mid-run | 0.1% low | 1% low |
+|---|---|---|---|
+| no list yet | 11, 237 ms | 62 fps | 209 fps |
+| list, r_glsl_warm 1 | 0 | 163 fps | 268 fps |
+| list, r_glsl_warm 0 | 11, 231 ms | 63 fps | 216 fps |
+
+- With the list, the load printed "27 remembered permutations compiled while loading, 558 ms" (cold).
+- The stamped exe b9fb1679 (git-8180-patch-1277-0-g58a4bf164), unsalted on the PC's real cache, learned the
+  same 27 and warmed them at the next load in 12 ms.
+- No temp or .bak file was left in any arm.
+- Four review rounds: the first saved inside Shader_DoReload, which runs every frame; FS_Rename returns true
+  on success, though common.h says 0; a loading-screen gate never ran for a local map from the menu (the
+  arm showed 0 warmed); the reader's byte cap was below what the writer could write.
+
+**Left.** A fresh install has no list, so its first play of each map still compiles mid-run; a seed list
+built from the census maps would cover it. Other stalls found, not changed here:
+- Lightmap rebuilds on surf_monolith (Surf_RenderDynamicLightmaps, up to ~85 ms).
+- The first view of a portal or water surface on boreas (GLBE_GenerateBatchTextures, ~30 ms).
+- Model lighting traces beside movers on surf_voyager (VBSP_WorldLightVisible, 8-13 ms).
+- Opening a replay (80-380 ms; not during play).
 ## Patch 1276 — the main view's water and glass reflections drawn multisampled (client exe)
 
 **Problem.** Lex (4 Nov), passing on a chatter: "would it be cheaper to still do the low res but msaa the
