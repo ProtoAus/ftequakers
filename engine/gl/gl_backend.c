@@ -183,6 +183,8 @@ static struct {
 		//GLBE_FBO_Update destroyed and re-created it, renderbuffer storage included, twice a frame.
 		fbostate_t fbo_refract[R_MAX_RECURSE][2];	//[0] depth texture, [1] depth renderbuffer
 		fbostate_t fbo_ripple[R_MAX_RECURSE];
+		fbostate_t fbo_skyroom;	//FTESurf Patch 1237: the main view's 3D sky at r_skyroom_scale
+		texid_t tex_skyroom;
 		fbostate_t fbo_lprepass;
 		texid_t tex_reflection[R_MAX_RECURSE];	/*basically a portal rendered to texture*/
 		texid_t tex_refraction[R_MAX_RECURSE];	/*the (culled) underwater view*/
@@ -1993,9 +1995,17 @@ void GenerateFogTexture(texid_t *tex, float density, float zscale)
 	Image_Upload(*tex, TF_RGBA32, fogdata, NULL, FOGS, FOGT, 1, IF_CLAMP|IF_NOMIPMAP);
 }
 
+//FTESurf Patch 1237: GLBE_DrawSkyroomScaled's multisample answer for one target; a glGet per frame syncs a
+//threaded driver, and a vid_restart can change the answer for the same id
+static int be_skysamplesfbo = -1, be_skysamples;
+static qboolean be_skyroombroken;	//its FBO came out incomplete: full size until the next vid_restart
+static GLenum be_skyroomifmt;	//tex_skyroom's internal format
 void GLBE_DestroyFBOs(void)
 {
 	size_t i;
+	be_skysamplesfbo = -1;
+	be_skyroombroken = false;
+	be_skyroomifmt = 0;
 	GLBE_FBO_Destroy(&shaderstate.fbo_lprepass);
 
 	for (i = 0; i < R_MAX_RECURSE; i++)
@@ -2029,6 +2039,12 @@ void GLBE_DestroyFBOs(void)
 			Image_DestroyTexture(shaderstate.tex_refractiondepth[i]);
 			shaderstate.tex_refractiondepth[i] = r_nulltex;
 		}
+	}
+	GLBE_FBO_Destroy(&shaderstate.fbo_skyroom);	//FTESurf Patch 1237
+	if (shaderstate.tex_skyroom)
+	{
+		Image_DestroyTexture(shaderstate.tex_skyroom);
+		shaderstate.tex_skyroom = r_nulltex;
 	}
 	if (shaderstate.temptexture)
 	{
@@ -7621,6 +7637,7 @@ static float *inst_data;
 static size_t inst_cap;					//floats
 static qboolean inst_broken;			//a program had no INSTANCED permutation: off until a restart
 static qboolean inst_broken_skel;		//FTESurf Patch 1047: the same for a skinned run, which costs only those
+static int inst_refusals;	//FTESurf Patch 1237: refusal lines printed this report (512 at most)
 static int inst_report = -1;			//host_framecount whose runs print (r_instancing 2)
 static void GLBE_InstanceReset(void)
 {	//the context, and so its objects, are new (GLBE_Init)
@@ -7656,6 +7673,35 @@ static qboolean GLBE_InstanceCandidate(const batch_t *b)
 {
 	return b->buildmeshes == R_GAlias_DrawBatch && b->ent && b->shader && !b->fog && GLBE_InstanceShader(b->shader) &&
 		!(b->ent->flags & (RF_DEPTHHACK|RF_XFLIP));
+}
+//FTESurf Patch 1237: r_instancing 2 names why each alias batch is refused (eternity save 4: 167 of 353 in its largest list)
+static const char *GLBE_InstanceRefusal(const batch_t *b, const char **progname)
+{
+	const shader_t *s = b->shader;
+	int passno;
+	*progname = "";
+	if (!b->ent || !s)
+		return "no entity or shader";
+	if (b->fog)
+		return "fog volume";
+	if (b->ent->flags & (RF_DEPTHHACK|RF_XFLIP))
+		return "depthhack or xflip";
+	if (s->remapto)
+		s = s->remapto;
+	if (s->flags & (SHADER_NODRAW|SHADER_SKY|SHADER_HASREFLECT|SHADER_HASREFRACT|SHADER_HASRIPPLEMAP|SHADER_HASPORTAL))
+		return "nodraw, sky or capture shader";
+	if (s->prog)
+	{
+		*progname = s->prog->name ? s->prog->name : "?";
+		return "program without INSTANCED";
+	}
+	for (passno = 0; passno < s->numpasses; passno += max(1, s->passes[passno].numMergedPasses))
+		if (!s->passes[passno].prog || !(s->passes[passno].prog->supportedpermutations & PERMUTATION_INSTANCED))
+		{
+			*progname = s->passes[passno].prog ? (s->passes[passno].prog->name ? s->passes[passno].prog->name : "?") : "fixed function";
+			return "pass program without INSTANCED";
+		}
+	return "no passes";
 }
 static qboolean GLBE_InstanceSame(const batch_t *a, const batch_t *b)
 {
@@ -7810,6 +7856,7 @@ static void GLBE_SubmitMeshesSortRange(batch_t *sortlist, batch_t *end)
 	if (r_instancing.ival == 2)
 	{	//one frame's report, every view of it
 		inst_report = host_framecount;
+		inst_refusals = 0;
 		Cvar_ForceSet(&r_instancing, "1");
 		Con_Printf("r_instancing: gates: cvar %i broken %i (skinned %i) mode %i (standard %i) DrawElementsInstanced %i TexBuffer %i fakeshadows %i lights %i\n",
 			r_instancing.ival, inst_broken, inst_broken_skel, shaderstate.mode, BEM_STANDARD, qglDrawElementsInstanced!=NULL, qglTexBuffer!=NULL, r_fakeshadows, Sh_AnyLightToDraw());
@@ -7824,8 +7871,12 @@ static void GLBE_SubmitMeshesSortRange(batch_t *sortlist, batch_t *end)
 			nalias++;
 			if (GLBE_InstanceCandidate(batch))
 				ncand++;
-			else if (nalias <= 3)
-				Con_Printf("r_instancing: not a candidate: %s prog %p supported %#x\n", batch->shader->name, (void*)batch->shader->prog, batch->shader->prog?batch->shader->prog->supportedpermutations:0);
+			else if (inst_refusals++ < 512)
+			{
+				const char *pn, *why = GLBE_InstanceRefusal(batch, &pn);
+				Con_Printf("r_instancing: not a candidate (%s %s): %s on %s\n", why, pn, batch->shader ? batch->shader->name : "?",
+					(batch->ent && batch->ent->model) ? batch->ent->model->name : "?");
+			}
 		}
 		if (noinst)
 			noinst--;
@@ -9508,13 +9559,17 @@ static void GLBE_SubmitNearest(batch_t *world, batch_t *dynamic)
 	GLBE_SubmitNearestSome(dynamic, GLBE_PickLate);
 }
 
+void R_SkyboxSortBegin(void);	//gl_warp.c, FTESurf Patch 1237
 void GLBE_SubmitMeshes (batch_t **worldbatches, int start, int stop)
 {
 	int i, prev;
 	int portaldepth = r_portalrecursion.ival;
 
+	R_SkyboxSortBegin();
 	for (i = start; i <= stop; i++)
 	{
+		if (i == SHADER_SORT_SKY)
+			R_SkyboxSortBegin();	//a portal view in the PORTAL sort drew its own box
 		if (i == SHADER_SORT_BLEND && r_blendsort.ival == 2)
 		{
 			GLBudget_Set(GPUB_TRANSPARENT);
@@ -10347,6 +10402,107 @@ void GLBE_DrawLightPrePass(void)
 }
 
 qboolean R_DrawSkyroom(shader_t *skyshader);
+/*
+FTESurf Patch 1237: the main view's 3D sky at r_skyroom_scale of its pixels, blitted (linear) into the
+view before the world draws over it. At r_renderscale 2 the sky room's GPU time is mostly fill: surf_demise
+save 33, 1.14 ms against 0.45 at render scale 1. Captures and nested views keep their own sizes; a
+multisampled target cannot take a single-sample blit, so it draws at full size.
+*/
+#ifndef GL_SAMPLE_BUFFERS
+#define GL_SAMPLE_BUFFERS 0x80A8
+#endif
+static qboolean GLBE_DrawSkyroomScaled(shader_t *skyshader)
+{
+#ifndef GL_STATIC
+	extern cvar_t r_skyroom_scale, r_fastsky, r_hdr_framebuffer;
+	float s = r_skyroom_scale.value;
+	vrect_t orect = r_refdef.vrect;
+	pxrect_t oprect = r_refdef.pxrect;
+	int w, h, oldfbo, dy;
+	GLenum ifmt;
+	qboolean drawn;
+
+	//R_DrawSkyroom's own refusals first, so a sky it will not draw costs no target; then what a blit
+	//cannot serve: anaglyph eyes (a blit ignores the colour mask), CSQC render targets (it writes every
+	//draw buffer), multisampled targets
+	if (!(s > 0 && s < 1) || r_refdef.recurse || !qglBlitFramebufferEXT || !gl_config.ext_framebuffer_objects ||
+		be_skyroombroken || r_refdef.colourmask || *r_refdef.rt_destcolour[0].texname || *r_refdef.rt_depth.texname ||
+		r_viewcluster == -1 || r_fastsky.value || !r_refdef.skyroom_enabled)
+		return R_DrawSkyroom(skyshader);
+	if (be_skysamplesfbo != shaderstate.fbo_current)
+	{
+		be_skysamples = 0;
+		qglGetIntegerv(GL_SAMPLE_BUFFERS, &be_skysamples);
+		be_skysamplesfbo = shaderstate.fbo_current;
+	}
+	if (be_skysamples)
+		return R_DrawSkyroom(skyshader);
+	w = max(1, oprect.width * s);
+	h = max(1, oprect.height * s);
+	//float where R_RenderScene renders the scene to a float target, or the sky bands before the gamma pass
+	if (((r_refdef.flags & RDF_SCENEGAMMA) || r_hdr_framebuffer.ival || (vid.flags & (VID_SRGBAWARE|VID_FP16))) && sh_config.texfmt[PTI_RGBA16F])
+		ifmt = GL_RGBA16F;
+	else
+		ifmt = GL_RGBA;
+
+	if (!shaderstate.tex_skyroom)
+	{
+		shaderstate.tex_skyroom = Image_CreateTexture("***tex_skyroom***", NULL, 0);
+		if (!shaderstate.tex_skyroom->num)
+			qglGenTextures(1, &shaderstate.tex_skyroom->num);
+	}
+	if (shaderstate.tex_skyroom->width != w || shaderstate.tex_skyroom->height != h || be_skyroomifmt != ifmt || !shaderstate.fbo_skyroom.fbo)
+	{
+		shaderstate.tex_skyroom->width = w;
+		shaderstate.tex_skyroom->height = h;
+		be_skyroomifmt = ifmt;
+		GL_MTBind(0, GL_TEXTURE_2D, shaderstate.tex_skyroom);
+		qglTexImage2D(GL_TEXTURE_2D, 0, ifmt, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+		qglTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+		qglTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+		qglTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+		qglTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+		oldfbo = GLBE_FBO_Update(&shaderstate.fbo_skyroom, FBO_RB_DEPTH, &shaderstate.tex_skyroom, 1, r_nulltex, w, h, 0);
+		if (qglCheckFramebufferStatusEXT(GL_FRAMEBUFFER_EXT) != GL_FRAMEBUFFER_COMPLETE_EXT)
+		{
+			be_skyroombroken = true;
+			GLBE_FBO_Pop(oldfbo);
+			return R_DrawSkyroom(skyshader);
+		}
+	}
+	else	//as last frame: a bind, not GLBE_FBO_Update's attachment and completeness pass
+		oldfbo = GLBE_FBO_Push(&shaderstate.fbo_skyroom);
+	r_refdef.vrect.x = r_refdef.vrect.y = 0;
+	r_refdef.vrect.width = max(1, orect.width * s);
+	r_refdef.vrect.height = max(1, orect.height * s);
+	r_refdef.pxrect.x = r_refdef.pxrect.y = 0;
+	r_refdef.pxrect.width = w;
+	r_refdef.pxrect.height = h;
+	r_refdef.pxrect.maxheight = shaderstate.fbo_skyroom.rb_size[1];
+	GL_ViewportUpdate();
+	GL_ForceDepthWritable();
+	qglClearColor(r_clearcolour.vec4[0], r_clearcolour.vec4[1], r_clearcolour.vec4[2], 1);	//what the view showed where the sky room draws nothing
+	qglClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+	drawn = R_DrawSkyroom(skyshader);
+
+	GLBE_FBO_Pop(oldfbo);
+	r_refdef.vrect = orect;
+	r_refdef.pxrect = oprect;
+	GL_ViewportUpdate();
+	if (drawn)
+	{	//dest in GL's bottom-up rows, as GL_ViewportUpdate places the view
+		dy = oprect.maxheight - (oprect.y + oprect.height);
+		qglBindFramebufferEXT(GL_READ_FRAMEBUFFER, shaderstate.fbo_skyroom.fbo);
+		qglBindFramebufferEXT(GL_DRAW_FRAMEBUFFER, oldfbo);
+		qglBlitFramebufferEXT(0, 0, w, h, oprect.x, dy, oprect.x + oprect.width, dy + oprect.height, GL_COLOR_BUFFER_BIT, GL_LINEAR);
+		qglBindFramebufferEXT(GL_FRAMEBUFFER_EXT, oldfbo);
+	}
+	return drawn;
+#else
+	return R_DrawSkyroom(skyshader);
+#endif
+}
 
 void GLBE_DrawWorld (batch_t **worldbatches)
 {
@@ -10433,7 +10589,7 @@ void GLBE_DrawWorld (batch_t **worldbatches)
 					seen++;
 				else if (need)
 					continue;
-				if (R_DrawSkyroom(b->shader))
+				if (GLBE_DrawSkyroomScaled(b->shader))
 				{
 					GL_CullFace(0);//make sure flipcull reversion takes effect
 					currententity = NULL;

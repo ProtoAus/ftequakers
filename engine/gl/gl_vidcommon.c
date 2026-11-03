@@ -90,6 +90,7 @@ void (APIENTRY *qglDeleteFramebuffersEXT)(GLsizei n, const GLuint* ids);
 void (APIENTRY *qglBindFramebufferEXT)(GLenum target, GLuint id);
 void (APIENTRY *qglDeleteRenderbuffersEXT)(GLsizei n, const GLuint* ids);
 void (APIENTRY *qglFramebufferTexture2DEXT)(GLenum target, GLenum attachmentPoint, GLenum textureTarget, GLuint textureId, GLint  level);
+void (APIENTRY *qglBlitFramebufferEXT)(GLint sx0, GLint sy0, GLint sx1, GLint sy1, GLint dx0, GLint dy0, GLint dx1, GLint dy1, GLbitfield mask, GLenum filter);	//FTESurf Patch 1237: gl3 / EXT_framebuffer_blit, may be NULL
 FTEPFNGLVERTEXATTRIBPOINTERPROC			qglVertexAttribPointer;
 FTEPFNGLVERTEXATTRIB4FPROC				qglVertexAttrib4f;
 FTEPFNGLGETVERTEXATTRIBIVPROC			qglGetVertexAttribiv;
@@ -725,6 +726,7 @@ static qboolean GL_CheckExtensions (void *(*getglfunction) (char *name))
 	qglBindRenderbufferEXT		= NULL;
 	qglRenderbufferStorageEXT	= NULL;
 	qglFramebufferTexture2DEXT	= NULL;
+	qglBlitFramebufferEXT		= NULL;
 
 #endif
 
@@ -1299,6 +1301,8 @@ static qboolean GL_CheckExtensions (void *(*getglfunction) (char *name))
 		qglFramebufferRenderbufferEXT	= (void *)getglext("glFramebufferRenderbuffer");
 		qglCheckFramebufferStatusEXT	= (void *)getglext("glCheckFramebufferStatus");
 		qglGetFramebufferAttachmentParameteriv	= (void *)getglext("glGetFramebufferAttachmentParameteriv");
+		if (gl_config.glversion >= 3 || GL_CheckExtension("GL_ARB_framebuffer_object"))
+			qglBlitFramebufferEXT	= (void *)getglext("glBlitFramebuffer");	//FTESurf Patch 1237: not in gles2
 
 		gl_config.arb_framebuffer_srgb = GL_CheckExtension("GL_ARB_framebuffer_sRGB");
 	}
@@ -1316,6 +1320,8 @@ static qboolean GL_CheckExtensions (void *(*getglfunction) (char *name))
 		qglFramebufferRenderbufferEXT	= (void *)getglext("glFramebufferRenderbufferEXT");
 		qglCheckFramebufferStatusEXT	= (void *)getglext("glCheckFramebufferStatusEXT");
 		qglGetFramebufferAttachmentParameteriv	= (void *)getglext("glGetFramebufferAttachmentParameterivEXT");
+		if (GL_CheckExtension("GL_EXT_framebuffer_blit"))
+			qglBlitFramebufferEXT	= (void *)getglext("glBlitFramebufferEXT");	//FTESurf Patch 1237
 	}
 /*	//I don't think we care about the differences, so this code should be safe, but I have no way to test that theory right now
 	else if (GL_CheckExtension("GL_OES_framebuffer_object"))
@@ -3325,6 +3331,7 @@ void GL_ForgetPointers(void)
 	qglBindRenderbufferEXT		= NULL;
 	qglRenderbufferStorageEXT	= NULL;
 	qglFramebufferTexture2DEXT	= NULL;
+	qglBlitFramebufferEXT		= NULL;
 #endif
 
 	//no GL_EXT_stencil_two_side
