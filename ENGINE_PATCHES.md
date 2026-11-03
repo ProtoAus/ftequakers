@@ -1,5 +1,18 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1265 — scr_loadingmap: the map a load is for (client exe)
+
+**Problem.** Lex (3 Nov): the loading screen should show the map's thumbnail and info. The menu had no
+reliable name for it: a hosted load sets svs.info's "map" near its end (holding the previous map until
+then), and a join reads the old serverinfo until the new one lands.
+
+**Change.** Read-only cvar scr_loadingmap: the base name SCR_ImageName is given (the server's map step,
+the client's model list), cleared with scr_loadingstep at LS_NONE. FTESurf's menu (P1265) draws the map
+list's card for it: thumbnail, name, "by <author> | MOM T | KSF T | stages".
+
+**Verified.** Rig, a dedicated server's changelevel to surf_eternity under a client that joined from the
+menu: scr_loadingmap read surf_eternity from the model list to the end of the load and "" after it; the
+card drew with the thumbnail and "by Hardex | MOM - | KSF T1".
 ## Patch 1262 — alpha-to-coverage: alpha-tested Source materials smoothed under MSAA
 
 **Problem.** Lex (3 Nov), after P1260: trees and fences stay jagged under MSAA. An alpha-tested material
