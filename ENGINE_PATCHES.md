@@ -1,5 +1,31 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1244 — the loading step for gamecode, and a gamecode loading screen redrawn through long loads (client exe)
+
+**Problem.** Lex (3 Nov): replace the loading screen (a centred line and a % box) with one that shows
+what the load is doing, step by step, and animates without hitching. FTE already hands the screen to
+menu QC (m_drawloading) but gave it no step, and redrew only between frames and at a few steps: a load
+is long stretches of one call (surf_eternity's world lightmap build alone is 917 ms).
+
+**Change.**
+- scr_loadingstep / scr_loadingseq: read-only cvars carrying SCR_SetLoadingFile's step (cleared when
+  no load is in progress); per-model and per-sound steps are named again (outside cl_parse.c's #if 0).
+- SCR_LoadingPump: redraws a gamecode loading screen at most 60 times a second, only where
+  GLSCR_UpdateScreen draws the loading screen alone (scr_disabled_for_loading, not past its 60 s
+  timeout or under non-game key focus), on the main thread, on GL, never re-entered or while the menu
+  VM runs, skipping the font and sRGB work a frame boundary wants. Called at each step, after each
+  work item in COM_WorkerPartialSync (which polls while such a screen is up), every 64 surfaces of
+  Surf_BuildModelLightmaps, per texture in Mod_NowLoadExternal and every 32 clusters of SV_CalcPHS.
+- An open console stays in front of an opaque gamecode loading screen.
+
+**Verified.** Rig, surf_eternity with FTESurf's P1244 menu and `ls_debug 1` (every redraw gap of 50
+ms+): the world lightmap build no longer stalls the screen (947 ms before). Still stalling: the hl2
+plugin's world load (about 1.5 s hosting; likely the same on a lobby join), the entity lump parse
+(~0.35 s) and the shader reload (~0.28 s, not safe to draw inside). Review 1 (one reviewer) found the
+console hidden behind the screen, pumps that could fall through to a full frame mid-function, font
+work running mid-load, and idle-only pumping; all fixed and re-run. Tag patch-1244 (5b7addc01) on
+patch-1237; exe git-8119-patch-1244-0-g5b7addc01 in both installs.
+
 ## Patch 1240 — surfd: the KSF crawl at 16 board requests and 24 demos a tick; never-fetched boards first
 
 **Problem.** Lex (3 Nov), on the grabber audit's open items: "please do what you can". About 46,000
