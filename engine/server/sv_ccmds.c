@@ -4720,14 +4720,14 @@ static void SV_DetTest_f (void)
 	           hfixtrace, fixwins, wrapwins);
 	Con_Printf("^5pm_dettest^7 fixmover %016llx\n", hfixmover);
 	/* Patch 1255.  "0 rides" compares nothing about mover 12 on this map; "0 differ" says its rides
-	   never met the rule; "touched" counts ticks where a trace hit or the mover stood, so 0 means
-	   free fall.  Every line reads unpinned settings (maxvelocity and other movevars, pm_trisoup_bevels,
+	   never met the rule; "touched" counts ticks where a trace recorded a hit (ClipEye's and the
+	   ground probe's count too) or the mover stood: 0 is free fall or stuck in solid.  Every line reads unpinned settings (maxvelocity and other movevars, pm_trisoup_bevels,
 	   pm_rotatedboxhulls, pm_portalcsg_scanall): compare only servers on the same config. */
 	Con_Printf("^5pm_dettest^7 picktrace %016llx  pick changed %i of %i traces, %i near %i prop contacts\n",
 	           dp.h, dp.changed, picksamples, picksamples - ntrace*4, dp.npts);
 	Con_Printf("^5pm_dettest^7 pickmover %016llx  touched %i of %i ticks\n", hpickmover, picktouch, ntick);
-	Con_Printf("^5pm_dettest^7 ride11 %016llx  ride12 %016llx  rides %i, %i differ, touched %i/%i ticks\n",
-	           hride[0], hride[1], rides, ridediff, ridetouch[0], ridetouch[1]);
+	Con_Printf("^5pm_dettest^7 ride11 %016llx  ride12 %016llx  rides %i, %i differ, touched %i (11) %i (12) of %i ticks\n",
+	           hride[0], hride[1], rides, ridediff, ridetouch[0], ridetouch[1], rides * PMDET_RIDETICKS);
 }
 
 /*
