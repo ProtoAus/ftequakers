@@ -4732,6 +4732,13 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 			Q_strlcatfz(script, &offset, sizeof(script),	"\tsurfaceparm nodraw\n");
 		else
 			Q_strlcatfz(script, &offset, sizeof(script),	"\tprogram \"vmt/imposter%s\"\n", progargs);
+		//FTESurf Patch 1251: opaque (1), it is pulled two depth steps toward the eye (engine `depthpush`).
+		//Mappers back fake skies with a shell (surf_fantasy: tools/toolsblack 16 units behind); from ~14k
+		//units that is about one step of the 24-bit depth buffer and the shell won in hatched stripes.
+		//Source draws the imposter after the world, blended, so it wins there. Only what lies within two
+		//steps in front of a fake sky is hidden: ~24 units at 14k (two pixels at 1920 across 100 degrees).
+		if (hl2_imposter && hl2_imposter->ival == 1)
+			Q_strlcatfz(script, &offset, sizeof(script),	"\tdepthpush -2\n");
 		//FTESurf Patch 1033: 2 = Source's state (windowimposter_dx90.cpp blends and writes no depth), ahead of
 		//other blended surfaces, so a fading func_lod outside bhop_ceaseless's fake sky is not cut by it. Opt-in:
 		//particles and blended faces behind an imposter then draw over it (Source sorts them back to front).
@@ -5294,33 +5301,6 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 	*/
 	if (st->animpass)
 		Con_DPrintf("[vmt] %s generated:\n%s", shortname, script);
-
-	//FTESurf Patch 1251: tools/toolsblack backs fake skies 16 units behind them (surf_fantasy's stage 4).
-	//Opaque beside an opaque WindowImposter it won the depth test in stripes from ~14k units, where 16
-	//units is about one depth step; `depthpush` (engine, P1251) moves it back so the face in front wins.
-	{
-		char nm[MAX_QPATH], *c;
-		Q_strlcpy(nm, shortname, sizeof(nm));
-		for (c = nm; *c; c++)
-			*c = (*c == '\\') ? '/' : ((*c >= 'A' && *c <= 'Z') ? *c + 32 : *c);
-		if ((c = strchr(nm, '#')))
-			*c = 0;
-		if (strlen(nm) > 4 && !strcmp(nm + strlen(nm) - 4, ".vmt"))
-			nm[strlen(nm) - 4] = 0;
-		c = strncmp(nm, "materials/", 10) ? nm : nm + 10;
-		if (!strcmp(c, "tools/toolsblack"))
-		{	//the script is a shader BODY (Shader_ReadShader: the opening brace is already consumed),
-			//so a shader-level keyword goes first, before any pass block opens
-			static const char push[] = "\tdepthpush 4\n";
-			size_t n = strlen(script);
-			if (n + sizeof(push) < sizeof(script))
-			{
-				memmove(script + (sizeof(push)-1), script, n + 1);
-				memcpy(script, push, sizeof(push)-1);
-				Con_DPrintf("[vmt] %s: depthpush 4 (P1251)\n", shortname);
-			}
-		}
-	}
 
 	LoadMaterialString(ps, script);
 

@@ -275,7 +275,7 @@ varying vec2 lm1, lm2, lm3;
 		diffuse_f.a *= vex_color.a;
 #endif
 
-		diffuse_f.rgb *= vec3(COLOR);
+		diffuse_f.rgb *= e_colourident.rgb * vec3(COLOR);	//FTESurf Patch 1250: a brush entity's rendercolor
 
 		/* deluxemapping isn't working on Source BSP yet, FIXME */
 		diffuse_f.rgb *= lightmap_fragment();
