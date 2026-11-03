@@ -243,6 +243,7 @@ cvar_t r_waterskyroom						= CVARD ("r_waterskyroom", "0", "Whether a water refl
 cvar_t r_waterviews						= CVARD ("r_waterviews", "1", "FTESurf Patch 879: how many water reflection/refraction captures a view renders.\n0: one for every water batch, as before.\n1: one pair, as Source (viewrender.cpp DrawWorldAndEntities: one fog volume per view), for the level water that most fills the screen on the eye's side of it (tops from above, undersides from in the water) and that the eye can see past the world; every level water facing the same way samples it, as every Source water material samples the same _rt_WaterReflection/_rt_WaterRefraction. Water facing the other way, sloped water and water on brush entities capture their own.\n2: one pair per plane: a plane's batches share a capture, other planes render their own.");
 cvar_t r_capturelog						= CVARD ("r_capturelog", "0", "FTESurf Patch 879: for this many top-level views (a frame's, or each eye/face/renderscene), print each view's water choice (and any plane rejected as hidden) and every water reflection/refraction capture and share (level, kind, shader, plane, the plane that placed it, meshes).");
 cvar_t r_nearestsort						= CVARD ("r_nearestsort", "1", "FTESurf Patch 878: how panes that refract the screen (Refract at hl2_refract 1) are ordered.\n1: the world's first, sharing the view's most recent copy of the screen (Patch 895; Source's brushes never copy), then models' back to front, each over a fresh copy, as Source draws its models.\n0: in the order they were submitted, world first, each over its own copy (the engine's order and copies before Patches 878 and 895; not a pre-878 picture, since the plugin's depth rule stays). Either way a model pane that Source draws opaque writes depth, and a world or brush pane does not. GL only.");
+cvar_t r_capturehalfrate				= CVARD ("r_capturehalfrate", "0", "FTESurf Patch 1245: the main view's water and glass reflection/refraction captures are reused for this many frames after each one rendered, turned with the camera in between (what they show is taken as distant: a turn lines up, a slide shows the frame-old view of nearby things). 0: every frame. 1: every second frame (surf_eternity's glass 201 -> 294 fps).");
 cvar_t r_waterforcereflectentities			= CVARD ("r_waterforcereflectentities", "0", "Source's cvar. 0: a water reflection draws entities and props only if its material says $reflectentities, as Source does -- most Source water reflects only the world and the 2D sky. 1: every water reflection draws them, as before Patch 868.");
 cvar_t r_drawviewmodel						= CVARF  ("r_drawviewmodel", "1", CVAR_ARCHIVE);
 cvar_t r_drawviewmodelinvis					= CVAR  ("r_drawviewmodelinvis", "0");
@@ -751,7 +752,9 @@ cvar_t gl_max_size							= CVARFD  ("gl_max_size", "8192", CVAR_RENDERERLATCH, "
 cvar_t gl_menutint_shader					= CVARD  ("gl_menutint_shader", "1", "Controls the use of GLSL to desaturate the background when drawing the menu, like quake's dos software renderer used to do before the ugly dithering of winquake.");
 
 //by setting to 64 or something, you can use this as a wallhack
-cvar_t gl_mindist							= CVARAD ("gl_mindist", "1", "r_nearclip",
+//FTESurf Patch 1257: 2, twice the depth precision of 1 and Source's 3D-sky value (main view: 7); review 1:
+//4 put the rewind chase camera's and replay eyes' near walls and ceilings through the near plane
+cvar_t gl_mindist							= CVARAD ("gl_mindist", "2", "r_nearclip",
 												"Distance to the near clip plane. Smaller values may damage depth precision, high values can potentialy be used to see through walls...");
 
 cvar_t gl_motionblur						= CVARF ("gl_motionblur", "0",
@@ -1546,6 +1549,7 @@ void Renderer_Init(void)
 	Cvar_Register (&r_waterskyroomcapture, GRAPHICALNICETIES);	//FTESurf Patch 1018
 	Cvar_Register (&r_watertargetsize, GRAPHICALNICETIES);
 	Cvar_Register (&r_waterforcereflectentities, GRAPHICALNICETIES);
+	Cvar_Register (&r_capturehalfrate, GRAPHICALNICETIES);	//FTESurf Patch 1245
 	Cvar_Register (&r_capturelog, GRAPHICALNICETIES);	//FTESurf Patch 879
 	Cvar_Register (&r_waterviews, GRAPHICALNICETIES);
 	Cvar_Register (&r_nearestsort, GRAPHICALNICETIES);

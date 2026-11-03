@@ -171,6 +171,18 @@ void main (void)
 	float fres;
 	float depth = 0.0;
 	stc = (1.0 + (tf.xy / tf.w)) * 0.5;
+#if defined(FTE_CAPTUREFIX) && !defined(SCREEN)
+	// FTESurf Patch 1245: a reused capture (r_capturehalfrate) saw this point at m_capturefix * tf
+	// (identity when fresh; a point behind that camera keeps this frame's). The ripple map is this frame's.
+	vec2 rstc = stc;
+	vec4 ctf = m_capturefix * tf;
+	if (ctf.w > 0.5)
+		stc = (1.0 + (ctf.xy / ctf.w)) * 0.5;
+	else
+		ctf = tf;
+#else
+	#define rstc stc
+#endif
 #ifdef ANIMBUMP
 	int bumplayers = textureSize(s_bumpanim, 0).z;
 	float bumplayer = bumplayers > 0 ? floor(mod(e_time * float(ANIMBUMP), float(bumplayers))) : 0.0;
@@ -206,7 +218,7 @@ void main (void)
 #endif
 
 #ifdef RIPPLEMAP
-	n += texture2D(s_ripplemap, stc).rgb*3.0;
+	n += texture2D(s_ripplemap, rstc).rgb*3.0;
 #endif
 	n = normalize(n);
 
@@ -217,6 +229,9 @@ void main (void)
 
 #ifdef DEPTH
 	float surfaceDepth = eyeDepth(gl_FragCoord.z);
+#if defined(FTE_CAPTUREFIX) && !defined(SCREEN)
+	surfaceDepth *= ctf.w / tf.w;	// along the capture's forward, as s_refractdepth is (exactly 1 when fresh)
+#endif
 	// P877: 1/depth is affine across the plane in screen space, so this gives the surface's depth
 	// on the refracted sample's own ray, the ray Source's alpha was computed for (water_ps2x_helper.h:161).
 	float invs = 1.0 / surfaceDepth;
