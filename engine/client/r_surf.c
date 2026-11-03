@@ -2485,10 +2485,12 @@ static void Surf_VoidVisReport(qboolean fired)
 }
 
 //most of this is a direct copy from gl
+unsigned int r_viewsetups;	//FTESurf Patch 1237: changes with every view set up (gl_warp.c's whole-box latch)
 void Surf_SetupFrame(void)
 {
 	vec3_t	pvsorg;
 	int viewcontents;
+	r_viewsetups++;
 
 	if (!cl.worldmodel || cl.worldmodel->loadstate!=MLS_LOADED)
 		r_refdef.flags |= RDF_NOWORLDMODEL;
