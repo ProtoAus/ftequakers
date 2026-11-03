@@ -3075,7 +3075,11 @@ static void GLSlang_ProgAutoFields(program_t *prog, struct programpermu_s *pp, c
 	pp->instuniform[0] = qglGetUniformLocationARB(pp->h.glsl.handle, "s_instdata");	//FTESurf Patch 831
 	pp->instuniform[1] = qglGetUniformLocationARB(pp->h.glsl.handle, "s_instvc");
 	pp->instuniform[2] = qglGetUniformLocationARB(pp->h.glsl.handle, "e_instbase");
-	pp->a2cuniform = qglGetUniformLocationARB(pp->h.glsl.handle, "e_alphacoverage");	//FTESurf Patch 1262
+	//FTESurf Patch 1262: only a program whose arguments ask for the alpha test (vmt/detail always does) turns its
+	//output alpha into coverage; a driver may report an unused uniform as active
+	pp->a2cuniform = (prog && prog->name && (strstr(prog->name, "#MASKLT") || !strncmp(prog->name, "vmt/detail", 10))) ?
+		qglGetUniformLocationARB(pp->h.glsl.handle, "e_alphacoverage") : -1;
+	pp->a2cval = -1;
 
 	for (i = 0; shader_unif_names[i].name; i++)
 	{

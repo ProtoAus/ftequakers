@@ -1161,6 +1161,7 @@ void GLBE_SetupVAO(vbo_t *vbo, unsigned int vaodynamic, unsigned int vaostatic)
 	}
 }
 
+static qboolean be_a2con;	//FTESurf Patch 1262: GL_SAMPLE_ALPHA_TO_COVERAGE as GLBE_AlphaCoverage last set it
 void GL_SelectProgram(GLuint program)
 {
 	if (shaderstate.currentprogram != program)
@@ -1171,6 +1172,11 @@ void GL_SelectProgram(GLuint program)
 }
 static void GL_DeSelectProgram(void)
 {
+	if (be_a2con)
+	{	//FTESurf Patch 1262: a fixed-function pass writes no coverage alpha
+		qglDisable(GL_SAMPLE_ALPHA_TO_COVERAGE);
+		be_a2con = false;
+	}
 	if (shaderstate.currentprogram != 0)
 	{
 		qglUseProgramObjectARB(0);
@@ -1561,9 +1567,6 @@ static qboolean GLBE_FlatRefractPane(void)
 //rt/$lastgameview (and its depth) when the view ends, and before a mid-scene copy of the screen, which
 //cannot read samples. A resolve needs identical formats, so the samples copy the targets' own.
 static qboolean be_scissoron;	//GL_SCISSOR_TEST as BE_Scissor last set it: blits are scissored
-static qboolean be_a2con;	//FTESurf Patch 1262: GL_SAMPLE_ALPHA_TO_COVERAGE as GLBE_AlphaCoverage last set it
-static const struct programpermu_s *be_a2cperm;	//and the permutation whose e_alphacoverage it last wrote, as be_a2cval
-static int be_a2cval = -1;
 #ifndef GL_STATIC
 extern cvar_t vid_multisample;
 static struct
@@ -2364,8 +2367,6 @@ void GLBE_Init(void)
 	memset(&be_msaa, 0, sizeof(be_msaa));	//FTESurf Patch 1260: a new context may take what the last refused
 #endif
 	be_a2con = false;	//FTESurf Patch 1262: a new context starts with A2C off
-	be_a2cperm = NULL;
-	be_a2cval = -1;
 
 	shaderstate.curentity = &r_worldentity;
 	be_maxpasses = gl_config_nofixedfunc?1:gl_mtexarbable;
@@ -5078,7 +5079,7 @@ static void BE_Program_Set_Attributes(const program_t *prog, struct programpermu
 //e_alphacoverage (only its alpha-test path reads it): the shader writes the test's edge as coverage instead of
 //discarding. Off for every other draw, so A2C never meets an opaque program's ordinary alpha.
 extern cvar_t r_alphacoverage;
-static void GLBE_AlphaCoverage(const struct programpermu_s *perm)
+static void GLBE_AlphaCoverage(struct programpermu_s *perm)
 {
 	qboolean want = false;
 #ifndef GL_STATIC
@@ -5086,11 +5087,10 @@ static void GLBE_AlphaCoverage(const struct programpermu_s *perm)
 	{
 		want = r_alphacoverage.ival && be_msaa.active && shaderstate.fbo_current == be_msaa.fbo &&
 			!(shaderstate.shaderbits & SBITS_BLEND_BITS) && !shaderstate.force2d;
-		if (be_a2cperm != perm || be_a2cval != want)
+		if (perm->a2cval != want)	//per permutation: a reload's new one starts at -1
 		{
 			qglUniform1fARB(perm->a2cuniform, want ? 1.0f : 0.0f);
-			be_a2cperm = perm;
-			be_a2cval = want;
+			perm->a2cval = want;
 		}
 	}
 #endif
