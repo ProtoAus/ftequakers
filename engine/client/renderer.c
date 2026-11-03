@@ -1333,6 +1333,7 @@ void Shader_NeedReload(qboolean rescanfs);	//nettest: declared in gl/shader.h, n
 static void R_FlushShaders_f(void)
 {
 	Shader_NeedReload(true);
+	Shader_NeedReload(false);	//FTESurf Patch 1267: every shader, as the command always meant
 }
 
 void Renderer_Init(void)

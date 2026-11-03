@@ -149,7 +149,7 @@ static cvar_t cl_verify_urischeme = CVARAFD("cl_verify_urischeme", "0", "cl_veri
 //one-shot reload after a map's first drawn frame costs a FULL re-parse of every
 //live shader (~633ms on a 197-material map) to correct a handful of water
 //shaders.  Default 1 keeps the water fix; 0 trades it for the load time.
-cvar_t r_shader_reload_afterframe = CVARD("r_shader_reload_afterframe", "1", "Re-finalise shaders once, after a map's first rendered frame. Fixes water that connects see-through, at the cost of a full shader re-parse per map load (see developer 1's `shaders NNNms` lines). 0 skips it.");
+cvar_t r_shader_reload_afterframe = CVARD("r_shader_reload_afterframe", "0", "Re-finalise shaders once, after a map's first rendered frame: a full shader re-parse per map load, a hitch in play (see developer 1's `shaders NNNms` lines). Once a fix for water that connected see-through; FTESurf Patch 1267 measured it changing no shader at all, so it is off. 1 brings it back.");
 cvar_t cl_fakeframes = CVARD("cl_fakeframes", "0", "Slow GPU? Want to see higher framerates get reported! Unleash the power of the lie to see much higher framerates! Many people said it couldn't be done, that the people wouldn't accept it, but to hell with the neighsayers and non-believers! WE WANT BIGGER NUMBERS AND WE'RE DAMN WELL GONNA GET THEM!... For best results, combine with an external tool like fluid motion frames...");
 
 
