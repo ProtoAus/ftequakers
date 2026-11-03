@@ -1,5 +1,33 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1264 — Source radiosity normal mapping on bumped brush faces (hl2 plugin + one r_surf.c line)
+
+**Problem.** Lex (3 Nov): bhop_ceaseless's walls have no bump mapping (save 34). vmt/lightmapped drew the
+flat lightmap and used the normal map only to bend the cubemap; Patch 268 D2's "RNM combine" was never
+written, so no bumped world face in any map showed its relief.
+
+**Change.** Plugin mod_vbsp.c VBSP_BuildRNM (hl2_rnm, default 1, map latch; needs r_deluxemapping), after
+VBSP_ProbeLightmapStride. For each face D1 tagged as bumped, on the 4-byte grid: each style's flat set
+becomes the mean of its three basis maps (what Source shows with a flat normal; VRAD's sum/flat runs
+1.8-3.8, median 2.1-3.1 over 1/4 and 2/5 maps), read in linear RGBE from the raw lump and converted by
+VBSP_ConvertLuxel. The model's deluxemap gets one tangent-space direction a luxel, sum(lum_i *
+bumpBasis[i]) (common_fxc.h:36, orthonormal); everything else is the zero vector, read as "no data". No
+deluxemap is built on a map with no such face. glsl/vmt/lightmapped.glsl (DELUXE+BUMP) turns the direction
+back into the three maps' shares and applies Source's weights (lightmappedgeneric_ps2_3_x.h:433-466): a
+normal map by its squared clamped basis dots, normalized; an $ssbump (mat_vmt.c #SSBUMP) by its channels.
+The factor is linear light on an sRGB-encoded lightmap, so it is applied as F^(1/2.2). $ssbump also sets
+the reflection normal (the basis-weighted sum). Engine r_surf.c Surf_BuildDeluxMap: the E5BGR9 style walk
+skips D1's extra sets, as Surf_BuildLightMap does. Per-direction colour is not kept (the mean colour is);
+vmt/transition and vmt/animated faces get the mean brightness but no relief.
+
+**Verified (rig; one review, its findings fixed and measured).** bhop_ceaseless save 34: wall crop 48.9 ->
+53.7 with the cracked-rock relief at 1:1 (hl2_rnm 0 matches the previous build); surf_sedona's sand shows
+its grain, its bumped ground ~12% darker (the basis mean). The 2/5 set order [flat][b0][b1][b2][extra]
+checked over 40 maps (the non-RGBE record last on 5180 faces, elsewhere on under 20). A map change from
+hl2_rnm 1 to 0 recompiles the permutation (sedona after ceaseless == a fresh hl2_rnm 0 run, diff 0.06).
+Tag patch-1264 = 4cdfaff24 on patch-1265; both installs run exe 11994f33 (git-8165-patch-1264-0-g4cdfaff24)
+and hl2 plugin c3c9062f.
+
 ## Patch 1265 — scr_loadingmap: the map a load is for (client exe)
 
 **Problem.** Lex (3 Nov): the loading screen should show the map's thumbnail and info. The menu had no
