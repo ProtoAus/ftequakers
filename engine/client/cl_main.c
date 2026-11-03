@@ -464,6 +464,10 @@ void CL_MakeActive(char *gamename)
 		fs_finds = 0;
 	}
 	P_LoadedCensus("CL_MakeActive begin");	//FTESurf Patch 272: the effect-set census at each step of activation.
+	{
+		void GLSLWarm_Save(void);
+		GLSLWarm_Save();	//FTESurf Patch 1277: written at the end of a load, never mid-run
+	}
 
 	cl.matchgametimestart = 0;
 	cls.state = ca_active;
