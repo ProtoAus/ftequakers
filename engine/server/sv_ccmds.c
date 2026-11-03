@@ -4149,7 +4149,9 @@ static void SV_MapFrom_f (void)
             and optimisation level.
     mover   PM_PlayerMove for real, world-only physents.  Everything above plus
             the arithmetic, so it is the answer that actually matters and the
-            other two localise it.
+            other two localise it.  Patch 1255 review: it never collided (skipent
+            0 skips the world physent), so `mover` and its four twins measure free
+            fall; pickmover and the rides are the colliding ones.
 
   THE NAMED SUSPECT, verified by reading before this was written.
   BIH_Sort_X/Y/Z (com_bih.c:2108-2133) end in `return am > bm;` -- 0 or 1,
@@ -4239,8 +4241,27 @@ static int SV_DetRange (unsigned int *s, int lo, int hi)
 extern int bih_sourceclip;	//Patch 492, com_bih.c
 extern int bih_phybrushes;	//Patch 764, com_bih.c
 extern int bih_phyfix;		//Patch 888, com_bih.c
+extern int bih_phypick;		//Patch 1248, com_bih.c
 extern int bih_probe_kind;	//Patch 764: which leaf decided the last trace (com_bih.h)
 extern model_t *bih_probe_model;
+
+static unsigned long long SV_DetHashTrace(unsigned long long h, const trace_t *tr)
+{
+	h = SV_DetHash(h, &tr->fraction,     sizeof(tr->fraction));
+	h = SV_DetHash(h, &tr->truefraction, sizeof(tr->truefraction));
+	h = SV_DetHash(h, tr->endpos,        sizeof(tr->endpos));
+	h = SV_DetHash(h, tr->plane.normal,  sizeof(tr->plane.normal));
+	h = SV_DetHash(h, &tr->plane.dist,   sizeof(tr->plane.dist));
+	h = SV_DetHash(h, &tr->contents,     sizeof(tr->contents));
+	h = SV_DetHash(h, &tr->allsolid,     sizeof(tr->allsolid));
+	h = SV_DetHash(h, &tr->startsolid,   sizeof(tr->startsolid));
+	/* WHICH surface won, not just where.  See the essay above. */
+	h = SV_DetHash(h, &tr->brush_id,     sizeof(tr->brush_id));
+	h = SV_DetHash(h, &tr->brush_face,   sizeof(tr->brush_face));
+	h = SV_DetHash(h, &tr->surface_id,   sizeof(tr->surface_id));
+	h = SV_DetHash(h, &tr->triangle_id,  sizeof(tr->triangle_id));
+	return h;
+}
 
 //pm_dettest's collision-tree sweep: ntrace random box traces, every field that
 //decides a move hashed.  A function since Patch 492's review, to run it twice.
@@ -4268,19 +4289,7 @@ static unsigned long long SV_DetTraceHash(model_t *world, unsigned int *seed, co
 			bih_probe_model && bih_probe_model->phyfixed)
 			(*fixwins)++;	//Patch 888: a hull whose old indices wrapped decided it
 
-		htrace = SV_DetHash(htrace, &tr.fraction,     sizeof(tr.fraction));
-		htrace = SV_DetHash(htrace, &tr.truefraction, sizeof(tr.truefraction));
-		htrace = SV_DetHash(htrace, tr.endpos,        sizeof(tr.endpos));
-		htrace = SV_DetHash(htrace, tr.plane.normal,  sizeof(tr.plane.normal));
-		htrace = SV_DetHash(htrace, &tr.plane.dist,   sizeof(tr.plane.dist));
-		htrace = SV_DetHash(htrace, &tr.contents,     sizeof(tr.contents));
-		htrace = SV_DetHash(htrace, &tr.allsolid,     sizeof(tr.allsolid));
-		htrace = SV_DetHash(htrace, &tr.startsolid,   sizeof(tr.startsolid));
-		/* WHICH surface won, not just where.  See the essay above. */
-		htrace = SV_DetHash(htrace, &tr.brush_id,     sizeof(tr.brush_id));
-		htrace = SV_DetHash(htrace, &tr.brush_face,   sizeof(tr.brush_face));
-		htrace = SV_DetHash(htrace, &tr.surface_id,   sizeof(tr.surface_id));
-		htrace = SV_DetHash(htrace, &tr.triangle_id,  sizeof(tr.triangle_id));
+		htrace = SV_DetHashTrace(htrace, &tr);
 
 		if (print && i < 4)
 			Con_Printf("  trace[%i] frac %08x  norm %08x %08x %08x  brush %i face %i surf %i\n",
@@ -4291,6 +4300,109 @@ static unsigned long long SV_DetTraceHash(model_t *world, unsigned int *seed, co
 			           tr.brush_id, tr.brush_face, tr.surface_id);
 	}
 	return htrace;
+}
+
+//Patch 1255: mover 12's plane pick (bih_phypick) against mover 9-11's on the same draws, hashing the
+//pick, and the prop contacts found on the way, which seed the rides.  Caller sets the other bih_ flags.
+#define PMDET_PROPPTS 64	//prop contacts kept, each sampled PMDET_NEAR times and ridden PMDET_RIDES ways
+#define PMDET_NEAR 1024
+#define PMDET_RIDES 4
+#define PMDET_RIDETICKS 132
+typedef struct { unsigned long long h; int changed, npts; vec3_t pts[PMDET_PROPPTS], ptn[PMDET_PROPPTS]; } detpick_t;
+
+//One sample both ways; true when a prop piece decided the pick.  FTESurf's hull (origin at the feet),
+//so a contact is a place the colliding mover can stand.
+static qboolean SV_DetPickOne(model_t *world, const vec3_t s1, const vec3_t e1, detpick_t *dp, trace_t *tr)
+{
+	vec3_t tmins = {-16,-16,0}, tmaxs = {16,16,62};
+	trace_t t0;
+	memset(&t0, 0, sizeof(t0));
+	memset(tr, 0, sizeof(*tr));
+	bih_phypick = 0;
+	world->funcs.NativeTrace(world, 0, PE_FRAMESTATE, NULL, s1, e1, tmins, tmaxs, false, MASK_PLAYERSOLID, &t0);
+	bih_phypick = 1;
+	bih_probe_kind = 0;
+	world->funcs.NativeTrace(world, 0, PE_FRAMESTATE, NULL, s1, e1, tmins, tmaxs, false, MASK_PLAYERSOLID, tr);
+	bih_phypick = 0;
+	dp->h = SV_DetHashTrace(dp->h, tr);
+	if (t0.fraction != tr->fraction || t0.plane.dist != tr->plane.dist || !VectorCompare(t0.plane.normal, tr->plane.normal))
+		dp->changed++;
+	return tr->fraction < 1 && !tr->startsolid && bih_probe_kind == 2 && bih_probe_model;
+}
+
+//ntrace draws in the world box, then PMDET_NEAR round each prop contact they found (integer
+//offsets of +-128 from the contact's floor, so inputs stay exact).  Returns the samples taken.
+static int SV_DetPickHash(model_t *world, unsigned int *seed, const int *lo, const int *hi, int ntrace, detpick_t *dp)
+{
+	vec3_t s1, e1;
+	trace_t tr;
+	int i, j, k, n = 0;
+	for (i = 0; i < ntrace; i++, n++)
+	{
+		for (k = 0; k < 3; k++)
+		{
+			s1[k] = (float)SV_DetRange(seed, lo[k], hi[k]);
+			e1[k] = (float)SV_DetRange(seed, lo[k], hi[k]);
+		}
+		if (SV_DetPickOne(world, s1, e1, dp, &tr) && dp->npts < PMDET_PROPPTS)
+		{
+			VectorCopy(tr.endpos, dp->pts[dp->npts]);
+			VectorCopy(tr.plane.normal, dp->ptn[dp->npts]);
+			dp->npts++;
+		}
+	}
+	for (i = 0; i < dp->npts; i++)
+		for (j = 0; j < PMDET_NEAR; j++, n++)
+		{
+			for (k = 0; k < 3; k++)
+			{
+				int c = (int)floor(dp->pts[i][k]);
+				s1[k] = (float)(c + SV_DetRange(seed, -128, 128));
+				e1[k] = (float)(c + SV_DetRange(seed, -128, 128));
+			}
+			SV_DetPickOne(world, s1, e1, dp, &tr);
+		}
+	return n;
+}
+
+//The mover's state and movevars as every pass pins them -- not the running config (the header).
+//Patch 1255 review: passes 0-4 left skipent 0, the world physent's info, so PM_PlayerTrace skipped the
+//world and they measure free fall (pmovetst.c:1168).  Kept for their recorded values; collide is what
+//pm_recsim sets up.
+static void SV_DetPinMover(model_t *world, int fixrampbugs, int sourceversion, qboolean collide)
+{
+	memset(&pmove, 0, sizeof(pmove));
+	pmove.numphysent = 1;
+	pmove.physents[0].model = world;
+	if (collide)
+	{
+		pmove.skipent = -1;
+		VectorSet(pmove.player_mins, -16, -16,  0);
+		VectorSet(pmove.player_maxs,  16,  16, 62);	//the mover takes standheight instead: pinned below
+	}
+	else
+	{
+		VectorSet(pmove.player_mins, -16, -16, -24);
+		VectorSet(pmove.player_maxs,  16,  16,  32);
+	}
+	pmove.pm_type = PM_NORMAL;
+	pmove.surfacefriction = 1.0f;
+
+	movevars.physicsmode   = PHYSMODE_SOURCE;
+	movevars.ticrate       = PMDET_TICRATE;	//Patch 325: the mover is a function of it
+	movevars.gravity       = 800;
+	movevars.friction      = 4;
+	movevars.stopspeed     = 75;
+	movevars.accelerate    = 5;
+	movevars.airaccelerate = 1000;
+	movevars.maxairspeed   = 30;
+	movevars.jumpvelocity  = 289.0f;
+	movevars.maxspeed      = 320;
+	movevars.entgravity    = 1;
+	movevars.fixrampbugs   = fixrampbugs;
+	movevars.sourceversion = sourceversion;
+	if (collide)
+		movevars.standheight = 62;	//the picks' hull, so a contact is a standing place
 }
 
 static void SV_DetTest_f (void)
@@ -4306,6 +4418,12 @@ static void SV_DetTest_f (void)
 	unsigned long long hfixtrace, hfixmover = SV_DETHASH_INIT;	//Patch 888
 	int                fixwins = 0, wrapwins = 0;	//Patch 888
 	int                propwins = 0;					//Patch 764
+	unsigned long long hpickmover = SV_DETHASH_INIT;	//Patch 1255
+	unsigned long long hride[2] = {SV_DETHASH_INIT, SV_DETHASH_INIT};
+	unsigned int       seedpick;
+	int                picksamples, rides = 0, ridediff = 0, picktouch = 0, ridetouch[2] = {0, 0};
+	unsigned int       seq0;
+	detpick_t          dp;
 	unsigned int       ticktotal = 0;				//FTESurf Patch 325
 	unsigned int seed = 20260914u, seedrerun, seedprop, seedfix;
 	int ntrace = atoi(Cmd_Argv(1));
@@ -4357,6 +4475,7 @@ static void SV_DetTest_f (void)
 	seedrerun = seed;
 	seedprop = seed;
 	seedfix = seed;
+	seedpick = seed;
 	htrace = SV_DetTraceHash(world, &seed, lo, hi, ntrace, true, NULL, NULL);
 	bih_sourceclip = 1;
 	hsrctrace = SV_DetTraceHash(world, &seedrerun, lo, hi, ntrace, false, NULL, NULL);
@@ -4364,6 +4483,10 @@ static void SV_DetTest_f (void)
 	hproptrace = SV_DetTraceHash(world, &seedprop, lo, hi, ntrace, false, &propwins, &wrapwins);
 	bih_phyfix = 1;	//Patch 888: `fixtrace`, mover 9's hulls
 	hfixtrace = SV_DetTraceHash(world, &seedfix, lo, hi, ntrace, false, NULL, &fixwins);
+	//Patch 1255: the pick only differs at near-ties on prop pieces, so many more draws, then near props
+	memset(&dp, 0, sizeof(dp));
+	dp.h = SV_DETHASH_INIT;
+	picksamples = SV_DetPickHash(world, &seedpick, lo, hi, ntrace*4, &dp);
 	bih_sourceclip = 0;
 	bih_phybrushes = 0;
 	bih_phyfix = 0;
@@ -4373,55 +4496,28 @@ static void SV_DetTest_f (void)
 	   recorded reading ran at; pass 1 is `srcmover`, the same walk at 2.
 	   Patch 764: both at mover 6, which they had run at live; pass 2 is
 	   `propmover`, the walk at 2 on mover 7.  Patch 813: pass 3 is `pinmover`,
-	   the same walk on mover 8.  Patch 888: pass 4 is `fixmover`, on mover 9. */
+	   the same walk on mover 8.  Patch 888: pass 4 is `fixmover`, on mover 9.
+	   Patch 1255: pass 5 is `pickmover`, on mover 12, and the only one that collides. */
 	seedrerun = seed;
-	for (pass = 0; pass < 5; pass++)
+	for (pass = 0; pass < 6; pass++)
 	{
 		movevars_t savemv = movevars;
 		playermove_t savepm = pmove;
-		unsigned long long *hm = (pass == 4) ? &hfixmover : (pass == 3) ? &hpinmover : (pass == 2) ? &hpropmover : pass ? &hsrcmover : &hmover;
+		unsigned long long *hm = (pass == 5) ? &hpickmover : (pass == 4) ? &hfixmover : (pass == 3) ? &hpinmover : (pass == 2) ? &hpropmover : pass ? &hsrcmover : &hmover;
 
 		if (pass)
 			seed = seedrerun;
 
-		memset(&pmove, 0, sizeof(pmove));
-		pmove.numphysent = 1;
-		pmove.physents[0].model = world;
-		VectorSet(pmove.player_mins, -16, -16, -24);
-		VectorSet(pmove.player_maxs,  16,  16,  32);
-		pmove.pm_type = PM_NORMAL;
-		pmove.surfacefriction = 1.0f;
-
-		/* Pinned, not the running config -- see the header. */
-		movevars.physicsmode   = PHYSMODE_SOURCE;
-		/* FTESurf Patch 325 -- A HARNESS HOLE THAT PREDATES THIS PATCH.
-		   ticrate was NOT pinned, and it is the one variable this whole command
-		   is a function of: the mover divides the command's msec by it to decide
-		   how many ticks to run.  So `mover` was only comparable between two
-		   machines that happened to share a pm_ticrate, and nothing printed it.
-		   On a surf server it is 0.015 and the Patch 322/323 readings were taken
-		   there, so pinning it here does not move those hashes -- it makes them
-		   mean what they were always reported to mean.  A box that had loaded
-		   cfg/mode_bhop.cfg (0.010) would previously have produced a different
-		   `mover` from identical source and read as a determinism failure. */
-		movevars.ticrate       = PMDET_TICRATE;
-		movevars.gravity       = 800;
-		movevars.friction      = 4;
-		movevars.stopspeed     = 75;
-		movevars.accelerate    = 5;
-		movevars.airaccelerate = 1000;
-		movevars.maxairspeed   = 30;
-		movevars.jumpvelocity  = 289.0f;
-		movevars.maxspeed      = 320;
-		movevars.entgravity    = 1;
-		movevars.fixrampbugs   = pass ? 2 : 1;
-		movevars.sourceversion = (pass == 4) ? 9 : (pass == 3) ? 8 : (pass == 2) ? 7 : 6;
+		SV_DetPinMover(world, pass ? 2 : 1, (pass == 5) ? 12 : (pass == 4) ? 9 : (pass == 3) ? 8 : (pass == 2) ? 7 : 6, pass == 5);
 
 		/* Start in the middle of the world's box, well above the floor, so the
 		   first few ticks are a fall onto whatever is there rather than a
-		   stuck-in-solid no-op. */
+		   stuck-in-solid no-op.  (Patch 1255: it is usually void, and passes 0-4
+		   collide with nothing anyway; pickmover starts on the first prop contact.) */
 		for (k = 0; k < 3; k++)
 			pmove.origin[k] = (float)((lo[k] + hi[k]) / 2);
+		if (pass == 5 && dp.npts)
+			VectorCopy(dp.pts[0], pmove.origin);
 
 		for (i = 0; i < ntick; i++)
 		{
@@ -4438,11 +4534,14 @@ static void SV_DetTest_f (void)
 			pmove.angles[2] = 0;
 			pmove.momlimit = pmove.momslide = 0;	pmove.momcool = 0;	//FTESurf Patch 882: no trigger state here
 
+			seq0 = bih_probe_seq;	//Patch 1255: bumped by every hit a trace records (com_bih.c)
 			PM_PlayerMove(1.0f);
 
 			*hm = SV_DetHash(*hm, pmove.origin,   sizeof(pmove.origin));
 			*hm = SV_DetHash(*hm, pmove.velocity, sizeof(pmove.velocity));
 			*hm = SV_DetHash(*hm, &pmove.onground, sizeof(pmove.onground));
+			if (pass == 5 && (bih_probe_seq != seq0 || pmove.onground))
+				picktouch++;	//Patch 1255: a trace hit something, so the walk's hash can mean something
 
 			/* FTESurf Patch 325.  Kept OUT of hmover deliberately: folding it in
 			   would change a hash whose measured values are recorded against
@@ -4465,6 +4564,60 @@ static void SV_DetTest_f (void)
 				           pmove.onground);
 		}
 
+		movevars = savemv;
+		pmove = savepm;
+	}
+
+	/* Patch 1255: from each prop contact, PMDET_RIDES hands-off rides at 2000 u/s along the face
+	   (a random integer direction with its normal part removed), on mover 11 and then 12.  Rides
+	   that differ are mover 12's rule at work; the hashes are what two machines compare. */
+	{
+		movevars_t savemv = movevars;
+		playermove_t savepm = pmove;
+		vec3_t dir[PMDET_PROPPTS * PMDET_RIDES];
+		unsigned long long last[PMDET_PROPPTS * PMDET_RIDES];
+		int c, r;
+		for (c = 0; c < dp.npts; c++)
+			for (r = 0; r < PMDET_RIDES; r++)
+			{
+				float *d = dir[c * PMDET_RIDES + r], dn;
+				for (k = 0; k < 3; k++)
+					d[k] = (float)SV_DetRange(&seedpick, -100, 100);
+				dn = DotProduct(d, dp.ptn[c]);	//once: VectorMA repeats its arguments per component
+				VectorMA(d, -dn, dp.ptn[c], d);
+				if (VectorNormalize(d) < 1)
+					VectorClear(d);	//along the normal: not ridden
+			}
+		for (pass = 0; pass < 2; pass++)
+			for (c = 0; c < dp.npts * PMDET_RIDES; c++)
+			{
+				unsigned long long hw = SV_DETHASH_INIT;
+				if (DotProduct(dir[c], dir[c]) == 0)
+					continue;
+				SV_DetPinMover(world, 2, pass ? 12 : 11, true);
+				VectorCopy(dp.pts[c / PMDET_RIDES], pmove.origin);
+				VectorScale(dir[c], 2000, pmove.velocity);
+				for (i = 0; i < PMDET_RIDETICKS; i++)
+				{
+					pmove.cmd.msec = 15;
+					pmove.momlimit = pmove.momslide = 0;	pmove.momcool = 0;
+					seq0 = bih_probe_seq;
+					PM_PlayerMove(1.0f);
+					hw = SV_DetHash(hw, pmove.origin,   sizeof(pmove.origin));
+					hw = SV_DetHash(hw, pmove.velocity, sizeof(pmove.velocity));
+					hw = SV_DetHash(hw, &pmove.onground, sizeof(pmove.onground));
+					if (bih_probe_seq != seq0 || pmove.onground)
+						ridetouch[pass]++;
+				}
+				hride[pass] = SV_DetHash(hride[pass], &hw, sizeof(hw));
+				if (!pass)
+				{
+					last[c] = hw;
+					rides++;
+				}
+				else if (last[c] != hw)
+					ridediff++;
+			}
 		movevars = savemv;
 		pmove = savepm;
 	}
@@ -4566,6 +4719,15 @@ static void SV_DetTest_f (void)
 	Con_Printf("^5pm_dettest^7 fixtrace %016llx  unwrapped hulls decided %i traces, wrapped %i at proptrace\n",
 	           hfixtrace, fixwins, wrapwins);
 	Con_Printf("^5pm_dettest^7 fixmover %016llx\n", hfixmover);
+	/* Patch 1255.  "0 rides" compares nothing about mover 12 on this map; "0 differ" says its rides
+	   never met the rule; "touched" counts ticks where a trace recorded a hit (ClipEye's and the
+	   ground probe's count too) or the mover stood: 0 is free fall or stuck in solid.  Every line reads unpinned settings (maxvelocity and other movevars, pm_trisoup_bevels,
+	   pm_rotatedboxhulls, pm_portalcsg_scanall): compare only servers on the same config. */
+	Con_Printf("^5pm_dettest^7 picktrace %016llx  pick changed %i of %i traces, %i near %i prop contacts\n",
+	           dp.h, dp.changed, picksamples, picksamples - ntrace*4, dp.npts);
+	Con_Printf("^5pm_dettest^7 pickmover %016llx  touched %i of %i ticks\n", hpickmover, picktouch, ntick);
+	Con_Printf("^5pm_dettest^7 ride11 %016llx  ride12 %016llx  rides %i, %i differ, touched %i (11) %i (12) of %i ticks\n",
+	           hride[0], hride[1], rides, ridediff, ridetouch[0], ridetouch[1], rides * PMDET_RIDETICKS);
 }
 
 /*

@@ -1,5 +1,47 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1257 — near clip 2 by default; viewmodels keep 1
+
+**Problem.** Fake-sky faces z-fought with the shell 16 units behind them from far away (P1251 pulled the
+imposter forward instead); the near plane at 1 spends most of a 24-bit depth buffer on the first units.
+
+**Change.** Tag patch-1257 = c355068d9 (on patch-1251 with patch-1260 merged). client/renderer.c:
+gl_mindist defaults to 2 (twice the precision of 1; Source's 3D-sky near plane, its main view uses 7).
+gl/gl_rmain.c: m_projection_view (RF_DEPTHHACK/RF_XFLIP, the viewmodels) is built with min(mindist, 1),
+Source's zNearViewmodel. Review 1 measured 4 first: the rewind chase camera (4 units off its trace hit)
+and replay eyes in low tunnels put walls through the near plane, the water-surface strip at the eye grew
+4x, and a sky-room clamp did nothing (R_DrawSkyroom reuses the outer projection matrices).
+
+**Verified.** Rig with the built exe: `gl_mindist` reads "2" (default); surf_fantasy save 10 and the
+knife, usp and scout viewmodels draw the same at 1 and 2. Review 2 at near 2: nothing regresses in live
+play or spectate; left in FTESurf BACKLOG: 48-49 unit ducked tunnels in replays, the water strip ~2x,
+an ultrawide rewind-chase corner, world within 2-3 units over a viewmodel, Vulkan/D3D viewmodels at 2.
+Installs: exe 20b1609f, fteqwsv64 79111b05 (.pre1257 79dbfde0 / 78c8006c), plugin unchanged 1ba21f71.
+
+## Patch 1255 — pm_dettest measures mover 12, and finds its mover passes never collided
+
+**Problem.** Nothing compared mover 12 (P1248) across machines: pm_dettest pinned movers 6-9 and never set
+bih_phypick.
+
+**Change.** server/sv_ccmds.c. picktrace: mover 12's plane pick against the older rule on the same
+draws (ntrace*4 in the world box, then 1024 round each of up to 64 prop contacts), hashed, with the
+count it changed. pickmover: the random walk at mover 12 from the first prop contact. ride11/ride12:
+four hands-off rides along the face from each contact, 132 ticks at 2000 u/s, on movers 11 and 12;
+"touched" counts ticks where bih_probe_seq moved or the mover stood. SV_DetHashTrace and SV_DetPinMover
+factored out; every older line is bit-identical.
+
+**Found by review 1, and a correction to every earlier reading.** SV_DetPinMover's memset leaves
+pmove.skipent 0, the world physent's info, so PM_PlayerTrace (pmovetst.c:1168) skips the world: mover,
+srcmover, propmover, pinmover and fixmover have measured free fall since Patch 322 ("srcmover equals
+mover" in Patch 492 was this, not a physics result). They are kept for their recorded values; pickmover
+and the rides set skipent -1 and the feet hull with standheight 62, as pm_recsim does.
+
+**Verified.** Windows x64 against the Pi arm64 build (p1255-pi, measurement only, not swapped): all 90
+lines equal over pigate's six maps once the Windows rig carries the game cfg and surf_boreas's zone-file
+sv_maxvelocity 5000 (the walks read unpinned settings). Rides differ between movers 11 and 12 on surf_axil
+(16 of 72) and surf_sedona (11 of 116), identically on both machines; pickmover touched 228-662 of 2048
+ticks on the four prop maps. Four review rounds.
+
 ## Patch 1260 — vid_multisample reaches the scene: a multisampled scene target, resolved before every copy
 
 **Problem.** Lex (3 Nov): "the engine doesn't support MSAA". vid_multisample only chose the window's pixel
