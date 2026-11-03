@@ -1664,9 +1664,9 @@ static void Shader_PolygonOffset (parsestate_t *ps, const char **ptr)
 	shader->flags |= SHADER_POLYGONOFFSET;	//some backends might be lazy and only allow simple values.
 }
 
-//FTESurf Patch 1251: `depthpush N` moves the surface N depth-buffer steps away from the eye, with no
-//slope term (polygonoffset's -0.05 factor pulls hard at grazing angles). For a backing face that
-//must never win against what sits just in front of it.
+//FTESurf Patch 1251: `depthpush N` moves the surface N depth-buffer steps away from the eye (negative:
+//toward it), with no slope term (polygonoffset's -0.05 factor pulls hard at grazing angles). The hl2
+//plugin pulls opaque WindowImposter fake skies by 2 so the shell mappers put behind them never wins.
 static void Shader_DepthPush (parsestate_t *ps, const char **ptr)
 {
 	ps->s->depthpush = Shader_ParseFloat(ps->s, ptr, 0);
