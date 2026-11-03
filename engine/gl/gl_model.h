@@ -407,7 +407,7 @@ typedef struct
 #define SURF_DRAWBACKGROUND	0x00040
 #define SURF_UNDERWATER		0x00080
 #define SURF_DONTWARP		0x00100
-#define SURF_LMPAD			0x00200	//FTESurf Patch 1275: its lightmap block has a one-texel copy of its edge around it (r_lightmap_bicubic)
+//#define SURF_BULLETEN		0x00200
 //FTESurf Patch 268 D1: per-LIGHTSTYLE lightmap stride, as EXTRA bytes per luxel beyond the
 //lightmap format's own (0 = the classic one luxel set per style).  Source's VRAD stores a
 //SURF_BUMPLIGHT face as 4 luxel sets per style (flat + 3 radiosity-normal-map basis maps:
@@ -420,6 +420,7 @@ typedef struct
 //by engine/client/r_surf.c.  Bits 9-13 were unused by every loader and both plugins.
 #define SURF_LMSTRIDE_SHIFT	9
 #define SURF_LMSTRIDE_MASK	0x03e00	//0..31 extra bytes per luxel per style
+#define SURF_LMPAD			0x04000	//FTESurf Patch 1275: its lightmap block has a one-texel copy of its edge around it (vmt bicubic)
 #define SURF_NOFLAT			0x08000
 #define SURF_DRAWALPHA		0x10000
 #define SURF_NODRAW			0x20000	//set on non-vertical halflife water submodel surfaces

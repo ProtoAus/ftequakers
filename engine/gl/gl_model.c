@@ -4620,8 +4620,8 @@ static void Mod_Batches_AllocLightmaps(model_t *mod)
 	int sty;
 
 	size_t samps = 0;
-	extern cvar_t r_lightmap_bicubic;
-	qboolean lmpad = r_lightmap_bicubic.ival && (mod->engineflags & MDLF_SOURCEBSP);	//FTESurf Patch 1275: the vmt shaders' bicubic reads a texel past the face
+	qboolean lmpad = !!(mod->engineflags & MDLF_SOURCEBSP);
+															//always, so r_lightmap_bicubic can switch without a reload
 
 	//small models don't have many surfaces, don't allocate a smegging huge lightmap that simply won't be used.
 	for (i=0, j=0; i<mod->nummodelsurfaces; i++)
@@ -4635,10 +4635,10 @@ static void Mod_Batches_AllocLightmaps(model_t *mod)
 			continue;	//surfaces with no lightmap should not count torwards anything.
 		samps += ((surf->extents[0]>>surf->lmshift)+1+2*lmpad) * ((surf->extents[1]>>surf->lmshift)+1+2*lmpad);
 
-		if (j < (surf->extents[0]>>surf->lmshift)+1)
-			j = (surf->extents[0]>>surf->lmshift)+1;
-		if (j < (surf->extents[1]>>surf->lmshift)+1)
-			j = (surf->extents[1]>>surf->lmshift)+1;
+		if (j < (surf->extents[0]>>surf->lmshift)+1+2*lmpad)
+			j = (surf->extents[0]>>surf->lmshift)+1+2*lmpad;
+		if (j < (surf->extents[1]>>surf->lmshift)+1+2*lmpad)
+			j = (surf->extents[1]>>surf->lmshift)+1+2*lmpad;
 	}
 	samps /= 4;
 	samps = sqrt(samps);
@@ -4739,9 +4739,9 @@ static void Mod_Batches_AllocLightmaps(model_t *mod)
 	}
 
 	Mod_LightmapAllocDone(&lmallocator, mod);
-	if (mod->engineflags & MDLF_SOURCEBSP)	//FTESurf Patch 1275
+	if (lmpad && !mod->submodelof)	//FTESurf Patch 1275
 		Con_DPrintf("%s: %i lightmap pages of %ix%i, blocks %s\n", mod->name, mod->lightmaps.count,
-			mod->lightmaps.width, mod->lightmaps.height, lmpad ? "padded for r_lightmap_bicubic" : "unpadded");
+			mod->lightmaps.width, mod->lightmaps.height, "padded for bicubic sampling");
 }
 #endif
 

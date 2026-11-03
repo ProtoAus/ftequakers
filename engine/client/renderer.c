@@ -301,7 +301,13 @@ cvar_t r_fullbright							= CVARFD ("r_fullbright", "0",
 cvar_t r_fullbrightSkins					= CVARFD	("r_fullbrightSkins", "0.8", /*don't default to 1, as it looks a little ugly (too bright), but don't default to 0 either because then you're handicapped in the dark*/
 												CVAR_SEMICHEAT|CVAR_SHADERSYSTEM, "Force the use of fullbright skins on other players. No more hiding in the dark.");
 cvar_t r_lightmap_saturation				= CVAR	("r_lightmap_saturation", "1");
-cvar_t r_lightmap_bicubic				= CVARFD ("r_lightmap_bicubic", "1", CVAR_ARCHIVE|CVAR_MAPLATCH|CVAR_SHADERSYSTEM, "FTESurf Patch 1275: Source maps' lightmaps filtered bicubically (as HL2's 20th-anniversary update does): smoother shadow and light edges than bilinear on coarse lightmaps. Applies at the next map load. 0: bilinear.");
+static void QDECL R_LightmapBicubic_Changed(struct cvar_s *var, char *oldvalue)
+{	//FTESurf Patch 1275: the shaders read it as a preprocessor define, which must be an integer
+	const char *v = var->ival ? "1" : "0";
+	if (strcmp(var->string, v))
+		Cvar_ForceSet(var, v);
+}
+cvar_t r_lightmap_bicubic				= CVARFCD ("r_lightmap_bicubic", "1", CVAR_ARCHIVE|CVAR_SHADERSYSTEM, R_LightmapBicubic_Changed, "FTESurf Patch 1275: Source maps' lightmaps filtered bicubically (as HL2's 20th-anniversary update does): smoother shadow and light edges than bilinear on coarse lightmaps. 0: bilinear.");
 cvar_t r_lightstylesmooth					= CVARF	("r_lightstylesmooth", "0", CVAR_ARCHIVE);
 cvar_t r_lightstylesmooth_limit				= CVAR	("r_lightstylesmooth_limit", "2");
 cvar_t r_lightstylespeed					= CVAR	("r_lightstylespeed", "10");

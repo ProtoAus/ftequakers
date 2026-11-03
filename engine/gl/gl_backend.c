@@ -5107,6 +5107,7 @@ static void BE_Program_Set_Attributes(const program_t *prog, struct programpermu
 				if (lmi < numlightmaps && lightmap[lmi]->width > 0 && lightmap[lmi]->height > 0)
 					Vector4Set(sz, lightmap[lmi]->width, lightmap[lmi]->height, 1.0f/lightmap[lmi]->width, 1.0f/lightmap[lmi]->height);
 				qglUniform4fvARB(ph, 1, sz);
+				shaderstate.lastuniform = 0;	//per batch: the next batch of this entity and program may be on another page
 			}
 			break;
 
