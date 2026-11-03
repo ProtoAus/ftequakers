@@ -27,6 +27,13 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include "shader.h"
 #include "gl_draw.h"
 #include "fs.h"
+#define P1259PROF	//PROBE BRANCH ONLY: samples the main thread while the loading screen is stalled
+#ifdef P1259PROF
+#include "winquake.h"
+static void Prof_Init(void);
+static void Prof_Dump(void);
+static char prof_step[48];
+#endif
 
 //name of the current backdrop for the loading screen
 char levelshotname[MAX_QPATH];
@@ -3330,6 +3337,9 @@ void SCR_SetLoadingStage(int stage)
 		loadingfile = NULL;
 		Cvar_ForceSet(&scr_loadingstep, "");	//FTESurf Patch 1244: no load in progress
 		scr_disabled_for_loading = scr_drawloading = false;
+#ifdef P1259PROF
+		Prof_Dump();
+#endif
 		break;
 	case LS_CONNECTION:
 		SCR_SetLoadingFile("waiting for connection...");
@@ -3401,6 +3411,162 @@ void SCR_LoadTimesEnd(void)
 qboolean scr_loadingdraw;
 qboolean scr_loadingpumping;	//GLSCR_UpdateScreen skips the font and sRGB work for a pump's update
 double scr_loadingswap;		//the loading branch's last swap, the pump's or a frame's
+
+#ifdef P1259PROF
+//While the loading screen has not been swapped for 100 ms, a thread suspends the main thread every
+//2 ms and unwinds its stack from the modules' own .pdata (no loader lock), then resumes it.
+//Appended to <cwd>/p1259prof.txt at the end of each load.
+#define PROF_MAX 20000
+#define PROF_DEPTH 28
+static struct { float t, gap; char step[48]; int n; DWORD64 pc[PROF_DEPTH]; } *prof_s;
+static volatile LONG prof_n;
+static HANDLE prof_main;
+static DWORD64 prof_lo, prof_hi;
+static double prof_t0;
+static char prof_step[48];
+static PRUNTIME_FUNCTION Prof_Lookup(DWORD64 pc, DWORD64 *base)
+{
+	MEMORY_BASIC_INFORMATION mbi;
+	IMAGE_DOS_HEADER *dos;
+	IMAGE_NT_HEADERS64 *nt;
+	IMAGE_DATA_DIRECTORY *dd;
+	RUNTIME_FUNCTION *rf;
+	DWORD rva, lo, hi, mid;
+	BYTE *b;
+	if (!VirtualQuery((void*)pc, &mbi, sizeof(mbi)) || mbi.Type != MEM_IMAGE)
+		return NULL;
+	b = mbi.AllocationBase;
+	dos = (void*)b;
+	if (dos->e_magic != IMAGE_DOS_SIGNATURE)
+		return NULL;
+	nt = (void*)(b + dos->e_lfanew);
+	if (nt->Signature != IMAGE_NT_SIGNATURE || nt->OptionalHeader.Magic != IMAGE_NT_OPTIONAL_HDR64_MAGIC)
+		return NULL;
+	dd = &nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXCEPTION];
+	if (!dd->VirtualAddress || !dd->Size)
+		return NULL;
+	rf = (void*)(b + dd->VirtualAddress);
+	rva = (DWORD)(pc - (DWORD64)b);
+	lo = 0;
+	hi = dd->Size / sizeof(*rf);
+	while (lo < hi)
+	{
+		mid = (lo + hi) / 2;
+		if (rva < rf[mid].BeginAddress)
+			hi = mid;
+		else if (rva >= rf[mid].EndAddress)
+			lo = mid + 1;
+		else
+		{
+			*base = (DWORD64)b;
+			return &rf[mid];
+		}
+	}
+	return NULL;
+}
+static DWORD WINAPI Prof_Thread(LPVOID arg)
+{
+	CONTEXT ctx;
+	for (;;)
+	{
+		double now;
+		LONG i;
+		int d;
+		Sleep(2);
+		now = Sys_DoubleTime();
+		if (!scr_disabled_for_loading || !scr_loadingswap || now - scr_loadingswap < 0.1 || now - scr_disabled_time > 60)
+			continue;
+		i = prof_n;
+		if (i >= PROF_MAX)
+			continue;
+		memset(&ctx, 0, sizeof(ctx));
+		ctx.ContextFlags = CONTEXT_FULL;
+		if (SuspendThread(prof_main) == (DWORD)-1)
+			continue;
+		if (GetThreadContext(prof_main, &ctx))
+		{
+			for (d = 0; d < PROF_DEPTH && ctx.Rip; )
+			{
+				DWORD64 base;
+				PRUNTIME_FUNCTION f;
+				prof_s[i].pc[d++] = ctx.Rip;
+				if (ctx.Rsp < prof_lo || ctx.Rsp + 8 > prof_hi)
+					break;
+				f = Prof_Lookup(ctx.Rip, &base);
+				if (!f)
+				{	//a leaf: the return address is on top
+					ctx.Rip = *(DWORD64*)ctx.Rsp;
+					ctx.Rsp += 8;
+				}
+				else
+				{
+					PVOID hd;
+					DWORD64 ef;
+					RtlVirtualUnwind(UNW_FLAG_NHANDLER, base, ctx.Rip, f, &ctx, &hd, &ef, NULL);
+				}
+			}
+			prof_s[i].n = d;
+			prof_s[i].t = (now - prof_t0) * 1000;
+			prof_s[i].gap = (now - scr_loadingswap) * 1000;
+			memcpy(prof_s[i].step, prof_step, sizeof(prof_step));
+			prof_n = i + 1;
+		}
+		ResumeThread(prof_main);
+	}
+	return 0;
+}
+static void Prof_Init(void)
+{
+	MEMORY_BASIC_INFORMATION mbi;
+	NT_TIB *tib = (NT_TIB*)NtCurrentTeb();
+	if (prof_main)
+		return;
+	if (!DuplicateHandle(GetCurrentProcess(), GetCurrentThread(), GetCurrentProcess(), &prof_main,
+			THREAD_SUSPEND_RESUME|THREAD_GET_CONTEXT|THREAD_QUERY_INFORMATION, FALSE, 0))
+		return;
+	VirtualQuery(&mbi, &mbi, sizeof(mbi));
+	prof_lo = (DWORD64)mbi.AllocationBase;
+	prof_hi = (DWORD64)tib->StackBase;
+	prof_s = calloc(PROF_MAX, sizeof(*prof_s));
+	prof_t0 = Sys_DoubleTime();
+	CreateThread(NULL, 0, Prof_Thread, NULL, 0, NULL);
+	Con_Printf("p1259prof: sampling stalls over 100 ms\n");
+}
+static void Prof_Dump(void)
+{
+	FILE *f;
+	LONG i, n = prof_n;
+	int d;
+	if (!n)
+		return;
+	f = fopen("p1259prof.txt", "a");
+	if (f)
+	{
+		fprintf(f, "# load ended at %.0f ms; %ld samples\n", (Sys_DoubleTime() - prof_t0) * 1000, n);
+		for (i = 0; i < n; i++)
+		{
+			fprintf(f, "S %.0f %.0f %s |", prof_s[i].t, prof_s[i].gap, prof_s[i].step);
+			for (d = 0; d < prof_s[i].n; d++)
+			{
+				MEMORY_BASIC_INFORMATION mbi;
+				char name[MAX_PATH], *b;
+				DWORD64 pc = prof_s[i].pc[d];
+				if (VirtualQuery((void*)pc, &mbi, sizeof(mbi)) && mbi.Type == MEM_IMAGE && GetModuleFileNameA(mbi.AllocationBase, name, sizeof(name)))
+				{
+					b = strrchr(name, '\\');
+					fprintf(f, " %s+%llx", b ? b + 1 : name, (unsigned long long)(pc - (DWORD64)mbi.AllocationBase));
+				}
+				else
+					fprintf(f, " ?%llx", (unsigned long long)pc);
+			}
+			fputc('\n', f);
+		}
+		fclose(f);
+		Con_Printf("p1259prof: %ld samples written\n", n);
+	}
+	prof_n = 0;
+}
+#endif
 qboolean SCR_LoadingPumpWanted(void)
 {
 #ifdef MENU_DAT
@@ -3447,6 +3613,9 @@ void SCR_SetLoadingFile(char *str)
 	strcpy(loadingfile, str);
 	Cvar_ForceSet(&scr_loadingstep, str);	//FTESurf Patch 1244
 	Cvar_ForceSet(&scr_loadingseq, va("%i", ++seq));
+#ifdef P1259PROF
+	Q_strncpyz(prof_step, str, sizeof(prof_step));
+#endif
 
 	if (scr_loadingrefresh.ival)
 	{
@@ -3709,6 +3878,9 @@ void SCR_BeginLoadingPlaque (void)
 		scr_drawloading = false;
 		scr_disabled_for_loading = true;
 		r_refdef.warndraw = oldwarndraw;
+#ifdef P1259PROF
+		Prof_Init();
+#endif
 	}
 
 	scr_disabled_time = Sys_DoubleTime();	//realtime tends to change... Hmmm....
@@ -3784,6 +3956,9 @@ void SCR_ImageName (const char *mapname)
 
 	scr_disabled_time = Sys_DoubleTime();	//realtime tends to change... Hmmm....
 	scr_disabled_for_loading = true;
+#ifdef P1259PROF
+	Prof_Init();
+#endif
 }
 
 
