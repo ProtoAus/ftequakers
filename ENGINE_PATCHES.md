@@ -1,5 +1,28 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1253 — surfd: Momentum Beta boards collected; approval wipes followed only where Momentum's board shows them
+
+**Problem.** Lex (3 Nov), "yes please to all" on P1240's open items, the third of which was split
+out of P1247: collect the boards of held Momentum Beta maps, and at approval drop the Beta leftovers
+(board-cache rows, runs, recordings) so stale testing times stop blocking slower approved ones.
+
+**Change.** FTESurf surfd/mapwatch.py: beta_boards puts held Beta maps' boards into momtracks.tsv;
+approvals() checks each approved map once per approvedDate and drops what predates the approval only
+after two "wiped" reads of Momentum's live board an hour or more apart, every Beta track judged at
+both, under momwatch's lock, from a purge record written first (recordings retired, not deleted;
+a failed purge settles from the record). A read covers only what it saw; served replay hashes,
+post-approval and undated rows are never dropped; a reply that looks filtered or cut short reads
+unknown.
+
+**Measured.** The wipe is not a Momentum rule: the first draft purged by date and a read-only dry
+scan found surf_me (approved Oct 2025) still serving 43 of its top 100 from before approval. On 3 Nov
+13 of 47 approved maps holding Beta data read wiped (all approved in Oct 2026), 32 kept. Momentum's
+ranks are positions (14,592 of 14,592 rows on 32 boards), so a rank gap is a hidden row.
+
+**Verified.** 16 review rounds, three lenses (control flow, stored data, upstream replies); Pi suite
+403 checks; 125 mutants, all killed but 5 guards another check shadows. Live 3 Nov 12:54:52Z
+(generation ea4e8b3c), a 27 s activation after a KSF tick. First purges no earlier than 00:23Z 4 Nov.
+
 ## Patch 1266 — exact reuse of repeated collision traces (bih_tracecache)
 
 **Problem.** Lex (3 Nov): faster movement collision, with no ramp bugs and still accurate to Momentum. On
