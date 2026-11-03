@@ -6677,11 +6677,10 @@ void COM_WorkerPartialSync(void *priorityctx, int *address, int value)
 		{
 			while (*address == value && !com_workererror)
 			{
-				if (!COM_DoWork(WG_MAIN, false))
-				{
-					SCR_LoadingPump();
+				qboolean did = COM_DoWork(WG_MAIN, false);
+				SCR_LoadingPump();	//throttled: after a run of uploads as well as while idle
+				if (!did)
 					Sys_Sleep(0.004);
-				}
 			}
 			return;
 		}

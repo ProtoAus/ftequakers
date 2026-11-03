@@ -3399,6 +3399,8 @@ void SCR_LoadTimesEnd(void)
 //GLSCR_UpdateScreen draws the loading screen alone (scr_disabled_for_loading), never inside a
 //screen update already drawing it, never while the menu's VM runs.
 qboolean scr_loadingdraw;
+qboolean scr_loadingpumping;	//GLSCR_UpdateScreen skips the font and sRGB work for a pump's update
+double scr_loadingswap;		//the loading branch's last swap, the pump's or a frame's
 qboolean SCR_LoadingPumpWanted(void)
 {
 #ifdef MENU_DAT
@@ -3409,23 +3411,26 @@ qboolean SCR_LoadingPumpWanted(void)
 }
 void SCR_LoadingPump(void)
 {
-	static double last;
 	double now;
 	qboolean oldwarndraw;
 
-	if (scr_loadingdraw || !SCR_LoadingPumpWanted())
+	if (scr_loadingdraw || qrenderer != QR_OPENGL || !Sys_IsMainThread() || !SCR_LoadingPumpWanted())
 		return;
 #ifdef MENU_DAT
 	if (MP_Executing())
 		return;
 #endif
 	now = Sys_DoubleTime();
-	if (now - last < 1.0/60 && now >= last)
+	//where GLSCR_UpdateScreen would leave the loading branch for a full frame: not mid-function
+	if (now - scr_disabled_time > 60 || Key_Dest_Has(~kdm_game))
 		return;
-	last = now;
+	if (now - scr_loadingswap < 1.0/60 && now >= scr_loadingswap)
+		return;
 	oldwarndraw = r_refdef.warndraw;
 	r_refdef.warndraw = false;
+	scr_loadingpumping = true;
 	SCR_UpdateScreen();
+	scr_loadingpumping = false;
 	r_refdef.warndraw = oldwarndraw;
 }
 
@@ -4921,6 +4926,9 @@ void SCR_DrawTwoDimensional(qboolean nohud)
 		SCR_ShowPics_Draw();
 
 		if (!scr_disabled_for_loading)
+#ifdef MENU_DAT
+		if (!MP_UsingGamecodeLoadingScreen())	//FTESurf Patch 1244: that screen is opaque; an open console stays in front
+#endif
 			consolefocused = false;
 	}
 	else if (nohud)

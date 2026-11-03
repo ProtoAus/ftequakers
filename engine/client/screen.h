@@ -317,7 +317,8 @@ void SCR_SetLoadingStage(int stage);
 void SCR_SetLoadingFile(char *str);
 qboolean SCR_LoadingPumpWanted(void);	//FTESurf Patch 1244
 void SCR_LoadingPump(void);
-extern qboolean scr_loadingdraw;
+extern qboolean scr_loadingdraw, scr_loadingpumping;
+extern double scr_loadingswap;
 void SCR_LoadTimesBegin(const char *label);	//FTESurf Patch 1022, scr_loadtimes
 void SCR_LoadTimesStage(const char *next);
 void SCR_LoadTimesEnd(void);
