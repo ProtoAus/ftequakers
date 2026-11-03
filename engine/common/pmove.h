@@ -259,7 +259,7 @@ typedef struct
    Patch 888: version 9 traces a .phy hull whose 16-bit indices wrapped as it really is.
    Patch 882: version 10 honours momlimit/momcool/momslide (Momentum's limitmovement and slide triggers).
    Patch 916: version 11 adds Source water-lip assist and ceiling eye clearance. */
-#define PMSRC_VERSION 11
+#define PMSRC_VERSION 12
 
 typedef struct {
 	//standard quakeworld
