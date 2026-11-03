@@ -10252,6 +10252,20 @@ static qbyte *VBSP_PVSMemo(model_t *mod, int area, const int clusters[2], const 
 	}
 	return prv->vcache[lvl].memo;
 }
+//Patch 1271: an area's verdict on an unvised map. Area 0 is never culled (Source's R_CullNode); nor is one
+//past numareas, which areabits does not cover.
+static qboolean VBSP_UnvisedAreaVisible(const vbspinfo_t *prv, const qbyte *areabits, int a)
+{
+	return a <= 0 || a >= (int)prv->numareas || (areabits[a>>3] & (1<<(a&7)));
+}
+//An object's pair: hidden only when every area it names is (num_leafs < 0: an overflowed record, drawn).
+//`none` is the record's "no second area": 0 from VBSP_FindTouchedLeafs, -1 from the static prop loader.
+static qboolean VBSP_UnvisedPairVisible(const vbspinfo_t *prv, const qbyte *areabits, const pvscache_t *pc, int none)
+{
+	return pc->num_leafs < 0 || VBSP_UnvisedAreaVisible(prv, areabits, pc->areanum) ||
+		(pc->areanum2 != none && VBSP_UnvisedAreaVisible(prv, areabits, pc->areanum2));
+}
+
 //its verdict for one object, or the test's (kept); vbsp_pvs_why as the test leaves it
 static qboolean VBSP_PVSMemoTest(qbyte *memo, size_t idx, model_t *mod, const struct staticprop_s *sp, const pvscache_t *pvs, const qbyte *surfvis, const int *areas)
 {
@@ -10272,6 +10286,7 @@ static void VBSP_PrepareFrame(model_t *mod, refdef_t *r_refdef, int area, int cl
 	qbyte *memo;	//FTESurf Patch 1261
 	vbspinfo_t	*prv = (vbspinfo_t*)mod->meshinfo;
 	qbyte *surfvis, *entvis;
+	qboolean unvisedareas;	//Patch 1271: an unvised map, culled by area
 
 	refdef = r_refdef;
 
@@ -10389,11 +10404,13 @@ static void VBSP_PrepareFrame(model_t *mod, refdef_t *r_refdef, int area, int cl
 	entvis = surfvis = VBSP_MarkLeaves(mod, clusters);
 	memo = VBSP_PVSMemo(mod, area, clusters, surfvis);
 	VectorCopy (r_refdef->vieworg, modelorg);
-	if (!surfvis && !mod->vis && !hl2_novis->ival && !r_refdef->forcevis)
+	unvisedareas = !surfvis && !mod->vis && !hl2_novis->ival && !r_refdef->forcevis;
+	if (unvisedareas)
 	{	//Patch 1271: an unvised map is still culled by area in Source (R_CullNode: a node whose area > 0 draws
 		//only if R_IsAreaVisible; area 0 never), so surf_voyager's stations, alone in area 3, are hidden from
-		//area 1 rather than drawn and cut at r_sky_forcedepth_scale's distance. Displacements are not culled.
-		//Marked by leaf, emitted in surface order: leaf order split sunset's batches, 77 -> 796 draws.
+		//area 1 rather than drawn and cut at r_sky_forcedepth_scale's distance. Displacements and static props
+		//by their area pair (review 3). Marked by leaf, emitted in surface order: leaf order split sunset's
+		//batches, 77 -> 796 draws.
 		size_t i;
 		int k;
 		msurface_t *surf, **mark;
@@ -10403,13 +10420,14 @@ static void VBSP_PrepareFrame(model_t *mod, refdef_t *r_refdef, int area, int cl
 			mleaf_t *leaf = &mod->leafs[i];
 			if (leaf->contents == FTECONTENTS_SOLID)
 				continue;
-			if (leaf->area > 0 && !(r_refdef->areabits[leaf->area>>3] & (1<<(leaf->area&7))))
+			if (!VBSP_UnvisedAreaVisible(prv, r_refdef->areabits, leaf->area))
 				continue;
 			for (mark = leaf->firstmarksurface, k = leaf->nummarksurfaces; k > 0; k--)
 				(*mark++)->visframe = vbsp_surfsequence;
 		}
 		for (i = 0; i < prv->numdisplacements; i++)
-			prv->displacements[i].surf->visframe = vbsp_surfsequence;
+			if (VBSP_UnvisedPairVisible(prv, r_refdef->areabits, &prv->displacements[i].pvs, 0))
+				prv->displacements[i].surf->visframe = vbsp_surfsequence;
 		for (i = 0; i < mod->nummodelsurfaces; i++)
 		{
 			surf = &mod->surfaces[i];
@@ -10814,6 +10832,12 @@ static void VBSP_PrepareFrame(model_t *mod, refdef_t *r_refdef, int area, int cl
 				sent->lastpvswhy = vbsp_pvs_why;	//FTESurf Patch 257: set by the call above
 				PROP_VERDICT(PROPV_PVS);
 				continue;	//prop's leaves aren't in the view PVS and its area can't be reached — not visible.
+			}
+			if (unvisedareas && !VBSP_UnvisedPairVisible(prv, r_refdef->areabits, &src->pvscache, -1))
+			{
+				sent->lastpvswhy = VBSP_PVSWHY_AREA;	//Patch 1271
+				PROP_VERDICT(PROPV_PVS);
+				continue;
 			}
 
 			//cheap frustum cull on the model's radius box (props through the portal still pass PVS above, so this only drops what's off-screen).
