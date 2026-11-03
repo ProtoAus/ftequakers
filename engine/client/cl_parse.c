@@ -919,6 +919,8 @@ void CL_DownloadFinished(qdownload_t *dl)
 
 		Mod_FileWritten(filename);
 		{
+			extern void SCR_ResumeLoadingPlaque(void);
+			SCR_ResumeLoadingPlaque();	//FTESurf Patch 1258 review: a downloaded world loads below, synchronously (22 s for surf_eternity)
 			for (i = 0; i < MAX_PRECACHE_MODELS; i++)	//go and load this model now.
 			{
 				if (cl.model_name[i] && !strcmp(cl.model_name[i], filename))

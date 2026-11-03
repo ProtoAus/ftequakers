@@ -3744,15 +3744,17 @@ void SCR_ReleaseLoadingPlaque(const char *dlname)
 #endif
 	SCR_EndLoadingPlaque();
 }
-//The downloads are done: the plaque comes back for the loads after them, or no loading pump runs
-//on a first visit that downloaded its map (Patch 1258 review).
+//A download finished, or none is left: the plaque comes back for the loads after it, or no loading
+//pump runs on a first visit that downloaded its map (Patch 1258 review).  The flag lasts the load
+//(LS_NONE clears it), so a plaque that a later download outlived (GLSCR's 60 s) comes back too.
 void SCR_ResumeLoadingPlaque(void)
 {
-	if (!scr_loadingreleased)
+	if (!scr_loadingreleased || loading_stage == LS_NONE || scr_disabled_for_loading || !qrenderer || Key_Dest_Has(~kdm_game))
 		return;
-	scr_loadingreleased = false;
-	if (loading_stage == LS_NONE || scr_disabled_for_loading || !qrenderer || Key_Dest_Has(~kdm_game))
+#ifdef MENU_DAT
+	if (!MP_UsingGamecodeLoadingScreen())
 		return;
+#endif
 	scr_disabled_for_loading = true;
 	scr_disabled_time = Sys_DoubleTime();
 }
