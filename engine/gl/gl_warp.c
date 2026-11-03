@@ -499,6 +499,8 @@ qboolean R_DrawSkyroom(shader_t *skyshader)
 //	if (r_ignoreentpvs.ival)	//if we're ignoring ent pvs then we're probably drawing lots of ents in the skybox that shouldn't be there
 //		r_refdef.firstvisedict = cl_numvisedicts;
 	r_refdef.externalview = true;	//an out-of-body experience...
+	if (r_refdef.mindist > 1)
+		r_refdef.mindist = 1;	//FTESurf Patch 1257: in sky-room units, as before gl_mindist 4 (Source uses 2, viewrender.cpp:4635)
 	r_refdef.skyroom_enabled = false;
 	r_refdef.forcevis = false;
 	r_refdef.flags |= RDF_DISABLEPARTICLES;
