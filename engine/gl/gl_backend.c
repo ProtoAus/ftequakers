@@ -1998,10 +1998,14 @@ void GenerateFogTexture(texid_t *tex, float density, float zscale)
 //FTESurf Patch 1237: GLBE_DrawSkyroomScaled's multisample answer for one target; a glGet per frame syncs a
 //threaded driver, and a vid_restart can change the answer for the same id
 static int be_skysamplesfbo = -1, be_skysamples;
+static qboolean be_skyroombroken;	//its FBO came out incomplete: full size until the next vid_restart
+static GLenum be_skyroomifmt;	//tex_skyroom's internal format
 void GLBE_DestroyFBOs(void)
 {
 	size_t i;
 	be_skysamplesfbo = -1;
+	be_skyroombroken = false;
+	be_skyroomifmt = 0;
 	GLBE_FBO_Destroy(&shaderstate.fbo_lprepass);
 
 	for (i = 0; i < R_MAX_RECURSE; i++)
@@ -7870,7 +7874,7 @@ static void GLBE_SubmitMeshesSortRange(batch_t *sortlist, batch_t *end)
 			else if (inst_refusals++ < 512)
 			{
 				const char *pn, *why = GLBE_InstanceRefusal(batch, &pn);
-				Con_Printf("r_instancing: not a candidate (%s %s): %s on %s\n", why, pn, batch->shader->name,
+				Con_Printf("r_instancing: not a candidate (%s %s): %s on %s\n", why, pn, batch->shader ? batch->shader->name : "?",
 					(batch->ent && batch->ent->model) ? batch->ent->model->name : "?");
 			}
 		}
@@ -9555,13 +9559,17 @@ static void GLBE_SubmitNearest(batch_t *world, batch_t *dynamic)
 	GLBE_SubmitNearestSome(dynamic, GLBE_PickLate);
 }
 
+void R_SkyboxSortBegin(void);	//gl_warp.c, FTESurf Patch 1237
 void GLBE_SubmitMeshes (batch_t **worldbatches, int start, int stop)
 {
 	int i, prev;
 	int portaldepth = r_portalrecursion.ival;
 
+	R_SkyboxSortBegin();
 	for (i = start; i <= stop; i++)
 	{
+		if (i == SHADER_SORT_SKY)
+			R_SkyboxSortBegin();	//a portal view in the PORTAL sort drew its own box
 		if (i == SHADER_SORT_BLEND && r_blendsort.ival == 2)
 		{
 			GLBudget_Set(GPUB_TRANSPARENT);
@@ -10406,14 +10414,20 @@ multisampled target cannot take a single-sample blit, so it draws at full size.
 static qboolean GLBE_DrawSkyroomScaled(shader_t *skyshader)
 {
 #ifndef GL_STATIC
-	extern cvar_t r_skyroom_scale;
+	extern cvar_t r_skyroom_scale, r_fastsky, r_hdr_framebuffer;
 	float s = r_skyroom_scale.value;
 	vrect_t orect = r_refdef.vrect;
 	pxrect_t oprect = r_refdef.pxrect;
 	int w, h, oldfbo, dy;
+	GLenum ifmt;
 	qboolean drawn;
 
-	if (!(s > 0 && s < 1) || r_refdef.recurse || !qglBlitFramebufferEXT || !gl_config.ext_framebuffer_objects)
+	//R_DrawSkyroom's own refusals first, so a sky it will not draw costs no target; then what a blit
+	//cannot serve: anaglyph eyes (a blit ignores the colour mask), CSQC render targets (it writes every
+	//draw buffer), multisampled targets
+	if (!(s > 0 && s < 1) || r_refdef.recurse || !qglBlitFramebufferEXT || !gl_config.ext_framebuffer_objects ||
+		be_skyroombroken || r_refdef.colourmask || *r_refdef.rt_destcolour[0].texname || *r_refdef.rt_depth.texname ||
+		r_viewcluster == -1 || r_fastsky.value || !r_refdef.skyroom_enabled)
 		return R_DrawSkyroom(skyshader);
 	if (be_skysamplesfbo != shaderstate.fbo_current)
 	{
@@ -10425,6 +10439,11 @@ static qboolean GLBE_DrawSkyroomScaled(shader_t *skyshader)
 		return R_DrawSkyroom(skyshader);
 	w = max(1, oprect.width * s);
 	h = max(1, oprect.height * s);
+	//float where R_RenderScene renders the scene to a float target, or the sky bands before the gamma pass
+	if (((r_refdef.flags & RDF_SCENEGAMMA) || r_hdr_framebuffer.ival || (vid.flags & (VID_SRGBAWARE|VID_FP16))) && sh_config.texfmt[PTI_RGBA16F])
+		ifmt = GL_RGBA16F;
+	else
+		ifmt = GL_RGBA;
 
 	if (!shaderstate.tex_skyroom)
 	{
@@ -10432,23 +10451,27 @@ static qboolean GLBE_DrawSkyroomScaled(shader_t *skyshader)
 		if (!shaderstate.tex_skyroom->num)
 			qglGenTextures(1, &shaderstate.tex_skyroom->num);
 	}
-	if (shaderstate.tex_skyroom->width != w || shaderstate.tex_skyroom->height != h)
-	{	//the formats tex_reflection takes
+	if (shaderstate.tex_skyroom->width != w || shaderstate.tex_skyroom->height != h || be_skyroomifmt != ifmt || !shaderstate.fbo_skyroom.fbo)
+	{
 		shaderstate.tex_skyroom->width = w;
 		shaderstate.tex_skyroom->height = h;
+		be_skyroomifmt = ifmt;
 		GL_MTBind(0, GL_TEXTURE_2D, shaderstate.tex_skyroom);
-		if ((vid.flags&VID_FP16) && sh_config.texfmt[PTI_RGBA16F])
-			qglTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
-		else if ((vid.flags&(VID_SRGBAWARE|VID_FP16)) && sh_config.texfmt[PTI_RGBA8_SRGB])
-			qglTexImage2D(GL_TEXTURE_2D, 0, GL_SRGB8_ALPHA8_EXT, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
-		else
-			qglTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+		qglTexImage2D(GL_TEXTURE_2D, 0, ifmt, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
 		qglTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
 		qglTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
 		qglTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
 		qglTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+		oldfbo = GLBE_FBO_Update(&shaderstate.fbo_skyroom, FBO_RB_DEPTH, &shaderstate.tex_skyroom, 1, r_nulltex, w, h, 0);
+		if (qglCheckFramebufferStatusEXT(GL_FRAMEBUFFER_EXT) != GL_FRAMEBUFFER_COMPLETE_EXT)
+		{
+			be_skyroombroken = true;
+			GLBE_FBO_Pop(oldfbo);
+			return R_DrawSkyroom(skyshader);
+		}
 	}
-	oldfbo = GLBE_FBO_Update(&shaderstate.fbo_skyroom, FBO_RB_DEPTH, &shaderstate.tex_skyroom, 1, r_nulltex, w, h, 0);
+	else	//as last frame: a bind, not GLBE_FBO_Update's attachment and completeness pass
+		oldfbo = GLBE_FBO_Push(&shaderstate.fbo_skyroom);
 	r_refdef.vrect.x = r_refdef.vrect.y = 0;
 	r_refdef.vrect.width = max(1, orect.width * s);
 	r_refdef.vrect.height = max(1, orect.height * s);
@@ -10458,7 +10481,7 @@ static qboolean GLBE_DrawSkyroomScaled(shader_t *skyshader)
 	r_refdef.pxrect.maxheight = shaderstate.fbo_skyroom.rb_size[1];
 	GL_ViewportUpdate();
 	GL_ForceDepthWritable();
-	qglClearColor(0, 0, 0, 1);
+	qglClearColor(r_clearcolour.vec4[0], r_clearcolour.vec4[1], r_clearcolour.vec4[2], 1);	//what the view showed where the sky room draws nothing
 	qglClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
 	drawn = R_DrawSkyroom(skyshader);
