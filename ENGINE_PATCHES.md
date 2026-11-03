@@ -1,5 +1,41 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1266 — exact reuse of repeated collision traces (bih_tracecache)
+
+**Problem.** Lex (3 Nov): faster movement collision, with no ramp bugs and still accurate to Momentum. On
+surf_voyager surfed hands-free, client prediction replays the unacknowledged commands every frame
+(CL_PredictUsercmdPart: 2.5 player moves for 3.9 Source ticks a frame, ~145 world traces, 96.5% from
+PM_TransformedHullCheck), and 13.5% of those traces repeat exactly within the frame. A whole-tick memo is not
+exact: CSQC_PredictPlayerPreMove/PlayerMove run inside each tick on state that changes between frames.
+
+**Change.** Engine com_bih.c, com_bih.h, gl_model.c, common.c, sv_ccmds.c. No plugin change.
+- BIH_Trace becomes a 256-entry direct-mapped cache (~60 KB; 2048 entries measured no better) over the
+  unchanged trace, BIH_TraceUncached. Key: the resolved model (phyfix twin), its cnodes and bounds, contents,
+  hull, capsule, axis, bih_sourceclip/phybrushes/phyfix/phypick, pm_trisoup_bevels, pm_rotatedboxhulls, the
+  start/end/size/axis bytes, and bih_collisionepoch. Full-key memcmp; the hash only picks the slot.
+- The epoch is bumped atomically by BIH_Build, Mod_ModelLoaded and Mod_PurgeModel: a world trace reaches props
+  through BIH_MODEL leaves, waits on one still loading (a zero-length test skips it), and BIH_Build runs on the
+  loader thread before the load is marked done. A result is stored only if the epoch and the tree pointer did
+  not move during its trace (the plugin's occluder and visual builds swap mod->cnodes and put it back).
+- Stands aside for pm_dispprobe and pm_dettest (bih_probe_readers): both read the probe record, which a hit
+  does not write. Also for terrain, models without a tree, and off the main thread.
+- bih_tracecache 0/1/2 (NOSAVE, NOTFROMSERVER): 2 copies the hit out, re-traces it and compares every field
+  (BIH_TraceSame); bih_tracestats prints and resets the counters.
+- Tried and dropped: com_bih.c at -O2 under the release's -Os. No measurable gain on prediction or server
+  frames, and the Pi's compiler was not verified.
+
+**Verified (rig, Lex's settings; two review rounds, the last with no defects).**
+- Voyager hands-free at mode 2 on the final exe: 670324 reused answers re-traced, 0 differed. The smoke run
+  of the stamped exe with plugin c3c9062f: 200055 re-traced, 0 differed.
+- r_budget's prediction line (CL_PredictMove), cache off -> on, three alternating pairs per run:
+  0.130 -> 0.103, 0.133 -> 0.110, 0.130 -> 0.110 ms. Frame time is within noise: on voyager prediction is
+  0.13 of 2.3 ms CPU (draw calls 0.80, CSQC view 0.42, server 0.23).
+- pm_dettest: 90 of 90 lines identical to the installed patch-1257 server (the cache stands aside there).
+- pm_verify, the installed server and P1266 at cache 0/1/2 identical: p492voy.rec HOLD (52 rows differ,
+  first at row 408), surf_boreas 0002871_pb.rec PASS (2871 ticks); mode 2 differed 0 on both.
+
+Tag patch-1266 = 9e6c5806b (P1266 on patch-1267); both installs run exe c3342a2d (git-8171-patch-1266-0-g9e6c5806b) and hl2 plugin c3c9062f.
+
 ## Patch 1267 — a map change's shader reload skips what it does not need; the after-frame reload is off (client exe)
 
 **Problem.** Lex (3 Nov), on the loading freezes left after Patch 1259: "do whatever you think you can do". Each map
