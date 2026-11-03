@@ -100,6 +100,7 @@ static cvar_t *hl2_favour_ldr;
 static cvar_t *hl2_lumpretire;	//FTESurf Patch 298
 static cvar_t *hl2_lightmap_repack;	//FTESurf Patch 281: see VBSP_RepackLighting
 static cvar_t *hl2_bumpstride;	//FTESurf Patch 268 D1: tag surfaces with their per-style luxel-set stride, see VBSP_ProbeLightmapStride
+static cvar_t *hl2_rnm;	//FTESurf Patch 1264: bumped faces lit by their basis maps, see VBSP_BuildRNM
 static cvar_t *map_noareas;
 static cvar_t *map_autoopenportals;
 static cvar_t *hl2_areaportals;		//FTESurf Build 8
@@ -4581,6 +4582,118 @@ static void VBSP_ProbeLightmapStride (model_t *mod)
 	Con_Printf("VBSP: %s lightmap stride %s: %i luxel set(s) per lightstyle flat, %i bumped%s; %u lit faces, %u bumped, %u lightstyled (%u of those bumped); %u tagged, %u left untagged (block past lump) -- %s\n",
 		mod->name, cand[chosen].name, cand[chosen].flat, cand[chosen].bump, cand[chosen].trailer?" plus a per-face trailer of one byte per luxel per style after the last style":"",
 		lit, bumped, styled, bumpedstyled, tagged, clipped, why);
+}
+#endif
+#ifdef HAVE_CLIENT
+/*
+FTESurf Patch 1264: Source's radiosity normal mapping (lightmappedgeneric_ps2_3_x.h:433-466).  A
+bumped face lights with its three basis maps, never its flat one: with a flat normal that is their
+mean, so the flat set (Patch 268 D1's set 0 of each style) becomes the mean, colour and all -- VRAD's
+sum(basis)/flat runs 1.8-3.8 (median 2.2-2.6 on bhop_ceaseless, surf_4am, surf_fantasy, surf_sedona),
+so the flat set is 0.6-1.3x what Source shows there.  The deluxemap gets one tangent-space direction a
+luxel, sum(lum_i * bumpBasis[i]): the basis is orthonormal, so vmt/lightmapped.glsl gets each map's
+share back as dot(dir, bumpBasis[i]) and weights it by the normal map (or the ssbump).  Per-direction
+colour is lost; the mean colour is kept.  Every other luxel is the zero vector, which the shader reads
+as "no basis data" and leaves alone (an ssbump material on an unbumped face, an unlit luxel).
+Read from the raw lump in linear RGBE and converted by VBSP_ConvertLuxel, as the flat set was.
+Nothing is built with r_deluxemapping 0 or no bumped face (the deluxe pages double the lightmaps),
+and a face off the 4-byte grid (the nine trailer maps under hl2_lightmap_repack 0) is left as it was.
+The 2/5 layout's sets are [flat][b0][b1][b2][extra]: over 40 such maps the non-RGBE record sat in the
+last set on 5180 single-style bumped faces and elsewhere on under 20.
+*/
+static const float vbsp_bumpbasis[3][3] = {	//common_fxc.h:36
+	{ 0.81649661064147949f, 0.0f, 0.57735025882720947f },
+	{ -0.40824833512306213f, 0.70710676908493042f, 0.57735025882720947f },
+	{ -0.40824821591377258f, -0.7071068286895752f, 0.57735025882720947f }};
+
+static void VBSP_EncodeRGBE(const float *c, qbyte *p)
+{
+	float m = max(c[0], max(c[1], c[2]));
+	int e, k;
+	if (!(m > 0))
+	{
+		p[0] = p[1] = p[2] = 0;
+		p[3] = 0;
+		return;
+	}
+	frexp(m / 255.0f, &e);	//m/255 = f*2^e, f in [0.5,1): every channel/2^e fits a byte
+	e = bound(-128, e, 127);
+	for (k = 0; k < 3; k++)
+		p[k] = (qbyte)bound(0, (int)(ldexp(c[k], -e) + 0.5f), 255);
+	p[3] = (qbyte)(signed char)e;
+}
+
+static void VBSP_BuildRNM(model_t *mod)
+{
+	vbspinfo_t	*prv = (vbspinfo_t*)mod->meshinfo;
+	size_t		words, si, faces = 0, i;
+	qbyte		*dx;
+	int			k, b, c;
+
+	if (!hl2_rnm || !hl2_rnm->ival || !cvarfuncs->GetFloat("r_deluxemapping") || !mod->lightdata ||
+		!prv->lightraw || prv->lightrepacked || mod->lightmaps.fmt != LM_E5BGR9 || (mod->lightdatasize & 3))
+		return;
+	words = mod->lightdatasize / 4;
+	dx = NULL;
+	for (si = 0; si < mod->numsurfaces; si++)
+	{
+		msurface_t *surf = mod->surfaces + si;
+		int extra = (surf->flags & SURF_LMSTRIDE_MASK) >> SURF_LMSTRIDE_SHIFT;
+		int smax, tmax, ns;
+		size_t lux, ofs;
+
+		if (!surf->samples || extra < 12 || !prv->texinfo[surf->texinfo - mod->texinfo].bumped)
+			continue;
+		smax = (surf->extents[0]>>surf->lmshift)+1;
+		tmax = (surf->extents[1]>>surf->lmshift)+1;
+		ofs = surf->samples - mod->lightdata;	//== the file's lightofs (VBSP_LoadLighting keeps offsets)
+		if (smax <= 0 || tmax <= 0 || (ofs & 3))
+			continue;
+		lux = (size_t)smax*tmax;
+		for (ns = 0; ns < MAXCPULIGHTMAPS && surf->styles[ns] != INVALID_LIGHTSTYLE; ns++)
+			;
+		if (!dx)
+		{
+			dx = plugfuncs->GMalloc(&mod->memgroup, words * 3);
+			memset(dx, 127, words * 3);	//the zero vector: no basis data
+		}
+		for (k = 0; k < ns; k++)
+		{
+			size_t blk = ofs + (size_t)k*lux*(4+extra);	//bytes: style k, set 0
+			qbyte *q = dx + (ofs/4 + (size_t)k*lux)*3;	//the deluxe walk's style k (r_surf.c Surf_BuildDeluxMap)
+			if (blk + 4*lux*4 > prv->lightrawsize)
+				break;
+			for (i = 0; i < lux; i++, q += 3)
+			{
+				float col[3][3], mean[3], d[3] = {0, 0, 0}, l, len;
+				qbyte rgbe[4];
+				for (b = 0; b < 3; b++)
+				{
+					const qbyte *r = prv->lightraw + blk + (size_t)(b+1)*lux*4 + 4*i;
+					float sc = ldexp(1.0f, (signed char)r[3]);
+					col[b][0] = r[0]*sc;
+					col[b][1] = r[1]*sc;
+					col[b][2] = r[2]*sc;
+					l = 0.2126f*col[b][0] + 0.7152f*col[b][1] + 0.0722f*col[b][2];
+					for (c = 0; c < 3; c++)
+						d[c] += l * vbsp_bumpbasis[b][c];
+				}
+				for (c = 0; c < 3; c++)
+					mean[c] = (col[0][c] + col[1][c] + col[2][c]) * (1.0f/3);
+				VBSP_EncodeRGBE(mean, rgbe);
+				((unsigned int*)(mod->lightdata + blk))[i] = VBSP_ConvertLuxel(rgbe);
+				len = sqrt(d[0]*d[0] + d[1]*d[1] + d[2]*d[2]);
+				if (len > 0)
+					for (c = 0; c < 3; c++)
+						q[c] = (qbyte)bound(0, (int)(127.5f + 127.0f * d[c] / len), 254);
+			}
+		}
+		faces++;
+	}
+	if (!dx)
+		return;
+	mod->deluxdata = dx;
+	Con_DPrintf("VBSP: %s: %u bumped faces lit by their basis maps (hl2_rnm 1)\n", mod->name, (unsigned)faces);
 }
 #endif
 #ifdef HAVE_CLIENT
@@ -12829,6 +12942,8 @@ static qboolean VBSP_LoadModel(model_t *mod, qbyte *mod_base, size_t filelen, ch
 		VBSP_LoadVertNormals					(mod, mod_base, header.lumps);
 	if (noerrors && haverenderer)	//FTESurf Patch 268 D1: needs texinfo, faces and the lighting lump; before displacements only because nothing later moves samples or extents
 		VBSP_ProbeLightmapStride				(mod);
+	if (noerrors && haverenderer)	//FTESurf Patch 1264: after the stride tags it reads, before anything allocates lightmaps
+		VBSP_BuildRNM							(mod);
 #endif
 	noerrors = noerrors && VBSP_LoadDisplacements	(mod, mod_base, header.lumps);
 	noerrors = noerrors && VBSP_LoadMarksurfaces	(mod, mod_base, &header.lumps[VLUMP_LEAFFACES]);
@@ -13507,6 +13622,7 @@ qboolean VBSP_Init(void)
 		which walk was used either way.  MAPLATCH: the tags are written while the BSP is
 		read, so a map reload is when a change takes effect.
 		*/
+		hl2_rnm = cvarfuncs->GetNVFDG("hl2_rnm", "1", CVAR_MAPLATCH, "Light bumped Source brush faces as Source does (radiosity normal mapping): the three basis lightmaps VRAD stores for a $bumpmap face, weighted by the normal map or $ssbump; needs r_deluxemapping. 0 shows the flat lightmap and no bump lighting (an $ssbump material still reflects off its own normal). Takes effect on a map reload.", MAPOPTIONS);
 		hl2_bumpstride = cvarfuncs->GetNVFDG("hl2_bumpstride", "1", CVAR_MAPLATCH, "Walk a Source map's lightstyles at the stride VRAD wrote them: a $bumpmap face stores four luxel sets per style (flat plus three radiosity-normal-map basis maps), and 150 library maps add a non-lightmap record after every style's sets.\n0: the old walk, which summed a basis map in as the next lightstyle at full brightness and never read the real one, on ~67,000 faces across 153 library maps.\n1: probe the layout per map and skip the extra sets (default). Faces then show their real second style -- brighter where it is a bright switchable light, darker where it is dim. Maps whose layout cannot be proven from the lighting lump size fall back to 0 and say so in the console.", MAPOPTIONS);
 		/*
 		FTESurf: hide the brushes Source hides.

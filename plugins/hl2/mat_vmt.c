@@ -916,6 +916,7 @@ typedef struct
 	char color2[MAX_QPATH];		//FTESurf Patch 188: $color2, which wins over $color where both are written
 	char envfrombase;
 	char envfromnorm;
+	char ssbump;	//FTESurf Patch 1264: $ssbump -- the bump map holds the three basis weights, not a normal
 	char halflambert;
 
 	float envmaptint_r;
@@ -2098,7 +2099,7 @@ static char *VMT_ParseBlock(const char *fname, vmtstate_t *st, char *line)
 			;	//nettest: recognised-but-ignored Source key; silenced (was per-field developer-1 spam)
 		}
 		else if (!Q_strcasecmp(key, "$ssbump"))
-			;
+			st->ssbump = atoi(value) != 0;
 		else if (!Q_strcasecmp(key, "$ssbumpmathfix"))
 			;
 		else if (!Q_strcasecmp(key, "$basetexture2") || !strcmp(key, "$texture2"))
@@ -4905,6 +4906,8 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 				Q_strlcpy(st->type, "vmt/lightmapped#ENVFROMMASK", sizeof(st->type));
 			else /* take from normalmap */
 				Q_strlcpy(st->type, "vmt/lightmapped", sizeof(st->type));
+			if (st->ssbump && *st->normalmap)	//FTESurf Patch 1264
+				Q_strlcat(progargs, "#SSBUMP", sizeof(progargs));
 
 			//FTESurf Patch 268 B: + envmapcontrast, empty unless bit 2 is on.
 			Q_strlcatfz(script, &offset, sizeof(script),	"\tprogram \"%s%s%s%s%s\"\n", st->type, progargs, envmaptint, envmapsat, envmapcontrast);
