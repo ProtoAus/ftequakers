@@ -1847,8 +1847,9 @@ qboolean Font_LoadKexFont(struct font_s *f, int fheight, const char *fontfilenam
 //script latn (else DFLT), default LangSys; lookup types 2 and 9->2; value 1's XAdvance. Lookups add in
 //LookupList order and each stops at its first subtable that applies (a format 2 one applies whenever
 //both classes are in range), as HarfBuzz does. Every read is bounds-checked; an array that cannot fit
-//the table is skipped, and more than KERN_MAXSUB subtables or KERN_MAXWORK searches drops the face's
-//kerning (Roboto needs 40k, Bebas 33k; the cap keeps a crafted table to a fraction of a second).
+//the table is skipped, and more than KERN_MAXSUB subtables or KERN_MAXWORK steps (lookup indices
+//marked, subtables walked, searches) drops the face's kerning. Roboto needs 40k, Bebas 33k; the cap
+//keeps a crafted table to a fraction of a second.
 #define KERN_MAXSUB 1024
 #define KERN_MAXWORK (4*1024*1024)
 typedef struct
@@ -2021,6 +2022,9 @@ static void Font_LoadKerning(fontface_t *qface)
 		ln = GPOS_U16(&g, f+2);
 		if (!GPOS_Fits(&g, f+4, ln, 2))
 			continue;
+		work += ln;
+		if (work > KERN_MAXWORK)
+			goto toomuch;
 		for (k = 0; k < ln; k++)
 		{
 			a = GPOS_U16(&g, f+4+(size_t)k*2);
@@ -2043,6 +2047,9 @@ static void Font_LoadKerning(fontface_t *qface)
 		n = GPOS_U16(&g, lk+4);
 		if ((fmt != 2 && fmt != 9) || !GPOS_Fits(&g, lk+6, n, 2))
 			continue;
+		work += n;
+		if (work > KERN_MAXWORK)
+			goto toomuch;
 		for (k = 0; k < n; k++)
 		{
 			st = lk + GPOS_U16(&g, lk+6+(size_t)k*2);
