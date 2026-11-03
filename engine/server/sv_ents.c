@@ -1660,6 +1660,10 @@ qboolean SVFTE_EmitPacketEntities(client_t *client, packet_entities_t *to, sizeb
 			//even if prediction is disabled, we want to force velocity info to be sent for the local player. This is used by view bob and things.
 			if (client->edict && j == client->edict->entnum && (n->u.q1.velocity[0] || n->u.q1.velocity[1] || n->u.q1.velocity[2]))
 				client->pendingdeltabits[j] |= UF_PREDINFO;
+			//FTESurf Patch 1238: and its movetype in every update, not only on a change: a lost snapshot
+			//left a save-lock hold's start or release stale until the resend, a round trip later.
+			if (client->edict && j == client->edict->entnum)
+				client->pendingdeltabits[j] |= UF_PREDINFO|UF_SV_MOVETYPE;
 
 			//spectators(and mvds) should be told the actual view angles of the person they're trying to track
 			if (j <= sv.allocated_client_slots && (!client->edict || j == client->spec_track))
