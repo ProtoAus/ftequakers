@@ -1859,7 +1859,122 @@ static void BIH_RecursiveTest (struct bihtrace_s *fte_restrict tr, const struct 
 	}
 	FTE_UNREACHABLE;
 }
+/*FTESurf Patch 1266: exact reuse of a trace asked again. The key is every input BIH_TraceUncached reads; the
+  trees it walks, the props nested in them and their load state change only through BIH_Build, Mod_ModelLoaded
+  or Mod_PurgeModel, which bump bih_collisionepoch (a zero-length test skips a prop still loading, and BIH_Build
+  runs before the load is marked done). A hit does not write the probe record, so the cache stands aside while
+  anything reads it (pm_dispprobe, or a holder of bih_probe_readers such as pm_dettest). Main thread only.*/
+extern cvar_t bih_tracecache, pm_dispprobe;
+static int bih_collisionepoch = 1;
+int bih_probe_readers;
+void BIH_CollisionChanged(void)
+{
+	FTE_Atomic32_Inc(&bih_collisionepoch);
+}
+struct bihtracekey_s
+{
+	const void *model, *nodes;
+	unsigned int epoch, contents, flags;
+	int forcehullnum, bevels, rotated;
+	float v[12+9+6];	//start end mins maxs, axis, then the model's bounds (worldsize; set after BIH_Build by some loaders)
+};
+#define BIH_TRACECACHE	256	//~60 KB: a frame and a half of prediction's traces; 2048 (~490 KB) measured no gain
+static struct
+{
+	struct bihtracekey_s key;
+	trace_t trace;
+	qboolean hit, valid;
+} bih_tracecache_e[BIH_TRACECACHE];
+static unsigned int bih_tc_hits, bih_tc_misses, bih_tc_bad, bih_tc_tested;
+//bih_tracecache 2: every named field, bitwise (struct padding is not part of the answer)
+#define BIH_SAME(f) (!memcmp(&a->f, &b->f, sizeof(a->f)))
+static qboolean BIH_TraceSame(const trace_t *a, const trace_t *b)
+{
+	return BIH_SAME(allsolid) && BIH_SAME(startsolid) && BIH_SAME(fraction) && BIH_SAME(endpos) &&
+		BIH_SAME(plane.normal) && BIH_SAME(plane.dist) && BIH_SAME(plane.type) && BIH_SAME(plane.signbits) &&
+		BIH_SAME(surface) && BIH_SAME(contents) && BIH_SAME(ent) && BIH_SAME(entnum) && BIH_SAME(inopen) &&
+		BIH_SAME(inwater) && BIH_SAME(truefraction) && BIH_SAME(brush_id) && BIH_SAME(brush_face) &&
+		BIH_SAME(surface_id) && BIH_SAME(triangle_id) && BIH_SAME(bone_id);
+}
+#undef BIH_SAME
+void BIH_TraceStats_f(void)
+{
+	Con_Printf("bih_tracecache %i: %u reused, %u computed, %u reused answers re-traced, %u differed\n",
+		bih_tracecache.ival, bih_tc_hits, bih_tc_misses, bih_tc_tested, bih_tc_bad);
+	bih_tc_hits = bih_tc_misses = bih_tc_tested = bih_tc_bad = 0;
+}
+static qboolean BIH_TraceUncached(model_t *model, int forcehullnum, const framestate_t *framestate, const vec3_t axis[3], const vec3_t start, const vec3_t end, const vec3_t mins, const vec3_t maxs, qboolean capsule, unsigned int contents, trace_t *out_trace);
 static qboolean BIH_Trace(model_t *model, int forcehullnum, const framestate_t *framestate, const vec3_t axis[3], const vec3_t start, const vec3_t end, const vec3_t mins, const vec3_t maxs, qboolean capsule, unsigned int contents, trace_t *out_trace)
+{
+	struct bihtracekey_s key;
+	model_t *m = (bih_phyfix && model && model->phyfixed) ? model->phyfixed : model;	//as BIH_TraceUncached resolves it
+	unsigned int h, k, i, w;
+	qboolean hit;
+
+	if (!bih_tracecache.ival || pm_dispprobe.ival || bih_probe_readers || !m || !m->cnodes || m->terrain || !Sys_IsMainThread())
+		return BIH_TraceUncached(model, forcehullnum, framestate, axis, start, end, mins, maxs, capsule, contents, out_trace);
+	memset(&key, 0, sizeof(key));
+	key.epoch = *(volatile int*)&bih_collisionepoch;
+	key.model = m;
+	key.nodes = m->cnodes;
+	key.contents = contents;
+	key.forcehullnum = forcehullnum;
+	key.flags = (capsule?1u:0u) | (axis?2u:0u) | (bih_sourceclip?4u:0u) | (bih_phybrushes?8u:0u) | (bih_phyfix?16u:0u) | (bih_phypick?32u:0u);
+	key.bevels = pm_trisoup_bevels.ival;
+	key.rotated = pm_rotatedboxhulls.ival;
+	VectorCopy(start, key.v+0);
+	VectorCopy(end, key.v+3);
+	VectorCopy(mins, key.v+6);
+	VectorCopy(maxs, key.v+9);
+	if (axis)
+	{
+		VectorCopy(axis[0], key.v+12);
+		VectorCopy(axis[1], key.v+15);
+		VectorCopy(axis[2], key.v+18);
+	}
+	VectorCopy(m->mins, key.v+21);
+	VectorCopy(m->maxs, key.v+24);
+	for (h = 2166136261u, k = 0; k < sizeof(key); k += sizeof(w))
+	{
+		memcpy(&w, (const qbyte*)&key + k, sizeof(w));	//not an unsigned int* over the struct: strict aliasing
+		h = (h ^ w) * 16777619u;
+	}
+	i = (h ^ (h >> 15)) & (BIH_TRACECACHE-1);
+	if (bih_tracecache_e[i].valid && !memcmp(&bih_tracecache_e[i].key, &key, sizeof(key)))
+	{
+		*out_trace = bih_tracecache_e[i].trace;	//copied out first: the verifying trace below can nest into a prop
+		hit = bih_tracecache_e[i].hit;			//whose own miss overwrites this slot
+		bih_tc_hits++;
+		if (bih_tracecache.ival >= 2)
+		{	//verify: what a fresh trace says
+			trace_t fresh;
+			qboolean freshhit = BIH_TraceUncached(model, forcehullnum, framestate, axis, start, end, mins, maxs, capsule, contents, &fresh);
+			bih_tc_tested++;
+			if (freshhit != hit || !BIH_TraceSame(&fresh, out_trace))
+			{
+				bih_tc_bad++;
+				if (bih_tc_bad <= 8)
+					Con_Printf(CON_WARNING "bih_tracecache: reused trace differs (frac %.9g/%.9g, normal %g %g %g / %g %g %g)\n",
+						out_trace->fraction, fresh.fraction, out_trace->plane.normal[0], out_trace->plane.normal[1],
+						out_trace->plane.normal[2], fresh.plane.normal[0], fresh.plane.normal[1], fresh.plane.normal[2]);
+			}
+			if (!(bih_tc_tested % 20000))
+				Con_Printf("bih_tracecache: %u reused, %u computed, %u reused answers re-traced, %u differed\n",
+					bih_tc_hits, bih_tc_misses, bih_tc_tested, bih_tc_bad);
+		}
+		return hit;
+	}
+	bih_tc_misses++;
+	hit = BIH_TraceUncached(model, forcehullnum, framestate, axis, start, end, mins, maxs, capsule, contents, out_trace);
+	if (key.epoch != (unsigned int)*(volatile int*)&bih_collisionepoch || m->cnodes != key.nodes)
+		return hit;	//a load it waited on, or a tree swapped under it
+	bih_tracecache_e[i].key = key;
+	bih_tracecache_e[i].trace = *out_trace;
+	bih_tracecache_e[i].hit = hit;
+	bih_tracecache_e[i].valid = true;
+	return hit;
+}
+static qboolean BIH_TraceUncached(model_t *model, int forcehullnum, const framestate_t *framestate, const vec3_t axis[3], const vec3_t start, const vec3_t end, const vec3_t mins, const vec3_t maxs, qboolean capsule, unsigned int contents, trace_t *out_trace)
 {
 	int		i;
 	vec3_t point;
@@ -2940,6 +3055,7 @@ void BIH_Build (model_t *mod, struct bihleaf_s *leafs, size_t numleafs)
 			Sys_Error("CM_BuildBIH: generated wrong number of nodes");
 	}
 	mod->cnodes = nodes;
+	BIH_CollisionChanged();	//FTESurf Patch 1266
 	mod->funcs.NativeTrace			= BIH_Trace;
 	mod->funcs.PointContents		= BIH_PointContents;
 	mod->funcs.NativeContents		= BIH_NativeContents;

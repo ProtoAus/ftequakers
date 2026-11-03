@@ -112,6 +112,7 @@ cvar_t	pm_trisoup_bevels		= CVARFD("pm_trisoup_bevels", "1", CVAR_SERVERINFO, "F
 //is linked into client and server alike.  CVAR_SERVERINFO so a dedicated server
 //publishes it -- client and server MUST agree or prediction disagrees about where
 //every rotated prop's surface is.
+cvar_t	bih_tracecache			= CVARFD("bih_tracecache", "1", CVAR_NOSAVE|CVAR_NOTFROMSERVER, "FTESurf Patch 1266: a collision trace asked again with exactly the same inputs, model, tree and clip rules returns the answer already computed (com_bih.c BIH_Trace). Client prediction replays the unacknowledged movement every rendered frame, so the same traces recur. Exact by construction; off while pm_dispprobe is on, which reads the per-trace probe record.\n0: trace every time. 1: reuse (default). 2: reuse, but also trace every reused answer again, compare, and print how many differed (must be 0).");
 cvar_t	pm_rotatedboxhulls		= CVARFD("pm_rotatedboxhulls", "1", CVAR_SERVERINFO, "FTESurf Patch 320. Treat the player's box as the ORIENTED box it is when tracing inside a rotated submodel. BIH_RecursiveTrace rotates the trace's start/end into the submodel's frame but hands the box through as an AABB, so a prop placed at a diagonal yaw collided against a box that had rotated with it -- zero error at 0/90/180/270, worst at 45. On surf_boreas's ramps (yaw -135) it put the player 7.73 units too deep in every ramp, which is why fixing the .phy winding in Patch 317 made the ride worse instead of better: the two errors had been cancelling. 0 restores the old behaviour exactly, for A/B against recorded times; it does not restore correctness.");
 cvar_t	pm_ladderprobe			= CVARFD("pm_ladderprobe", "0", CVAR_NOSAVE, "FTESurf Patch 260, temporary instrument. Fire the ladder-detection traces a Source-mode mover would fire, at the point in PMSrc_Tick where the ladder hook would live, and print what each one sees: a zero-length box trace at the origin and a forward trace, each run under MASK_PLAYERSOLID, under MASK_PLAYERSOLID|LADDER, and under an all-bits mask, plus PM_ExtraBoxContents for the entity path. Answers three questions at once -- does a ladder brush exist here, does the default mask hit it, and does trace.contents carry the LADDER bit when it does. 4Hz, and it prints even when nothing is hit so a negative is legible.");
 cvar_t	scr_usekfont			= CVARD("scr_usekfont"/*kex*/, "0", "Exists for compat with the quake rerelease, changing the behaviour of QC's sprint/bprint/centerprint builtins.");
@@ -6916,6 +6917,11 @@ void COM_Init (void)
 	Cvar_Register (&pm_dispprobe, NULL);	//Patch 256, temporary
 	Cvar_Register (&pm_trisoup_bevels, NULL);	//Patch 258
 	Cvar_Register (&pm_rotatedboxhulls, NULL);	//Patch 320
+	Cvar_Register (&bih_tracecache, NULL);	//Patch 1266
+	{
+		extern void BIH_TraceStats_f(void);
+		Cmd_AddCommandD("bih_tracestats", BIH_TraceStats_f, "FTESurf Patch 1266: print bih_tracecache's counters since the last call, then reset them.");
+	}
 	Cvar_Register (&pm_ladderprobe, NULL);	//Patch 260, temporary
 	Cvar_Register (&pm_portalcsg_scanall, NULL);	//Patch 283
 	Cvar_Register (&pm_skipent_portals, NULL);		//Patch 283

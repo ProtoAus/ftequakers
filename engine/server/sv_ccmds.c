@@ -4405,7 +4405,15 @@ static void SV_DetPinMover(model_t *world, int fixrampbugs, int sourceversion, q
 		movevars.standheight = 62;	//the picks' hull, so a contact is a standing place
 }
 
+static void SV_DetTest_Run (void);
 static void SV_DetTest_f (void)
+{	//Patch 1266: reads the probe record after its traces, which a cached trace does not write
+	extern int bih_probe_readers;
+	bih_probe_readers++;
+	SV_DetTest_Run();
+	bih_probe_readers--;
+}
+static void SV_DetTest_Run (void)
 {
 	model_t *world = sv.state?sv.world.worldmodel:NULL;
 	unsigned long long htrace = SV_DETHASH_INIT;

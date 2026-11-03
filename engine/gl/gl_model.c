@@ -792,6 +792,7 @@ qboolean Mod_PurgeModel(model_t	*mod, enum mod_purge_e ptype)
 	}
 	ZG_FreeGroup(&mod->memgroup);
 	mod->loadstate = MLS_NOTLOADED;
+	BIH_CollisionChanged();	//FTESurf Patch 1266: cached traces may have walked it
 
 	mod->submodelof = NULL;
 	mod->pvs = NULL;
@@ -1300,6 +1301,7 @@ void Mod_ModelLoaded(void *ctx, void *data, size_t a, size_t b)
 
 	previouslyfailed = mod->loadstate == MLS_FAILED;
 	mod->loadstate = a;
+	BIH_CollisionChanged();	//FTESurf Patch 1266: a trace that skipped it while loading is stale now
 
 #ifdef TERRAIN
 	if (mod->terrain)
