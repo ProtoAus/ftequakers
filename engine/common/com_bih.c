@@ -2393,6 +2393,10 @@ static void BIH_SortLeafs (struct bihleaf_s *leafs, size_t numleafs, struct bihl
 static struct bihbox_s BIH_BuildNode (struct bihnode_s *node, struct bihnode_s **freenodes, struct bihleaf_s *leafs, size_t numleafs, struct bihleaf_s *scratch)
 {
 	struct bihbox_s bounds;
+#ifndef SERVERONLY
+	if (numleafs >= 64)
+		SCR_LoadingPump();	//FTESurf Patch 1259: the hl2 world's tree is built on the main thread
+#endif
 	if (numleafs == 1)	//the leaf just gives the brush pointer.
 	{
 		size_t i;

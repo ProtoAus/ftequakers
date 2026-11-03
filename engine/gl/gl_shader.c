@@ -833,6 +833,8 @@ qboolean Shader_ParseSkySides (char *shadername, char *texturename, texid_t *ima
 		"materials/skybox/%s%s"	//nettest: explicit materials/ prefix (matches how Source .vpk paths are mounted)
 	};
 
+	char texname[MAX_QPATH];	//FTESurf Patch 1259: texturename is com_token, and the pump below may parse
+
 	if (*texturename == '$')
 	{
 		cvar_t *v;
@@ -842,9 +844,13 @@ qboolean Shader_ParseSkySides (char *shadername, char *texturename, texid_t *ima
 	}
 	if (!*texturename)
 		texturename = "-";
+	Q_strncpyz(texname, texturename, sizeof(texname));
+	texturename = texname;
 
 	for ( i = 0; i < 6; i++ )
 	{
+		if (i)
+			SCR_LoadingPump();	//Patch 1259: each face loads now (IF_LOADNOW), ~70 ms apiece for a Source sky
 		if ( texturename[0] == '-' )
 		{
 			images[i] = r_nulltex;

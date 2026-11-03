@@ -434,6 +434,10 @@ static void ASMCALL ThinkTimeOp (pubprogfuncs_t *prinst, edict_t *ed, float var)
 #endif
 
 static int SV_ParticlePrecache_Add(const char *pname);
+//FTESurf Patch 1259: PR_FindFunction ends in a linear scan of every global def, and ran once per
+//unknown key -- 2x170 ms of surf_eternity's spawn.  PR_SpawnInitialEntities looks it up once.
+static qboolean sv_unknownepair_cached;
+static func_t sv_unknownepair;
 static pbool PDECL SV_BadField(pubprogfuncs_t *inst, edict_t *foo, const char *keyname, const char *value)
 {
 	if (!strcmp(keyname, "traileffect"))
@@ -496,7 +500,7 @@ static pbool PDECL SV_BadField(pubprogfuncs_t *inst, edict_t *foo, const char *k
 	//"is not a field" warning — the QC code is responsible for
 	//ignoring keys it doesn't care about.
 	{
-		func_t hookfn = PR_FindFunction(inst, "ED_ParseUnknownEpair", PR_ANY);
+		func_t hookfn = (sv_unknownepair_cached && inst == svprogfuncs) ? sv_unknownepair : PR_FindFunction(inst, "ED_ParseUnknownEpair", PR_ANY);
 		if (hookfn)
 		{
 			globalvars_t *pr_globals = PR_globals(inst, PR_CURRENT);
@@ -1219,6 +1223,7 @@ void PR_LoadGlabalStruct(qboolean muted)
 */
 	pr_teamfield = 0;
 
+	sv_unknownepair_cached = false;	//Patch 1259: a spawn that errored out must not leak into these progs
 	SpectatorConnect = PR_FindFunction(svprogfuncs, "SpectatorConnect", PR_ANY);
 	SpectatorDisconnect = PR_FindFunction(svprogfuncs, "SpectatorDisconnect", PR_ANY);
 	SpectatorThink = PR_FindFunction(svprogfuncs, "SpectatorThink", PR_ANY);
@@ -2064,7 +2069,12 @@ void PR_SpawnInitialEntities(const char *file)
 	ctx.fulldata = PR_FindGlobal(svprogfuncs, "__fullspawndata", PR_ANY, NULL);
 
 	if (svprogfuncs)
+	{
+		sv_unknownepair = PR_FindFunction(svprogfuncs, "ED_ParseUnknownEpair", PR_ANY);	//Patch 1259
+		sv_unknownepair_cached = true;
 		sv.world.edict_size = PR_LoadEnts(svprogfuncs, file, &ctx, NULL, PR_DoSpawnInitialEntity, NULL);
+		sv_unknownepair_cached = false;
+	}
 	else
 		sv.world.edict_size = 0;
 }

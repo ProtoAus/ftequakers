@@ -4074,6 +4074,9 @@ static void Mod_Batches_BuildModelMeshes(model_t *mod, int maxverts, int maxindi
 				mesh->vbofirstelement = 0;
 
 				build(mod, surf, bd);
+#ifndef SERVERONLY
+				SCR_LoadingPump();	//FTESurf Patch 1259: the hl2 world's batches run as one main-thread job
+#endif
 
 				if (lmmerge != 1)
 				{
@@ -4666,6 +4669,9 @@ static void Mod_Batches_AllocLightmaps(model_t *mod)
 
 		for (j = 1; j < batch->maxmeshes; j++)
 		{
+#ifndef SERVERONLY
+			SCR_LoadingPump();	//Patch 1259: Mod_LightmapAllocBlock was a third of a 0.5 s stall on surf_eternity
+#endif
 			surf = (msurface_t*)batch->mesh[j];
 			Mod_LightmapAllocSurf (mod, &lmallocator, surf, 0);
 			for (sty = 1; sty < MAXRLIGHTMAPS; sty++)
