@@ -557,6 +557,8 @@ struct programpermu_s
 #ifdef GLQUAKE
 	int factorsuniform;
 	int instuniform[3];	//FTESurf Patch 831: s_instdata, s_instvc, e_instbase
+	int a2cuniform;		//FTESurf Patch 1262: e_alphacoverage, for an alpha-testing program (GLSlang_ProgAutoFields)
+	int a2cval;			//the value last written to it, -1 none
 #endif
 	unsigned int permutation;
 	unsigned int attrmask;

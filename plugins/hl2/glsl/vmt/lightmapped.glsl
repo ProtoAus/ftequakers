@@ -237,8 +237,14 @@ uniform float cvar_r_renderscale;
 		diffuse_f.rgb *= e_colourident.rgb * vec3(COLOR);
 
 #ifdef MASKLT
+	#ifdef FTE_ALPHACOVERAGE	// FTESurf Patch 1262: under MSAA the test's edge is a pixel of coverage, not a cut
+		float a2c = (diffuse_f.a - float(MASK)) / max(fwidth(diffuse_f.a), 0.0001) + 0.5;
+		if (e_alphacoverage > 0.0 ? a2c <= 0.0 : diffuse_f.a < float(MASK))
+			discard;
+	#else
 		if (diffuse_f.a < float(MASK))
 			discard;
+	#endif
 #endif
 
 		//ftesurf (P232): the per-vertex tint and opacity the material asked for.
@@ -388,5 +394,9 @@ uniform float cvar_r_renderscale;
 			gl_FragColor = vec4(fog3(diffuse_f.rgb), diffuse_f.a);
 		#endif
 	#endif
+#if defined(MASKLT) && defined(FTE_ALPHACOVERAGE)
+	if (e_alphacoverage > 0.0)
+		gl_FragColor.a = min(a2c, 1.0);
+#endif
 	}
 #endif

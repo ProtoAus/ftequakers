@@ -1615,6 +1615,8 @@ static const char *glsl_hdrs[] =
 				"uniform mat3 m_invmodelview;"
 				"uniform mat4 m_capturefix;\n"	//FTESurf Patch 1245
 				"#define FTE_CAPTUREFIX 1\n"
+				"uniform float e_alphacoverage;\n"	//FTESurf Patch 1262
+				"#define FTE_ALPHACOVERAGE 1\n"
 
 				/*viewer properties*/
 				"uniform vec3 v_eyepos;"
@@ -3073,6 +3075,11 @@ static void GLSlang_ProgAutoFields(program_t *prog, struct programpermu_s *pp, c
 	pp->instuniform[0] = qglGetUniformLocationARB(pp->h.glsl.handle, "s_instdata");	//FTESurf Patch 831
 	pp->instuniform[1] = qglGetUniformLocationARB(pp->h.glsl.handle, "s_instvc");
 	pp->instuniform[2] = qglGetUniformLocationARB(pp->h.glsl.handle, "e_instbase");
+	//FTESurf Patch 1262: only a program whose arguments ask for the alpha test (vmt/detail always does) turns its
+	//output alpha into coverage; a driver may report an unused uniform as active
+	pp->a2cuniform = (prog && prog->name && (strstr(prog->name, "#MASKLT") || !strncmp(prog->name, "vmt/detail", 10))) ?
+		qglGetUniformLocationARB(pp->h.glsl.handle, "e_alphacoverage") : -1;
+	pp->a2cval = -1;
 
 	for (i = 0; shader_unif_names[i].name; i++)
 	{

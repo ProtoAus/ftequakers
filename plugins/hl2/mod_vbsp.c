@@ -94,6 +94,7 @@ static cvar_t *hl2_novis;
 static cvar_t *hl2_clipflags;	//FTESurf Patch 831
 static cvar_t *hl2_visdebug;	//Opt-in area/leaf-walk statistics, not visibility behavior.
 static cvar_t *hl2_pvscache;	//FTESurf Patch 273: memoise the headnode descent
+static cvar_t *hl2_pvsmemo;		//FTESurf Patch 1261: keep each level's prop and displacement PVS verdicts
 static cvar_t *hl2_displacement_scale;
 static cvar_t *hl2_favour_ldr;
 static cvar_t *hl2_lumpretire;	//FTESurf Patch 298
@@ -469,6 +470,12 @@ typedef struct vbspinfo_s
 		qbyte *vis;
 		pvsbuffer_t visbuf;
 		int viewcluster[2];
+		//FTESurf Patch 1261 (VBSP_PVSMemo): the static props' then the displacements' PVS/area answers against
+		//this vis, 0 unknown or 1 + vbsp_pvs_why, while the view's vis, clusters, area, area connections
+		//(floodvalid) and map_noareas are the ones they were taken for
+		qbyte *memo;
+		const qbyte *memovis;
+		int memocluster[2], memoarea, memoflood, memonoareas;
 	} vcache[R_MAX_RECURSE];
 
 	/*
@@ -10108,8 +10115,48 @@ static void VBSP_DetailDraw(model_t *mod, const qbyte *surfvis, int area)
 	}
 }
 
+//FTESurf Patch 1261: a level's PVS verdicts, NULL where there are none to keep (a forced vis: captures and portals)
+static qbyte *VBSP_PVSMemo(model_t *mod, int area, const int clusters[2], const qbyte *surfvis)
+{
+	vbspinfo_t	*prv = (vbspinfo_t*)mod->meshinfo;
+	int lvl = (refdef->recurse < 0) ? 0 : (refdef->recurse >= R_MAX_RECURSE ? R_MAX_RECURSE-1 : refdef->recurse);
+	size_t n = prv->numstaticprops + prv->numdisplacements;
+	if (!surfvis || refdef->forcevis || !n || (hl2_pvsmemo && !hl2_pvsmemo->ival))
+		return NULL;
+	if (!prv->vcache[lvl].memo)
+		prv->vcache[lvl].memo = plugfuncs->GMalloc(&mod->memgroup, n);
+	if (prv->vcache[lvl].memovis != surfvis || prv->vcache[lvl].memocluster[0] != clusters[0] ||
+		prv->vcache[lvl].memocluster[1] != clusters[1] || prv->vcache[lvl].memoarea != area ||
+		prv->vcache[lvl].memoflood != prv->floodvalid || prv->vcache[lvl].memonoareas != !!map_noareas->value)
+	{
+		memset(prv->vcache[lvl].memo, 0, n);
+		prv->vcache[lvl].memovis = surfvis;
+		prv->vcache[lvl].memocluster[0] = clusters[0];
+		prv->vcache[lvl].memocluster[1] = clusters[1];
+		prv->vcache[lvl].memoarea = area;
+		prv->vcache[lvl].memoflood = prv->floodvalid;
+		prv->vcache[lvl].memonoareas = !!map_noareas->value;	//VBSP_AreasConnected's override
+	}
+	return prv->vcache[lvl].memo;
+}
+//its verdict for one object, or the test's (kept); vbsp_pvs_why as the test leaves it
+static qboolean VBSP_PVSMemoTest(qbyte *memo, size_t idx, model_t *mod, const struct staticprop_s *sp, const pvscache_t *pvs, const qbyte *surfvis, const int *areas)
+{
+	qboolean vis;
+	if (memo && memo[idx])
+	{
+		vbsp_pvs_why = memo[idx] - 1;
+		return memo[idx] == 1 + VBSP_PVSWHY_VISIBLE;
+	}
+	vis = (sp && sp->numpvsclusters) ? VBSP_PropClustersVisible(sp, surfvis) : VBSP_EdictInFatPVS(mod, pvs, surfvis, areas);
+	if (memo)
+		memo[idx] = 1 + vbsp_pvs_why;
+	return vis;
+}
+
 static void VBSP_PrepareFrame(model_t *mod, refdef_t *r_refdef, int area, int clusters[2], pvsbuffer_t *vis, qbyte **entvis_out, qbyte **surfvis_out)
 {
+	qbyte *memo;	//FTESurf Patch 1261
 	vbspinfo_t	*prv = (vbspinfo_t*)mod->meshinfo;
 	qbyte *surfvis, *entvis;
 
@@ -10227,6 +10274,7 @@ static void VBSP_PrepareFrame(model_t *mod, refdef_t *r_refdef, int area, int cl
 
 
 	entvis = surfvis = VBSP_MarkLeaves(mod, clusters);
+	memo = VBSP_PVSMemo(mod, area, clusters, surfvis);
 	VectorCopy (r_refdef->vieworg, modelorg);
 	if (!surfvis)
 	{
@@ -10252,7 +10300,7 @@ static void VBSP_PrepareFrame(model_t *mod, refdef_t *r_refdef, int area, int cl
 		for (i = 0; i < prv->numdisplacements; i++)
 		{
 			disp = &prv->displacements[i];
-			if (VBSP_EdictInFatPVS(mod, &disp->pvs, surfvis, areas))
+			if (VBSP_PVSMemoTest(memo, prv->numstaticprops + i, mod, NULL, &disp->pvs, surfvis, areas))
 			{
 				surf = disp->surf;
 				if (surf->visframe == vbsp_surfsequence)
@@ -10618,8 +10666,7 @@ static void VBSP_PrepareFrame(model_t *mod, refdef_t *r_refdef, int area, int cl
 			//PVS/area cull, exactly like the displacement loop above (VBSP_EdictInFatPVS at ~3587).
 			//Only valid when we actually have view PVS: surfvis==NULL means portal-recursion / novis / no model vis, where everything must draw.
 			//src->pvscache.leafnums hold CLUSTERS, and surfvis is the cluster-PVS from VBSP_MarkLeaves, so this is index-consistent (same as displacements).
-			if (surfvis && (sent->numpvsclusters ? !VBSP_PropClustersVisible(sent, surfvis) :
-			                !VBSP_EdictInFatPVS(mod, &src->pvscache, surfvis, areas)))
+			if (surfvis && !VBSP_PVSMemoTest(memo, i, mod, sent, &src->pvscache, surfvis, areas))
 			{
 				sent->lastpvswhy = vbsp_pvs_why;	//FTESurf Patch 257: set by the call above
 				PROP_VERDICT(PROPV_PVS);
@@ -13423,6 +13470,7 @@ qboolean VBSP_Init(void)
 		hl2_visdebug = cvarfuncs->GetNVFDG("hl2_visdebug", "0", 0, "Print Source area visibility and 300-frame leaf-walk statistics (also requires developer). Does not change visibility.", MAPOPTIONS);
 		hl2_novis = cvarfuncs->GetNVFDG("r_novis", "0", 0, "Draw every leaf, ignoring the PVS. Diagnostic: makes a vis problem visible by removing vis.", MAPOPTIONS);
 		hl2_clipflags = cvarfuncs->GetNVFDG("hl2_clipflags", "1", 0, "FTESurf Patch 831: the world walk stops testing a frustum plane below a node wholly in front of it. 0 tests every plane at every node (the A/B).", MAPOPTIONS);
+		hl2_pvsmemo = cvarfuncs->GetNVFDG("hl2_pvsmemo", "1", 0, "FTESurf Patch 1261: keep each view level's static-prop and displacement PVS verdicts while its clusters, area and area connections are unchanged, instead of testing every one each frame. 0 tests every frame (the A/B).", MAPOPTIONS);
 		hl2_pvscache = cvarfuncs->GetNVFDG("hl2_pvscache", "1", 0, "FTESurf (P273): reuse the answer to the whole-tree entity-visibility descent when the same node is asked about the same PVS. Exact, not approximate -- the test is a pure function of those two. Measured on surf_tensor2 it was 98% of the listen server's per-frame cost. 0 restores the old recompute-every-time behaviour, so a suspected culling bug is a one-command A/B.", MAPOPTIONS);
 		hl2_lumpretire = cvarfuncs->GetNVFDG("hl2_lumpretire", "1", CVAR_MAPLATCH, "FTESurf (P298): skip LZMA-decompressing the BSP lumps nothing in this configuration will read -- both lightmaps on a dedicated server, and the unused half of the LDR/HDR pair when drawing. Map load on this engine is single-threaded LZMA and almost nothing else, so this is most of it: 334 MB of the 350 MB surf_affliction expands is lightmap. 0 restores the old decompress-everything behaviour, which makes the whole patch a one-command A/B.", MAPOPTIONS);
 		/*
