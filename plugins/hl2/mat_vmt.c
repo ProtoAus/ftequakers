@@ -5295,6 +5295,33 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 	if (st->animpass)
 		Con_DPrintf("[vmt] %s generated:\n%s", shortname, script);
 
+	//FTESurf Patch 1251: tools/toolsblack backs fake skies 16 units behind them (surf_fantasy's stage 4).
+	//Opaque beside an opaque WindowImposter it won the depth test in stripes from ~14k units, where 16
+	//units is about one depth step; `depthpush` (engine, P1251) moves it back so the face in front wins.
+	{
+		char nm[MAX_QPATH], *c;
+		Q_strlcpy(nm, shortname, sizeof(nm));
+		for (c = nm; *c; c++)
+			*c = (*c == '\\') ? '/' : ((*c >= 'A' && *c <= 'Z') ? *c + 32 : *c);
+		if ((c = strchr(nm, '#')))
+			*c = 0;
+		if (strlen(nm) > 4 && !strcmp(nm + strlen(nm) - 4, ".vmt"))
+			nm[strlen(nm) - 4] = 0;
+		c = strncmp(nm, "materials/", 10) ? nm : nm + 10;
+		if (!strcmp(c, "tools/toolsblack"))
+		{	//the script is a shader BODY (Shader_ReadShader: the opening brace is already consumed),
+			//so a shader-level keyword goes first, before any pass block opens
+			static const char push[] = "\tdepthpush 4\n";
+			size_t n = strlen(script);
+			if (n + sizeof(push) < sizeof(script))
+			{
+				memmove(script + (sizeof(push)-1), script, n + 1);
+				memcpy(script, push, sizeof(push)-1);
+				Con_DPrintf("[vmt] %s: depthpush 4 (P1251)\n", shortname);
+			}
+		}
+	}
+
 	LoadMaterialString(ps, script);
 
 	if (st->sourcefile)
