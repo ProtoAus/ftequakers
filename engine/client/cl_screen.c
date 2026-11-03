@@ -3758,6 +3758,7 @@ void SCR_ResumeLoadingPlaque(void)
 		return;
 	scr_disabled_for_loading = true;
 	scr_disabled_time = Sys_DoubleTime();
+	scr_loadingreleased = false;	//once per download (review 4): CL_RequestNextDownload calls this every frame, and GLSCR's 60 s must stand
 }
 
 void SCR_EndLoadingPlaque (void)
