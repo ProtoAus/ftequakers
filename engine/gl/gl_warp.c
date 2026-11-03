@@ -881,8 +881,9 @@ qboolean R_DrawSkyChain (batch_t *batch)
 				GL_DrawSkyBoxFull(batch, skyboxtex, skyboxscale, NULL);
 			r_skyroom_boxdrawn = true;
 		}
-		else if (r_skybox_full.ival && r_worldentity.model && r_worldentity.model->fromgame == fg_new && !cl.skyrotate &&
-			!(r_skyroomlevel >= 0 && r_refdef.recurse == r_skyroomlevel))	//the sky room keeps r_skyroom_fullbox's choice
+		else if (r_skybox_full.ival && qrenderer == QR_OPENGL && r_worldentity.model && r_worldentity.model->fromgame == fg_new &&
+			!cl.skyrotate && !(r_skyroomlevel >= 0 && r_refdef.recurse == r_skyroomlevel))
+		//GL only: only GLBE_SubmitMeshes resets the latch. The sky room keeps r_skyroom_fullbox's choice.
 		{	//Patch 1237: once a view, however many sky batches it has
 			if (!r_skybox_fulldrawn)
 				GL_DrawSkyBoxFull(batch, skyboxtex, skyboxscale, NULL);
