@@ -1,5 +1,41 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1236 — GPOS pair kerning for QC text; r_font_gamma; no 2D flush on a font change; ^U over-read
+
+**Problem.** Lex (3 Nov) asked for sharp, kerned, gamma-correct text. The static FreeType (2.10.1)
+reads only legacy 'kern' tables, and Roboto and Bebas Neue keep their kerning in GPOS alone. Every
+font change between strings also flushed the 2D batch.
+
+**Change.** Tag patch-1236 = 01621b9bd (4 commits on patch-1233-with-1230).
+- gl_font.c Font_LoadKerning: GPOS 'kern' (script latn, else DFLT; default LangSys; PairPos formats
+  1 and 2, directly or through Extension; value 1's XAdvance). Lookups add, and each stops at its
+  first subtable that applies, as HarfBuzz does. It is baked into a 224x224 table over
+  U+0020..U+00FF the first time a face is some font's face[0]. Reads are bounds-checked;
+  KERN_MAXSUB 1024 subtables, KERN_MAXWORK 4M steps.
+- Font_DrawScaleChar kerns against the char it drew last when it is passed back the pen it returned
+  (same font, same y; Font_BeginScaledString resets it). Font_LineScaleWidth applies the same pairs,
+  so drawstring and stringwidth agree. Pairs round to the font's whole pixels. r_font_kerning
+  (archived, 1); r_font_kerndump lists the baked tables.
+- r_font_gamma (archived, 1.4): coverage^(1/g) through a 256-entry table when a glyph is baked;
+  1 while vid_srgb 1 or 2 blends in linear light.
+- Font_BeginString/Font_BeginScaledString no longer flush on a font change: vertices carry final
+  colour, and a texture change flushes in Font_BeginChar.
+- common.c COM_ParseFunString: ^U needs four hex digits. A trailing "^U" read str[2..5] and stepped
+  past the terminator (pre-existing; any marked-up drawn or measured string, e.g. a chat line).
+- FT_Load_Sfnt_Table is resolved on its own on DLL builds, so lacking it costs kerning only.
+
+**Measured.** The baked tables equal fontTools' parse (Roboto 1790, Bebas 4447 Latin-1 pairs) and
+HarfBuzz 15's shaping except U+00AD (HarfBuzz hides it; FTE draws it). Right-aligned probe rows
+(Roboto 16/24/48, Bebas 24/32/48) keep their right edge with kerning on and off, the left edge
+moving by exactly the stringwidth change. leet_xl spawn at Lex's settings: 193 -> 190 draws a frame
+from the flush, frame time unchanged; kerning's cost is not measurable. Crafted GPOS tables: 7.4 s
+-> 0.007 s at load. Installs: exe 8c93b1fc (git-8110-patch-1236-0-g01621b9bd).
+
+**Not done.** Console, sbar, drawtextfield and Font_DrawChar text are unkerned; U+0020..U+00FF
+only; GPOS value 2, lookup flags and contextual kerning are not implemented (no shipped font
+reaches them). FTESurf's QC places carets with Font_PenX (sh_font.qc), since stringwidth is no
+longer additive. Reviewed through three lenses plus two rounds on the fixes.
+
 ## Patch 1230 — r_scenedepth: CSQC passes test against the scene's depth (the aura glow); render-target views leave vrect and the stair smoothing alone
 
 **Problem.** Lex (3 Nov): the inventory Ice aura (P1163, sixteen normal-pushed shells) looked like
