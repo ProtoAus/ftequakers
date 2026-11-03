@@ -3430,7 +3430,7 @@ static PRUNTIME_FUNCTION Prof_Lookup(DWORD64 pc, DWORD64 *base)
 	IMAGE_DOS_HEADER *dos;
 	IMAGE_NT_HEADERS64 *nt;
 	IMAGE_DATA_DIRECTORY *dd;
-	RUNTIME_FUNCTION *rf;
+	RUNTIME_FUNCTION *fe;
 	DWORD rva, lo, hi, mid;
 	BYTE *b;
 	if (!VirtualQuery((void*)pc, &mbi, sizeof(mbi)) || mbi.Type != MEM_IMAGE)
@@ -3445,21 +3445,21 @@ static PRUNTIME_FUNCTION Prof_Lookup(DWORD64 pc, DWORD64 *base)
 	dd = &nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXCEPTION];
 	if (!dd->VirtualAddress || !dd->Size)
 		return NULL;
-	rf = (void*)(b + dd->VirtualAddress);
+	fe = (void*)(b + dd->VirtualAddress);
 	rva = (DWORD)(pc - (DWORD64)b);
 	lo = 0;
-	hi = dd->Size / sizeof(*rf);
+	hi = dd->Size / sizeof(*fe);
 	while (lo < hi)
 	{
 		mid = (lo + hi) / 2;
-		if (rva < rf[mid].BeginAddress)
+		if (rva < fe[mid].BeginAddress)
 			hi = mid;
-		else if (rva >= rf[mid].EndAddress)
+		else if (rva >= fe[mid].EndAddress)
 			lo = mid + 1;
 		else
 		{
 			*base = (DWORD64)b;
-			return &rf[mid];
+			return &fe[mid];
 		}
 	}
 	return NULL;
