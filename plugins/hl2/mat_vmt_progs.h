@@ -777,18 +777,8 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "#else\n"
 "lightmaps  = LIGHTMAP * e_lmscale.rgb;\n"
 "#endif\n"
-
-/* the light we're getting is always too bright */
-"lightmaps *= 0.75;\n"
-
-/* clamp at 1.5 */
-"if (lightmaps.r > 1.5)\n"
-"lightmaps.r = 1.5;\n"
-"if (lightmaps.g > 1.5)\n"
-"lightmaps.g = 1.5;\n"
-"if (lightmaps.b > 1.5)\n"
-"lightmaps.b = 1.5;\n"
-
+//Patch 1269: no 0.75 scale or 1.5 clamp, as lightmapped.glsl since e4c4938ef: a blended
+//displacement drew at 3/4 of the flat face beside it (surf_starvald's floor seam).
 "return lightmaps;\n"
 "}\n"
 
