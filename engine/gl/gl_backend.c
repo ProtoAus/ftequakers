@@ -5291,7 +5291,10 @@ static void BE_RenderMeshProgram(const shader_t *shader, const shaderpass_t *pas
 		permu = p->permu[perm];
 		if (!permu)
 		{
+			void GLSLWarm_Note(const char *name, unsigned int perm);
 			p->permu[perm] = permu = Shader_LoadPermutation(p, perm);
+			if (permu)
+				GLSLWarm_Note(p->name, perm);	//FTESurf Patch 1277: compiled at its next load
 			if (!permu)
 			{	//failed? copy from 0 so we don't keep re-failing
 				permu = p->permu[perm] = p->permu[0];

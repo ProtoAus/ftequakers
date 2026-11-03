@@ -485,6 +485,11 @@ void CL_MakeActive(char *gamename)
 	shader_reload_why = "CL_ParseServerData/ca_active";
 	Shader_DoReload();
 	P_LoadedCensus("CL_MakeActive after Shader_DoReload");
+	{	//FTESurf Patch 1277: the remembered permutations, after the reload and behind the loading screen
+		void GLSLWarm_MapActive(void);
+		SCR_LoadTimesStage("shader warm list");
+		GLSLWarm_MapActive();
+	}
 
 	//and now free any textures that were not still needed.
 	SCR_LoadTimesStage("purge images");

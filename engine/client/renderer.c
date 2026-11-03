@@ -126,6 +126,7 @@ cvar_t gl_shadeq1_name						= CVARD  ("gl_shadeq1_name", "*", "Rename all surfac
 extern cvar_t r_vertexlight;
 extern cvar_t r_forceprogramify;
 extern cvar_t r_glsl_precache;
+extern cvar_t r_glsl_warm;	//FTESurf Patch 1277
 extern cvar_t r_halfrate;
 extern cvar_t dpcompat_nopremulpics;
 #ifdef PSKMODELS
@@ -1739,6 +1740,7 @@ void Renderer_Init(void)
 
 	Cvar_Register (&r_forceprogramify, GLRENDEREROPTIONS);
 	Cvar_Register (&r_glsl_precache, GLRENDEREROPTIONS);
+	Cvar_Register (&r_glsl_warm, GLRENDEREROPTIONS);
 	Cvar_Register (&r_halfrate, GRAPHICALNICETIES);
 #ifdef HAVE_LEGACY
 	Cvar_Register (&dpcompat_nopremulpics, GLRENDEREROPTIONS);
