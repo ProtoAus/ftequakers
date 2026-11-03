@@ -1,5 +1,39 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1237 — the 3D sky at r_skyroom_scale; Source's 2D sky drawn whole; r_instancing 2 names its refusals
+
+**Problem.** Lex (3 Nov) asked whether the skybox rendering is wrong, to try a lower-resolution 3D sky,
+and to measure surf_eternity's reflective glass. The sky room is drawn as Source draws it (once, from
+the sky camera with its own vis and area, behind the world); at r_renderscale 2 its cost is fill:
+surf_demise save 33, 1.14 ms of GPU at scale 2 against 0.45 at 1. A sampling profile of eternity save 4
+(glass reflection, ~3.3 ms of its 5.4 ms frame) put 6% in ClipSkyPolygon and R_CalcSkyChainBounds: the
+2D skybox's face rectangles, clipped from every sky triangle on the CPU in every view.
+
+**Change.** Tag patch-1237 = 1b32d09e5 (P1237 on patch-1236).
+- r_skyroom_scale (default 1, archived, GL): below 1, GLBE_DrawSkyroomScaled draws the top-level view's
+  sky room into fbo_skyroom at that fraction of the view's pixels and blits it (linear) behind the world.
+  Full size inside captures and nested views, for anaglyph eyes (a blit ignores the colour mask), CSQC
+  render-target views (it writes every draw buffer), multisampled targets and an incomplete FBO.
+  RGBA16F where the scene target is float. glBlitFramebuffer is loaded (gl3, ARB_fbo, EXT blit).
+- r_skybox_full (default 1, GL): a Source map's 2D skybox draws its six faces whole via
+  GL_DrawSkyBoxFull, once a view; the latch resets at each GLBE_SubmitMeshes and at its SKY sort (a
+  portal view in the PORTAL sort draws its own box). The sky room keeps r_skyroom_fullbox's choice.
+- r_instancing 2: every refused alias batch prints reason, program and model (512 a report).
+
+**Verified (rig, Lex's settings, fixture; three review rounds, the last clean).** r_skybox_full against 0:
+eternity s4 4.70/4.73 ms against 5.09/5.34, s10 5.18/5.26 against 5.65/5.65; s7, demise, garden
+unchanged; pictures equal. r_skyroom_scale 0.5: demise s33 3.27 -> 2.82 ms (306 -> 355 fps), sky
+slightly softer at screen resolution; a cheap sky loses ~0.05-0.1 ms to the blit (garden s4).
+Installed: exe ca2222e0 in both installs (.pre1237 8c93b1fc).
+
+**Also measured (no change made).** Eternity's glass reflection draws 353 prop batches against the main
+view's 51 (Source's func_reflective_glass view draws entities too); r_portalareas 0 changed nothing; 163
+of its 167 instancing refusals are lights/white.vmt (vmt/unlit has no INSTANCED) on 49 models, and an
+instanced vmt/unlit (as a <gamedir>/vmt override) cut 106 batches with no frame-time change. Skipping
+the per-face lightmap checks showed nothing. surf_demise save 33 with displacements hidden (a test-only
+plugin switch, not committed): 3.25 -> 2.57 ms, GPU 3.19 -> 1.54 (world ~1.0 and sky room ~0.7 ms);
+hl2_seamless 0 and hl2_bumpmap2 0 changed nothing.
+
 ## Patch 1236 — GPOS pair kerning for QC text; r_font_gamma; no 2D flush on a font change; ^U over-read
 
 **Problem.** Lex (3 Nov) asked for sharp, kerned, gamma-correct text. The static FreeType (2.10.1)
