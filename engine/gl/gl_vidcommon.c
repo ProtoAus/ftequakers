@@ -1615,6 +1615,8 @@ static const char *glsl_hdrs[] =
 				"uniform mat3 m_invmodelview;"
 				"uniform mat4 m_capturefix;\n"	//FTESurf Patch 1245
 				"#define FTE_CAPTUREFIX 1\n"
+				"uniform float e_alphacoverage;\n"	//FTESurf Patch 1262
+				"#define FTE_ALPHACOVERAGE 1\n"
 
 				/*viewer properties*/
 				"uniform vec3 v_eyepos;"
@@ -3073,6 +3075,7 @@ static void GLSlang_ProgAutoFields(program_t *prog, struct programpermu_s *pp, c
 	pp->instuniform[0] = qglGetUniformLocationARB(pp->h.glsl.handle, "s_instdata");	//FTESurf Patch 831
 	pp->instuniform[1] = qglGetUniformLocationARB(pp->h.glsl.handle, "s_instvc");
 	pp->instuniform[2] = qglGetUniformLocationARB(pp->h.glsl.handle, "e_instbase");
+	pp->a2cuniform = qglGetUniformLocationARB(pp->h.glsl.handle, "e_alphacoverage");	//FTESurf Patch 1262
 
 	for (i = 0; shader_unif_names[i].name; i++)
 	{

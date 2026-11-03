@@ -557,6 +557,7 @@ struct programpermu_s
 #ifdef GLQUAKE
 	int factorsuniform;
 	int instuniform[3];	//FTESurf Patch 831: s_instdata, s_instvc, e_instbase
+	int a2cuniform;		//FTESurf Patch 1262: e_alphacoverage, which only an alpha-tested permutation keeps
 #endif
 	unsigned int permutation;
 	unsigned int attrmask;

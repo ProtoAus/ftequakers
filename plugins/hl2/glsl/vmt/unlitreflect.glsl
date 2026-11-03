@@ -82,8 +82,14 @@ void main()
 	base.a = mix(base.a, base.a * texture2D(s_upper, (tex_c + e_time * vec2(DETAILSCROLL)) * float(DETAILSCALE)).a, float(DETAILBLEND));	//BaseVSShader.cpp:351-357 scales the scroll too
 #endif
 #if defined(MASKLT) && !defined(ENVFROMBASE)	//base alpha as the mask turns the alpha test off
+	#ifdef FTE_ALPHACOVERAGE	// FTESurf Patch 1262, as vmt/lightmapped
+	float a2c = (base.a - float(MASK)) / max(fwidth(base.a), 0.0001) + 0.5;
+	if (e_alphacoverage > 0.0 ? a2c <= 0.0 : base.a < float(MASK))
+		discard;
+	#else
 	if (base.a < float(MASK))
 		discard;
+	#endif
 #endif
 #ifdef ENVFROMMASK
 	rgb *= texture2D(s_reflectmask, btc).rgb;	//at the base's coordinates (ps2x.fxc:331)
@@ -121,6 +127,10 @@ void main()
 	gl_FragColor = fog4additive(result);
 #else
 	gl_FragColor = vec4(fog3(result.rgb), result.a);
+#endif
+#if defined(BASE) && defined(MASKLT) && !defined(ENVFROMBASE) && defined(FTE_ALPHACOVERAGE)	//as the test above
+	if (e_alphacoverage > 0.0)
+		gl_FragColor.a = min(a2c, 1.0);
 #endif
 }
 #endif

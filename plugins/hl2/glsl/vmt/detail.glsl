@@ -53,11 +53,21 @@ void main ()
 void main ()
 {
 	vec4 c = texture2D(s_diffuse, tex_c);
+#ifdef FTE_ALPHACOVERAGE	// FTESurf Patch 1262, as vmt/lightmapped
+	float a2c = (c.a - float(MASK)) / max(fwidth(c.a), 0.0001) + 0.5;
+	if (e_alphacoverage > 0.0 ? a2c <= 0.0 : c.a < float(MASK))
+		discard;
+#else
 	if (c.a < float(MASK))
 		discard;
+#endif
 	//interleaved-gradient noise as the fade's threshold
 	if (vex_color.a < 1.0 && vex_color.a <= fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715)))))
 		discard;
 	gl_FragColor = fog4(vec4(c.rgb * vex_color.rgb, 1.0));
+#ifdef FTE_ALPHACOVERAGE
+	if (e_alphacoverage > 0.0)
+		gl_FragColor.a = min(a2c, 1.0);
+#endif
 }
 #endif

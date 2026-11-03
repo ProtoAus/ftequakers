@@ -1561,6 +1561,9 @@ static qboolean GLBE_FlatRefractPane(void)
 //rt/$lastgameview (and its depth) when the view ends, and before a mid-scene copy of the screen, which
 //cannot read samples. A resolve needs identical formats, so the samples copy the targets' own.
 static qboolean be_scissoron;	//GL_SCISSOR_TEST as BE_Scissor last set it: blits are scissored
+static qboolean be_a2con;	//FTESurf Patch 1262: GL_SAMPLE_ALPHA_TO_COVERAGE as GLBE_AlphaCoverage last set it
+static const struct programpermu_s *be_a2cperm;	//and the permutation whose e_alphacoverage it last wrote, as be_a2cval
+static int be_a2cval = -1;
 #ifndef GL_STATIC
 extern cvar_t vid_multisample;
 static struct
@@ -1737,6 +1740,11 @@ void GLBE_SceneMSAA_End(void)
 	if (!be_msaa.active)
 		return;
 	be_msaa.active = false;
+	if (be_a2con)
+	{	//FTESurf Patch 1262
+		qglDisable(GL_SAMPLE_ALPHA_TO_COVERAGE);
+		be_a2con = false;
+	}
 	bits = GL_COLOR_BUFFER_BIT | (be_msaa.depnum ? GL_DEPTH_BUFFER_BIT : 0);
 	if ((be_msaa.checked & bits) == bits)
 		GLBE_SceneMSAA_Blit(0, 0, be_msaa.w, be_msaa.h, bits);
@@ -2355,6 +2363,9 @@ void GLBE_Init(void)
 #ifndef GL_STATIC
 	memset(&be_msaa, 0, sizeof(be_msaa));	//FTESurf Patch 1260: a new context may take what the last refused
 #endif
+	be_a2con = false;	//FTESurf Patch 1262: a new context starts with A2C off
+	be_a2cperm = NULL;
+	be_a2cval = -1;
 
 	shaderstate.curentity = &r_worldentity;
 	be_maxpasses = gl_config_nofixedfunc?1:gl_mtexarbable;
@@ -5063,6 +5074,36 @@ static void BE_Program_Set_Attributes(const program_t *prog, struct programpermu
 	}
 }
 
+//FTESurf Patch 1262: alpha-to-coverage for an unblended draw into the multisampled scene by a program that keeps
+//e_alphacoverage (only its alpha-test path reads it): the shader writes the test's edge as coverage instead of
+//discarding. Off for every other draw, so A2C never meets an opaque program's ordinary alpha.
+extern cvar_t r_alphacoverage;
+static void GLBE_AlphaCoverage(const struct programpermu_s *perm)
+{
+	qboolean want = false;
+#ifndef GL_STATIC
+	if (perm->a2cuniform != -1)
+	{
+		want = r_alphacoverage.ival && be_msaa.active && shaderstate.fbo_current == be_msaa.fbo &&
+			!(shaderstate.shaderbits & SBITS_BLEND_BITS) && !shaderstate.force2d;
+		if (be_a2cperm != perm || be_a2cval != want)
+		{
+			qglUniform1fARB(perm->a2cuniform, want ? 1.0f : 0.0f);
+			be_a2cperm = perm;
+			be_a2cval = want;
+		}
+	}
+#endif
+	if (want != be_a2con)
+	{
+		if (want)
+			qglEnable(GL_SAMPLE_ALPHA_TO_COVERAGE);
+		else
+			qglDisable(GL_SAMPLE_ALPHA_TO_COVERAGE);
+		be_a2con = want;
+	}
+}
+
 static void BE_RenderMeshProgram(const shader_t *shader, const shaderpass_t *pass, program_t *p)
 {
 	int	i;
@@ -5235,6 +5276,7 @@ static void BE_RenderMeshProgram(const shader_t *shader, const shaderpass_t *pas
 	BE_Program_Set_Attributes(p, permu, i);
 
 	BE_SendPassBlendDepthMask(pass->shaderbits);
+	GLBE_AlphaCoverage(permu);	//FTESurf Patch 1262: after the blend bits it reads
 
 	for (i = 0; i < pass->numMergedPasses; i++)
 	{
