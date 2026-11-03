@@ -4553,6 +4553,21 @@ static void BE_Program_Set_Attributes(const program_t *prog, struct programpermu
 
 	if (perm->factorsuniform != -1)
 		qglUniform4fvARB(perm->factorsuniform, countof(shaderstate.curshader->factors), shaderstate.curshader->factors[0]);
+	if (perm->lmsizeuniform != -1)
+	{	//FTESurf Patch 1275: the batch's lightmap page, which the per-entity cache below does not follow
+		unsigned int lmi = shaderstate.curbatch ? (unsigned short)shaderstate.curbatch->lightmap[0] : ~0u;
+		int w = 1, h = 1;
+		if (lmi < numlightmaps && lightmap[lmi]->width > 0 && lightmap[lmi]->height > 0)
+			w = lightmap[lmi]->width, h = lightmap[lmi]->height;
+		if (w != perm->lmsizew || h != perm->lmsizeh)
+		{
+			vec4_t sz;
+			Vector4Set(sz, w, h, 1.0f/w, 1.0f/h);
+			qglUniform4fvARB(perm->lmsizeuniform, 1, sz);
+			perm->lmsizew = w;
+			perm->lmsizeh = h;
+		}
+	}
 
 	/*don't bother setting it if the ent properties are unchanged (but do if the mesh changed)*/
 	if (entunchanged)
@@ -5099,16 +5114,6 @@ static void BE_Program_Set_Attributes(const program_t *prog, struct programpermu
 			break;
 		case SP_E_L_AMBIENTCUBE:	//see BE_EntityAmbientCube
 			qglUniform3fvARB(ph, 6, BE_EntityAmbientCube(shaderstate.curentity, true));
-			break;
-		case SP_E_LMSIZE:	//FTESurf Patch 1275
-			{
-				vec4_t sz = {1, 1, 1, 1};
-				unsigned int lmi = shaderstate.curbatch ? (unsigned short)shaderstate.curbatch->lightmap[0] : ~0u;
-				if (lmi < numlightmaps && lightmap[lmi]->width > 0 && lightmap[lmi]->height > 0)
-					Vector4Set(sz, lightmap[lmi]->width, lightmap[lmi]->height, 1.0f/lightmap[lmi]->width, 1.0f/lightmap[lmi]->height);
-				qglUniform4fvARB(ph, 1, sz);
-				shaderstate.lastuniform = 0;	//per batch: the next batch of this entity and program may be on another page
-			}
 			break;
 
 		case SP_E_TIME:

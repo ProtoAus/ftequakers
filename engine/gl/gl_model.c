@@ -4620,8 +4620,15 @@ static void Mod_Batches_AllocLightmaps(model_t *mod)
 	int sty;
 
 	size_t samps = 0;
-	qboolean lmpad = !!(mod->engineflags & MDLF_SOURCEBSP);
-															//always, so r_lightmap_bicubic can switch without a reload
+	extern cvar_t r_lightmap_bicubic, r_lightmap_bicubic_world;
+	qboolean lmpad = false;	//FTESurf Patch 1275: the vmt shaders' bicubic reads a texel past the face
+
+	if (mod->engineflags & MDLF_SOURCEBSP)
+	{	//the world decides when its lightmaps are built (its submodels follow) and says so to the shaders
+		if (!mod->submodelof)
+			Cvar_ForceSet(&r_lightmap_bicubic_world, r_lightmap_bicubic.ival ? "1" : "0");
+		lmpad = r_lightmap_bicubic_world.ival != 0;
+	}
 
 	//small models don't have many surfaces, don't allocate a smegging huge lightmap that simply won't be used.
 	for (i=0, j=0; i<mod->nummodelsurfaces; i++)

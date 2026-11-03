@@ -3081,6 +3081,8 @@ static void GLSlang_ProgAutoFields(program_t *prog, struct programpermu_s *pp, c
 	pp->a2cuniform = (prog && prog->name && (strstr(prog->name, "#MASKLT") || !strncmp(prog->name, "vmt/detail", 10))) ?
 		qglGetUniformLocationARB(pp->h.glsl.handle, "e_alphacoverage") : -1;
 	pp->a2cval = -1;
+	pp->lmsizeuniform = qglGetUniformLocationARB(pp->h.glsl.handle, "e_lmsize");	//FTESurf Patch 1275
+	pp->lmsizew = pp->lmsizeh = 0;
 
 	for (i = 0; shader_unif_names[i].name; i++)
 	{

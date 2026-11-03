@@ -461,7 +461,6 @@ typedef struct {
 		SP_E_L_MUL,
 		SP_E_L_AMBIENT,
 		SP_E_L_AMBIENTCUBE,	//FTESurf Patch 268 C: vec3[6], Source's six-face ambient cube (entity_t::light_cube), world axes. GL only.
-		SP_E_LMSIZE,	//FTESurf Patch 1275: vec4, the batch's lightmap page (w, h, 1/w, 1/h). GL only.
 		SP_E_EYEPOS, /*viewer's eyepos, in model space*/
 		SP_V_EYEPOS, /*viewer's eyepos, in world space*/
 		SP_W_FOG,
@@ -560,6 +559,8 @@ struct programpermu_s
 	int instuniform[3];	//FTESurf Patch 831: s_instdata, s_instvc, e_instbase
 	int a2cuniform;		//FTESurf Patch 1262: e_alphacoverage, for an alpha-testing program (GLSlang_ProgAutoFields)
 	int a2cval;			//the value last written to it, -1 none
+	int lmsizeuniform;	//FTESurf Patch 1275: e_lmsize, the batch's lightmap page (w, h, 1/w, 1/h)
+	int lmsizew, lmsizeh;	//the size last written to it, 0 none
 #endif
 	unsigned int permutation;
 	unsigned int attrmask;

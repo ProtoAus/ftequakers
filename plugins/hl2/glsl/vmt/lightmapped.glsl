@@ -19,7 +19,7 @@
 
 !!permu FAKESHADOWS
 !!cvardf r_glsl_pcf
-!!cvardf r_lightmap_bicubic=0
+!!cvardf r_lightmap_bicubic_world=0
 !!cvarf r_renderscale
 !!samps =FAKESHADOWS shadowmap
 
@@ -187,7 +187,7 @@ uniform float cvar_r_renderscale;
 
 	//FTESurf Patch 1275: a cubic B-spline over the lightmap in four bilinear taps, as HL2's 20th-anniversary
 	//update filters it. Each face's block has a one-texel copy of its edge around it (r_surf.c SURF_LMPAD).
-	#if r_lightmap_bicubic
+	#if r_lightmap_bicubic_world
 	vec3 lm_bicubic(sampler2D s, vec2 c)
 	{
 		vec2 p = c * e_lmsize.xy - 0.5;
