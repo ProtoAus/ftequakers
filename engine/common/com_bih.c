@@ -1,8 +1,3 @@
-//FTESurf Patch 1266: the trace runs ~145 times a frame in prediction; -Os left even BIH_BoundsIntersect a call.
-//Same IEEE results (-ffp-contract=off, no fast-math); pm_dettest hashes them across builds.
-#if defined(__GNUC__) && !defined(__clang__) && defined(__OPTIMIZE_SIZE__)
-#pragma GCC optimize ("O2")
-#endif
 #include "quakedef.h"
 #ifndef SERVERONLY
 #include "glquake.h"
@@ -1865,9 +1860,10 @@ static void BIH_RecursiveTest (struct bihtrace_s *fte_restrict tr, const struct 
 	FTE_UNREACHABLE;
 }
 /*FTESurf Patch 1266: exact reuse of a trace asked again. The key is every input BIH_TraceUncached reads; the
-  trees it walks, the props nested in them and their load state change only through BIH_Build or Mod_PurgeModel,
-  which bump bih_collisionepoch. A hit does not write the probe record, so the cache stands aside while anything
-  reads it (pm_dispprobe, or a holder of bih_probe_readers such as pm_dettest). Main thread only.*/
+  trees it walks, the props nested in them and their load state change only through BIH_Build, Mod_ModelLoaded
+  or Mod_PurgeModel, which bump bih_collisionepoch (a zero-length test skips a prop still loading, and BIH_Build
+  runs before the load is marked done). A hit does not write the probe record, so the cache stands aside while
+  anything reads it (pm_dispprobe, or a holder of bih_probe_readers such as pm_dettest). Main thread only.*/
 extern cvar_t bih_tracecache, pm_dispprobe;
 static int bih_collisionepoch = 1;
 int bih_probe_readers;
@@ -1880,7 +1876,7 @@ struct bihtracekey_s
 	const void *model, *nodes;
 	unsigned int epoch, contents, flags;
 	int forcehullnum, bevels, rotated;
-	float v[12+9];	//start end mins maxs, then axis
+	float v[12+9+6];	//start end mins maxs, axis, then the model's bounds (worldsize; set after BIH_Build by some loaders)
 };
 #define BIH_TRACECACHE	256	//~60 KB: a frame and a half of prediction's traces; 2048 (~490 KB) measured no gain
 static struct
@@ -1936,6 +1932,8 @@ static qboolean BIH_Trace(model_t *model, int forcehullnum, const framestate_t *
 		VectorCopy(axis[1], key.v+15);
 		VectorCopy(axis[2], key.v+18);
 	}
+	VectorCopy(m->mins, key.v+21);
+	VectorCopy(m->maxs, key.v+24);
 	for (h = 2166136261u, k = 0; k < sizeof(key); k += sizeof(w))
 	{
 		memcpy(&w, (const qbyte*)&key + k, sizeof(w));	//not an unsigned int* over the struct: strict aliasing
@@ -1944,27 +1942,27 @@ static qboolean BIH_Trace(model_t *model, int forcehullnum, const framestate_t *
 	i = (h ^ (h >> 15)) & (BIH_TRACECACHE-1);
 	if (bih_tracecache_e[i].valid && !memcmp(&bih_tracecache_e[i].key, &key, sizeof(key)))
 	{
+		*out_trace = bih_tracecache_e[i].trace;	//copied out first: the verifying trace below can nest into a prop
+		hit = bih_tracecache_e[i].hit;			//whose own miss overwrites this slot
 		bih_tc_hits++;
 		if (bih_tracecache.ival >= 2)
 		{	//verify: what a fresh trace says
 			trace_t fresh;
 			qboolean freshhit = BIH_TraceUncached(model, forcehullnum, framestate, axis, start, end, mins, maxs, capsule, contents, &fresh);
 			bih_tc_tested++;
-			if (freshhit != bih_tracecache_e[i].hit || !BIH_TraceSame(&fresh, &bih_tracecache_e[i].trace))
+			if (freshhit != hit || !BIH_TraceSame(&fresh, out_trace))
 			{
 				bih_tc_bad++;
 				if (bih_tc_bad <= 8)
 					Con_Printf(CON_WARNING "bih_tracecache: reused trace differs (frac %.9g/%.9g, normal %g %g %g / %g %g %g)\n",
-						bih_tracecache_e[i].trace.fraction, fresh.fraction,
-						bih_tracecache_e[i].trace.plane.normal[0], bih_tracecache_e[i].trace.plane.normal[1], bih_tracecache_e[i].trace.plane.normal[2],
-						fresh.plane.normal[0], fresh.plane.normal[1], fresh.plane.normal[2]);
+						out_trace->fraction, fresh.fraction, out_trace->plane.normal[0], out_trace->plane.normal[1],
+						out_trace->plane.normal[2], fresh.plane.normal[0], fresh.plane.normal[1], fresh.plane.normal[2]);
 			}
 			if (!(bih_tc_tested % 20000))
 				Con_Printf("bih_tracecache: %u reused, %u computed, %u reused answers re-traced, %u differed\n",
 					bih_tc_hits, bih_tc_misses, bih_tc_tested, bih_tc_bad);
 		}
-		*out_trace = bih_tracecache_e[i].trace;
-		return bih_tracecache_e[i].hit;
+		return hit;
 	}
 	bih_tc_misses++;
 	hit = BIH_TraceUncached(model, forcehullnum, framestate, axis, start, end, mins, maxs, capsule, contents, out_trace);

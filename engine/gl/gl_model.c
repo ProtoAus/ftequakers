@@ -1301,6 +1301,7 @@ void Mod_ModelLoaded(void *ctx, void *data, size_t a, size_t b)
 
 	previouslyfailed = mod->loadstate == MLS_FAILED;
 	mod->loadstate = a;
+	BIH_CollisionChanged();	//FTESurf Patch 1266: a trace that skipped it while loading is stale now
 
 #ifdef TERRAIN
 	if (mod->terrain)
