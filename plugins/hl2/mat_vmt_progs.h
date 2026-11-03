@@ -1752,6 +1752,18 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "float fres;\n"
 "float depth = 0.0;\n"
 "stc = (1.0 + (tf.xy / tf.w)) * 0.5;\n"
+"#if defined(FTE_CAPTUREFIX) && !defined(SCREEN)\n"
+// FTESurf Patch 1245: a reused capture (r_capturehalfrate) saw this point at m_capturefix * tf
+// (identity when fresh; a point behind that camera keeps this frame's). The ripple map is this frame's.
+"vec2 rstc = stc;\n"
+"vec4 ctf = m_capturefix * tf;\n"
+"if (ctf.w > 0.5)\n"
+"stc = (1.0 + (ctf.xy / ctf.w)) * 0.5;\n"
+"else\n"
+"ctf = tf;\n"
+"#else\n"
+"#define rstc stc\n"
+"#endif\n"
 "#ifdef ANIMBUMP\n"
 "int bumplayers = textureSize(s_bumpanim, 0).z;\n"
 "float bumplayer = bumplayers > 0 ? floor(mod(e_time * float(ANIMBUMP), float(bumplayers))) : 0.0;\n"
@@ -1787,7 +1799,7 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "#endif\n"
 
 "#ifdef RIPPLEMAP\n"
-"n += texture2D(s_ripplemap, stc).rgb*3.0;\n"
+"n += texture2D(s_ripplemap, rstc).rgb*3.0;\n"
 "#endif\n"
 "n = normalize(n);\n"
 
@@ -1798,6 +1810,9 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 
 "#ifdef DEPTH\n"
 "float surfaceDepth = eyeDepth(gl_FragCoord.z);\n"
+"#if defined(FTE_CAPTUREFIX) && !defined(SCREEN)\n"
+"surfaceDepth *= ctf.w / tf.w; // along the capture's forward, as s_refractdepth is (exactly 1 when fresh)\n"
+"#endif\n"
 // P877: 1/depth is affine across the plane in screen space, so this gives the surface's depth
 // on the refracted sample's own ray, the ray Source's alpha was computed for (water_ps2x_helper.h:161).
 "float invs = 1.0 / surfaceDepth;\n"
@@ -3533,6 +3548,18 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "float fres;\n"
 "float depth = 0.0;\n"
 "stc = (1.0 + (tf.xy / tf.w)) * 0.5;\n"
+"#if defined(FTE_CAPTUREFIX) && !defined(SCREEN)\n"
+// FTESurf Patch 1245: a reused capture (r_capturehalfrate) saw this point at m_capturefix * tf
+// (identity when fresh; a point behind that camera keeps this frame's). The ripple map is this frame's.
+"vec2 rstc = stc;\n"
+"vec4 ctf = m_capturefix * tf;\n"
+"if (ctf.w > 0.5)\n"
+"stc = (1.0 + (ctf.xy / ctf.w)) * 0.5;\n"
+"else\n"
+"ctf = tf;\n"
+"#else\n"
+"#define rstc stc\n"
+"#endif\n"
 "#ifdef ANIMBUMP\n"
 "int bumplayers = textureSize(s_bumpanim, 0).z;\n"
 "float bumplayer = bumplayers > 0 ? floor(mod(e_time * float(ANIMBUMP), float(bumplayers))) : 0.0;\n"
@@ -3568,7 +3595,7 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "#endif\n"
 
 "#ifdef RIPPLEMAP\n"
-"n += texture2D(s_ripplemap, stc).rgb*3.0;\n"
+"n += texture2D(s_ripplemap, rstc).rgb*3.0;\n"
 "#endif\n"
 "n = normalize(n);\n"
 
@@ -3579,6 +3606,9 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 
 "#ifdef DEPTH\n"
 "float surfaceDepth = eyeDepth(gl_FragCoord.z);\n"
+"#if defined(FTE_CAPTUREFIX) && !defined(SCREEN)\n"
+"surfaceDepth *= ctf.w / tf.w; // along the capture's forward, as s_refractdepth is (exactly 1 when fresh)\n"
+"#endif\n"
 // P877: 1/depth is affine across the plane in screen space, so this gives the surface's depth
 // on the refracted sample's own ray, the ray Source's alpha was computed for (water_ps2x_helper.h:161).
 "float invs = 1.0 / surfaceDepth;\n"
@@ -4167,7 +4197,14 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 // Source's normal maps are DX: green is flipped (lightmapped.glsl).
 "vec3 tn = normalize(vec3(nrm.r, 1.0 - nrm.g, nrm.b) * 2.0 - 1.0);\n"
 "vec3 wn = normalize(invsurface * tn);\n"
+"#ifdef FTE_CAPTUREFIX\n"
+"vec4 ctf = m_capturefix * tf_c; // FTESurf Patch 1245: where a reused capture saw this point\n"
+"if (ctf.w <= 0.5)\n"
+"ctf = tf_c; // behind that camera: this frame's\n"
+"vec2 sc = (1.0 + ctf.xy / ctf.w) * 0.5;\n"
+"#else\n"
 "vec2 sc = (1.0 + tf_c.xy / tf_c.w) * 0.5;\n"
+"#endif\n"
 "float ndv = clamp(dot(normalize(-incident), wn), 0.0, 1.0);\n"
 "float f = float(REFLECTANCE) + (1.0 - float(REFLECTANCE)) * pow(1.0 - ndv, 5.0);\n"
 "#if defined(CUBEREFL) && !defined(REFLECTCUBEMASK)\n"

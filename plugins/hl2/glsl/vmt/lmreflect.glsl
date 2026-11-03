@@ -58,7 +58,14 @@ void main()
 	// Source's normal maps are DX: green is flipped (lightmapped.glsl).
 	vec3 tn = normalize(vec3(nrm.r, 1.0 - nrm.g, nrm.b) * 2.0 - 1.0);
 	vec3 wn = normalize(invsurface * tn);
+#ifdef FTE_CAPTUREFIX
+	vec4 ctf = m_capturefix * tf_c;	// FTESurf Patch 1245: where a reused capture saw this point
+	if (ctf.w <= 0.5)
+		ctf = tf_c;	// behind that camera: this frame's
+	vec2 sc = (1.0 + ctf.xy / ctf.w) * 0.5;
+#else
 	vec2 sc = (1.0 + tf_c.xy / tf_c.w) * 0.5;
+#endif
 	float ndv = clamp(dot(normalize(-incident), wn), 0.0, 1.0);
 	float f = float(REFLECTANCE) + (1.0 - float(REFLECTANCE)) * pow(1.0 - ndv, 5.0);
 #if defined(CUBEREFL) && !defined(REFLECTCUBEMASK)

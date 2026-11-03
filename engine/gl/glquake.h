@@ -700,6 +700,7 @@ extern void (APIENTRY *qglFramebufferRenderbufferEXT)(GLenum target, GLenum atta
 extern GLenum (APIENTRY *qglCheckFramebufferStatusEXT)(GLenum target);
 extern void (APIENTRY *qglGetFramebufferAttachmentParameteriv)(GLenum  target,  GLenum  attachment,  GLenum  pname,  GLint * params);
 extern void (APIENTRY *qglBlitFramebufferEXT)(GLint sx0, GLint sy0, GLint sx1, GLint sy1, GLint dx0, GLint dy0, GLint dx1, GLint dy1, GLbitfield mask, GLenum filter);	//FTESurf Patch 1237: may be NULL
+extern void (APIENTRY *qglRenderbufferStorageMultisampleEXT)(GLenum target, GLsizei samples, GLenum internalformat, GLsizei width, GLsizei height);	//FTESurf Patch 1260: may be NULL
 
 //glslang - arb_shader_objects
 extern FTEPFNGLCREATEPROGRAMPROC			qglCreateProgramObjectARB;
