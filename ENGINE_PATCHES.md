@@ -1,5 +1,79 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1260 — vid_multisample reaches the scene: a multisampled scene target, resolved before every copy
+
+**Problem.** Lex (3 Nov): "the engine doesn't support MSAA". vid_multisample only chose the window's pixel
+format, and the scene never draws there on Source maps: it draws into fbo_gameview (rt/$lastgameview) at
+any r_renderscale other than 1, under any post-process, and whenever r_scenedepth is on (P1230's aura
+depth, Lex's config). That target was single-sample, so MSAA never reached the 3D view.
+
+**Change.** Tag patch-1260 = 406ccd88f (with P1245). Engine gl_backend.c, gl_rmain.c, gl_rlight.c,
+gl_vidcommon.c, glquake.h, shader.h.
+- GLBE_SceneMSAA_Begin/End: with vid_multisample above 1 (clamped to GL_MAX_SAMPLES; desktop GL with
+  glRenderbufferStorageMultisample and glBlitFramebuffer), GLR_RenderView's scene draws into a
+  multisampled FBO whose colour and depth renderbuffers copy the internal formats of rt/$lastgameview and
+  its depth (or of GLBE_FBO_Update's depth renderbuffer), so the resolve into fbo_gameview is legal. It
+  resolves (colour, and depth when there is a depth texture; the first time one buffer at a time) when the
+  view ends, under the post-process bucket. Rebuilt on a size, sample count, format or texture change;
+  freed when vid_multisample drops; never freed while bound (GLBE_DrawWorld's mode-change
+  GLBE_DestroyFBOs runs mid-scene). An incomplete target or a failed first resolve prints once and stays
+  single-sample until GLBE_Init.
+- vid_multisample above 1 forces the scene target at render scale 1 too (world views, not quad stereo).
+- Mid-scene reads cannot see samples: T_Gen_CurrentRender ($currentrender), T_Gen_ScreenWater (hl2_water
+  5's colour and depth) and r_coronas_occlusion 3's depth read resolve their rectangle into fbo_gameview
+  and read it (GLBE_SceneMSAA_ReadBegin/End). The blit is scissored, so BE_Scissor records the state.
+- The sky room at r_skyroom_scale below 1 keeps drawing full size into a multisampled target (P1237):
+  through the resolve target measured slower (surf_demise s33 307 against 348 fps).
+- Known: alpha-tested surfaces (foliage) still cut at the alpha test, unsmoothed (alpha-to-coverage would
+  need the vmt/defaultskin/defaultwall alpha tests rewritten); a depth texture of PTI_DEPTH32 asks for a
+  GL_DEPTH_COMPONENT32 multisample renderbuffer, which NVIDIA accepts and a driver may refuse (then no
+  MSAA); $currentrender copied per batch (r_nearestsort 0, particles) resolves the frame each time.
+
+**Verified (rig, Lex's settings, fixture; three review rounds, the last with no confirmed defect).**
+surf_demise s33: render scale 2 306 fps (GPU 3.21 ms); scale 1 346 (1.50); scale 1 + MSAA 4 348 (1.83);
+MSAA 8 343 (2.14); scale 1.5 369 (2.18). At scale 1, demise, eternity, garden and boreas are CPU-bound;
+the end-of-view resolve costs ~0.06 ms of CPU (2-4% there). Crops at 1:1: geometry edges at MSAA 4 match
+render scale 2; fir branches stay as aliased as scale 1. hl2_water 5 under MSAA matches single-sample
+(mean 0.03). MSAA switched on before vid_restart renders from the first frame.
+
+## Patch 1245 — r_capturehalfrate: water and glass captures reused between renders, turned with the camera
+
+**Problem.** Lex (3 Nov) asked for half-rate reflections. A water or glass capture renders the scene again
+from the mirrored camera every frame: surf_eternity save 4, whose func_reflective_glass reflection draws
+353 prop batches, spent about 3.3 ms of a 5 ms frame on it; boreas and garden's water about 1.2-1.6 ms.
+
+**Change.** Tag patch-1260 = 406ccd88f (P1245 + P1260 on patch-1251). Engine gl_backend.c, renderer.c,
+gl_shader.c, shader.h, gl_vidcommon.c; plugin vmt/water and vmt/lmreflect (48's shaders, with their okay).
+- r_capturehalfrate N (default 0): the top-level view's chosen water plane (GLBE_WaterViewsBegin), or a
+  single-plane glass capture outside the water views, is kept in the level-0 targets and reused for N
+  frames after each render (GLBE_CaptureKeep): Source maps only (MDLF_SOURCEBSP: Quake's altwater reads no
+  fix), same seat and same world view of the frame (BE_SeatView), one capturing view last frame, same
+  frame size and plane, nothing else written to those targets, eye within 128 units and forward (vpn)
+  within 30 degrees of the render. A plane's other batches in the frame share the keep; no glass keep
+  for ripple maps.
+- m_capturefix (SP_M_CAPTUREFIX, FTE_CAPTUREFIX in sys/defs.h): on a reused frame the shaders sample the
+  capture through its projection times its view rotation times the inverse of this frame's
+  (GLBE_TurnVP). The eye's translation is left out on purpose: what a capture shows is taken as distant,
+  and the matrices keep float precision at map coordinates past 10000. Identity on rendered frames, in
+  nested views, and from the first fresh level-0 write after a keep. vmt/water moves DEPTH's surface depth
+  to the capture's forward (exactly 1x when fresh); both shaders keep this frame's coordinate for a point
+  behind the capture's camera.
+- Known: reused-frame fog depth ignores the eye's travel along the capture's forward (up to a frame's
+  movement); a refraction-only re-render after a portal or glass draws one frame of identity for the
+  kinds not re-rendered; 3D-sky water samples level 0's reused targets uncorrected (N+1 frames old); a
+  turning reused frame clamps a strip at the leading edge.
+
+**Verified (rig, Lex's settings, fixture; three review rounds, the last with no confirmed defect).**
+r_capturehalfrate 1 at the shipped commit: eternity s4 200 -> 273 fps, s10 188 -> 268, boreas s10 397 ->
+491, garden s1 464 -> 576, s4 573 -> 613; depth-1 views per top-level view 1.5-1.9 -> 1.0; r_capturelog
+prints "kept". Reprojection, eternity s4, a reuse from one pose shot at another against a fresh capture
+there (mean absolute difference): a 3 degree turn 0.14 (unreprojected 2.59); a 24-unit slide 0.84
+(unreprojected 0.83; reprojecting the translation as well scored 1.35). Review 1 added a turn guard on
+r_refdef.viewaxis, which the GL path never fills: every keep was refused (201 fps against 294) until
+review 2 read vpn; the review-1b commit blamed a seat-view rule instead, wrongly (FTESurf draws one world
+view a frame; renderscenes use VF_DRAWWORLD 0). Half-size captures (r_watertargetsize 512 against the 1024
+cap) gained 0-8%: the captures are CPU-bound.
+
 ## Patch 1252 — Source env_laser beams drawn by the client (QC only)
 
 **Problem.** Lex (3 Nov): surf_fantasy's env_lasers are "removed at spawn (unimplemented class)". 2,741
