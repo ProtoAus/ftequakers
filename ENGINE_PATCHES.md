@@ -1,5 +1,53 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1259 — the loading screen keeps moving through the hl2 world load (client exe + hl2 plugin)
+
+**Problem.** P1244's pumps left the longest stalls of a Source map load. A stack sampler (branch
+p1259-probe, never shipped: a thread suspends the main thread every 2 ms while the loading screen has
+not been swapped for 100 ms and unwinds it from the modules' .pdata; FTESurf tools/loadprof_resolve.py
+names the frames) found them on surf_eternity, hosted and on a dedicated server's changelevel:
+VBSP_BuildBIHMain, one WG_MAIN job (the .phy prop brushes and the tree build), 1.65-1.83 s;
+VBSP_GenerateMaterials with Mod_Batches_Build (a third in Mod_LightmapAllocBlock), 0.52 s; the six sky
+faces, IF_LOADNOW in Shader_ParseSkySides, 0.43-0.45 s; SV_BadField's
+PR_FindFunction("ED_ParseUnknownEpair") per unknown entity key, each a linear scan of every global def,
+2x 0.16-0.18 s of the server's entity spawn.
+
+**Change.** SCR_LoadingPump per prop and displacement in VBSP_BuildBIHMain, per BIH node of 64+ leaves,
+per surface in Mod_Batches_BuildModelMeshes and Mod_Batches_AllocLightmaps, per texture in
+VBSP_GenerateMaterials, and between sky faces (the name is copied out of com_token first). The plugin
+reaches the pump through a new interface, "FTESurfLoading/1" (plugloadingfuncs_t; NULL on older engines
+and on servers). SV_BadField looks the hook up once per PR_SpawnInitialEntities (cleared at every progs
+load). The pump stops at 59 s, since GLSCR_UpdateScreen re-reads the clock for its 60 s timeout.
+
+**Verified.** Rig, the menu's ls_debug (every redraw gap of 50 ms+), the same arm against the installed
+patch-1251 pair: hosted, the collision build's 1409 ms became gaps of 74-159 ms, the materials 424 ->
+138 ms, the sky 360 ms -> six of 53-67 ms, the entity spawn's 157+153 ms gone; changelevel, 1398 ms ->
+75-160 ms, 392 -> 149 ms, sky 362 ms -> 53-73 ms. Load length 22.26 -> 22.36 s. Four review rounds
+(with P1258). Left (FTESurf BACKLOG): the join's filesystem hash rebuild after the old map's pack drops
+(0.34-0.36 s, P180; not safe to draw inside), the shader reload at activation (0.27-0.30 s), csqc init
+(0.08-0.16 s), a hosted map's first 0.34-0.39 s.
+
+## Patch 1258 — a gamecode loading screen stays up through a load's downloads (client exe)
+
+**Problem.** A join that downloads (a lobby's new csprogs after a deploy, a missing map) showed a black
+screen with the console's one-line bar: CL_CheckOrEnqueDownloadFile ended the plaque and its stage
+("release console") at the enqueue, and with con_stayhidden 1 SCR_SetUpToDrawConsole had nothing to
+show. And with the plaque down, no loading pump ran for the rest of that load: CL_DownloadFinished
+loads a downloaded world on the spot (MLV_WARNSYNC), 22 s for surf_eternity without one redraw.
+
+**Change.** For a menu QC loading screen the stage stays; the enqueue leaves its plaque alone;
+CL_SendDownloadStartRequest drops it while the download runs (step "download <file>"); CL_DownloadFinished
+and CL_RequestNextDownload raise it again with a fresh 60 s. Downloads run in normal frames (the menu's
+m_draw), loads under the plaque. Neither the step nor serverkey("loadstate"/"dlstate") uses va() any
+more: callers hold va() strings across both (csprogs and sound download names; the menu reads serverkey
+from inside pumps). Other loading screens keep the old behaviour. FTESurf's menu (P1258) shows the
+address being tried, a download's file, percent, rate, size left and queued files, and the load
+percent, from serverkey.
+
+**Verified.** Rig, a first visit that downloads both a 152 MB map (surf_eternity's bsp under a new name)
+and the server's csprogs: the installed exe showed a black screen and the console bar during a 6 MB
+download; the first cut froze 21.7 s after the download; this build kept the screen up throughout, the
+downloaded world's load had no gap over 160 ms, and the join completed with the csprogs downloaded.
 ## Patch 1257 — near clip 2 by default; viewmodels keep 1
 
 **Problem.** Fake-sky faces z-fought with the shell 16 units behind them from far away (P1251 pulled the
