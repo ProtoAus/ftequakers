@@ -987,6 +987,9 @@ int GLBE_FBO_Push(fbostate_t *state);
 void GLBE_FBO_Pop(int oldfbo);
 void GLBE_FBO_Destroy(fbostate_t *state);
 int GLBE_FBO_Update(fbostate_t *state, unsigned int enables, texid_t *destcol, int colourbuffers, texid_t destdepth, int width, int height, int layer);
+int GLBE_SceneMSAA_Samples(void);	//FTESurf Patch 1260
+void GLBE_SceneMSAA_Begin(texid_t col, texid_t depth, int key);
+void GLBE_SceneMSAA_End(void);
 
 qboolean GLBE_BeginShadowMap(int id, int w, int h, uploadfmt_t encoding, int *restorefbo);
 void GLBE_EndShadowMap(int restorefbo);
