@@ -1651,7 +1651,11 @@ int GLBE_SceneMSAA_Samples(void)
 	int s = vid_multisample.ival;
 	if (s <= 1 || be_msaa.broken || gl_config_gles || !gl_config.ext_framebuffer_objects ||
 		!qglRenderbufferStorageMultisampleEXT || !qglBlitFramebufferEXT || !qglGetTexLevelParameteriv)
+	{
+		if (be_msaa.fbo && !be_msaa.active)
+			GLBE_SceneMSAA_Free();	//off at render scale 1 with no post-process: Begin would not run to free it
 		return 0;
+	}
 	if (!be_msaa.maxsamples)
 	{
 		qglGetIntegerv(GL_MAX_SAMPLES, &be_msaa.maxsamples);
@@ -7539,8 +7543,8 @@ static qboolean GLBE_CaptureKeep(const plane_t *p, entity_t *ent, unsigned int n
 	//vmt/water and vmt/lmreflect take m_capturefix; Quake's altwater does not
 	if (be_capkeep.frame != host_framecount - 1 || be_capkeep.reused >= r_capturehalfrate.ival || be_capkeep.views != 1 ||
 		be_capkeep.fbw != vid.fbpwidth || be_capkeep.fbh != vid.fbpheight ||
-		!r_worldentity.model || r_worldentity.model->fromgame != fg_new ||
-		DotProduct(d, d) > 128*128 || DotProduct(r_refdef.viewaxis[0], be_capkeep.fwd) < 0.866f)	//past 128 units or 30 degrees
+		!r_worldentity.model || !(r_worldentity.model->engineflags & MDLF_SOURCEBSP) ||
+		DotProduct(d, d) > 128*128 || DotProduct(vpn, be_capkeep.fwd) < 0.866f)	//past 128 units or 30 degrees
 		return false;
 	if (((need & SHADER_HASREFLECT) && !TEXVALID(shaderstate.tex_reflection[0])) ||
 		((need & SHADER_HASREFRACT) && !TEXVALID(shaderstate.tex_refraction[0])) ||
@@ -7669,7 +7673,7 @@ static qboolean GLBE_GenerateBatchTextures(batch_t *batch, shader_t *bs)
 				keepent = &r_worldentity;
 				GLBE_TurnVP(keepvp);
 				VectorCopy(r_refdef.vieworg, keepeye);
-				VectorCopy(r_refdef.viewaxis[0], keepfwd);
+				VectorCopy(vpn, keepfwd);	//R_SetupGL's; r_refdef.viewaxis is the native scene API's only
 			}
 			else
 			{
@@ -7701,7 +7705,7 @@ static qboolean GLBE_GenerateBatchTextures(batch_t *batch, shader_t *bs)
 			keepent = batch->ent;
 			GLBE_TurnVP(keepvp);
 			VectorCopy(r_refdef.vieworg, keepeye);
-			VectorCopy(r_refdef.viewaxis[0], keepfwd);
+			VectorCopy(vpn, keepfwd);
 		}
 	}
 
