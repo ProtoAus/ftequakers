@@ -10016,6 +10016,97 @@ static qboolean GLBE_PickLate(const batch_t *b)
 	return !GLBE_NearestModelPane(b) && GLBE_NearestLate(b);
 }
 
+/*
+FTESurf Patch 1268: Source draws a translucent model whole after its screen copy, meshes in model order
+(viewrender.cpp:4339-4380), so a layer after its Refract mesh lands on top of the refraction. surf_starvald's
+start platform is refract_ice2 (mesh 4) under rune_floor (mesh 7): there the ice drew NEAREST after every
+BLEND batch and covered the rune floor with a warped copy of it. A model pane's later translucent meshes are
+held back from their sorts and drawn after their pane, in mesh order.
+*/
+typedef struct
+{
+	batch_t *batch, *pane;
+	int sort;
+} glpanelayer_t;
+static glpanelayer_t be_panelayer[256];
+static size_t be_panelayers;
+
+//the alias mesh index of b, or -1 (only R_GAlias_GenerateBatches fills user.alias)
+static int GLBE_AliasMesh(const batch_t *b)
+{
+	return (b->buildmeshes == R_GAlias_DrawBatch && b->ent) ? b->user.alias.surfrefs[0] : -1;
+}
+static qboolean GLBE_NearestModelPane(const batch_t *batch);
+//returns where this view's entries start: a capture or portal view nests and stacks its own above them
+static size_t GLBE_DeferPaneLayers(void)
+{
+	batch_t *p, *b, **link, *owner;
+	int s, m, pm;
+	size_t start = be_panelayers;
+
+	if (!r_nearestsort.ival || shaderstate.mode != BEM_STANDARD || (r_refdef.recurse && r_refdef.capturekind >= 1))
+		return start;	//the conditions GLBE_SubmitNearest draws model panes under
+	for (s = SHADER_SORT_SEETHROUGH+1; s < SHADER_SORT_NEAREST; s++)
+		for (link = &shaderstate.mbatches[s]; (b = *link); )
+		{
+			owner = NULL;
+			m = GLBE_AliasMesh(b);
+			if (m >= 0 && be_panelayers < countof(be_panelayer))
+				for (p = shaderstate.mbatches[SHADER_SORT_NEAREST]; p; p = p->next)
+				{
+					pm = GLBE_AliasMesh(p);
+					if (p->ent == b->ent && pm >= 0 && pm < m && GLBE_NearestModelPane(p) &&
+					    (!owner || pm > GLBE_AliasMesh(owner)))
+						owner = p;	//the last pane before this mesh
+				}
+			if (owner)
+			{
+				be_panelayer[be_panelayers].batch = b;
+				be_panelayer[be_panelayers].pane = owner;
+				be_panelayer[be_panelayers].sort = s;
+				be_panelayers++;
+				*link = b->next;	//relinked by GLBE_RestorePaneLayers
+			}
+			else
+				link = &b->next;
+		}
+	return start;
+}
+//pane's held-back layers (every one from start when pane is NULL), in mesh order
+static void GLBE_SubmitPaneLayersFrom(const batch_t *pane, size_t start)
+{
+	batch_t one;
+	size_t i, best;
+	for (;;)
+	{
+		for (best = be_panelayers, i = start; i < be_panelayers; i++)
+			if (be_panelayer[i].pane && (!pane || be_panelayer[i].pane == pane) &&
+			    (best == be_panelayers || GLBE_AliasMesh(be_panelayer[i].batch) < GLBE_AliasMesh(be_panelayer[best].batch)))
+				best = i;
+		if (best == be_panelayers)
+			return;
+		be_panelayer[best].pane = NULL;	//drawn
+		one = *be_panelayer[best].batch;
+		one.next = NULL;
+		GLBE_SubmitMeshesSortList(&one);
+	}
+}
+static void GLBE_SubmitPaneLayers(const batch_t *pane)
+{
+	GLBE_SubmitPaneLayersFrom(pane, 0);	//a pane pointer belongs to one view
+}
+static void GLBE_RestorePaneLayers(size_t start)
+{
+	size_t i;
+	GLBE_SubmitPaneLayersFrom(NULL, start);	//a pane that never drew must not lose its layers
+	for (i = start; i < be_panelayers; i++)
+	{
+		be_panelayer[i].batch->next = shaderstate.mbatches[be_panelayer[i].sort];
+		shaderstate.mbatches[be_panelayer[i].sort] = be_panelayer[i].batch;
+	}
+	be_panelayers = start;
+}
+
 extern cvar_t r_nearestsort;
 static void GLBE_SubmitNearest(batch_t *world, batch_t *dynamic)
 {
@@ -10051,6 +10142,7 @@ static void GLBE_SubmitNearest(batch_t *world, batch_t *dynamic)
 		one = *panes[i].batch;
 		one.next = NULL;
 		GLBE_SubmitMeshesSortList(&one);
+		GLBE_SubmitPaneLayers(panes[i].batch);	//Patch 1268
 	}
 	if (panes != stackpanes)
 		BZ_Free(panes);
@@ -10062,12 +10154,19 @@ void GLBE_SubmitMeshes (batch_t **worldbatches, int start, int stop)
 {
 	int i, prev;
 	int portaldepth = r_portalrecursion.ival;
+	qboolean deferred = false;	//Patch 1268
+	size_t layerstart = 0;
 
 	R_SkyboxSortBegin();
 	for (i = start; i <= stop; i++)
 	{
 		if (i == SHADER_SORT_SKY)
 			R_SkyboxSortBegin();	//a portal view in the PORTAL sort drew its own box
+		if (!deferred && i > SHADER_SORT_SEETHROUGH && i < SHADER_SORT_NEAREST && stop >= SHADER_SORT_NEAREST)
+		{
+			layerstart = GLBE_DeferPaneLayers();
+			deferred = true;
+		}
 		if (i == SHADER_SORT_BLEND && r_blendsort.ival == 2)
 		{
 			GLBudget_Set(GPUB_TRANSPARENT);
@@ -10103,6 +10202,8 @@ void GLBE_SubmitMeshes (batch_t **worldbatches, int start, int stop)
 			GLBudget_Set(GLBudget_SortCat(i, false));
 		GLBE_SubmitMeshesSortList(shaderstate.mbatches[i]);
 	}
+	if (deferred)
+		GLBE_RestorePaneLayers(layerstart);
 }
 
 #if (defined(GLQUAKE) || defined(VKQUAKE)) && defined(MULTITHREAD)
