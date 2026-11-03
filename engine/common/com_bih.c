@@ -1043,10 +1043,12 @@ static void BIH_ClipBoxToBrush (struct bihtrace_s *fte_restrict tr, const q2cbru
 	  adjusted entry times then tie inside float noise and the side plane could win, throwing the
 	  surfer off (surf_sedona ramp 3: (2169,718,-1175) -> (2169,-279,-334) in Lex's own session).
 	  For pieces at mover 12 the reported plane is the one the hull really meets last (unadjusted
-	  entry) and the box stops DIST_EPSILON in front of it; whether it is a hit stays mover 11's
-	  (testing the reported plane's entry instead let hits stand on faces the box never reaches).
-	  Stopping where mover 11 does instead left a grazed reported plane closer than eps, and the
-	  slide along it hit the same piece again at fraction 0 (review 2: 1,485 per 2M traces).*/
+	  entry) and the box stops DIST_EPSILON in front of it (fraction); whether it is a hit, and which
+	  brush wins (truefraction, the tree's cull key), stay mover 11's. Testing the reported plane's
+	  entry let hits stand on faces the box never reaches (review 1); stopping where mover 11 does
+	  left a grazed reported plane closer than eps, re-hit at fraction 0 (review 2); the earlier stop
+	  as the cross-brush key beat the brush the box meets first (review 3). Reporting the plane only
+	  past a clearance floor kept exactly the snags (simulator rule D: pantheon save 13 lost 1523).*/
 	geopick = bih_sourceclip && tr->inphy && bih_phypick;
 	entergeo = -1;
 	geofrac = 0;
@@ -1112,14 +1114,14 @@ static void BIH_ClipBoxToBrush (struct bihtrace_s *fte_restrict tr, const q2cbru
 	}
 	if (bih_sourceclip ? enterfrac < leavefrac : enterfrac <= leavefrac)
 	{
-		if (geopick && enterfrac > NEVER_UPDATED && geofrac < enterfrac)
-			enterfrac = (geofrac < 0) ? 0 : geofrac;	//Patch 1248: eps in front of the reported plane
 		if (enterfrac > (bih_sourceclip ? NEVER_UPDATED : -1) && (bih_sourceclip ? enterfrac < tr->trace.truefraction : enterfrac <= tr->trace.truefraction))
 		{
 			if (enterfrac < 0)
 				enterfrac = 0;
 			if (bih_sourceclip)
 				nearfrac = enterfrac;	//already pulled back by DIST_EPSILON
+			if (geopick && geofrac < nearfrac)
+				nearfrac = (geofrac < 0) ? 0 : geofrac;	//Patch 1248: eps in front of the reported plane
 
 			tr->trace.fraction = nearfrac;
 			tr->trace.truefraction = enterfrac;
