@@ -1,5 +1,47 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1262 — alpha-to-coverage: alpha-tested Source materials smoothed under MSAA
+
+**Problem.** Lex (3 Nov), after P1260: trees and fences stay jagged under MSAA. An alpha-tested material
+discards below $alphatestreference, so its edge is a cut that multisampling cannot see.
+
+**Change.** Engine gl_backend.c, gl_vidcommon.c, shader.h, renderer.c; plugin glsl/vmt lightmapped,
+vertexlit, transition, unlit, unlitreflect, animated and detail (48's shaders, with their okay).
+- r_alphacoverage (default 1, archived): with P1260's multisampled scene bound, an unblended draw whose
+  program keeps the prelude's e_alphacoverage uniform (programpermu_s a2cuniform; only the alpha-test path
+  reads it, so only alpha-tested permutations keep it) enables GL_SAMPLE_ALPHA_TO_COVERAGE and sets the
+  uniform (GLBE_AlphaCoverage, after BE_SendPassBlendDepthMask). Off for every other draw, at the scene's
+  resolve and at GLBE_Init.
+- The shaders' alpha test becomes, under e_alphacoverage, a = (alpha - MASK) / fwidth(alpha) + 0.5: a
+  discard at a <= 0 and the output alpha min(a, 1) as the coverage, so the edge spreads over about a pixel
+  of samples. FTE_ALPHACOVERAGE guards it for an older exe; without MSAA nothing changes.
+
+**Verified (rig, Lex's settings, fixture; two review rounds, the last clean).** surf_demise s33 trees at render scale 1 + MSAA 4: horizontal edge
+gradient 3.52 cut, 3.13 with coverage, 3.23 at render scale 2 (lower is smoother); 4x crops show the stair
+steps gone. GPU 1.91 ms either way; CPU within 0.07 ms.
+Tag patch-1262 = 4f2114b9f (P1261 + P1262 on patch-1259); both installs run exe 39e00f6e (git-8162-patch-1262-0-g4f2114b9f) and hl2 plugin d500ef70.
+
+## Patch 1261 — the VBSP plugin keeps each view level's static-prop and displacement PVS verdicts
+
+**Problem.** Lex (3 Nov): "build whatever you can" for the CPU, which limits every measured map once
+MSAA replaces render scale 2. A 20 s sampling profile of surf_demise s33 put the plugin's visibility work at
+~23% of the main thread: VBSP_PrepareFrame 6.3%, RecursiveWorldNode 5.1%, EdictInFatPVS 4.2%, MarkLeaves
+3.7%, BoxOnPlaneSide 2.4%. Every static prop and displacement was tested against the PVS and areas every
+frame, in every view, though the answer only changes with the view's clusters, area and area connections.
+
+**Change.** Plugin mod_vbsp.c. VBSP_PVSMemo keeps, per recursion level, a byte per static prop and
+displacement (unknown, or 1 + vbsp_pvs_why) for the level's vis pointer, clusters, area and
+prv->floodvalid; any change clears it. VBSP_PVSMemoTest answers from it or runs the test and records it.
+Forced-vis views (captures, portals) test as before. hl2_pvsmemo 0 is the A/B. The static props'
+nearest-cubemap scan (Mod_CubemapForOrigin) was under 0.3% of the profile: cubemaps never change, and
+the lookup is not worth caching.
+
+**Verified (rig, Lex's settings, fixture, alternating windows; two review rounds, the last clean).** surf_demise s33 PrepareFrame 0.79 ->
+0.60 ms (CPU busy 2.82 -> 2.50; at render scale 2 it waits on the GPU, so fps equal there); eternity s10
+1.22 -> 1.10; garden and boreas within noise. Draw counts equal and pictures equal (garden s4's animated
+water aside).
+Tag patch-1262 = 4f2114b9f (P1261 + P1262 on patch-1259); both installs run exe 39e00f6e (git-8162-patch-1262-0-g4f2114b9f) and hl2 plugin d500ef70.
+
 ## Patch 1259 — the loading screen keeps moving through the hl2 world load (client exe + hl2 plugin)
 
 **Problem.** P1244's pumps left the longest stalls of a Source map load. A stack sampler (branch
