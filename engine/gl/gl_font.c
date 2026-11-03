@@ -57,7 +57,8 @@ extern unsigned int r2d_be_flags;
 
 #ifdef AVAIL_FREETYPE
 #include <ft2build.h>
-#include FT_FREETYPE_H 
+#include FT_FREETYPE_H
+#include FT_TRUETYPE_TABLES_H	//FTESurf Patch 1236: FT_Load_Sfnt_Table, for GPOS kerning
 struct fontface_s;
 int Font_ChangeFTSize(struct fontface_s *qface, int pixelheight);
 
@@ -77,6 +78,7 @@ static FT_Library fontlib;
 #define pFT_New_Memory_Face	FT_New_Memory_Face
 #define pFT_Done_Face		FT_Done_Face
 #define pFT_Error_String	FT_Error_String
+#define pFT_Load_Sfnt_Table	FT_Load_Sfnt_Table
 #else
 qboolean triedtoloadfreetype;
 dllhandle_t *fontmodule;
@@ -89,6 +91,7 @@ FT_Error (VARGS *pFT_New_Face)			(FT_Library library, const char *pathname, FT_L
 FT_Error (VARGS *pFT_New_Memory_Face)	(FT_Library library, const FT_Byte* file_base, FT_Long file_size, FT_Long face_index, FT_Face *aface);
 FT_Error (VARGS *pFT_Done_Face)			(FT_Face face);
 const char *(VARGS *pFT_Error_String)	(FT_Error  error_code);
+FT_Error (VARGS *pFT_Load_Sfnt_Table)	(FT_Face face, FT_ULong tag, FT_Long offset, FT_Byte *buffer, FT_ULong *length);
 #endif
 #else
 typedef unsigned int FT_Pixel_Mode; //for consistency even without freetype support.
@@ -296,6 +299,9 @@ typedef struct fontface_s
 		int actualsize;		//sometimes that activeheight isn't usable and we need to manually rescale. :(
 		FT_Face face;
 		void *membuf;
+		short *kern;			//FTESurf Patch 1236: [KERN_COUNT][KERN_COUNT] GPOS pair adjustments in font units, or NULL
+		unsigned short kernupem;
+		qboolean kerntried;		//read once, the first time the face is some font's face[0]
 	} ft;
 #endif
 } fontface_t;
@@ -343,6 +349,7 @@ typedef struct font_s
 
 	unsigned short faces;
 	fontface_t *face[MAX_FACES];
+	unsigned short kernppem;	//FTESurf Patch 1236: face[0]'s ppem when it has a kern table, else 0
 
 	struct font_s *alt;
 	vec3_t tint;
@@ -396,6 +403,15 @@ static float curfont_scale[2];
 
 extern cvar_t r_font_linear;
 extern cvar_t r_font_gamma;	//FTESurf Patch 1236
+extern cvar_t r_font_kerning;	//FTESurf Patch 1236
+
+//FTESurf Patch 1236: pair kerning over U+0020..U+00FF. Font_DrawScaleChar kerns against the char it
+//drew last when the caller passes back the pen it returned; Font_LineScaleWidth applies the same pairs.
+#define KERN_FIRST 32
+#define KERN_COUNT 224
+static struct font_s *kern_font;
+static unsigned int kern_prev;
+static float kern_x, kern_y;
 
 //^Ue2XX
 static struct
@@ -1827,6 +1843,341 @@ qboolean Font_LoadKexFont(struct font_s *f, int fheight, const char *fontfilenam
 #if defined(LIBFONTCONFIG_STATIC)
 #include <fontconfig/fontconfig.h>
 #endif
+//FTESurf Patch 1236: GPOS pair kerning, baked once per face over U+0020..U+00FF: feature 'kern' of
+//script latn (else DFLT), default LangSys; lookup types 2 and 9->2; value 1's XAdvance. Lookups add in
+//LookupList order and each stops at its first subtable that applies (a format 2 one applies whenever
+//both classes are in range), as HarfBuzz does. Every read is bounds-checked; an array that cannot fit
+//the table is skipped, and more than KERN_MAXSUB subtables drops the face's kerning.
+#define KERN_MAXSUB 1024
+typedef struct
+{
+	const qbyte *t;
+	size_t len;
+} gpos_t;
+static unsigned int GPOS_U16(const gpos_t *g, size_t o)
+{
+	return (o < g->len && g->len - o >= 2)?(g->t[o]<<8)|g->t[o+1]:0;
+}
+static qboolean GPOS_Fits(const gpos_t *g, size_t o, size_t count, size_t size)
+{
+	return o <= g->len && (!size || count <= (g->len - o) / size);
+}
+static size_t GPOS_ValueSize(unsigned int vf)
+{
+	size_t s = 0;
+	for (vf &= 0xff; vf; vf >>= 1)
+		s += (vf & 1)*2;
+	return s;
+}
+static int GPOS_XAdvance(const gpos_t *g, size_t rec, unsigned int vf)
+{
+	if (!(vf & 4))
+		return 0;
+	return (short)GPOS_U16(g, rec + ((vf&1)?2:0) + ((vf&2)?2:0));
+}
+static int GPOS_Coverage(const gpos_t *g, size_t c, unsigned int glyph)
+{
+	unsigned int fmt = GPOS_U16(g, c), n = GPOS_U16(g, c+2), lo = 0, hi = n, mid;
+	size_t r;
+	if (fmt == 1 && GPOS_Fits(g, c+4, n, 2))
+	{
+		while (lo < hi)
+		{
+			mid = (lo+hi)/2;
+			r = GPOS_U16(g, c+4+(size_t)mid*2);
+			if (r == glyph)
+				return mid;
+			if (r < glyph)
+				lo = mid+1;
+			else
+				hi = mid;
+		}
+	}
+	else if (fmt == 2 && GPOS_Fits(g, c+4, n, 6))
+	{
+		while (lo < hi)
+		{
+			mid = (lo+hi)/2;
+			r = c+4+(size_t)mid*6;
+			if (glyph < GPOS_U16(g, r))
+				hi = mid;
+			else if (glyph > GPOS_U16(g, r+2))
+				lo = mid+1;
+			else
+				return GPOS_U16(g, r+4) + glyph - GPOS_U16(g, r);
+		}
+	}
+	return -1;
+}
+static unsigned int GPOS_Class(const gpos_t *g, size_t c, unsigned int glyph)
+{
+	unsigned int fmt = GPOS_U16(g, c), lo = 0, hi, mid;
+	size_t r;
+	if (fmt == 1)
+	{
+		unsigned int start = GPOS_U16(g, c+2);
+		if (glyph >= start && glyph - start < GPOS_U16(g, c+4))
+			return GPOS_U16(g, c+6+(size_t)(glyph-start)*2);
+	}
+	else if (fmt == 2)
+	{
+		hi = GPOS_U16(g, c+2);
+		if (!GPOS_Fits(g, c+4, hi, 6))
+			return 0;
+		while (lo < hi)
+		{
+			mid = (lo+hi)/2;
+			r = c+4+(size_t)mid*6;
+			if (glyph < GPOS_U16(g, r))
+				hi = mid;
+			else if (glyph > GPOS_U16(g, r+2))
+				lo = mid+1;
+			else
+				return GPOS_U16(g, r+4);
+		}
+	}
+	return 0;
+}
+static void Font_LoadKerning(fontface_t *qface)
+{
+	FT_Face face = qface->ft.face;
+	const FT_ULong tag = FT_MAKE_TAG('G','P','O','S');
+	FT_ULong len = 0;
+	gpos_t g;
+	qbyte *buf;
+	size_t sl, fl, ll, s, ls, f, lk, st, r, ps, recs;
+	size_t *sub;
+	unsigned short *sublookup;
+	unsigned int i, j, k, n, fn, ln, nsub = 0, nlook = 0, pairs = 0, a, b;
+	unsigned int fmt, vf1, vf2, c1, c2, c1n, c2n, lo, hi, mid;
+	size_t s1, s2, rs;
+	int ci, acc[KERN_COUNT];
+	qbyte done[KERN_COUNT], seen[65536/8];
+	unsigned short gid[KERN_COUNT];
+	short *kern;
+
+	if (!FT_IS_SFNT(face) || !FT_IS_SCALABLE(face) || !face->units_per_EM)
+		return;
+	if (pFT_Load_Sfnt_Table(face, tag, 0, NULL, &len) || len < 10 || len > 16*1024*1024)
+		return;
+	buf = BZ_Malloc(len);
+	if (pFT_Load_Sfnt_Table(face, tag, 0, buf, &len))
+	{
+		BZ_Free(buf);
+		return;
+	}
+	g.t = buf;
+	g.len = len;
+	sub = NULL;
+	sublookup = NULL;
+	kern = NULL;
+	if (GPOS_U16(&g, 0) != 1)
+		goto done;
+	sl = GPOS_U16(&g, 4);
+	fl = GPOS_U16(&g, 6);
+	ll = GPOS_U16(&g, 8);
+
+	//the script's default LangSys
+	n = GPOS_U16(&g, sl);
+	if (!sl || !GPOS_Fits(&g, sl+2, n, 6))
+		goto done;
+	s = 0;
+	for (i = 0; i < n; i++)
+	{
+		r = sl+2+(size_t)i*6;
+		if (!memcmp(buf+r, "latn", 4))
+		{
+			s = sl + GPOS_U16(&g, r+4);
+			break;
+		}
+		if (!memcmp(buf+r, "DFLT", 4))
+			s = sl + GPOS_U16(&g, r+4);
+	}
+	if (!s || !GPOS_U16(&g, s))
+		goto done;
+	ls = s + GPOS_U16(&g, s);
+
+	//its 'kern' features' lookups
+	memset(seen, 0, sizeof(seen));
+	fn = GPOS_U16(&g, fl);
+	n = GPOS_U16(&g, ls+4);
+	if (!fl || !GPOS_Fits(&g, fl+2, fn, 6) || !GPOS_Fits(&g, ls+6, n, 2))
+		goto done;
+	for (i = 0; i <= n; i++)
+	{
+		j = (i == n)?GPOS_U16(&g, ls+2):GPOS_U16(&g, ls+6+(size_t)i*2);	//the required feature last (0xffff: none)
+		if (j >= fn)
+			continue;
+		r = fl+2+(size_t)j*6;
+		if (memcmp(buf+r, "kern", 4))
+			continue;
+		f = fl + GPOS_U16(&g, r+4);
+		ln = GPOS_U16(&g, f+2);
+		if (!GPOS_Fits(&g, f+4, ln, 2))
+			continue;
+		for (k = 0; k < ln; k++)
+		{
+			a = GPOS_U16(&g, f+4+(size_t)k*2);
+			seen[a>>3] |= 1u<<(a&7);
+		}
+	}
+
+	//their PairPos subtables, in lookup order
+	ln = GPOS_U16(&g, ll);
+	if (!ll || !GPOS_Fits(&g, ll+2, ln, 2))
+		goto done;
+	sub = BZ_Malloc(sizeof(*sub)*KERN_MAXSUB);
+	sublookup = BZ_Malloc(sizeof(*sublookup)*KERN_MAXSUB);
+	for (i = 0; i < ln; i++)
+	{
+		if (!(seen[i>>3] & (1u<<(i&7))))
+			continue;
+		lk = ll + GPOS_U16(&g, ll+2+(size_t)i*2);
+		fmt = GPOS_U16(&g, lk);	//lookup type
+		n = GPOS_U16(&g, lk+4);
+		if ((fmt != 2 && fmt != 9) || !GPOS_Fits(&g, lk+6, n, 2))
+			continue;
+		for (k = 0; k < n; k++)
+		{
+			st = lk + GPOS_U16(&g, lk+6+(size_t)k*2);
+			if (fmt == 9)
+			{
+				size_t off;
+				if (GPOS_U16(&g, st) != 1 || GPOS_U16(&g, st+2) != 2)
+					continue;
+				off = ((size_t)GPOS_U16(&g, st+4)<<16) | GPOS_U16(&g, st+6);
+				if (off >= len - st)
+					continue;
+				st += off;
+			}
+			if (GPOS_U16(&g, st) != 1 && GPOS_U16(&g, st) != 2)
+				continue;
+			if (nsub == KERN_MAXSUB)
+				goto done;
+			sub[nsub] = st;
+			sublookup[nsub++] = nlook;
+		}
+		nlook++;
+	}
+	if (!nsub)
+		goto done;
+
+	for (i = 0; i < KERN_COUNT; i++)
+	{
+		j = pFT_Get_Char_Index(face, KERN_FIRST+i);
+		gid[i] = (j <= 0xffff && KERN_FIRST+i != 0xad)?j:0;	//the soft hyphen is default-ignorable: HarfBuzz never kerns it
+	}
+	kern = Z_Malloc(sizeof(*kern)*KERN_COUNT*KERN_COUNT);
+	for (a = 0; a < KERN_COUNT; a++)
+	{
+		if (!gid[a])
+			continue;
+		memset(acc, 0, sizeof(acc));
+		for (j = 0; j < nsub; j++)
+		{
+			if (!j || sublookup[j] != sublookup[j-1])
+				memset(done, 0, sizeof(done));
+			st = sub[j];
+			ci = GPOS_Coverage(&g, st + GPOS_U16(&g, st+2), gid[a]);
+			if (ci < 0)
+				continue;
+			fmt = GPOS_U16(&g, st);
+			vf1 = GPOS_U16(&g, st+4);
+			vf2 = GPOS_U16(&g, st+6);
+			s1 = GPOS_ValueSize(vf1);
+			s2 = GPOS_ValueSize(vf2);
+			if (fmt == 1)
+			{
+				n = GPOS_U16(&g, st+8);
+				if ((unsigned int)ci >= n || !GPOS_Fits(&g, st+10, n, 2))
+					continue;
+				ps = st + GPOS_U16(&g, st+10+(size_t)ci*2);
+				n = GPOS_U16(&g, ps);
+				rs = 2+s1+s2;
+				if (!GPOS_Fits(&g, ps+2, n, rs))
+					continue;
+				for (b = 0; b < KERN_COUNT; b++)
+				{
+					if (done[b] || !gid[b])
+						continue;
+					lo = 0;
+					hi = n;
+					while (lo < hi)
+					{
+						mid = (lo+hi)/2;
+						r = ps+2+(size_t)mid*rs;
+						k = GPOS_U16(&g, r);
+						if (k == gid[b])
+						{
+							acc[b] += GPOS_XAdvance(&g, r+2, vf1);
+							done[b] = true;
+							break;
+						}
+						if (k < gid[b])
+							lo = mid+1;
+						else
+							hi = mid;
+					}
+				}
+			}
+			else
+			{
+				c1n = GPOS_U16(&g, st+12);
+				c2n = GPOS_U16(&g, st+14);
+				recs = st+16;
+				c1 = GPOS_Class(&g, st + GPOS_U16(&g, st+8), gid[a]);
+				if (c1 >= c1n || !GPOS_Fits(&g, recs, (size_t)c1n*c2n, s1+s2))
+					continue;
+				for (b = 0; b < KERN_COUNT; b++)
+				{
+					if (done[b] || !gid[b])
+						continue;
+					c2 = GPOS_Class(&g, st + GPOS_U16(&g, st+10), gid[b]);
+					if (c2 >= c2n)
+						continue;
+					acc[b] += GPOS_XAdvance(&g, recs + ((size_t)c1*c2n + c2)*(s1+s2), vf1);
+					done[b] = true;
+				}
+			}
+		}
+		for (b = 0; b < KERN_COUNT; b++)
+		{
+			kern[a*KERN_COUNT+b] = bound(-32768, acc[b], 32767);
+			if (kern[a*KERN_COUNT+b])
+				pairs++;
+		}
+	}
+done:
+	if (pairs)
+	{
+		qface->ft.kern = kern;
+		qface->ft.kernupem = face->units_per_EM;
+	}
+	else if (kern)
+		Z_Free(kern);
+	Con_DPrintf("%s: %u kerning pairs\n", qface->name, pairs);
+	if (sub)
+		BZ_Free(sub);
+	if (sublookup)
+		BZ_Free(sublookup);
+	BZ_Free(buf);
+}
+//the ppem face[0] was just sized to for this font; 0 (no kerning) for a face FreeType rescales or that has no pairs.
+//Fallback faces are never kerned, so their tables are never built.
+static void Font_SetKernPPEM(font_t *f, fontface_t *qface)
+{
+	FT_Face face = qface->ft.face;
+	if (!qface->ft.kerntried)
+	{
+		qface->ft.kerntried = true;
+		Font_LoadKerning(qface);
+	}
+	if (qface->ft.kern && qface->ft.activeheight && qface->ft.actualsize == qface->ft.activeheight && face->size)
+		f->kernppem = face->size->metrics.x_ppem;
+	else
+		f->kernppem = 0;
+}
+
 extern cvar_t dpcompat_smallerfonts;
 int Font_ChangeFTSize(fontface_t *qface, int pixelheight)
 {
@@ -1901,7 +2252,10 @@ qboolean Font_LoadFreeTypeFont(struct font_s *f, int height, const char *fontfil
 		{
 			qface->refs++;
 			if (!f->faces)
+			{
 				f->truecharheight = Font_ChangeFTSize(qface, f->charheight);
+				Font_SetKernPPEM(f, qface);
+			}
 			f->face[f->faces++] = qface;
 			return true;
 		}
@@ -1922,6 +2276,7 @@ qboolean Font_LoadFreeTypeFont(struct font_s *f, int height, const char *fontfil
 			{(void**)&pFT_Init_FreeType, "FT_Init_FreeType"},
 			{(void**)&pFT_Done_Face, "FT_Done_Face"},
 			{(void**)&pFT_Error_String, "FT_Error_String"},
+			{(void**)&pFT_Load_Sfnt_Table, "FT_Load_Sfnt_Table"},
 			{NULL, NULL}
 		};
 		if (triedtoloadfreetype)
@@ -2068,7 +2423,10 @@ qboolean Font_LoadFreeTypeFont(struct font_s *f, int height, const char *fontfil
 				qface->fnext->flink = &qface->fnext;
 
 			if (!f->faces)
+			{
 				f->truecharheight = trueheight;
+				Font_SetKernPPEM(f, qface);
+			}
 			f->face[f->faces++] = qface;
 			return true;
 		}
@@ -2851,6 +3209,8 @@ void Font_Free(struct font_s *f)
 				pFT_Done_Face(qface->ft.face);
 			if (qface->ft.membuf)
 				BZ_Free(qface->ft.membuf);
+			if (qface->ft.kern)
+				Z_Free(qface->ft.kern);
 #endif
 			*qface->flink = qface->fnext;
 			if (qface->fnext)
@@ -2873,6 +3233,7 @@ void Font_BeginString(struct font_s *font, float vx, float vy, int *px, int *py)
 	R2D_Flush = Font_Flush;
 	font_be_flags = r2d_be_flags;
 	curfont = font;
+	kern_font = NULL;	//FTESurf Patch 1236
 	*px = (vx*(int)vid.rotpixelwidth) / (float)vid.width;
 	*py = (vy*(int)vid.rotpixelheight) / (float)vid.height;
 
@@ -2895,6 +3256,7 @@ void Font_BeginScaledString(struct font_s *font, float vx, float vy, float szx, 
 	R2D_Flush = Font_Flush;
 	font_be_flags = r2d_be_flags;
 	curfont = font;
+	kern_font = NULL;	//FTESurf Patch 1236: a string's first char has no pair
 	*px = (vx*(float)vid.rotpixelwidth) / (float)vid.width;
 	*py = (vy*(float)vid.rotpixelheight) / (float)vid.height;
 
@@ -2967,6 +3329,46 @@ int Font_TabWidth(int x)
 	x++;
 	x = x + ((tabwidth - (x % tabwidth)) % tabwidth);
 	return x;
+}
+
+//FTESurf Patch 1236: the pair's kerning in the font's own pixels, rounded so the pen stays on whole pixels
+static int Font_KernPx(struct font_s *f, unsigned int first, unsigned int second)
+{
+#ifdef AVAIL_FREETYPE
+	int v;
+	first -= KERN_FIRST;
+	second -= KERN_FIRST;
+	if (!f->kernppem || !r_font_kerning.ival || first >= KERN_COUNT || second >= KERN_COUNT)
+		return 0;
+	v = f->face[0]->ft.kern[first*KERN_COUNT+second];
+	if (!v)
+		return 0;
+	return floor(v * (float)f->kernppem / f->face[0]->ft.kernupem + 0.5f);
+#else
+	return 0;
+#endif
+}
+void Font_KernDump_f(void)
+{	//FTESurf Patch 1236: each face's baked table, "first second units" per nonzero pair, to diff against an outside parser
+#ifdef AVAIL_FREETYPE
+	fontface_t *qface;
+	const char *name = Cmd_Argv(1);
+	unsigned int a, b, n = 0;
+	for (qface = faces; qface; qface = qface->fnext)
+	{
+		if (!qface->ft.kern || (*name && !strstr(qface->name, name)))
+			continue;
+		Con_Printf("kerndump %s upem %u\n", qface->name, qface->ft.kernupem);
+		for (a = 0; a < KERN_COUNT; a++)
+			for (b = 0; b < KERN_COUNT; b++)
+				if (qface->ft.kern[a*KERN_COUNT+b])
+				{
+					Con_Printf("%04x %04x %d\n", KERN_FIRST+a, KERN_FIRST+b, qface->ft.kern[a*KERN_COUNT+b]);
+					n++;
+				}
+	}
+	Con_Printf("kerndump end %u\n", n);
+#endif
 }
 
 /*
@@ -3147,14 +3549,34 @@ int Font_LineWidth(conchar_t *start, conchar_t *end)
 	return x;
 }
 float Font_LineScaleWidth(conchar_t *start, conchar_t *end)
-{
+{	//FTESurf Patch 1236: Font_CharEndCoord inlined, plus the pairs Font_DrawScaleChar kerns
 	int x = 0;
-	struct font_s *font = curfont;
-	unsigned int codeflags, codepoint;
+	struct font_s *font = curfont, *f, *kf = NULL;
+	struct charcache_s *c;
+	unsigned int codeflags, codepoint, prev = 0;
 	while(start < end)
 	{
 		start = Font_Decode(start, &codeflags, &codepoint);
-		x = Font_CharEndCoord(font, x, codeflags, codepoint);
+		if (codeflags&CON_HIDDEN)
+			continue;
+		if (codepoint == '\t')
+		{
+			x = Font_TabWidth(x);
+			kf = NULL;
+			continue;
+		}
+		f = ((codeflags & CON_2NDCHARSETTEXT) && font->alt)?font->alt:font;
+		c = Font_GetChar(f, codepoint);
+		if (!c)
+		{
+			kf = NULL;
+			continue;
+		}
+		if (f == kf)
+			x += Font_KernPx(f, prev, codepoint);
+		x += c->advance;
+		kf = f;
+		prev = codepoint;
 	}
 	return x * curfont_scale[0];
 }
@@ -3528,9 +3950,19 @@ float Font_DrawScaleChar(float px, float py, unsigned int charflags, unsigned in
 	//crash if there is no current font.
 	c = Font_GetChar(font, codepoint);
 	if (!c)
+	{
+		kern_font = NULL;
 		return px;
+	}
 
+	//FTESurf Patch 1236: kern only when the caller continues the pen this function returned
+	if (font == kern_font && px == kern_x && py == kern_y)
+		px += Font_KernPx(font, kern_prev, codepoint)*cw;
 	nextx = px + c->advance*cw;
+	kern_font = font;
+	kern_prev = codepoint;
+	kern_x = nextx;
+	kern_y = py;
 
 	if (codepoint == ' ' && (charflags & (CON_RICHFORECOLOUR|CON_NONCLEARBG)) != CON_NONCLEARBG)
 		return nextx;
