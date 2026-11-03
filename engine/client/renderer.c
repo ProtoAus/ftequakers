@@ -301,6 +301,7 @@ cvar_t r_fullbright							= CVARFD ("r_fullbright", "0",
 cvar_t r_fullbrightSkins					= CVARFD	("r_fullbrightSkins", "0.8", /*don't default to 1, as it looks a little ugly (too bright), but don't default to 0 either because then you're handicapped in the dark*/
 												CVAR_SEMICHEAT|CVAR_SHADERSYSTEM, "Force the use of fullbright skins on other players. No more hiding in the dark.");
 cvar_t r_lightmap_saturation				= CVAR	("r_lightmap_saturation", "1");
+cvar_t r_lightmap_bicubic				= CVARFD ("r_lightmap_bicubic", "1", CVAR_ARCHIVE|CVAR_MAPLATCH|CVAR_SHADERSYSTEM, "FTESurf Patch 1275: Source maps' lightmaps filtered bicubically (as HL2's 20th-anniversary update does): smoother shadow and light edges than bilinear on coarse lightmaps. Applies at the next map load. 0: bilinear.");
 cvar_t r_lightstylesmooth					= CVARF	("r_lightstylesmooth", "0", CVAR_ARCHIVE);
 cvar_t r_lightstylesmooth_limit				= CVAR	("r_lightstylesmooth_limit", "2");
 cvar_t r_lightstylespeed					= CVAR	("r_lightstylespeed", "10");
@@ -1681,6 +1682,7 @@ void Renderer_Init(void)
 	Cvar_Register (&gl_texture_lodbias, GLRENDEREROPTIONS);
 	Cvar_Register (&gl_texture_anisotropic_filtering, GLRENDEREROPTIONS);
 	Cvar_Register (&r_deluxemapping_cvar, GRAPHICALNICETIES);
+	Cvar_Register (&r_lightmap_bicubic, GRAPHICALNICETIES);	//FTESurf Patch 1275
 	Cvar_Register (&r_max_gpu_bones, GRAPHICALNICETIES);
 	Cvar_Register (&r_drawflat, GRAPHICALNICETIES);
 	Cvar_Register (&r_lightmap, GRAPHICALNICETIES);

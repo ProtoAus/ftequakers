@@ -5100,6 +5100,15 @@ static void BE_Program_Set_Attributes(const program_t *prog, struct programpermu
 		case SP_E_L_AMBIENTCUBE:	//see BE_EntityAmbientCube
 			qglUniform3fvARB(ph, 6, BE_EntityAmbientCube(shaderstate.curentity, true));
 			break;
+		case SP_E_LMSIZE:	//FTESurf Patch 1275
+			{
+				vec4_t sz = {1, 1, 1, 1};
+				unsigned int lmi = shaderstate.curbatch ? (unsigned short)shaderstate.curbatch->lightmap[0] : ~0u;
+				if (lmi < numlightmaps && lightmap[lmi]->width > 0 && lightmap[lmi]->height > 0)
+					Vector4Set(sz, lightmap[lmi]->width, lightmap[lmi]->height, 1.0f/lightmap[lmi]->width, 1.0f/lightmap[lmi]->height);
+				qglUniform4fvARB(ph, 1, sz);
+			}
+			break;
 
 		case SP_E_TIME:
 			qglUniform1fARB(ph, shaderstate.curtime);

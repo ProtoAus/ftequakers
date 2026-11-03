@@ -1638,6 +1638,7 @@ static const char *glsl_hdrs[] =
 				"#else\n"
 				"uniform vec4 e_lmscale;\n"
 				"#endif\n"
+				"uniform vec4 e_lmsize;\n"	//FTESurf Patch 1275
 				"uniform vec3 e_origin;"
 				"uniform float e_time;"
 				"uniform vec3 e_eyepos;"

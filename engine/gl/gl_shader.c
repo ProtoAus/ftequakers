@@ -3243,6 +3243,7 @@ struct shader_field_names_s shader_unif_names[] =
 /**/{"e_light_ambient",			SP_E_L_AMBIENT},	//lightgrid light value for the unlit side.
 /**/{"e_light_ambientcube[0]",	SP_E_L_AMBIENTCUBE},	//FTESurf Patch 268 C: Source's six-face ambient cube, world axes, +x -x +y -y +z -z
 /**/{"e_light_ambientcube",		SP_E_L_AMBIENTCUBE},
+/**/{"e_lmsize",				SP_E_LMSIZE},	//FTESurf Patch 1275: the batch's lightmap page, for bicubic lightmaps
 
 	{"s_colour",				SP_S_COLOUR},	//the rgbgen/alphagen stuff. obviously doesn't work with per-vertex ones.
 

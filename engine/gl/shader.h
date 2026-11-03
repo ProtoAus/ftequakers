@@ -461,6 +461,7 @@ typedef struct {
 		SP_E_L_MUL,
 		SP_E_L_AMBIENT,
 		SP_E_L_AMBIENTCUBE,	//FTESurf Patch 268 C: vec3[6], Source's six-face ambient cube (entity_t::light_cube), world axes. GL only.
+		SP_E_LMSIZE,	//FTESurf Patch 1275: vec4, the batch's lightmap page (w, h, 1/w, 1/h). GL only.
 		SP_E_EYEPOS, /*viewer's eyepos, in model space*/
 		SP_V_EYEPOS, /*viewer's eyepos, in world space*/
 		SP_W_FOG,

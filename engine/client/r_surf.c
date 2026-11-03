@@ -1365,6 +1365,22 @@ R_BuildLightMap
 Combine and scale multiple lightmaps into the 8.8 format in blocklights
 ===============
 */
+//FTESurf Patch 1275: a SURF_LMPAD block's edge texels copied into the one-texel border around it, so a
+//bicubic tap past the face reads the face's own light. dest: the block's first texel; stride: the page width.
+static void Surf_PadLightmapBlock(qbyte *dest, int smax, int tmax, int stride, int pixbytes)
+{
+	ptrdiff_t row = (ptrdiff_t)stride * pixbytes;
+	int t;
+	memcpy(dest - row, dest, (size_t)smax * pixbytes);
+	memcpy(dest + tmax * row, dest + (tmax-1) * row, (size_t)smax * pixbytes);
+	for (t = -1; t <= tmax; t++)
+	{
+		qbyte *r = dest + t * row;
+		memcpy(r - pixbytes, r, pixbytes);
+		memcpy(r + (size_t)smax * pixbytes, r + (size_t)(smax-1) * pixbytes, pixbytes);
+	}
+}
+
 static void Surf_BuildLightMap (model_t *model, msurface_t *surf, int map, int shift, int ambient, int *d_lightstylevalue)
 {
 	int			smax = (surf->extents[0]>>surf->lmshift)+1;
@@ -1378,7 +1394,7 @@ static void Surf_BuildLightMap (model_t *model, msurface_t *surf, int map, int s
 	unsigned	*bl;
 	glRect_t	*theRect;
 	void		*dest;
-	void		*deluxedest;
+	void		*deluxedest = NULL;
 	void		*stainsrc;
 	lightmapinfo_t *lm = lightmap[surf->lightmaptexturenums[map]];
 	qbyte		*src = surf->samples;
@@ -1389,6 +1405,7 @@ static void Surf_BuildLightMap (model_t *model, msurface_t *surf, int map, int s
 	//0 for every non-VBSP surface and for any VBSP map whose layout the loader could not
 	//prove against its lighting lump (see VBSP_ProbeLightmapStride, mod_vbsp.c).
 	size_t		lmextra = size * (size_t)((surf->flags & SURF_LMSTRIDE_MASK) >> SURF_LMSTRIDE_SHIFT);
+	int			pad = (surf->flags & SURF_LMPAD) ? 1 : 0;	//FTESurf Patch 1275
 
 	shift += 7; // increase to base value
 	surf->cached_dlight = (surf->dlightframe == r_dlightframecount);
@@ -1406,14 +1423,14 @@ static void Surf_BuildLightMap (model_t *model, msurface_t *surf, int map, int s
 
 	//make sure we flag the output rect properly.
 	theRect = &lm->rectchange;
-	if (theRect->t > surf->light_t[map])
-		theRect->t = surf->light_t[map];
-	if (theRect->l > surf->light_s[map])
-		theRect->l = surf->light_s[map];
-	if (theRect->r < surf->light_s[map]+smax)
-		theRect->r = surf->light_s[map]+smax;
-	if (theRect->b < surf->light_t[map]+tmax)
-		theRect->b = surf->light_t[map]+tmax;
+	if (theRect->t > surf->light_t[map]-pad)
+		theRect->t = surf->light_t[map]-pad;
+	if (theRect->l > surf->light_s[map]-pad)
+		theRect->l = surf->light_s[map]-pad;
+	if (theRect->r < surf->light_s[map]+smax+pad)
+		theRect->r = surf->light_s[map]+smax+pad;
+	if (theRect->b < surf->light_t[map]+tmax+pad)
+		theRect->b = surf->light_t[map]+tmax+pad;
 
 	dest = lm->lightmaps + (surf->light_t[map] * lm->width + surf->light_s[map]) * lm->pixbytes;
 	if (!r_stains.value || !surf->stained)
@@ -1427,14 +1444,14 @@ static void Surf_BuildLightMap (model_t *model, msurface_t *surf, int map, int s
 		lightmapinfo_t *dlm = lightmap[surf->lightmaptexturenums[map]+1];
 		dlm->modified = true;
 		theRect = &dlm->rectchange;
-		if (theRect->t > surf->light_t[map])
-			theRect->t = surf->light_t[map];
-		if (theRect->l > surf->light_s[map])
-			theRect->l = surf->light_s[map];
-		if (theRect->r < surf->light_s[map]+smax)
-			theRect->r = surf->light_s[map]+smax;
-		if (theRect->b < surf->light_t[map]+tmax)
-			theRect->b = surf->light_t[map]+tmax;
+		if (theRect->t > surf->light_t[map]-pad)
+			theRect->t = surf->light_t[map]-pad;
+		if (theRect->l > surf->light_s[map]-pad)
+			theRect->l = surf->light_s[map]-pad;
+		if (theRect->r < surf->light_s[map]+smax+pad)
+			theRect->r = surf->light_s[map]+smax+pad;
+		if (theRect->b < surf->light_t[map]+tmax+pad)
+			theRect->b = surf->light_t[map]+tmax+pad;
 
 		deluxedest = dlm->lightmaps + (surf->light_t[map] * dlm->width + surf->light_s[map]) * dlm->pixbytes;
 
@@ -1735,6 +1752,12 @@ static void Surf_BuildLightMap (model_t *model, msurface_t *surf, int map, int s
 		}
 
 		Surf_StoreLightmap_Lum(dest, blocklights, smax, tmax, shift, stainsrc, lm->width);
+	}
+	if (pad)
+	{
+		Surf_PadLightmapBlock(dest, smax, tmax, lm->width, lm->pixbytes);
+		if (deluxedest)
+			Surf_PadLightmapBlock(deluxedest, smax, tmax, lightmap[surf->lightmaptexturenums[map]+1]->width, lightmap[surf->lightmaptexturenums[map]+1]->pixbytes);
 	}
 }
 

@@ -19,6 +19,7 @@
 
 !!permu FAKESHADOWS
 !!cvardf r_glsl_pcf
+!!cvardf r_lightmap_bicubic=0
 !!cvarf r_renderscale
 !!samps =FAKESHADOWS shadowmap
 
@@ -184,13 +185,34 @@ uniform float cvar_r_renderscale;
 	#include "sys/pcf.h"
 #endif
 
-	#ifdef LIGHTSTYLED
-		#define LIGHTMAP0 texture2D(s_lightmap0, lm0).rgb
-		#define LIGHTMAP1 texture2D(s_lightmap1, lm1).rgb
-		#define LIGHTMAP2 texture2D(s_lightmap2, lm2).rgb
-		#define LIGHTMAP3 texture2D(s_lightmap3, lm3).rgb
+	//FTESurf Patch 1275: a cubic B-spline over the lightmap in four bilinear taps, as HL2's 20th-anniversary
+	//update filters it. Each face's block has a one-texel copy of its edge around it (r_surf.c SURF_LMPAD).
+	#if r_lightmap_bicubic
+	vec3 lm_bicubic(sampler2D s, vec2 c)
+	{
+		vec2 p = c * e_lmsize.xy - 0.5;
+		vec2 f = fract(p);
+		vec2 f2 = f * f, f3 = f2 * f;
+		vec2 w0 = (1.0 - 3.0*f + 3.0*f2 - f3) / 6.0;
+		vec2 w1 = (4.0 - 6.0*f2 + 3.0*f3) / 6.0;
+		vec2 w3 = f3 / 6.0;
+		vec2 g0 = w0 + w1, g1 = 1.0 - g0;
+		vec2 b = p - f + 0.5;
+		vec2 h0 = (b - 1.0 + w1 / g0) * e_lmsize.zw, h1 = (b + 1.0 + w3 / g1) * e_lmsize.zw;
+		return g0.y * (g0.x * texture2D(s, h0).rgb + g1.x * texture2D(s, vec2(h1.x, h0.y)).rgb) +
+		       g1.y * (g0.x * texture2D(s, vec2(h0.x, h1.y)).rgb + g1.x * texture2D(s, h1).rgb);
+	}
+	#define LMSAMPLE(s,c) lm_bicubic(s, c)
 	#else
-		#define LIGHTMAP texture2D(s_lightmap, lm0).rgb 
+	#define LMSAMPLE(s,c) texture2D(s, c).rgb
+	#endif
+	#ifdef LIGHTSTYLED
+		#define LIGHTMAP0 LMSAMPLE(s_lightmap0, lm0)
+		#define LIGHTMAP1 LMSAMPLE(s_lightmap1, lm1)
+		#define LIGHTMAP2 LMSAMPLE(s_lightmap2, lm2)
+		#define LIGHTMAP3 LMSAMPLE(s_lightmap3, lm3)
+	#else
+		#define LIGHTMAP LMSAMPLE(s_lightmap, lm0)
 	#endif
 
 	vec3 lightmap_fragment()
