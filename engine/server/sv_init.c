@@ -501,6 +501,10 @@ void SV_CalcPHS (void)
 	vcount = 0;
 	for (i=0 ; i<num ; i++, scan+=rowbytes)
 	{
+#ifndef SERVERONLY
+		if (!(i & 31))
+			SCR_LoadingPump();	//FTESurf Patch 1244: surf_eternity spends 1.7 s here hosting
+#endif
 		buf.buffer = scan;
 		model->funcs.ClusterPVS(model, i, &buf, PVM_REPLACE);
 		if (i == 0)
@@ -545,6 +549,10 @@ void SV_CalcPHS (void)
 	dest = (unsigned *)model->phs;
 	for (i=0 ; i<num ; i++, dest += rowwords, scan += rowbytes)
 	{
+#ifndef SERVERONLY
+		if (!(i & 31))
+			SCR_LoadingPump();	//FTESurf Patch 1244: surf_eternity spends 1.7 s here hosting
+#endif
 		memcpy (dest, scan, rowbytes);
 		for (j=0 ; j<rowbytes ; j++)
 		{

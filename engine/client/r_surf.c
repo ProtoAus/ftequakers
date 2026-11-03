@@ -4805,6 +4805,8 @@ void Surf_BuildModelLightmaps (model_t *m)
 
 				Surf_BuildLightMap (m, surf, j, shift, r_ambient.value*255, d_lightstylevalue);
 			}
+			if (!(i & 63))
+				SCR_LoadingPump();	//FTESurf Patch 1244: a big world builds for ~1 s (surf_eternity 917 ms)
 		}
 	}
 	m->lightmaps.first = newfirst;

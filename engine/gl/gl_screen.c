@@ -77,9 +77,13 @@ qboolean GLSCR_UpdateScreen (void)
 		return false;                         // not initialized yet
 	}
 
-	R2D_Font_Changed();
+	if (!scr_loadingpumping)	//FTESurf Patch 1244: a pump runs mid-load; r_2d.c's font reload wants a frame boundary
+	{
+		scr_loadingdraw = false;	//a host_abort out of the loading branch must not leave pumps off
+		R2D_Font_Changed();
+	}
 
-	if (vid_srgb.modified)
+	if (vid_srgb.modified && !scr_loadingpumping)
 	{
 		vid_srgb.modified = false;
 
@@ -122,6 +126,7 @@ qboolean GLSCR_UpdateScreen (void)
 			return false;	//don't refresh if we can't do so safely.
 		else
 		{
+			scr_loadingdraw = true;	//FTESurf Patch 1244: SCR_LoadingPump must not re-enter this
 			SCR_DrawLoading (true);
 			SCR_SetUpToDrawConsole();
 			if (Key_Dest_Has(kdm_console))
@@ -129,6 +134,8 @@ qboolean GLSCR_UpdateScreen (void)
 			if (R2D_Flush)
 				R2D_Flush();
 			VID_SwapBuffers();
+			scr_loadingswap = Sys_DoubleTime();
+			scr_loadingdraw = false;
 			return true;
 		}
 	}

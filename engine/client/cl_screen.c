@@ -1416,6 +1416,9 @@ cvar_t	scr_showdisk_y	= CVAR("scr_showdisk_y", "0");
 cvar_t	scr_showobituaries = CVAR("scr_showobituaries", "0");
 
 cvar_t	scr_loadingrefresh = CVARD("scr_loadingrefresh", "0", "Force redrawing of the loading screen, in order to display EVERY resource that is loaded");
+//FTESurf Patch 1244: what the load is doing, for a gamecode loading screen (menu QC's m_drawloading).
+static cvar_t	scr_loadingstep = CVARFD("scr_loadingstep", "", CVAR_NOSAVE|CVAR_NOSET, "The loading screen's current step: a resource name or a phase such as \"receiving map info\" (FTESurf Patch 1244). Read-only.");
+static cvar_t	scr_loadingseq = CVARFD("scr_loadingseq", "0", CVAR_NOSAVE|CVAR_NOSET, "Counts loading steps, so a repeated name still reads as a new step (FTESurf Patch 1244). Read-only.");
 cvar_t	scr_loadtimes = CVARD("scr_loadtimes", "0", "Print each stage of a map load that took this many milliseconds or more, and the load's total. A stage is the label the loading screen showed while the time passed (a model, a sound, newmap, csqc init, a wait on the server), from the server's map change to the first frame. 0 is off. (FTESurf Patch 1022)");
 cvar_t	scr_showloading	= CVAR("scr_showloading", "1");
 //things to configure the legacy loading screen
@@ -1444,6 +1447,8 @@ void CLSCR_Init(void)
 
 	Cvar_Register(&con_stayhidden, cl_screengroup);
 	Cvar_Register(&scr_loadingrefresh, cl_screengroup);
+	Cvar_Register(&scr_loadingstep, cl_screengroup);	//FTESurf Patch 1244
+	Cvar_Register(&scr_loadingseq, cl_screengroup);
 	Cvar_Register(&scr_loadtimes, cl_screengroup);
 	Cvar_Register(&scr_showloading, cl_screengroup);
 	Cvar_Register(&scr_loadingscreen_picture, cl_screengroup);
@@ -3323,6 +3328,7 @@ void SCR_SetLoadingStage(int stage)
 		if (loadingfile)
 			Z_Free(loadingfile);
 		loadingfile = NULL;
+		Cvar_ForceSet(&scr_loadingstep, "");	//FTESurf Patch 1244: no load in progress
 		scr_disabled_for_loading = scr_drawloading = false;
 		break;
 	case LS_CONNECTION:
@@ -3388,8 +3394,49 @@ void SCR_LoadTimesEnd(void)
 	lt_begin = 0;
 }
 
+//FTESurf Patch 1244: a gamecode loading screen redrawn while the main thread waits on loader work
+//(COM_WorkerPartialSync) or steps through a load, at most 60 times a second.  Only where
+//GLSCR_UpdateScreen draws the loading screen alone (scr_disabled_for_loading), never inside a
+//screen update already drawing it, never while the menu's VM runs.
+qboolean scr_loadingdraw;
+qboolean scr_loadingpumping;	//GLSCR_UpdateScreen skips the font and sRGB work for a pump's update
+double scr_loadingswap;		//the loading branch's last swap, the pump's or a frame's
+qboolean SCR_LoadingPumpWanted(void)
+{
+#ifdef MENU_DAT
+	return scr_disabled_for_loading && qrenderer != QR_NONE && MP_UsingGamecodeLoadingScreen();
+#else
+	return false;
+#endif
+}
+void SCR_LoadingPump(void)
+{
+	double now;
+	qboolean oldwarndraw;
+
+	if (scr_loadingdraw || qrenderer != QR_OPENGL || !Sys_IsMainThread() || !SCR_LoadingPumpWanted())
+		return;
+#ifdef MENU_DAT
+	if (MP_Executing())
+		return;
+#endif
+	now = Sys_DoubleTime();
+	//where GLSCR_UpdateScreen would leave the loading branch for a full frame: not mid-function
+	if (now - scr_disabled_time > 60 || Key_Dest_Has(~kdm_game))
+		return;
+	if (now - scr_loadingswap < 1.0/60 && now >= scr_loadingswap)
+		return;
+	oldwarndraw = r_refdef.warndraw;
+	r_refdef.warndraw = false;
+	scr_loadingpumping = true;
+	SCR_UpdateScreen();
+	scr_loadingpumping = false;
+	r_refdef.warndraw = oldwarndraw;
+}
+
 void SCR_SetLoadingFile(char *str)
 {
+	static int seq;
 	if (loadingfile && !strcmp(loadingfile, str))
 		return;
 	SCR_LoadTimesStage(str);
@@ -3398,6 +3445,8 @@ void SCR_SetLoadingFile(char *str)
 		Z_Free(loadingfile);
 	loadingfile = Z_Malloc(strlen(str)+1);
 	strcpy(loadingfile, str);
+	Cvar_ForceSet(&scr_loadingstep, str);	//FTESurf Patch 1244
+	Cvar_ForceSet(&scr_loadingseq, va("%i", ++seq));
 
 	if (scr_loadingrefresh.ival)
 	{
@@ -3406,6 +3455,8 @@ void SCR_SetLoadingFile(char *str)
 		SCR_UpdateScreen();
 		r_refdef.warndraw = oldwarndraw;
 	}
+	else
+		SCR_LoadingPump();
 }
 
 void SCR_DrawLoading (qboolean opaque)
@@ -4875,6 +4926,9 @@ void SCR_DrawTwoDimensional(qboolean nohud)
 		SCR_ShowPics_Draw();
 
 		if (!scr_disabled_for_loading)
+#ifdef MENU_DAT
+		if (!MP_UsingGamecodeLoadingScreen())	//FTESurf Patch 1244: that screen is opaque; an open console stays in front
+#endif
 			consolefocused = false;
 	}
 	else if (nohud)
