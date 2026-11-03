@@ -321,13 +321,14 @@ static int be_capstamp[R_MAX_RECURSE][BE_CAPKINDS], be_capseat[R_MAX_RECURSE][BE
 //for r_capturehalfrate. frame 0: nothing to reuse (reused already, or another capture overwrote them).
 static struct
 {
-	int frame, views;		//host_framecount, and how many top-level views rendered captures in it
+	int frame, views;		//host_framecount they last served (rendered or reused), and the views that rendered them
+	int reused;				//frames served since they rendered
 	unsigned int kinds;		//SHADER_HASREFLECT etc. actually written to a target
 	plane_t plane;
 	entity_t *ent;			//the batch's: the world for water, a func_reflective_glass for glass
 	int fbw, fbh;
 	playerview_t *pv;
-	float vp[16];			//the view-projection they were rendered for
+	float vp[16];			//the projection times the view's rotation they were rendered for (GLBE_TurnVP)
 } be_capkeep;
 static int be_capfixframe;	//host_framecount whose top-level draws sample a reused capture through be_capfix
 static float be_capfix[16];	//its view-projection times the inverse of this frame's (SP_M_CAPTUREFIX)
@@ -4395,7 +4396,10 @@ static void BE_Program_Set_Attributes(const program_t *prog, struct programpermu
 			qglUniformMatrix3x4fv(ph, shaderstate.sourcevbo->numbones, false, shaderstate.sourcevbo->bones);
 			break;
 		case SP_M_CAPTUREFIX:	//FTESurf Patch 1245: only the top-level view samples a reused capture
-			qglUniformMatrix4fvARB(ph, 1, false, (be_capfixframe == host_framecount && !r_refdef.recurse) ? be_capfix : be_identity16);
+			{
+				extern cvar_t r_p1245_nofix;	//P1245 TEST ONLY
+				qglUniformMatrix4fvARB(ph, 1, false, (be_capfixframe == host_framecount && !r_refdef.recurse && !r_p1245_nofix.ival) ? be_capfix : be_identity16);
+			}
 			break;
 		case SP_M_INVVIEWPROJECTION:
 			{
@@ -7291,10 +7295,22 @@ static void GLBE_WaterViewsEnd(void)
 
 extern cvar_t r_capturehalfrate;
 extern int host_framecount;
-//FTESurf Patch 1245: last frame's captures of this plane, if nothing has written those targets since
+//FTESurf Patch 1245: m_capturefix turns a reused capture's camera to this frame's and does not move it:
+//what it reflects is taken as distant. Moved too (exact on the water plane) was worse on a 24-unit slide,
+//surf_eternity s4 1.35 mean against 0.83 unmoved; a 3 degree turn 0.13 against 2.59. Without the eye's
+//translation the matrices also keep float precision at map coordinates of 10000+.
+static void GLBE_TurnVP(float *out)
+{
+	float v[16];
+	memcpy(v, r_refdef.m_view, sizeof(v));
+	v[12] = v[13] = v[14] = 0;
+	Matrix4_Multiply(shaderstate.projectionmatrix, v, out);
+}
+//last frame's captures of this plane, if nothing has written those targets since
 static qboolean GLBE_CaptureKeep(const plane_t *p, entity_t *ent, unsigned int need)
 {
-	if (!need || (need & ~be_capkeep.kinds) || be_capkeep.frame != host_framecount - 1 || be_capkeep.views != 1 || be_capkeep.ent != ent ||
+	if (!need || (need & ~be_capkeep.kinds) || be_capkeep.frame != host_framecount - 1 || be_capkeep.reused >= r_capturehalfrate.ival ||
+		be_capkeep.views != 1 || be_capkeep.ent != ent ||
 		be_capkeep.pv != r_refdef.playerview || be_capkeep.fbw != vid.fbpwidth || be_capkeep.fbh != vid.fbpheight ||
 		!GLBE_WaterSamePlane(p, &be_capkeep.plane))
 		return false;
@@ -7308,10 +7324,11 @@ static qboolean GLBE_CaptureKeep(const plane_t *p, entity_t *ent, unsigned int n
 		BE_StampCapture(BE_CAPREFR);
 	if (need & SHADER_HASREFRACTDEPTH)
 		BE_StampCapture(BE_CAPDEPTH);
-	be_capkeep.frame = 0;	//once: the next frame renders
-	{	//the water and glass shaders sample it where it saw each point (m_capturefix)
+	be_capkeep.frame = host_framecount;
+	be_capkeep.reused++;
+	{
 		float vp[16], inv[16];
-		Matrix4_Multiply(shaderstate.projectionmatrix, r_refdef.m_view, vp);
+		GLBE_TurnVP(vp);
 		if (Matrix4_Invert(vp, inv))
 			Matrix4_Multiply(be_capkeep.vp, inv, be_capfix);
 		else
@@ -7333,7 +7350,7 @@ static qboolean GLBE_GenerateBatchTextures(batch_t *batch, shader_t *bs)
 	qboolean keepable = false;		//FTESurf Patch 1245: the top-level view's chosen plane, or a glass plane
 	plane_t keepplane = {{0}};
 	entity_t *keepent = NULL;
-	float keepvp[16] = {0};			//this view's view-projection, before any capture runs
+	float keepvp[16] = {0};			//this view's GLBE_TurnVP, before any capture runs
 	if (r_refdef.recurse >= r_portalrecursion.ival || r_refdef.recurse == R_MAX_RECURSE)
 		return false;
 	//FTESurf Patch 864: no water capture inside a water capture.  r_portalrecursion 2
@@ -7420,7 +7437,7 @@ static qboolean GLBE_GenerateBatchTextures(batch_t *batch, shader_t *bs)
 				keepable = !r_refdef.recurse;
 				keepplane = p;
 				keepent = &r_worldentity;
-				Matrix4_Multiply(shaderstate.projectionmatrix, r_refdef.m_view, keepvp);
+				GLBE_TurnVP(keepvp);
 			}
 			else
 			{
@@ -7450,7 +7467,7 @@ static qboolean GLBE_GenerateBatchTextures(batch_t *batch, shader_t *bs)
 			keepable = true;
 			keepplane = gp;
 			keepent = batch->ent;
-			Matrix4_Multiply(shaderstate.projectionmatrix, r_refdef.m_view, keepvp);
+			GLBE_TurnVP(keepvp);
 		}
 	}
 
@@ -7722,6 +7739,7 @@ static qboolean GLBE_GenerateBatchTextures(batch_t *batch, shader_t *bs)
 			else if (!GLBE_WaterSamePlane(&keepplane, &be_capkeep.plane) || be_capkeep.pv != r_refdef.playerview || be_capkeep.ent != keepent)
 				be_capkeep.views++;	//a second plane, entity or view this frame: nothing is kept next frame
 			be_capkeep.frame = host_framecount;
+			be_capkeep.reused = 0;
 			be_capkeep.kinds |= written;
 			be_capkeep.plane = keepplane;
 			be_capkeep.ent = keepent;
