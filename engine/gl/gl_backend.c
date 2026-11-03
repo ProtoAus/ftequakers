@@ -331,12 +331,14 @@ static struct
 	float vp[16];			//the projection times the view's rotation they were rendered for (GLBE_TurnVP)
 	vec3_t eye, fwd;		//and the eye and its forward (a teleport or a flick renders afresh)
 	int keptframe;			//host_framecount a keep was applied in: the plane's other batches share it
+	int view;				//which of its seat's world views that frame rendered them (BE_SeatView)
 } be_capkeep = {-1};
 static int be_capfixframe = -1;	//host_framecount whose top-level draws sample a reused capture through be_capfix; -1 once a level-0 target is written
 static float be_capfix[16];	//its view-projection times the inverse of this frame's (SP_M_CAPTUREFIX)
 static const float be_identity16[16] = {1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1};
 static int be_seatviews[MAX_SPLITS];	//world-drawing top-level views begun, per seat
-static int be_seatframe[MAX_SPLITS], be_seatmulti[MAX_SPLITS];	//FTESurf Patch 1245: a seat's last world-view frame, and its last with two
+static int be_seatframe[MAX_SPLITS], be_seatbase[MAX_SPLITS];	//FTESurf Patch 1245: be_seatviews at a seat's first world view of a frame
+#define BE_SeatView(seat) (be_seatviews[seat] - be_seatbase[seat])	//1 for the frame's first world view of the seat
 static int BE_Seat(void)
 {
 	if (r_refdef.playerview && r_refdef.playerview >= cl.playerview && r_refdef.playerview < cl.playerview + MAX_SPLITS)
@@ -7527,15 +7529,17 @@ static qboolean GLBE_CaptureKeep(const plane_t *p, entity_t *ent, unsigned int n
 	if (!need || (need & ~be_capkeep.kinds) || be_capkeep.ent != ent || be_capkeep.pv != r_refdef.playerview ||
 		!GLBE_WaterSamePlane(p, &be_capkeep.plane))
 		return false;
+	//a seat can draw several world views a frame (stereo eyes, r_projection's faces, renderscenes): a view reuses
+	//only what the same view of the last frame rendered, and a second view sharing this frame's keep renders afresh
+	if (be_capkeep.view != BE_SeatView(seat))
+		return false;
 	if (be_capkeep.keptframe == host_framecount && be_capfixframe == host_framecount)
 		return true;	//another batch of the plane kept this frame
 	VectorSubtract(r_refdef.vieworg, be_capkeep.eye, d);
-	//vmt/water and vmt/lmreflect take m_capturefix; Quake's altwater does not. A seat with two world views in
-	//the capture's frame or this one (stereo, r_projection's faces, a second renderscene) has no one camera.
+	//vmt/water and vmt/lmreflect take m_capturefix; Quake's altwater does not
 	if (be_capkeep.frame != host_framecount - 1 || be_capkeep.reused >= r_capturehalfrate.ival || be_capkeep.views != 1 ||
 		be_capkeep.fbw != vid.fbpwidth || be_capkeep.fbh != vid.fbpheight ||
 		!r_worldentity.model || r_worldentity.model->fromgame != fg_new ||
-		be_seatmulti[seat] >= host_framecount - 1 ||
 		DotProduct(d, d) > 128*128 || DotProduct(r_refdef.viewaxis[0], be_capkeep.fwd) < 0.866f)	//past 128 units or 30 degrees
 		return false;
 	if (((need & SHADER_HASREFLECT) && !TEXVALID(shaderstate.tex_reflection[0])) ||
@@ -7971,8 +7975,9 @@ static qboolean GLBE_GenerateBatchTextures(batch_t *batch, shader_t *bs)
 			}
 			if (!be_capkeep.kinds)
 				be_capkeep.views++;
-			else if (!GLBE_WaterSamePlane(&keepplane, &be_capkeep.plane) || be_capkeep.pv != r_refdef.playerview || be_capkeep.ent != keepent)
-				be_capkeep.views++;	//a second plane, entity or view this frame: nothing is kept next frame
+			else if (!GLBE_WaterSamePlane(&keepplane, &be_capkeep.plane) || be_capkeep.pv != r_refdef.playerview || be_capkeep.ent != keepent ||
+				be_capkeep.view != BE_SeatView(BE_Seat()))
+				be_capkeep.views++;	//a second plane, entity, seat or world view this frame: nothing is kept next frame
 			be_capkeep.frame = host_framecount;
 			be_capkeep.reused = 0;
 			be_capkeep.kinds |= written;
@@ -7981,6 +7986,7 @@ static qboolean GLBE_GenerateBatchTextures(batch_t *batch, shader_t *bs)
 			be_capkeep.fbw = vid.fbpwidth;
 			be_capkeep.fbh = vid.fbpheight;
 			be_capkeep.pv = r_refdef.playerview;
+			be_capkeep.view = BE_SeatView(BE_Seat());
 			memcpy(be_capkeep.vp, keepvp, sizeof(keepvp));
 			VectorCopy(keepeye, be_capkeep.eye);
 			VectorCopy(keepfwd, be_capkeep.fwd);
@@ -10899,10 +10905,12 @@ void GLBE_DrawWorld (batch_t **worldbatches)
 		if (worldbatches)
 		{
 			int seat = BE_Seat();
+			if (be_seatframe[seat] != host_framecount)
+			{	//FTESurf Patch 1245: BE_SeatView counts from here
+				be_seatframe[seat] = host_framecount;
+				be_seatbase[seat] = be_seatviews[seat];
+			}
 			be_seatviews[seat]++;	//FTESurf Patch 1018: what a capture stamp is counted against
-			if (be_seatframe[seat] == host_framecount)
-				be_seatmulti[seat] = host_framecount;	//FTESurf Patch 1245: no capture keep across it
-			be_seatframe[seat] = host_framecount;
 		}
 		if (shaderstate.wbatch + 50 > shaderstate.maxwbatches)
 		{
