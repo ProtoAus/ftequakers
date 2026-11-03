@@ -11,6 +11,7 @@
 !!samps =LIGHTSTYLED lightmap1 lightmap2 lightmap3
 
 !!samps =BUMP normalmap
+!!samps =DELUXE deluxemap
 !!samps =FULLBRIGHT fullbright
 
 // envmaps only
@@ -218,6 +219,35 @@ uniform float cvar_r_renderscale;
 	#define SEAMSAMP(s) texture2D(s, tex_c)
 #endif
 
+#ifdef BUMP
+	//FTESurf Patch 1264: Source's bump basis (common_fxc.h:36), the tangent space of its normal maps,
+	//ssbumps and the deluxemap mod_vbsp.c VBSP_BuildRNM writes.
+	const vec3 rnm_b0 = vec3(0.81649661, 0.0, 0.57735026);
+	const vec3 rnm_b1 = vec3(-0.40824833, 0.70710677, 0.57735026);
+	const vec3 rnm_b2 = vec3(-0.40824822, -0.70710683, 0.57735026);
+#endif
+#if defined(DELUXE) && defined(BUMP)
+	//FTESurf Patch 1264: radiosity normal mapping (lightmappedgeneric_ps2_3_x.h:433-466).  The
+	//deluxemap is the luxel's three basis-map luminances as one direction, so each map's share is
+	//dot(dir, basis); the lightmap is their mean (VBSP_BuildRNM), so Source's weighted sum is the mean
+	//times 3 * dot(weights, share) / sum(share).  A normal map weighs by its squared, clamped dots
+	//with the basis, normalized; an ssbump IS the three weights, unnormalized.
+	float rnm_fragment()
+	{
+		vec3 share = max(vec3(dot(texture2D(s_deluxemap, lm0).rgb * 2.0 - 1.0, rnm_b0),
+		                      dot(texture2D(s_deluxemap, lm0).rgb * 2.0 - 1.0, rnm_b1),
+		                      dot(texture2D(s_deluxemap, lm0).rgb * 2.0 - 1.0, rnm_b2)), 0.0);
+		vec3 w = SEAMSAMP(s_normalmap).rgb;
+	#ifndef SSBUMP
+		w = w * 2.0 - 1.0;	//Source's DX space, as the deluxemap: no green flip
+		w = clamp(vec3(dot(w, rnm_b0), dot(w, rnm_b1), dot(w, rnm_b2)), 0.0, 1.0);
+		w *= w;
+		w /= max(dot(w, vec3(1.0)), 0.0001);
+	#endif
+		return 3.0 * dot(w, share) / max(dot(share, vec3(1.0)), 0.0001);
+	}
+#endif
+
 	vec3 env_saturation(vec3 rgb, float adjustment) {
 	    vec3 intensity = vec3(dot(rgb, vec3(0.2126,0.7152,0.0722)));
 	    return mix(intensity, rgb, adjustment);
@@ -262,17 +292,26 @@ uniform float cvar_r_renderscale;
 		diffuse_f.rgb *= ShadowmapFilter(s_shadowmap, vtexprojcoord);
 #endif
 
-		/* deluxemapping isn't working on Source BSP yet */
 		diffuse_f.rgb *= lightmap_fragment();
+#if defined(DELUXE) && defined(BUMP)
+		diffuse_f.rgb *= rnm_fragment();	//FTESurf Patch 1264
+#endif
 
 /* CUBEMAPS ONLY */
 #ifdef REFLECTCUBEMASK
 	/* We currently only use the normal/bumpmap for cubemap warping. move this block out once we do proper radiosity normalmapping */
 	#ifdef BUMP
-		/* Source's normalmaps are in the DX format where the green channel is flipped */
 		vec4 normal_f = SEAMSAMP(s_normalmap);
+		#ifdef SSBUMP
+		{	//FTESurf Patch 1264: three basis weights, and Source reflects off their sum (ps2_3_x.h:447)
+			vec3 n = normalize(rnm_b0 * normal_f.r + rnm_b1 * normal_f.g + rnm_b2 * normal_f.b);
+			normal_f.rgb = vec3(n.x, -n.y, n.z);	//into the green-flipped space below
+		}
+		#else
+		/* Source's normalmaps are in the DX format where the green channel is flipped */
 		normal_f.g = 1.0 - normal_f.g;
 		normal_f.rgb = normalize(normal_f.rgb - 0.5);
+		#endif
 	#else
 		vec4 normal_f = vec4(0.0,0.0,1.0,0.0);
 	#endif
