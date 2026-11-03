@@ -630,7 +630,8 @@ static void R_SetupGL (const float eyematrix[12]/*can be null*/, const vec4_t fo
 				if (sh_config.stencilbits && Sh_StencilShadowsActive())
 					maxdist = 0;	//if we're using stencil shadows then force the maxdist to infinite to ensure the shadow volume is sealed.
 				Matrix4x4_CM_Projection_Offset(r_refdef.m_projection_std, fov_l, fov_r, fov_d, fov_u, r_refdef.mindist, maxdist, false);
-				Matrix4x4_CM_Projection_Offset(r_refdef.m_projection_view, -fovv_x/2, fovv_x/2, -fovv_y/2, fovv_y/2, r_refdef.mindist, maxdist, false);
+				//FTESurf Patch 1257: viewmodels keep a near plane of 1 under a farther gl_mindist (Source's zNearViewmodel, view.cpp:560)
+				Matrix4x4_CM_Projection_Offset(r_refdef.m_projection_view, -fovv_x/2, fovv_x/2, -fovv_y/2, fovv_y/2, min(r_refdef.mindist, 1), maxdist, false);
 
 				r_refdef.m_projection_std[8] += r_refdef.projectionoffset[0];
 				r_refdef.m_projection_std[9] += r_refdef.projectionoffset[1];
