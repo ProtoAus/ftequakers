@@ -1997,15 +1997,19 @@ void GenerateFogTexture(texid_t *tex, float density, float zscale)
 
 //FTESurf Patch 1237: GLBE_DrawSkyroomScaled's multisample answer for one target; a glGet per frame syncs a
 //threaded driver, and a vid_restart can change the answer for the same id
+#ifndef GL_STATIC
 static int be_skysamplesfbo = -1, be_skysamples;
 static qboolean be_skyroombroken;	//its FBO came out incomplete: full size until the next vid_restart
 static GLenum be_skyroomifmt;	//tex_skyroom's internal format
+#endif
 void GLBE_DestroyFBOs(void)
 {
 	size_t i;
+#ifndef GL_STATIC
 	be_skysamplesfbo = -1;
 	be_skyroombroken = false;
 	be_skyroomifmt = 0;
+#endif
 	GLBE_FBO_Destroy(&shaderstate.fbo_lprepass);
 
 	for (i = 0; i < R_MAX_RECURSE; i++)
@@ -10457,7 +10461,7 @@ static qboolean GLBE_DrawSkyroomScaled(shader_t *skyshader)
 		shaderstate.tex_skyroom->height = h;
 		be_skyroomifmt = ifmt;
 		GL_MTBind(0, GL_TEXTURE_2D, shaderstate.tex_skyroom);
-		qglTexImage2D(GL_TEXTURE_2D, 0, ifmt, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+		qglTexImage2D(GL_TEXTURE_2D, 0, ifmt, w, h, 0, GL_RGBA, (ifmt == GL_RGBA16F) ? GL_FLOAT : GL_UNSIGNED_BYTE, NULL);	//gles3 pairs a float format with a float type
 		qglTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
 		qglTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
 		qglTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
@@ -10481,7 +10485,7 @@ static qboolean GLBE_DrawSkyroomScaled(shader_t *skyshader)
 	r_refdef.pxrect.maxheight = shaderstate.fbo_skyroom.rb_size[1];
 	GL_ViewportUpdate();
 	GL_ForceDepthWritable();
-	qglClearColor(r_clearcolour.vec4[0], r_clearcolour.vec4[1], r_clearcolour.vec4[2], 1);	//what the view showed where the sky room draws nothing
+	qglClearColor(0, 0, 0, 1);	//as R_Clear clears a render-scale target
 	qglClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
 	drawn = R_DrawSkyroom(skyshader);
