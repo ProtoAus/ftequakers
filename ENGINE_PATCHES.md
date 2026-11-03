@@ -1,5 +1,96 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1252 — Source env_laser beams drawn by the client (QC only)
+
+**Problem.** Lex (3 Nov): surf_fantasy's env_lasers are "removed at spawn (unimplemented class)". 2,741
+env_lasers across 184 library maps drew nothing.
+
+**Change.** FTESurf CSQC (cl_lasers.qc): at map load the entity lump's env_lasers are resolved to beam
+entries in the shared sprite beam table after the spotlight shafts (LaserTarget by name, case-blind;
+several targets of one name flicker as Source does, re-picked every 0.015 s), traced once to the first
+solid, and drawn each frame as one camera-facing additive quad (Source's width rounding, renderamt only
+when rendermode is not 0, TextureScroll). Declined, and counted on the load line: start-off (no I/O
+yet), parented, no target, moving target, no material, over the table. `vbsp_lasers 0` hides them live.
+Server QC: a brush entity's Color input now sets its colormod (P1250 makes Source brush tints visible).
+
+**Verified.** Rig: surf_fantasy "lasers: 59 of 59 drawn", rings drawn whole; surf_orbion's relays flash
+their brushes (49 Color deliveries logged, a white segment on screen 1.3 s after the trigger). Two review
+rounds: the 16 segments per beam drew what one quad draws (up to 1781 polygons a frame on surf_breach);
+Color params censused over 16,866 outputs. Residuals in FTESurf BACKLOG (noise, renderfx, sparks, I/O).
+
+## Patch 1251 — fake skies win against the shell behind them (hl2 plugin + engine keyword)
+
+**Problem.** Lex (3 Nov, surf_fantasy save 10): black hatching over the fake sky. The opaque
+WindowImposter sits 16 units in front of tools/toolsblack; from ~14k units that is about one step of the
+24-bit depth buffer (near clip 1), and the shell won in stripes.
+
+**Change.** Engine shader keyword `depthpush N` (gl_shader.c, appended shader_t field; BE_PolyOffset adds
+N units, sign by depth func, no slope term). The plugin gives WindowImposter at hl2_imposter 1 (default)
+`depthpush -2`. Review 1 replaced the first cut, `depthpush 4` on toolsblack: that let walls behind any
+visible toolsblack win at range (8,258 world pairs on 217 maps).
+
+**Verified.** Rig at Lex's pose: stripes gone (r_shaderpasses: fakeskies depthpush=-2, toolsblack 0);
+control shot shows them. Review 2 census: 275 world faces within 4 units in front of an imposter now lose
+from ~2.9k-5.8k units (they z-fought from ~4.1k-8.2k before); coplanar faces lose, as in Source.
+Root-cause option left in BACKLOG: near clip 4 (gl_mindist's cap).
+
+## Patch 1250 — lit warp faces keep their lightmaps; Source brush tints drawn (hl2 plugin + engine)
+
+**Problem.** Lex (3 Nov, surf_bikini_bottom save 3): the window water is solid, "meant to be like a thin
+layer of water". Warp faces were drawn SURF_DRAWTILED (no lightmap, saturated white), and Source brush
+entities' rendercolor never reached the shader.
+
+**Change.** Plugin VBSP_LoadFaces: a TI_WARP face keeps its lightmap when VRAD lit it (DRAWTILED only
+without samples). Engine r_surf.c: BEF_FORCECOLOURMOD for MDLF_SOURCEBSP brush models with
+RF_FORCECOLOURMOD; unlit.glsl and transition.glsl multiply by e_colourident.rgb as lightmapped.glsl does.
+
+**Verified.** Rig: the windows are teal and see-through with ripples; surf_bikini_bottom *57 green, not
+white; surf_acerbus and surf_again_njv's dx70 water lit by the room instead of glowing. Census: ~46,900
+LightmappedGeneric warp faces on ~292 maps change (Water-shader faces do not: no lightmap program);
+989 UnlitGeneric func_brushes now tinted. Brushes recoloured by map I/O needed the Color input (P1252's
+server half), or surf_orbion's 84 would stay black.
+
+## Patch 1249 — static props' flags read where SDK 2013 stores them (hl2 plugin)
+
+**Problem.** Lex (3 Nov, surf_pantheon save 14): yellow pillars. sprp v10 at 72 bytes (SDK 2013) keeps
+m_Flags as a uint at offset 64; byte 31 is padding, read as flags, so USE_LIGHTING_ORIGIN came from junk.
+
+**Change.** VBSP_LoadStaticProps reads flags at offset 64 for v10 without the 80/76-byte extras, and skips
+the v7 tint read there (offsets 64-67 are not a colour).
+
+**Verified.** Rig: pantheon's pillars marble. Census over 2,204 maps: offset 64's fade bit matches
+fademaxdist on all 356,518 v10@72 props and bit 0x100 matches lightmap resolution on all; byte 31's fade
+bit agrees 63%. 87,213 props on 770 maps change: 79,317 lose a junk lighting origin, 7,896 gain the one
+their mapper set.
+
+## Patch 1248 — mover 12: a prop hull's pieces report the plane the hull really meets
+
+**Problem.** Lex (3 Nov): surf_sedona ramp 3's end "buggy af" (save 2), surf_pantheon "bad ramp winding"
+(save 13). Source sweeps props with VPhysics; we clip their convex pieces with P492's Source rule, which
+picks the plane by epsilon-adjusted entry. At a crease the hull meets the next piece's top face at a
+grazing angle and an edge plane VBSP_PhyBrushes added head-on; the adjusted entries tie inside float
+noise and the edge plane could win (sedona: (2169,718,-1175) -> (2169,-279,-334) in Lex's session).
+
+**Change.** PMSRC_VERSION 12. BIH_ClipBoxToBrush, for .phy pieces at mover 12 only (bih_phypick from
+pm_source.c; the piece flag on struct bihtrace_s): the reported plane is the entering plane with the
+largest unadjusted entry, and the box stops DIST_EPSILON in front of it (clamped at 0); whether it is
+a hit stays mover 11's test. SV_PMSrcVer accepts 12.
+
+**Verified.** Rig hands-off on Lex's saves: sedona never touches the edge plane (old: six hits);
+pantheon rides to x -5826 (old: stops by -3777). Simulator (double and float32, 225 rides): no losses
+over 1000 u/s, stops, startsolid or stops inside a piece. Three review rounds, three lenses: round 1's
+pin blocker (SV_PMSrcVer lacked 12, so v12 recordings would have replayed as mover 2) and its stop rule
+(hits invented and dropped); round 2's grazed-plane re-hits (1,485 per 2M random traces). Fuzz of the
+final rule: hit set and stop never later than mover 11's, clearance >= 1/32 minus float noise.
+Installs (tag patch-1251 c78d47489, with P1249-P1251): exe b2b09404, fteqwsv64 78c8006c, hl2 plugin
+7b93539c (.pre1251 b4ddb77d / b2abe6aa / 354b596e). Lobby engine: branch p1248-pi 97f98dd9e on
+p1238-pi, fteqw-svarm64 ce06d73e (git-8080-patch-1173-6-g97f98dd9e), same 16 build warnings as
+P1238's; gate (pigate.sh, absolute paths) old vs new: 60 pm_dettest lines and both known HOLDs
+(boreas 1945, p492voy 408) identical, as stated in advance; swapped 3 Nov 06:10:06Z (.prev and
+pre1248-20261103T061006Z = 5f41b215), 12/12 lobbies restarted empty, serverinfo pm_sourceversion 12.
+A pre-P1248 verifier REFUSEs v12 files: never roll the Pi binary back past it once a lobby has run
+it. Held capture stays fenced at 11 (dormant).
+
 ## Patch 1247 — surfd: one bad KSF file no longer ends a tick; a converter change re-asks its set-asides
 
 **Problem.** Lex (3 Nov), "yes please to all" on P1240's open items: a file-level download failure
