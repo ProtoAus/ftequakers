@@ -999,6 +999,7 @@ static qboolean VK_CreateSwapChain(void)
 	if (reloadshaders)
 	{
 		Shader_NeedReload(true);
+		Shader_NeedReload(false);	//FTESurf Patch 1267: every shader, the render passes changed
 		Shader_DoReload();
 	}
 
