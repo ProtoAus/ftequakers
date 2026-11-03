@@ -4149,7 +4149,9 @@ static void SV_MapFrom_f (void)
             and optimisation level.
     mover   PM_PlayerMove for real, world-only physents.  Everything above plus
             the arithmetic, so it is the answer that actually matters and the
-            other two localise it.
+            other two localise it.  Patch 1255 review: it never collided (skipent
+            0 skips the world physent), so `mover` and its four twins measure free
+            fall; pickmover and the rides are the colliding ones.
 
   THE NAMED SUSPECT, verified by reading before this was written.
   BIH_Sort_X/Y/Z (com_bih.c:2108-2133) end in `return am > bm;` -- 0 or 1,
@@ -4376,7 +4378,7 @@ static void SV_DetPinMover(model_t *world, int fixrampbugs, int sourceversion, q
 	{
 		pmove.skipent = -1;
 		VectorSet(pmove.player_mins, -16, -16,  0);
-		VectorSet(pmove.player_maxs,  16,  16, 62);
+		VectorSet(pmove.player_maxs,  16,  16, 62);	//the mover takes standheight instead: pinned below
 	}
 	else
 	{
@@ -4399,6 +4401,8 @@ static void SV_DetPinMover(model_t *world, int fixrampbugs, int sourceversion, q
 	movevars.entgravity    = 1;
 	movevars.fixrampbugs   = fixrampbugs;
 	movevars.sourceversion = sourceversion;
+	if (collide)
+		movevars.standheight = 62;	//the picks' hull, so a contact is a standing place
 }
 
 static void SV_DetTest_f (void)
@@ -4417,7 +4421,8 @@ static void SV_DetTest_f (void)
 	unsigned long long hpickmover = SV_DETHASH_INIT;	//Patch 1255
 	unsigned long long hride[2] = {SV_DETHASH_INIT, SV_DETHASH_INIT};
 	unsigned int       seedpick;
-	int                picksamples, rides = 0, ridediff = 0;
+	int                picksamples, rides = 0, ridediff = 0, picktouch = 0, ridetouch[2] = {0, 0};
+	unsigned int       seq0;
 	detpick_t          dp;
 	unsigned int       ticktotal = 0;				//FTESurf Patch 325
 	unsigned int seed = 20260914u, seedrerun, seedprop, seedfix;
@@ -4507,9 +4512,12 @@ static void SV_DetTest_f (void)
 
 		/* Start in the middle of the world's box, well above the floor, so the
 		   first few ticks are a fall onto whatever is there rather than a
-		   stuck-in-solid no-op. */
+		   stuck-in-solid no-op.  (Patch 1255: it is usually void, and passes 0-4
+		   collide with nothing anyway; pickmover starts on the first prop contact.) */
 		for (k = 0; k < 3; k++)
 			pmove.origin[k] = (float)((lo[k] + hi[k]) / 2);
+		if (pass == 5 && dp.npts)
+			VectorCopy(dp.pts[0], pmove.origin);
 
 		for (i = 0; i < ntick; i++)
 		{
@@ -4526,11 +4534,14 @@ static void SV_DetTest_f (void)
 			pmove.angles[2] = 0;
 			pmove.momlimit = pmove.momslide = 0;	pmove.momcool = 0;	//FTESurf Patch 882: no trigger state here
 
+			seq0 = bih_probe_seq;	//Patch 1255: bumped by every hit a trace records (com_bih.c)
 			PM_PlayerMove(1.0f);
 
 			*hm = SV_DetHash(*hm, pmove.origin,   sizeof(pmove.origin));
 			*hm = SV_DetHash(*hm, pmove.velocity, sizeof(pmove.velocity));
 			*hm = SV_DetHash(*hm, &pmove.onground, sizeof(pmove.onground));
+			if (pass == 5 && (bih_probe_seq != seq0 || pmove.onground))
+				picktouch++;	//Patch 1255: a trace hit something, so the walk's hash can mean something
 
 			/* FTESurf Patch 325.  Kept OUT of hmover deliberately: folding it in
 			   would change a hash whose measured values are recorded against
@@ -4590,10 +4601,13 @@ static void SV_DetTest_f (void)
 				{
 					pmove.cmd.msec = 15;
 					pmove.momlimit = pmove.momslide = 0;	pmove.momcool = 0;
+					seq0 = bih_probe_seq;
 					PM_PlayerMove(1.0f);
 					hw = SV_DetHash(hw, pmove.origin,   sizeof(pmove.origin));
 					hw = SV_DetHash(hw, pmove.velocity, sizeof(pmove.velocity));
 					hw = SV_DetHash(hw, &pmove.onground, sizeof(pmove.onground));
+					if (bih_probe_seq != seq0 || pmove.onground)
+						ridetouch[pass]++;
 				}
 				hride[pass] = SV_DetHash(hride[pass], &hw, sizeof(hw));
 				if (!pass)
@@ -4706,13 +4720,14 @@ static void SV_DetTest_f (void)
 	           hfixtrace, fixwins, wrapwins);
 	Con_Printf("^5pm_dettest^7 fixmover %016llx\n", hfixmover);
 	/* Patch 1255.  "0 rides" compares nothing about mover 12 on this map; "0 differ" says its rides
-	   never met the rule.  pickmover and the rides read unpinned movevars (maxvelocity...): compare
-	   them only between servers on the same config. */
+	   never met the rule; "touched" counts ticks where a trace hit or the mover stood, so 0 means
+	   free fall.  Every line reads unpinned settings (maxvelocity and other movevars, pm_trisoup_bevels,
+	   pm_rotatedboxhulls, pm_portalcsg_scanall): compare only servers on the same config. */
 	Con_Printf("^5pm_dettest^7 picktrace %016llx  pick changed %i of %i traces, %i near %i prop contacts\n",
 	           dp.h, dp.changed, picksamples, picksamples - ntrace*4, dp.npts);
-	Con_Printf("^5pm_dettest^7 pickmover %016llx\n", hpickmover);
-	Con_Printf("^5pm_dettest^7 ride11 %016llx  ride12 %016llx  rides %i, %i differ\n",
-	           hride[0], hride[1], rides, ridediff);
+	Con_Printf("^5pm_dettest^7 pickmover %016llx  touched %i of %i ticks\n", hpickmover, picktouch, ntick);
+	Con_Printf("^5pm_dettest^7 ride11 %016llx  ride12 %016llx  rides %i, %i differ, touched %i/%i ticks\n",
+	           hride[0], hride[1], rides, ridediff, ridetouch[0], ridetouch[1]);
 }
 
 /*
