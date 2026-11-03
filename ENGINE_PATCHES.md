@@ -1,5 +1,26 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1240 — surfd: the KSF crawl at 16 board requests and 24 demos a tick; never-fetched boards first
+
+**Problem.** Lex (3 Nov), on the grabber audit's open items: "please do what you can". About 46,000
+advertised KSF replays waited at 6 downloads a tick (~27 days), and 4,037 never-fetched stage, bonus
+and style boards sorted behind ~4,000 deeper pages of boards already held. Momentum has no styles
+(Lex), so that item closed. Review found the demo queue would have capped any raise: a conversion
+refusal struck three times a day apart, downloaded each time, holding a slot two days (97 of 252).
+
+**Change.** FTESurf surfd: ksfimport WATCH_BOARDS 8 -> 16 and DEMO_MAX 6 -> 24 (one request at a
+time, 3 s apart); sweep_maps puts a board with no page beside the main boards and, at equal depth,
+viewed maps then Forward first. ksfgrab: a whole replay's content refusal is set aside 7 days at
+once, while bytes that are not a whole replay (inspect's refusals before the bookmark loop: a 200
+page, a cut or empty body, an unread header) strike as before; the deferral ledger cap 2048 -> 8192;
+a job passed over untouched is not saved; no download starts 150 s into a tick.
+
+**Verified.** Five review rounds, two lenses each to round 3. Round 2's run-of-refusals park was
+removed in round 3: one map's refusals cluster in the queue, so one board parked downloads every 6 h
+for good. Mutants for every rule fail the suites; Pi suites ksfimport, ksfprofile, ksfgrab (74) pass.
+Live 3 Nov 03:21:26Z (generation 20d99092, guard profile collectors84-v1 unchanged). The first tick (03:26) made 16 board requests (7 new pages, was 2) and linked 24 of 24 demos in 103 s. A rollback
+first trims the ledger (rollback_1240.py). Residuals in FTESurf BACKLOG.
+
 ## Patch 1238 — the local player's movetype rides every entity update (lobby server)
 
 **Problem.** Prederror reports of 2-3 Nov (surf_crucible, a player at ~345 ms): after a save-lock
