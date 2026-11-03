@@ -71,6 +71,7 @@ struct bihtrace_s
 	vec3_t startpos;	//bounds.[min|max]
 	vec3_t totalmove;
 	vec3_t endpos;	//bounds.[min|max]
+	qboolean inphy;	//FTESurf Patch 1248: BIH_ClipBoxToBrush is clipping a .phy piece (set round the piece loop)
 	trace_t trace;
 };
 
@@ -145,6 +146,7 @@ static qboolean BIH_BoundsIntersect (const vec3_t mins1, const vec3_t maxs1, con
 int bih_sourceclip;	//Patch 492: Source's clip rules, set by the Source mover (see BIH_ClipBoxToBrush)
 int bih_phybrushes;	//Patch 764: a static prop with phybrushes is traced as them, set by the Source mover at pmsrcver 7
 int bih_phyfix;		//Patch 888: a .phy hull whose old indices wrapped is traced unwrapped, set by the Source mover at pmsrcver 9
+int bih_phypick;	//Patch 1248: a prop hull piece's contact plane by geometric entry, set by the Source mover at pmsrcver 12
 
 #if defined(Q2BSPS) || defined(Q3BSPS)
 //Patch 888: the brushes the mover sweeps for this prop, or 0 to trace its model.
@@ -1022,6 +1024,8 @@ static void BIH_ClipBoxToBrush (struct bihtrace_s *fte_restrict tr, const q2cbru
 	qboolean	getout, startout;
 	float		f;
 	q2cbrushside_t	*side, *leadside;
+	qboolean	geopick;	//Patch 1248
+	float		entergeo, geofrac;
 
 	float nearfrac=0;
 	enterfrac = bih_sourceclip ? NEVER_UPDATED : -1;
@@ -1033,6 +1037,21 @@ static void BIH_ClipBoxToBrush (struct bihtrace_s *fte_restrict tr, const q2cbru
 
 	getout = false;
 	startout = false;
+	/*FTESurf Patch 1248: Source sweeps a prop's convex pieces with VPhysics, which has neither the
+	  epsilon-adjusted entry rule below nor the edge planes VBSP_PhyBrushes adds. At a crease the
+	  hull meets the next piece's top face at a grazing angle and an added side plane head on; the
+	  adjusted entry times then tie inside float noise and the side plane could win, throwing the
+	  surfer off (surf_sedona ramp 3: (2169,718,-1175) -> (2169,-279,-334) in Lex's own session).
+	  For pieces at mover 12 the reported plane is the one the hull really meets last (unadjusted
+	  entry) and the box stops DIST_EPSILON in front of it (fraction); whether it is a hit, and which
+	  brush wins (truefraction, the tree's cull key), stay mover 11's. Testing the reported plane's
+	  entry let hits stand on faces the box never reaches (review 1); stopping where mover 11 does
+	  left a grazed reported plane closer than eps, re-hit at fraction 0 (review 2); the earlier stop
+	  as the cross-brush key beat the brush the box meets first (review 3). Reporting the plane only
+	  past a clearance floor kept exactly the snags (simulator rule D: pantheon save 13 lost 1523).*/
+	geopick = bih_sourceclip && tr->inphy && bih_phypick;
+	entergeo = -1;
+	geofrac = 0;
 	leadside = NULL;
 
 	for (i=0 ; i<brush->numsides ; i++)
@@ -1064,6 +1083,16 @@ static void BIH_ClipBoxToBrush (struct bihtrace_s *fte_restrict tr, const q2cbru
 			{
 				enterfrac = f;
 				nearfrac = (d1-DIST_EPSILON) / (d1-d2);
+				if (!geopick)
+				{
+					clipplane = plane;
+					leadside = side;
+				}
+			}
+			if (geopick && d1 / (d1-d2) > entergeo)
+			{
+				entergeo = d1 / (d1-d2);
+				geofrac = f;
 				clipplane = plane;
 				leadside = side;
 			}
@@ -1091,6 +1120,8 @@ static void BIH_ClipBoxToBrush (struct bihtrace_s *fte_restrict tr, const q2cbru
 				enterfrac = 0;
 			if (bih_sourceclip)
 				nearfrac = enterfrac;	//already pulled back by DIST_EPSILON
+			if (geopick && geofrac < nearfrac)
+				nearfrac = (geofrac < 0) ? 0 : geofrac;	//Patch 1248: eps in front of the reported plane
 
 			tr->trace.fraction = nearfrac;
 			tr->trace.truefraction = enterfrac;
@@ -1370,6 +1401,7 @@ static void BIH_RecursiveTrace (struct bihtrace_s *fte_restrict tr, const struct
 				const struct bihtransform_s *trn = node->data.mesh.tr;
 				unsigned int i;
 				probeseq = bih_probe_seq;
+				tr->inphy = true;	//Patch 1248
 				for (i = 0; i < nb; i++)
 				{
 					q2cbrush_t *b = &brushes[i];
@@ -1377,6 +1409,7 @@ static void BIH_RecursiveTrace (struct bihtrace_s *fte_restrict tr, const struct
 					if ((b->contents & tr->hitcontents) && BIH_BoundsIntersect(b->absmins, b->absmaxs, tr->bounds.min, tr->bounds.max))
 						BIH_ClipBoxToBrush (tr, b);
 				}
+				tr->inphy = false;
 				if (bih_probe_seq != probeseq)
 				{
 					bih_probe_model = submod;
@@ -1864,6 +1897,7 @@ static qboolean BIH_Trace(model_t *model, int forcehullnum, const framestate_t *
 
 	// fill in a default trace
 	memset (&tr.trace, 0, sizeof(tr.trace));
+	tr.inphy = false;	//Patch 1248: only the prop-piece loop sets it
 	tr.trace.fraction = tr.trace.truefraction = 1;
 	tr.trace.surface = &(nullsurface.c);
 

@@ -64,7 +64,7 @@ void main ()
 void main ()
 {
 	vec4 diffuse_f = texture2D( s_diffuse, tex_c );
-	diffuse_f.rgb *= vec3(COLOR);
+	diffuse_f.rgb *= e_colourident.rgb * vec3(COLOR);	//FTESurf Patch 1250: a brush entity's rendercolor, as lightmapped.glsl
 
 #ifdef MASKLT
 		if (diffuse_f.a < float(MASK))

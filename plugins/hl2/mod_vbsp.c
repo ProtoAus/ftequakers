@@ -4353,7 +4353,7 @@ static qboolean VBSP_LoadFaces (model_t *mod, qbyte *mod_base, vlump_t *lumps, i
 		}
 		if (out->texinfo->flags & TI_WARP)
 		{
-			out->flags |= SURF_DRAWTURB|SURF_DRAWTILED;
+			out->flags |= SURF_DRAWTURB;	//FTESurf Patch 1250: DRAWTILED only when unlit, below
 		}
 		if ((out->texinfo->flags & TI_NODRAW) && hl2_hidetools->ival)
 		{
@@ -4391,7 +4391,15 @@ static qboolean VBSP_LoadFaces (model_t *mod, qbyte *mod_base, vlump_t *lumps, i
 	// set the drawing flags
 
 		if (out->texinfo->flags & TI_WARP)
+		{
 			out->flags |= SURF_DRAWTURB;
+			//FTESurf Patch 1250: a warp face VRAD lit keeps its lightmap. DRAWTILED denied one to every
+			//warp face (the Quake loaders' rule), so a LightmappedGeneric water sheet (surf_bikini_bottom's
+			//windows, nature/water_dx70_beneath) sampled white x overbright and clipped to flat white.
+			//Water/Refract programs have no lightmap stage; Mod_LightmapAllocSurf still refuses those.
+			if (!out->samples)
+				out->flags |= SURF_DRAWTILED;
+		}
 	}
 
 #ifdef HAVE_CLIENT
@@ -5692,6 +5700,12 @@ static qboolean VBSP_LoadStaticProps(model_t *mod, qbyte *offset, size_t size, i
 		leafcount = LittleShort(*(unsigned short*)prop);				prop += sizeof(unsigned short);
 		sent->solid = *prop;											prop += sizeof(qbyte);
 		propflags = *prop;												prop += sizeof(qbyte);
+		//FTESurf Patch 1249: SDK 2013's v10 72-byte record (gamebspfile.h:208-227) pads byte 31 and keeps
+		//m_Flags as the uint at 64; byte 31 is junk there (surf_pantheon: 0x3f/0xbf set USE_LIGHTING_ORIGIN
+		//over leftover origins, and four pillars lit warm from the world-origin leaf came out yellow).
+		//The 80-byte CS:GO layout does carry its flags in byte 31.
+		if (version == 10 && !propextra)
+			propflags = (qbyte)LittleLong(*(unsigned int*)(propbase + i*propsize + 64));
 		ent->skinnum = LittleLong(*(unsigned int*)prop);				prop += sizeof(unsigned int);
 		sent->fademindist = LittleFloat(*(float*)prop);					prop += sizeof(float);
 		sent->fademaxdist = LittleFloat(*(float*)prop);					prop += sizeof(float);
@@ -5864,7 +5878,7 @@ static qboolean VBSP_LoadStaticProps(model_t *mod, qbyte *offset, size_t size, i
 			Alpha zero is the tell: a modulation that makes the prop invisible
 			is not one the mapper asked for.
 			*/
-			if (prop[3])
+			if (prop[3] && !(version == 10 && !propextra))	//P1249: SDK 2013 v10 holds m_Flags here
 				VectorScale(prop, 1/255.0, ent->shaderRGBAf);
 			prop += sizeof(qbyte)*4;
 		}
