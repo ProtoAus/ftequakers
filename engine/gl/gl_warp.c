@@ -454,13 +454,13 @@ static qboolean r_skyroom_boxdrawn;	//this sky room view has drawn the whole box
 //FTESurf Patch 1237: a Source map's 2D sky as Source's R_DrawSkyBox draws it, all six faces whole.
 //R_CalcSkyChainBounds clips every sky triangle on the CPU, in every view, to save a little sky fill
 //(surf_eternity save 4 with its glass reflection: ClipSkyPolygon and the bounds walk, 6% of the frame).
-cvar_t r_skybox_full = CVARD("r_skybox_full", "1", "FTESurf Patch 1237: on Source maps, draw the 2D skybox's six faces whole, as Source does, instead of clipping every sky polygon on the CPU to find the visible part of each. 0: clip, as before.");
+cvar_t r_skybox_full = CVARD("r_skybox_full", "1", "FTESurf Patch 1237 (OpenGL renderer): on Source maps, draw the 2D skybox's six faces whole, as Source does, instead of clipping every sky polygon on the CPU to find the visible part of each. 0: clip, as before.");
 static qboolean r_skybox_fulldrawn;	//this submit's SKY sort has drawn the whole box
 void R_SkyboxSortBegin(void)	//GLBE_SubmitMeshes: at each submit and at its SKY sort, after any portal view
 {
 	r_skybox_fulldrawn = false;
 }
-cvar_t r_skyroom_scale = CVARFD("r_skyroom_scale", "1", CVAR_ARCHIVE, "FTESurf Patch 1237: draw the 3D sky (a Source map's sky room) at this fraction of the view's resolution, then stretch it behind the world. 1: full resolution. 0.5 at r_renderscale 2 draws the sky at your screen's own resolution, slightly softer: surf_demise 304 -> 342 fps. A sky that is cheap to draw gains nothing and the stretch costs a little (surf_garden about 3%).");
+cvar_t r_skyroom_scale = CVARFD("r_skyroom_scale", "1", CVAR_ARCHIVE, "FTESurf Patch 1237 (OpenGL renderer): draw the 3D sky (a Source map's sky room) at this fraction of the view's resolution, then stretch it behind the world. 1: full resolution. 0.5 at r_renderscale 2 draws the sky at your screen's own resolution, slightly softer: surf_demise 304 -> 342 fps. A sky that is cheap to draw gains nothing and the stretch costs a little (surf_garden about 3%).");
 static qboolean R_SkyroomFullBox(void)
 {
 	return r_skyroom_fullbox.ival && r_skyroomlevel >= 0 && r_refdef.recurse == r_skyroomlevel &&
