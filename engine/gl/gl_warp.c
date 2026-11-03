@@ -714,6 +714,11 @@ static qboolean R_SkyMaskWantedForGame(void)
 		return false;	//q3map2's invisible skyportals, as before
 	if (r_worldentity.model->fromgame == fg_new && r_sky_forcedepth.ival < 2)
 		return false;	//Source et al: masking here clips props at the sky brush
+	//Patch 1271: the mask stands in for the PVS Source culls by behind a sky face (a hole, Patch 990). An
+	//unvised map culls nothing, so surf_voyager's stations past its x -3008 sky wall draw whole in Source;
+	//here they were cut at twice the wall's distance and shrank as the player neared it. 68 library maps.
+	if (r_worldentity.model->fromgame == fg_new && !r_worldentity.model->vis)
+		return false;
 	return true;
 }
 

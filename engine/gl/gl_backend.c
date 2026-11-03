@@ -11144,6 +11144,7 @@ void GLBE_DrawWorld (batch_t **worldbatches)
 		}
 
 		shaderstate.wbatch = 0;
+		be_panelayers = 0;	//Patch 1268: batch addresses are reused from here; no stale entry may match one
 	}
 	//if the video mode changed, update any fbos (hopefully this won't happen on mirrors)
 	if (shaderstate.oldwidth != vid.pixelwidth || shaderstate.oldheight != vid.pixelheight)

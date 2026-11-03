@@ -992,6 +992,7 @@ typedef struct
 	char translucent;
 	char translucent_vmt;	//FTESurf Patch 783: $translucent as written; arms below overwrite `translucent`
 	char vertexalpha_on;	//FTESurf Patch 783: $vertexalpha's value (`vertexalpha` is set by the key alone)
+	char vertexcolor_on;	//Patch 1270: $vertexcolor's value, as vertexalpha_on
 	char additive_oneone;	//FTESurf Patch 783: Source's pass is ONE ONE whatever the alpha (emissive)
 	char vmtclass[32];	//FTESurf Patch 783: the Source shader class, before an arm rewrites `type`
 	char selfillum;
@@ -2258,7 +2259,10 @@ static char *VMT_ParseBlock(const char *fname, vmtstate_t *st, char *line)
 		else if (!Q_strcasecmp(key, "$color2"))
 			Q_strlcpy(st->color2, value, sizeof(st->color2));
 		else if (!Q_strcasecmp(key, "$vertexcolor"))
+		{
 			st->vertexcolor = 1;
+			st->vertexcolor_on = atof(value) != 0;
+		}
 		else if (!Q_strcasecmp(key, "$vertexalpha"))
 		{
 			st->vertexalpha = 1;
@@ -4114,7 +4118,7 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 		}
 		//Patch 1270: only $vertexcolor/$vertexalpha read vertex colour (modulate_dx9.cpp:133). A model's vertex colours
 		//are its lighting, so surf_voyager's combine balls (comball_glow1, grey under $mod2x) drew black squares in space.
-		if (st->vertexcolor || st->vertexalpha)
+		if (st->vertexcolor_on || st->vertexalpha_on)
 			Q_strlcatfz(script, &offset, sizeof(script),	"\trgbGen vertex\n");
 		else
 			Q_strlcatfz(script, &offset, sizeof(script),	"\trgbGen identity\n");
