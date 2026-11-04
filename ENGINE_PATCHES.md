@@ -60,8 +60,10 @@ paint/pack fail the seam and atlas controls (two failures, no errors). Colin 77
 and Classics3 70 local demos rebaked read-only to owned staging. These are NOT new
 downloads. Renderer/audio/frame-time and original sky symptom acceptance are
 PENDING: original rendered/dedicated control confirms milk_sky=0 retains an
-explicit stale r_skybox=milk after reconnect; subject is queued at the same shared
-quiet/4-GiB gate (control waited 544 seconds). NOT DEPLOYED; no visual/no-stutter claim. Detailed limits and next controls: mod repository
+explicit stale r_skybox=milk after reconnect; subject remained blocked at the same
+shared quiet/4-GiB gate (control waited 544 seconds). Verified own subject waiter
+stopped without children or an owned gate left behind. Source published in mod
+7dd89457 (asset-candidate docs ea72a344); NOT DEPLOYED, no visual/no-stutter claim. Detailed limits and next controls: mod repository
 tools/p1300-visuals.md; human acceptance pending in lextest.md. Snow/ice/cosmetics,
 weather/lightning and bounded independent smoke remain in ROADMAP.md; existing
 P1287 snow-cover ownership is preserved.
