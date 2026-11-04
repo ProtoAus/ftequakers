@@ -45,12 +45,23 @@ frozen client/server and five plugins (14 files), after the active game exited
 naturally. Destination and `.prev` hashes match; older predecessors were archived
 and individually rehashed; 1,441 protected config/program files are unchanged.
 Both installed dedicated binaries pass 1,472/1,472 checks. No process kill or
-progs/config/data/backend deploy. Pi is NOT deployed: read-only readiness found
-changing recorder parts and an open FD in the strict current 13-actor scope.
-No Pi stage, gate, swap or restart; the failed preservation check is not waived.
-Current backend profile is collectors84-v1, not the old 81-file helper profile.
-Safe Pi activation, historical verifier compatibility, live-client readback and
-the wider anti-cheat bank remain open.
+progs/config/data/backend deploy.
+
+**Further compatibility / Pi boundary.** All 72 legacy probe rows actually
+available in the live lobby binary match their subject counterparts. The modern
+subject's 18 extra pick/ride probe rows do not exist in that older command module;
+this is not a claim of 90 old-fleet rows. Historical verifier results with the
+qualified archived progs: both known legacy HOLDs unchanged; both gravity
+references PASS, actual fleet and subject. Original parser-profile failure kept.
+
+Pi is NOT deployed. Original recorder-stability/open-FD failure in the strict
+13-actor scope remains failed. After genuinely empty/closed windows, preparation
+bound the actual collectors84-v1 profile, then failed the exact current-cohort
+hash guard: a live backend source file differs from its deployed generation
+manifest. It matches published source, but that does not waive the manifest.
+Peer-owned runtime/manifest untouched. No Pi recorder archive, canonical stage,
+gate, swap, restart or backend operation. Safe Pi activation, live-client/ranked
+readback and the wider anti-cheat bank remain open.
 
 ## Patch 1300 — ramp scuff reach/seams, inspect sound warming, sky recovery (QC/tools only)
 
