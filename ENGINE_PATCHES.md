@@ -1,5 +1,32 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1310 — observe accepted shallow full-walk gravity use
+
+**Problem.** Native full-walk movement uses ordinary gravity in dry and shallow
+water, but the existing pure early-body observation required completely dry
+starts and finishes. A real accepted body difference could be missed after the
+late velocity result converged.
+
+**Change.** Admit only the native dry/shallow categories0/1 at the existing start
+and accepted-body fallback gates. Keep swimming, waterjump, invalid categories,
+slide/portal, unsupported/unclear alternative geometry and no-value exclusions.
+No native movement, input capture, API/format/flag, tier or ranking-policy change.
+
+**Verified.** Original Windows native plus128real-fluid controls:7,995checks,
+exactly2predicted missing-use failures, all actual native movement/category/debit/
+body/config controls otherwise pass. Extended identical full-player controls:
+8,266checks; reversing only the2product guards gives exactly7predicted admission/
+use failures, all physical controls still pass; subject8,266/8,266. The21actual
+fixed-tick PlayerMove arms include ground/air, shallow/dry transitions, default
+native alternatives, converged tails, no-value/cap erasure and a blocked
+alternative; whole observer OFF/ON body and config identity hold. Private hooks
+removed; final public1,571/1,571. Two independent whole-feature source reviews
+support the correction; the evidence reviewer identified the airborne/full-entry
+proof gap, now independently re-reviewed and resolved by the extended native arms.
+Clean exact-source platforms, integration/reader/corpus and installation remain
+in progress; no live/ranked/full-bank or general native-writer audit claim.
+Raw fixture values, private vectors and native/failed logs remain private.
+
 ## Patch 1307 — version ramp shader output/blend ABI (QC/assets only)
 
 **Problem.** Tracked assets and ignored progs can advance independently. P1295's

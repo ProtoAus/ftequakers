@@ -3277,7 +3277,8 @@ static qboolean PMSrc_BankGravityDefaultStart(vec3_t normal, qboolean groundjump
 	int i;
 	if (!pms_bankgravity_observe || pms_bankgravity_used ||
 		movevars.sourceversion < 11 || pmove.pm_type != PM_NORMAL ||
-		(pmove.onground && !groundjump) || pmove.waterlevel || pmove.waterjumptime ||
+		(pmove.onground && !groundjump) ||
+		(pmove.waterlevel != 0 && pmove.waterlevel != 1) || pmove.waterjumptime ||
 		pmove.waterjumpremaining ||
 		pms_haveportals || pms_anyslide || pms_slidetick || pms_momslide ||
 		!movevars.entgravity || movevars.entgravity == 1 ||
@@ -3558,8 +3559,9 @@ static void PMSrc_FullWalkMove (void)
 		bankfinish_projected ? bankfinish_plane : NULL))
 		pms_bankgravity_used = true;
 	// Lazy: the usual late use needs no alternative geometry queries.
+	// P1310: shallow water still takes full-walk gravity, unlike swimming.
 	if (bankstart && bankairclear && !pms_bankgravity_used && !pmove.onground &&
-		!pmove.waterlevel && !pms_slidetick && !pms_portalcrossed &&
+		(pmove.waterlevel == 0 || pmove.waterlevel == 1) && !pms_slidetick && !pms_portalcrossed &&
 		VectorCompare(pmove.origin, bankstart_airend) &&
 		PMSrc_BankGravityAirChanged(bankstart_origin, bankstart_airend, bankstart_airvel, bankstart_default[2]))
 		pms_bankgravity_used = true;
@@ -4697,6 +4699,28 @@ static void PMSrc_TestBankStartGravity(void)
 	pmove.waterjumpremaining = 1;
 	PMSrc_Check("P1131 waterjump excluded", PMSrc_BankGravityStartDefault(normal), 0, 0);
 	pmove.waterjumpremaining = 0;
+	/* P1310: only the native dry/shallow full-walk domain; admission is not use. */
+	{
+		int level;
+		for (level = -1; level <= 4; ++level)
+		{
+			pmove.waterlevel = level;
+			PMSrc_BankGravityBegin(true);
+			Q_snprintfz(name, sizeof(name), "P1310 water domain %i admitted", level);
+			PMSrc_Check(name, PMSrc_BankGravityStartDefault(normal), level == 0 || level == 1, 0);
+			Q_snprintfz(name, sizeof(name), "P1310 water domain %i alone not use", level);
+			PMSrc_Check(name, PMSrc_BankGravityEnd(), 0, 0);
+		}
+		pmove.waterlevel = 1;
+		PMSrc_BankGravityBegin(true);
+		pmove.waterjumptime = 1;
+		PMSrc_Check("P1310 shallow legacy waterjump excluded", PMSrc_BankGravityStartDefault(normal), 0, 0);
+		pmove.waterjumptime = 0;
+		pmove.waterjumpremaining = 1;
+		PMSrc_Check("P1310 shallow waterjump excluded", PMSrc_BankGravityStartDefault(normal), 0, 0);
+		pmove.waterjumpremaining = 0;
+		pmove.waterlevel = 0;
+	}
 	pmove.cmd.buttons = BUTTON_JUMP;
 	VectorClear(pmove.velocity);
 	VectorCopy(pmove.velocity, velocity);
