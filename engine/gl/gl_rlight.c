@@ -254,7 +254,8 @@ void R_AnimateLight (void)
 			//since the plugin owns them, so a hud_gfx change relights models without a reload.
 			//Looked up every frame: a gamedir change frees plugin-created cvars (Cvar_GamedirChange).
 			static const char *plugcvars[] = {"hl2_lt_scale", "hl2_lt_srgb_mag", "hl2_lt_min", "hl2_lt_face",
-				"hl2_lt_dirsign", "hl2_lt_fold", "hl2_lt_worldlight"};
+				"hl2_lt_dirsign", "hl2_lt_fold", "hl2_lt_worldlight",
+				"hl2_lt_occlusion", "hl2_lt_blend", "hl2_lt_illumpos", "hl2_cubelight", "hl2_lt_vcache"};	//FTESurf Patch 1289
 			size_t k;
 			for (k = 0; k < countof(plugcvars); k++)
 			{

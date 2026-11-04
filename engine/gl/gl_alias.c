@@ -1401,6 +1401,7 @@ static void R_DrawShadowVolume(mesh_t *mesh)
 typedef struct
 {
 	unsigned int seq;		//0 = empty; must match r_modellight_seq
+	double time;			//FTESurf Patch 1283: when sampled (R_ModelLightSettles)
 	vec3_t origin;			//the ENTITY origin the sample was taken for (not the sample point)
 	vec3_t shadelight;
 	vec3_t ambientlight;
@@ -1408,9 +1409,22 @@ typedef struct
 } modellightcache_t;
 static modellightcache_t modellightcache[MODELLIGHTCACHE_BUCKETS];
 
+//FTESurf Patch 1283: the hl2 plugin's light cache (hl2_lt_vcache, not 0) answers a repeated sample partly from
+//memory, refining it call by call, so a kept sample is no longer exact: a still model re-samples once a second,
+//the still eye 4 times a second, and r_modellight_cache 2's exactness check stands aside.
+static qboolean R_ModelLightSettles(void)
+{
+	cvar_t *vc;
+	if (!cl.worldmodel || !(cl.worldmodel->engineflags & MDLF_SOURCEBSP))
+		return false;	//review 2: a Quake map's sample is exact whatever the plugin is set to
+	vc = Cvar_FindVar("hl2_lt_vcache");	//by name, as Patch 894's hash does: the plugin owns it
+	return vc && vc->ival;
+}
+
 //FTESurf Patch 1280: every RF_WEAPONMODEL entity (knife, CS:GO arms, sleeve) samples r_refdef.vieworg, and on a
 //Source map each sample traces to every world light in range. One sample serves them all, kept while the eye is
-//still and for up to 1/r_viewmodel_lightrate s while it moves (under 256qu). Per-entity clamps and dlights still run.
+//still (re-sampled 4 times a second: the plugin's remembered light, Patch 1283, settles) and for up to
+//1/r_viewmodel_lightrate s while it moves (under 256qu). Per-entity clamps and dlights still run.
 static struct
 {
 	qboolean valid;
@@ -1515,7 +1529,8 @@ qboolean R_CalcModelLighting(entity_t *e, model_t *clmodel)
 			vec3_t moved;
 			VectorSubtract(r_refdef.vieworg, vmlightcache.origin, moved);
 			if (r_modellight_cache.ival && vmlightcache.valid && vmlightcache.seq == r_modellight_seq &&
-				(VectorEquals(vmlightcache.origin, r_refdef.vieworg) ||
+				((VectorEquals(vmlightcache.origin, r_refdef.vieworg) && (!R_ModelLightSettles() ||
+				  (realtime >= vmlightcache.time && realtime - vmlightcache.time < 0.25))) ||	//Patch 1283
 				 (rate > 0 && realtime >= vmlightcache.time && realtime - vmlightcache.time < 1.0 / rate &&
 				  DotProduct(moved, moved) < 256*256)))	//a teleport or respawn samples at once
 			{
@@ -1561,14 +1576,16 @@ qboolean R_CalcModelLighting(entity_t *e, model_t *clmodel)
 			if (r_modellight_cache.ival)
 			{
 				cache = &modellightcache[(unsigned int)e->keynum & (MODELLIGHTCACHE_BUCKETS-1)];
-				if (cache->seq == r_modellight_seq && VectorEquals(cache->origin, e->origin))
+				if (cache->seq == r_modellight_seq && VectorEquals(cache->origin, e->origin) &&
+					(!R_ModelLightSettles() || (realtime >= cache->time &&
+					 realtime - cache->time < 1 + (e->keynum & 63) * (1/64.0))))	//Patch 1283; spread, not all in one frame
 				{
 					VectorCopy(cache->shadelight, shadelight);
 					VectorCopy(cache->ambientlight, ambientlight);
 					VectorCopy(cache->lightdir, lightdir);
 					cachehit = true;	//fall through to the per-frame dlight/clamp tail
 
-					if (r_modellight_cache.ival == 2)
+					if (r_modellight_cache.ival == 2 && !R_ModelLightSettles())
 					{	/*self-check: re-sample and prove the cached value is EXACT. Any
 						  hit here is a real cache bug (a missed invalidation), not a
 						  rounding difference -- both sides run the same code on the same
@@ -1601,6 +1618,7 @@ qboolean R_CalcModelLighting(entity_t *e, model_t *clmodel)
 					VectorCopy(shadelight, cache->shadelight);
 					VectorCopy(ambientlight, cache->ambientlight);
 					VectorCopy(lightdir, cache->lightdir);
+					cache->time = realtime;
 					cache->seq = r_modellight_seq;	//publish last: the entry is only valid once filled
 				}
 			}
