@@ -1,5 +1,37 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1299 — gravity carry observation through normalized jump offsets
+
+**Problem.** The existing early gravity-use observer excluded every nonzero
+jump-height offset, including supported normalized jumps whose native relocation
+is independent of gravity. A later observation does not cover every earlier use.
+
+**Change.** `engine/common/pm_source.c` only. Move the zero-offset restriction to
+stock-jump admission; normalized admission accepts finite nonnegative offsets.
+The observer continues to use the actual accepted native jump origin and its
+existing clear-path proof. Native jump, trace, stamina, movement and sanitization
+order are unchanged. No new signal, recorder/API/version, tier or ranking policy.
+Negative and nonfinite offsets remain excluded from this bounded extension.
+
+**Verified.** Windows native `sv-rel`: the same isolated native controls on
+untreated production and subject. 1,448 older checks pass on both. The untreated
+parent fails 36 new admission/use assertions; the subject passes all 2,888 checks
+(1,416 private acting controls and 24 new public admission/negative controls).
+Native relocation agrees between gravity alternatives through standing, ducked
+and transitioning normalized jumps, additive/nonadditive modes, stamina off and
+finite enabled, stationary/rising input, successful and refused relocation
+traces. Clear and blocked accepted paths act; observer off/on preserves the entire
+player body and movement configuration byte-for-byte. Original fixture mistakes
+in contact margin and stamina-cost expectations were retained and corrected in
+the tests, not movement. No new compiler warning in changed code; full `sv-rel`
+has 21 pre-existing warnings. Reader suite: 949 checks, zero failed. Corpus
+baseline: 541 recordings, 341 existing structural faults, not a clean-corpus claim.
+
+At this source checkpoint, the final clean full build, ARM qualification, fleet
+and dual-install deployment are pending, not implied by the native unit result.
+The wider provenance bank remains partial; this is not full anti-cheat closure,
+ranked acceptance or a native file-writer audit.
+
 ## Patch 1292 — the QuakeC temp-string collector no longer makes the main thread wait (client exe)
 
 **Problem.** Lex (4 Nov): remove the dips, then lift the 1% and 0.1% lows. After Patches 1282-1284 the largest frames

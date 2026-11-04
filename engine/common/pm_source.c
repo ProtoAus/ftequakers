@@ -3302,7 +3302,6 @@ static qboolean PMSrc_BankGravityGroundStartCommon(vec3_t normal)
 {
 	if (!pmove.onground || !(pmove.cmd.buttons & BUTTON_JUMP) ||
 		movevars.ktjump ||
-		movevars.jumpzoffset ||
 		!isfinite(movevars.entgravity) || !isfinite(movevars.gravity) ||
 		!isfinite(movevars.jumpvelocity) || !isfinite(movevars.maxvelocity))
 		return false;
@@ -3321,8 +3320,8 @@ static qboolean PMSrc_BankGravityJumpStaminaDefault(void)
 static qboolean PMSrc_BankGravityGroundStartDefault(vec3_t normal)
 {
 	// P1145: stock crouch assigns Z; normalized postures share the existing add path.
-	if (movevars.normalizejump || movevars.jumpaddrise || pmove.ducked || pmove.ducking ||
-		!PMSrc_BankGravityJumpStaminaDefault())
+	if (movevars.normalizejump || movevars.jumpaddrise || movevars.jumpzoffset ||
+		pmove.ducked || pmove.ducking || !PMSrc_BankGravityJumpStaminaDefault())
 		return false;
 	return PMSrc_BankGravityGroundStartCommon(normal);
 }
@@ -3330,8 +3329,10 @@ static qboolean PMSrc_BankGravityGroundStartDefault(vec3_t normal)
 static qboolean PMSrc_BankGravityGroundStartNormalized(vec3_t normal)
 {
 	if (!isfinite(movevars.normalizejump) || !movevars.normalizejump ||
-		!isfinite(movevars.jumpaddrise)) return false;
+		!isfinite(movevars.jumpaddrise) ||
+		!isfinite(movevars.jumpzoffset) || movevars.jumpzoffset < 0) return false;
 	if (!PMSrc_BankGravityJumpStaminaDefault()) return false;
+	// P1299: native relocation is gravity-independent; observe its actual origin.
 	return PMSrc_BankGravityGroundStartCommon(normal);
 }
 
@@ -5640,6 +5641,31 @@ static void PMSrc_TestBankStartGravity(void)
 					PMSrc_Check(name, PMSrc_BankGravityEnd(), arm == 1, 0);
 				}
 			}
+		}
+		/* P1299: offset admission stays separate from actual accepted use. */
+		memset(&pmove, 0, sizeof(pmove));
+		pmove.pm_type = PM_NORMAL;
+		pmove.onground = true;
+		pmove.cmd.buttons = BUTTON_JUMP;
+		movevars.entgravity = 1.5f;
+		movevars.gravity = 800;
+		movevars.jumpvelocity = 301.993f;
+		movevars.maxvelocity = 3500;
+		movevars.stamina = movevars.jumpaddrise = 0;
+		movevars.ktjump = 0;
+		for (i = 0; i < 8; ++i)
+		{
+			movevars.normalizejump = 1;
+			movevars.jumpzoffset = i == 0 ? 0 : i == 1 ? 1.5f : i == 2 ? 5000 :
+				i == 3 ? -.125f : i == 4 ? NAN : i == 5 ? INFINITY : i == 6 ? -INFINITY : 1.5f;
+			if (i == 7) movevars.normalizejump = 0;
+			PMSrc_BankGravityBegin(true);
+			Q_snprintfz(name, sizeof(name), "P1299 offset %i normalized admission", i);
+			PMSrc_Check(name, PMSrc_BankGravityGroundStartNormalized(normal), i < 3, 0);
+			Q_snprintfz(name, sizeof(name), "P1299 offset %i stock stays excluded", i);
+			PMSrc_Check(name, PMSrc_BankGravityGroundStartDefault(normal), 0, 0);
+			Q_snprintfz(name, sizeof(name), "P1299 offset %i admission alone is not use", i);
+			PMSrc_Check(name, PMSrc_BankGravityEnd(), 0, 0);
 		}
 		pms_forwardmove = forwardmove;
 		pms_sidemove = sidemove;
