@@ -1,5 +1,36 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1307 — version ramp shader output/blend ABI (QC/assets only)
+
+**Problem.** Tracked assets and ignored progs can advance independently. P1295's
+full-multiplier shader/filter pair and P1300's half-output/double-modulation pair
+shared a filename and material key, so mixed or cached cohorts could be wrongly
+bright/dark. Actual Windows preimages already showed advanced shader source with
+older progs. More replay bakes also needed honest source-output sizing under the
+owner's MAX-FPS priority, not invented frame-time claims.
+
+**Change.** Preserve the exact qualified85254ea5 legacy shader at its old path;
+copy unchanged A84 modern source to `_v2`. New CSP probes v2 once at map load,
+selects matching program/blend and separate legacy/v2 material keys. No added
+per-frame I/O/pass/sample/trace/light. Cache seeder preserves arbitrary pending
+.tmp/.dcl downloads instead of blanket deletion. Existing source CLI prepares
+five provisional bakes using315 local replay instances;10-demo Christmas8024tri
+(one-ring5840) stays staged until moving-view sizing. Reject zero-mask no-op
+pruning before code: actual zero wear is fully dirty. Correct unsupported P1300
+bake counts from retained payloads plus byte-identical fresh regeneration.
+
+**Verified.** Existing3 seam/atlas/strength controls plus one source-ABI control
+pass; golden852 legacy/A84 modern bytes and four old/new client-asset pairing
+math cases include an acting mismatched-brightness negative. SOURCE/MATH, not
+native renderer execution. Actual approved c24ede65 compiles all3 programs with
+ZERO warnings. Old seeder control really seeds but removes both owned pending
+sentinels; subject seeds and preserves both. Both earlier Windows A84 installs
+and backend02 primary are independently hash/protocol verified, not a P1307
+installation claim. Native shader appearance, sky, inspect sound and moving-view
+frame time remain pending; prior guard refusals remain failures. No numeric FPS,
+no-hitch, native pin/tag, QC Build decision, movement or recorder change. Details:
+FTESurf tools/p1307-ramp-assets.md; deployment provenance follows actual copying.
+
 ## Patch 1306 — faithful stock crouch jump gravity observation
 
 **Problem.** The native stock crouch/transition jump assigns its impulse rather
