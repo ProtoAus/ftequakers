@@ -19,7 +19,11 @@ empty-timeline non-authority and terms refusal. Subject screenshot inspected;
 owned peers stopped. This is not populated-timeline, owner-feel or canonical
 replay qualification. Public queue/board and full source qualification remain
 unfinished; tools/tas-status.md and tools/p1298-tas-reopen.md in the mod describe
-scope. Deployment/live provenance is separate from these source/runtime checks.
+scope. Deployment readback4Nov2026 17:47UTC: clean QC0fbcc763 programs match the
+acted subject and both Windows destinations; approved -PiForce warned10seconds
+with three players before restarting12lobbies. All12advertise CSQC78f388a3;
+cold download SHA517849e5, rendered board and live Timeline close/reopen act.
+Native/backend untouched; full receipt in the mod's tools/p1298-tas-reopen.md.
 
 ## Patch 1292 — the QuakeC temp-string collector no longer makes the main thread wait (client exe)
 
