@@ -1414,7 +1414,10 @@ static modellightcache_t modellightcache[MODELLIGHTCACHE_BUCKETS];
 //the still eye 4 times a second, and r_modellight_cache 2's exactness check stands aside.
 static qboolean R_ModelLightSettles(void)
 {
-	cvar_t *vc = Cvar_FindVar("hl2_lt_vcache");	//by name, as Patch 894's hash does: the plugin owns it
+	cvar_t *vc;
+	if (!cl.worldmodel || !(cl.worldmodel->engineflags & MDLF_SOURCEBSP))
+		return false;	//review 2: a Quake map's sample is exact whatever the plugin is set to
+	vc = Cvar_FindVar("hl2_lt_vcache");	//by name, as Patch 894's hash does: the plugin owns it
 	return vc && vc->ival;
 }
 
@@ -1574,7 +1577,8 @@ qboolean R_CalcModelLighting(entity_t *e, model_t *clmodel)
 			{
 				cache = &modellightcache[(unsigned int)e->keynum & (MODELLIGHTCACHE_BUCKETS-1)];
 				if (cache->seq == r_modellight_seq && VectorEquals(cache->origin, e->origin) &&
-					(!R_ModelLightSettles() || (realtime >= cache->time && realtime - cache->time < 1)))	//Patch 1283
+					(!R_ModelLightSettles() || (realtime >= cache->time &&
+					 realtime - cache->time < 1 + (e->keynum & 15) * (1/16.0))))	//Patch 1283; spread, not all in one frame
 				{
 					VectorCopy(cache->shadelight, shadelight);
 					VectorCopy(cache->ambientlight, ambientlight);
