@@ -298,7 +298,10 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "#else\n"
 "diffuse_f = SEAMSAMP(s_diffuse);\n"
 "#endif\n"
-"diffuse_f.rgb *= e_colourident.rgb * vec3(COLOR);\n"
+//FTESurf Patch 1288: LightmappedGeneric multiplies by $color raw between an sRGB read and an sRGB write
+//(lightmappedgeneric_dx9_helper.cpp: no GammaToLinear, unlike VertexLitGeneric), so in linear light; on
+//the gamma values here that is ^(1/2.2). surf_eternity's $color .103 walls drew 3.5x too dark.
+"diffuse_f.rgb *= e_colourident.rgb * pow(vec3(COLOR), vec3(1.0/2.2));\n"
 
 "#ifdef MASKLT\n"
 "#ifdef FTE_ALPHACOVERAGE // FTESurf Patch 1262: under MSAA the test's edge is a pixel of coverage, not a cut\n"
@@ -901,7 +904,8 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "diffuse_f.a *= vex_color.a;\n"
 "#endif\n"
 
-"diffuse_f.rgb *= e_colourident.rgb * vec3(COLOR); //FTESurf Patch 1250: a brush entity's rendercolor\n"
+//FTESurf Patch 1288: $color in linear light, as LightmappedGeneric (see lightmapped.glsl)
+"diffuse_f.rgb *= e_colourident.rgb * pow(vec3(COLOR), vec3(1.0/2.2)); //FTESurf Patch 1250: a brush entity's rendercolor\n"
 
 /* deluxemapping isn't working on Source BSP yet, FIXME */
 "diffuse_f.rgb *= lightmap_fragment();\n"
@@ -2553,7 +2557,11 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "float layer = mod(e_time * float(ANIMRATE), float(sz.z));\n"
 
 "diffuse_f = texture2D(s_anim, vec3(tex_c, layer));\n"
+"#if defined(UNLIT) || defined(MODELLIT)\n"
 "diffuse_f.rgb *= e_colourident.rgb * vec3(COLOR);\n"
+"#else //FTESurf Patch 1288: a lightmapped brush takes $color in linear light (lightmapped.glsl)\n"
+"diffuse_f.rgb *= e_colourident.rgb * pow(vec3(COLOR), vec3(1.0/2.2));\n"
+"#endif\n"
 "#ifdef MODELLIT\n"
 "diffuse_f.rgb *= mlight;\n"
 "#elif defined(VERTEXCOL)\n"
