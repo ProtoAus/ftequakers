@@ -18,9 +18,26 @@ passing. Combined Windows candidate: 6,451/6,451 including actual neutral-native
 assignment oracle, observer OFF/ON whole-body/config identity, accepted versus
 blocked-alternative paths and all P1305 controls. Public suite now 1,557; historical
 posture exclusions changed only after actual native proof. Original stale private
-header dependency and intermediate outdated-scope assertions retained. Clean
-platform builds, installation and actual live/ranked acceptance remain pending;
-this does not close the broader provenance bank.
+header dependency and intermediate outdated-scope assertions retained.
+
+**Delivery, 4 Nov 2026.** Clean Windows full build and ARM64 server/HL2 build
+pass; both platforms pass 6,451 expanded and 1,557 final public controls. Final
+Windows source7ae5d53b2 preserves published P1301; all server/mover inputs are
+byte-identical to ARM source76acc7c6b/tagpatch-1306. Six-map90-row modern controls,
+72 actual old-fleet shared rows and unchanged historical verifier results pass.
+Both Windows installs received14 exact native files at21:20UTC, with predecessors
+preserved and18,195 protected files unchanged. Both installed servers1557PASS.
+All12Pi native/plugin pairs activated21:34:09UTC, no progs/config/backend deploy.
+All46,259 pre-existing protected files unchanged; actual backend launch/source
+contract156files unchanged. Eight actual recorder parts,2,821,850bytes, archived
+and individually rehashed ON/OFFBOX before any stage/restart; strict13 required
+actors checked again at locked activation. Original FD refusal and SSH caller
+timeout remain recorded; actual remote completion was verified read-only, never
+repeated or rolled back. Two fresh isolated installed clients download the live
+CSQC and draw the board without QC errors. They submit no timed/ranked run and do
+not establish live ranked acceptance, general file-writer audit or full bank
+closure. Public detail and the corrected old-manifest diagnosis:
+mod tools/p1306-gravity-context.md.
 
 ## Patch 1305 — gravity observation with ignored finite jump controls
 
@@ -41,8 +58,10 @@ failure. Candidate 5,925/5,925 including whole-body observer OFF/ON and ignored/
 zero-setting identity, real jump/debit/contact, neutral and blocked-alternative
 controls. Original fixture-macro failure retained; three historical public scope
 assertions updated only after the actual native proof. Public suite now 1,503.
-Clean cross-platform builds, final installation and live-current-program
-acceptance pending; this is not a broader anti-cheat bank completion claim.
+Cross-platform qualification and native-only delivery are now completed with
+P1306 under the same scope: see its delivery record and mod
+tools/p1306-gravity-context.md. Actual ranked acceptance and the broader
+provenance bank remain open.
 
 ## Patch 1304 — permanent Santa event gift (QC/backend/content only)
 
@@ -170,14 +189,18 @@ this is not a claim of 90 old-fleet rows. Historical verifier results with the
 qualified archived progs: both known legacy HOLDs unchanged; both gravity
 references PASS, actual fleet and subject. Original parser-profile failure kept.
 
-Pi is NOT deployed. Original recorder-stability/open-FD failure in the strict
-13-actor scope remains failed. After genuinely empty/closed windows, preparation
-bound the actual collectors84-v1 profile, then failed the exact current-cohort
-hash guard: a live backend source file differs from its deployed generation
-manifest. It matches published source, but that does not waive the manifest.
-Peer-owned runtime/manifest untouched. No Pi recorder archive, canonical stage,
-gate, swap, restart or backend operation. Safe Pi activation, live-client/ranked
-readback and the wider anti-cheat bank remain open.
+**Correction / completed Pi continuation, 4 Nov.** The earlier claimed backend
+integrity blocker was a selector error: preparation guessed a manifest beside the
+process cwd and selected the old CLOSED fallback, not the controller named in the
+actual canonical service launcher. Its hashes match its own declared fallback
+source; it was not the live manifest. Resolving the actual fixed launcher,
+state-dir, OPEN admission and declared source home verifies all84 runtime members
+and the complete156-file launch/source contract. No peer repair, manifest
+rebaseline, admission change or backend generation swap was needed or performed.
+Original recorder/FD refusals stay failed, not retrospectively passed. The same
+features are now on all12lobbies with qualified P1305/P1306, preserved actual parts
+and exact old data/config/program bytes; see P1306 delivery above. Cold clients
+verify live CSQC/board compatibility, not a ranked run or full bank closure.
 
 ## Patch 1300 — ramp scuff reach/seams, inspect sound warming, sky recovery (QC/tools only)
 
