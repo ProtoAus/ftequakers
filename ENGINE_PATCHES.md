@@ -1,5 +1,48 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1283 — a repeated model light sample remembers which world lights it saw (hl2 plugin, client exe)
+
+**Problem.** After Patch 1280, Lex (4 Nov): "I want to remove all dips". A model light sample on a Source map adds
+the direct light of every world light in PVS and range, each tested with a BIH trace (VBSP_AddWorldLightCube ->
+VBSP_WorldLightVisible). At two bhop_ceaseless spots one sample traces 1248-1516 lights (hl2_lightprobe; 86 at the
+spawn), ~10 ms, and every caller pays it every call: the view model, moving models (surf_voyager's movers, 2b's
+P1277 item), lit particles, QC getlight. A dim-light threshold does not help (below 1e-4 loses 2.5% of the visible
+light and still traces 420), and a trace already stops at its first hit.
+
+**Change.** mod_vbsp.c; gl_alias.c; gl_rlight.c (P1289's line).
+- VBSP_LightCacheCube: 64 slots, matched within 64qu of a caller's last point (a new slot seeds from one in the same
+  cluster within 1024qu, answers stale). Per light: visible/blocked and when traced. Each call re-traces
+  hl2_lt_vbudget (32): never-traced first, brightest first, then brightness x age; a burst of 64 when untraced
+  lights carry over 10% of the light, 128 for a first sample. Untraced lights count at the visible share of an even
+  spread of them (4 or more traces), else of the new picks, else the slot's known share: the brightest new lights
+  are nearer and less often blocked (95% visible where the rest let 55% through).
+- Bounded in time: a sample stops after 0.5 ms; once a view has spent 1 ms, later samples in it trace 4. A slot
+  whose caller has stood still since every light was traced is final and traces nothing.
+- Exact as before: the static-prop solve, the census and hl2_lightprobe (prv->wl_exact / report); hl2_lt_vcache 0.
+  hl2_lt_vcache 2 traces every light as well and prints the cube error and the worst sample every 5 s.
+- VBSP_WorldLightRatio is the per-light geometry split out unchanged: hl2_lightprobe output byte-identical (2778
+  lines at the two spots).
+- gl_alias.c R_ModelLightSettles (a Source world and hl2_lt_vcache on): the per-entity cache's sample lasts
+  1 + (keynum & 63)/64 s, the still eye (Patch 1280) re-samples 4 times a second, so remembered answers settle;
+  r_modellight_cache 2's exactness check stands aside then.
+- gl_rlight.c (Patch 1289): r_modellight_seq also hashes hl2_lt_occlusion, hl2_lt_blend, hl2_lt_illumpos,
+  hl2_cubelight and hl2_lt_vcache.
+
+**Verified.** Rig, Lex's settings (renderscale 2), CS:GO hands out.
+- bhop_ceaseless walk through the dense spots: old plugin 1% low 137, 0.1% 102, 175 stutters; P1283 1% 346-397,
+  0.1% 246-323, 0-28 stutters, worst frame 3.6-4.8 ms (several runs). Cache off (control): 1% 137, 207 stutters.
+- Check mode: cube error mean 0.24-0.27%, worst sample 9.5-12.8% (a first sample at a cluster edge).
+- Replay passes (P1277 probe rebuilt on P1283): surf_voyager stutters 377 -> 5, 0.1% low 105 -> 127; surf_hourglass's
+  48 ms frame of light traces gone (worst 10.7 ms, 0.1% 85 -> 163).
+- The ship exe (git-8210-patch-1283-0-g4a864094b, on patch-1284) and plugin d8b18216: walk 0.1% 311/323, voyager 5
+  stutters.
+- Five review rounds (display): an exact-first-sample seed through walls, lockstep re-samples, the heap traced root
+  first under the time cap, one-trace estimates, rope colours sampled once (cl_ropes.qc now samples with the cache off).
+
+**Left.** A still model first lit where many lights are new keeps an estimate until its re-sample settles it (1-2 s);
+callers within 64qu share answers; a frame with several views gets 1 ms each. Other dips found by the survey are
+not this patch: mid-run permutation compiles (P1277/P1282) and first-view lightmap rebuilds (P1284).
+
 ## Patch 1284 — a new lightstyle slot carries its colours' key, so a map's lightmaps are not rebuilt on first view (client exe)
 
 **Problem.** P1277's frame-pacing BACKLOG listed lightmap rebuilds on surf_monolith of up to ~85 ms a frame.
