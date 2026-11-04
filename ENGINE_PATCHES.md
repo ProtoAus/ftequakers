@@ -1,5 +1,27 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1306 — faithful stock crouch jump gravity observation
+
+**Problem.** The native stock crouch/transition jump assigns its impulse rather
+than adding it. The pure neutral-gravity model added in every stock posture and
+therefore excluded those postures; an early accepted effect could remain unseen
+once final velocity converged.
+
+**Change.** Mirror the existing native assignment in the pure model, retaining
+the add for standing stock and both normalized modes. Admit the already-captured
+stock postures under unchanged common, stamina, finite and accepted-path guards.
+No native movement, input capture, API/format/flag or ranking-policy change.
+
+**Verified.** Unchanged P1305 native: 1,975 checks, exactly 40 predicted model/
+admission/use failures, all actual jump/contact/debit/body controls otherwise
+passing. Combined Windows candidate: 6,451/6,451 including actual neutral-native
+assignment oracle, observer OFF/ON whole-body/config identity, accepted versus
+blocked-alternative paths and all P1305 controls. Public suite now 1,557; historical
+posture exclusions changed only after actual native proof. Original stale private
+header dependency and intermediate outdated-scope assertions retained. Clean
+platform builds, installation and actual live/ranked acceptance remain pending;
+this does not close the broader provenance bank.
+
 ## Patch 1305 — gravity observation with ignored finite jump controls
 
 **Problem.** Native stock jumps ignore the normalized-only rise/offset controls;

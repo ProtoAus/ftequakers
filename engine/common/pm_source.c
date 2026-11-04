@@ -3320,9 +3320,8 @@ static qboolean PMSrc_BankGravityJumpStaminaDefault(void)
 static qboolean PMSrc_BankGravityGroundStartDefault(vec3_t normal)
 {
 	// Stock ignores these options; nonfinite settings stay conservatively excluded.
-	// P1145: stock crouch assigns Z; normalized postures share the existing add path.
 	if (movevars.normalizejump || !isfinite(movevars.jumpaddrise) || !isfinite(movevars.jumpzoffset) ||
-		pmove.ducked || pmove.ducking || !PMSrc_BankGravityJumpStaminaDefault())
+		!PMSrc_BankGravityJumpStaminaDefault())
 		return false;
 	return PMSrc_BankGravityGroundStartCommon(normal);
 }
@@ -3348,7 +3347,11 @@ static qboolean PMSrc_BankGravityJumpDefault(vec3_t normal)
 		float inbound = normal[2] + (1.0f * movevars.gravity * 0.5f * pms_frametime);
 		if (inbound > 0) normal[2] -= inbound;
 	}
-	normal[2] += impulse;
+	// P1306: stock crouch/transition assigns; normalized jumps always add.
+	if (!movevars.normalizejump && (pmove.ducked || pmove.ducking))
+		normal[2] = impulse;
+	else
+		normal[2] += impulse;
 	if (PMSrc_StaminaEnabled())
 		normal[2] *= PMSrc_StaminaRatio();
 	if (!movevars.normalizejump)
@@ -4929,10 +4932,10 @@ static void PMSrc_TestBankStartGravity(void)
 				PMSrc_Check("P1305 ignored stock offset admitted", PMSrc_BankGravityGroundStartDefault(normal), 1, 0);
 				movevars.jumpzoffset = 0;
 				pmove.ducked = true;
-				PMSrc_Check("P1139 ducked jump excluded", PMSrc_BankGravityGroundStartDefault(normal), 0, 0);
+				PMSrc_Check("P1306 stock ducked jump admitted", PMSrc_BankGravityGroundStartDefault(normal), 1, 0);
 				pmove.ducked = false;
 				pmove.ducking = true;
-				PMSrc_Check("P1139 ducking jump excluded", PMSrc_BankGravityGroundStartDefault(normal), 0, 0);
+				PMSrc_Check("P1306 stock ducking jump admitted", PMSrc_BankGravityGroundStartDefault(normal), 1, 0);
 				pmove.ducking = false;
 				pmove.basevelocity[2] = INFINITY;
 				PMSrc_Check("P1139 nonfinite ground carrier excluded", PMSrc_BankGravityGroundStartDefault(normal), 0, 0);
@@ -5333,8 +5336,8 @@ static void PMSrc_TestBankStartGravity(void)
 						Q_snprintfz(name, sizeof(name), "P1148 recovered stamina %i/%i normalized admitted", mode, posture);
 						PMSrc_Check(name, PMSrc_BankGravityGroundStartNormalized(normal), 1, 0);
 						movevars.normalizejump = movevars.jumpaddrise = 0;
-						Q_snprintfz(name, sizeof(name), "P1148 recovered stamina %i/%i stock posture bounded", mode, posture);
-						PMSrc_Check(name, PMSrc_BankGravityGroundStartDefault(normal), posture == 0, 0);
+						Q_snprintfz(name, sizeof(name), "P1306 recovered stamina %i/%i stock posture admitted", mode, posture);
+						PMSrc_Check(name, PMSrc_BankGravityGroundStartDefault(normal), 1, 0);
 						movevars.normalizejump = 1;
 						movevars.jumpaddrise = mode;
 						pmove.stamina = 40;
@@ -5457,12 +5460,12 @@ static void PMSrc_TestBankStartGravity(void)
 							*finite_values[bad / 2] = saved_bad;
 						}
 						pmove.ducked = true;
-						Q_snprintfz(name, sizeof(name), "P1152 stock stamina %i ducked excluded", poolcase);
-						PMSrc_Check(name, PMSrc_BankGravityGroundStartDefault(normal), 0, 0);
+						Q_snprintfz(name, sizeof(name), "P1306 stock stamina %i ducked admitted", poolcase);
+						PMSrc_Check(name, PMSrc_BankGravityGroundStartDefault(normal), 1, 0);
 						pmove.ducked = false;
 						pmove.ducking = true;
-						Q_snprintfz(name, sizeof(name), "P1152 stock stamina %i ducking excluded", poolcase);
-						PMSrc_Check(name, PMSrc_BankGravityGroundStartDefault(normal), 0, 0);
+						Q_snprintfz(name, sizeof(name), "P1306 stock stamina %i ducking admitted", poolcase);
+						PMSrc_Check(name, PMSrc_BankGravityGroundStartDefault(normal), 1, 0);
 						pmove.ducking = false;
 					}
 					PMSrc_FullWalkMove();
@@ -5689,11 +5692,47 @@ static void PMSrc_TestBankStartGravity(void)
 			movevars.jumpaddrise = movevars.jumpzoffset = 1.5f;
 			pmove.ducked = true;
 			PMSrc_BankGravityBegin(true);
-			PMSrc_Check("P1305 stock duck remains excluded", PMSrc_BankGravityGroundStartDefault(normal), 0, 0);
+			PMSrc_Check("P1306 ignored stock duck admitted", PMSrc_BankGravityGroundStartDefault(normal), 1, 0);
 			pmove.ducked = false;
 			pmove.ducking = true;
-			PMSrc_Check("P1305 stock transition remains excluded", PMSrc_BankGravityGroundStartDefault(normal), 0, 0);
-			PMSrc_Check("P1305 excluded posture is not use", PMSrc_BankGravityEnd(), 0, 0);
+			PMSrc_Check("P1306 ignored stock transition admitted", PMSrc_BankGravityGroundStartDefault(normal), 1, 0);
+			PMSrc_Check("P1306 posture admission is not use", PMSrc_BankGravityEnd(), 0, 0);
+		}
+		/* P1306: pin stock assignment separately from both normalized add modes. */
+		{
+			int mode, posture, fatigue;
+			float scaled, wanted;
+			movevars.gravity = 800;
+			movevars.jumpvelocity = 280;
+			movevars.maxvelocity = 3500;
+			movevars.staminarecovery = 20;
+			pms_frametime = .015625f;
+			for (mode = 0; mode < 3; ++mode)
+			{
+				movevars.normalizejump = mode != 0;
+				movevars.jumpaddrise = mode == 2;
+				for (posture = 0; posture < 3; ++posture)
+				{
+					pmove.ducked = posture == 1;
+					pmove.ducking = posture == 2;
+					for (fatigue = 0; fatigue < 2; ++fatigue)
+					{
+						movevars.stamina = fatigue;
+						pmove.stamina = 2500;
+						scaled = fatigue ? .5f : 1;
+						wanted = mode == 1 ? 273.75f * scaled :
+							(mode == 2 ? 380 * scaled : (posture ? 280 : 380) * scaled - 6.25f);
+						VectorSet(normal, 0, 0, 100);
+						PMSrc_BankGravityBegin(true);
+						Q_snprintfz(name, sizeof(name), "P1306 jump model %i/%i/%i acts", mode, posture, fatigue);
+						PMSrc_Check(name, PMSrc_BankGravityJumpDefault(normal), 1, 0);
+						Q_snprintfz(name, sizeof(name), "P1306 jump model %i/%i/%i result", mode, posture, fatigue);
+						PMSrc_Check(name, normal[2], wanted, 0);
+						Q_snprintfz(name, sizeof(name), "P1306 model %i/%i/%i is not use", mode, posture, fatigue);
+						PMSrc_Check(name, PMSrc_BankGravityEnd(), 0, 0);
+					}
+				}
+			}
 		}
 		pms_forwardmove = forwardmove;
 		pms_sidemove = sidemove;
