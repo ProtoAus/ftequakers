@@ -1,5 +1,32 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1300 — ramp scuff reach/seams, inspect sound warming, sky recovery (QC/tools only)
+
+**Problem.** Ramp grooves disappeared as their rows became sub-pixel; atlas mips
+mixed unrelated faces and the large slope depth bias floated at grazing angles.
+Neighbouring bake grids did not share samples. First knife-event aliases repeatedly
+scanned the whole script string, and an off Milk sky could retain its override on
+maps with no authored sky. Christmas additions are separately requested work.
+
+**Change.** Broad-scuff LOD and configurable 12000-unit range; shared chart lattice,
+power-of-two atlas, neighbouring boarding paint, no cross-chart mip chain; fixed
+renderer-aware depthpush. Single-pass optional polish, not reflection capture.
+Line-based sound-script parsing, per-model 64-entry cache and one inspect event's
+precache per equip frame. Release only stale Milk-owned sky overrides when off or
+unsupported. No C/native pin/tag, movement, evidence, grant or QC Build change.
+
+**Verified.** Isolated existing build entrypoint: zero NEW warnings, same two CL
+F333 viewmodel diagnostics, SV/MENU zero. Three offline bake tests pass; exact old
+paint/pack fail the seam and atlas controls (two failures, no errors). Colin 77
+and Classics3 70 local demos rebaked read-only to owned staging. These are NOT new
+downloads. Renderer/audio/frame-time and original sky symptom acceptance are
+PENDING: original rendered/dedicated control confirms milk_sky=0 retains an
+explicit stale r_skybox=milk after reconnect; subject is queued at the same shared
+quiet/4-GiB gate (control waited 544 seconds). NOT DEPLOYED; no visual/no-stutter claim. Detailed limits and next controls: mod repository
+tools/p1300-visuals.md; human acceptance pending in lextest.md. Snow/ice/cosmetics,
+weather/lightning and bounded independent smoke remain in ROADMAP.md; existing
+P1287 snow-cover ownership is preserved.
+
 ## Patch 1298 — TAS workshop remembers the last tab (CSQC only)
 
 **Problem.** Closing Timeline or Shared always reset the workshop to Next input.
