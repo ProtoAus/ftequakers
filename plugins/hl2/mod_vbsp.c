@@ -12076,10 +12076,11 @@ static qboolean VBSP_LightCacheCube(model_t *mod, const vec3_t point, int cluste
 	unsigned int		k, budget, npick = 0;
 	float				best = VLVC_NEAR*VLVC_NEAR, bestseed = VLVC_SEED*VLVC_SEED, kw = 0, vw = 0, est;
 	float				tw = 0, uw = 0, nw = 0, nvw = 0;	//all, untraced, and the guide sample (all / visible) light
-	unsigned int		un = 0, spread, hbudget, unsettled = 0;
+	unsigned int		un = 0, spread, hbudget, unsettled = 0, nn = 0, done = 0;
+	float				sw = 0, svw = 0;
 	double				t0;
 	int					occl = hl2_lt_occlusion ? hl2_lt_occlusion->ival : 0, wlv = hl2_lt_worldlight ? hl2_lt_worldlight->ival : 0;
-	qboolean			fresh = false;
+	qboolean			fresh = false, claimed = false;
 
 	*traced = 0;
 	if (!n)
@@ -12126,6 +12127,7 @@ static qboolean VBSP_LightCacheCube(model_t *mod, const vec3_t point, int cluste
 	if (!s)
 	{
 		s = lru;
+		claimed = true;
 		if (!s->vis)
 		{
 			s->vis = plugfuncs->GMalloc(&mod->memgroup, n);
@@ -12149,8 +12151,8 @@ static qboolean VBSP_LightCacheCube(model_t *mod, const vec3_t point, int cluste
 			s->calls = 1u<<20;
 		}
 	}
-	if (!VectorEquals(s->org, point) || fresh)
-		s->stillfrom = s->calls + 1;	//moved (or new): nothing traced before this call is final here
+	if (!VectorEquals(s->org, point) || claimed)
+		s->stillfrom = s->calls + 1;	//moved (or claimed): nothing traced before this call is final here
 	s->used = v->clock;
 	s->calls++;
 	s->cluster = cluster;
@@ -12202,7 +12204,10 @@ static qboolean VBSP_LightCacheCube(model_t *mod, const vec3_t point, int cluste
 	{
 		const struct vlvccand_s *cd = &v->cand[i];
 		qbyte isnew = !s->vis[cd->light];
-		float pri = isnew ? cd->w : cd->w * (float)(s->calls - s->when[cd->light] + 1);
+		float pri;
+		if (!isnew && s->when[cd->light] >= s->stillfrom)
+			continue;	//traced since the caller stood still: final
+		pri = isnew ? cd->w : cd->w * (float)(s->calls - s->when[cd->light] + 1);
 		if (npick < hbudget)
 		{
 			v->heappri[npick] = pri;
@@ -12221,6 +12226,15 @@ static qboolean VBSP_LightCacheCube(model_t *mod, const vec3_t point, int cluste
 			VBSP_LightCacheHeapDown(v, npick, 0);
 		}
 	}
+	for (k = npick/2 + 1; k-- > 0;)
+		VBSP_LightCacheHeapDown(v, npick, k);	//a heap even when the candidates were fewer than the budget
+	for (k = npick; k > 1; k--)
+		{	//heapsort on the min-heap: the root goes to the end, so index 0 ends as the highest priority
+			float tp = v->heappri[0]; qbyte tn = v->heapnew[0]; unsigned int ti = v->heapidx[0];
+			v->heappri[0] = v->heappri[k-1]; v->heapnew[0] = v->heapnew[k-1]; v->heapidx[0] = v->heapidx[k-1];
+			v->heappri[k-1] = tp; v->heapnew[k-1] = tn; v->heapidx[k-1] = ti;
+			VBSP_LightCacheHeapDown(v, k-1, 0);
+		}
 	for (k = 0; k < npick; k++)
 	{
 		const struct vlvccand_s *cd = &v->cand[v->heapidx[k]];
@@ -12234,6 +12248,7 @@ static qboolean VBSP_LightCacheCube(model_t *mod, const vec3_t point, int cluste
 		if (!s->vis[cd->light])
 		{	//only a guide when there is no spread: these are the brightest, not a fair sample
 			nw += cd->w;
+			nn++;
 			if (a == 1)
 				nvw += cd->w;
 		}
@@ -12243,14 +12258,14 @@ static qboolean VBSP_LightCacheCube(model_t *mod, const vec3_t point, int cluste
 	}
 	if (spread)
 	{	//every step-th light still untraced, in light order: a fair sample of what is left
-		unsigned int left = 0, step, seen = 0, done = 0;
+		unsigned int left = 0, step, seen = 0;
 		for (i = 0; i < nc; i++)
 			if (!s->vis[v->cand[i].light])
 				left++;
 		step = left / spread;
 		if (step < 1)
 			step = 1;
-		nw = nvw = 0;
+		sw = svw = 0;
 		for (i = 0; i < nc && done < spread; i++)
 		{
 			const struct vlvccand_s *cd = &v->cand[i];
@@ -12260,9 +12275,9 @@ static qboolean VBSP_LightCacheCube(model_t *mod, const vec3_t point, int cluste
 			if ((done & 7) == 7 && (plugfuncs->GetSeconds() - t0) * 1000 > VLVC_CALLMS)
 				break;
 			a = VBSP_WorldLightVisible(mod, point, &prv->worldlights[cd->light]) ? 1 : 2;
-			nw += cd->w;
+			sw += cd->w;
 			if (a == 1)
-				nvw += cd->w;
+				svw += cd->w;
 			s->vis[cd->light] = a;
 			s->when[cd->light] = s->calls;
 			(*traced)++;
@@ -12278,7 +12293,14 @@ static qboolean VBSP_LightCacheCube(model_t *mod, const vec3_t point, int cluste
 			if (s->vis[v->cand[i].light] == 1)
 				vw += v->cand[i].w;
 		}
-	est = (nw > 0) ? nvw / nw : (kw > 0) ? vw / kw : 1;
+	//the share untraced lights get: a fair spread sample, else the newly traced brightest, else what this slot
+	//knows -- each only from 4 or more traces (one late trace is an all-or-nothing guess)
+	if (done >= 4 && sw > 0)
+		est = svw / sw;
+	else if (nn >= 4 && nw > 0)
+		est = nvw / nw;
+	else
+		est = (kw > 0) ? vw / kw : 1;
 	v->last_nc = nc;
 	v->last_est = est;
 	v->last_unk = 0;
