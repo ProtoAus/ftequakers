@@ -1,5 +1,71 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1284 — a new lightstyle slot carries its colours' key, so a map's lightmaps are not rebuilt on first view (client exe)
+
+**Problem.** P1277's frame-pacing BACKLOG listed lightmap rebuilds on surf_monolith of up to ~85 ms a frame.
+The hitch probe was given rebuild counters: for each slow frame, rebuilds by cause, and the first rebuild's
+style, its cached light and colour key, and the current ones.
+- Every rebuild was style 0, with light 264 -> 264 and colour key 0 -> 0x40100400.
+- surf_monolith has no animated or switched lights: all 19,567 lit faces use style 0 only, and its 781 lights
+  are static.
+
+**Cause.** gl_rlight.c R_BumpLightstyles gives a new slot white colours but leaves its colourkey at 0.
+- The world lightmaps built at load cache key 0.
+- The server's lightstyle(0, "m") then sets white's key, 0x40100400. Every surface then rebuilds an
+  unchanged lightmap the first time it is drawn.
+- Style 0 is on every map. Unlit maps are affected too, because their faces cache the same key (P1222).
+
+**Change.** R_LightStyleColourKey computes the key. R_BumpLightstyles sets the key of the colours it sets.
+R_UpdateLightStyle and R_AnimateLight's fullbright toggle use the same helper.
+
+**Verified.** A/B on the hitch probe, the same build with only the fix added, on Lex's Desktop 0.1.38
+settings and content. Surfaces rebuilt (ms in slow frames):
+
+| pass | control | P1284 |
+|---|---|---|
+| surf_monolith, after load | 626 (2.7) | 0 |
+| surf_monolith, replay viewer | 5,186 (27.7) | 0 |
+| surf_monolith, run drive | 6,522 (54.8) | 0 |
+| surf_leet_xl_beta7z (unlit), spawn | 1,338 (3.6) | 0 |
+
+- Screenshots at two fixed views differ, control against fixed, by 15,750 and 16,868 pixels over 2 levels.
+  That is inside each build's own shot-to-shot floor (19,594/15,683 for the control, 19,541/16,955 for the
+  fix), and the differing pixels lie in the frame graph and fps counter.
+- A third view was the first after the run drive and drifted between its shots (1.4M pixels even within one
+  build), so it is not counted.
+- The ship exe 9eb7aed8 (P1282 + P1284 on patch-1288) is installed in both installs; it carries the same
+  lines (patch-1281's lightmap changes do not touch the rebuild test or the keys).
+
+## Patch 1282 — a starter shader warm list shipped with the game (client exe + ftesurf/glsl/warmseed.txt)
+
+**Problem.** P1277 warms only the permutations this PC has compiled before. So a fresh install, whose driver
+cache is cold too, still compiles each map's first play mid-run.
+
+**Change.** gl_shader.c: GLSLWarm_Read takes a file name.
+- The load reads data/glslwarm.txt (else its .bak), then glsl/warmseed.txt: the gamedir's loose file, same
+  format.
+- Warmed starter entries are written into the PC's list at its next save.
+- The release ships glsl/ whole, so the starter list rides along.
+
+**Generation.** Built with the next release's exe, plugin, glsl and progs (a C:\FTESurf fixture) on default
+settings:
+- a viewer pass of the cached replay of each map;
+- a pass with the CS:GO knife shown (ftesurf-ac's sequence: cl_viewweapon 1, the knife cvars, `knife`), with
+  default arms and with a glove.
+The FTESurf repo's artifacts list the maps.
+
+**Verified.** Fresh fixtures (no per-PC list), the ship exe 9eb7aed8, surf_boreas replay:
+
+| arm | at load | compiled mid-run |
+|---|---|---|
+| starter list present | 58 warmed (464 ms; the plugin's shader text changed today, so the driver cache was cold) | 0 (no list written) |
+| no starter list | none | 28 |
+
+**Left.**
+- The list covers only the maps it replays, because material programs carry per-material defines in their
+  names. Generic programs (sprites, default skins, the knife) are covered on every map.
+- knife_finish was not recorded: the ghost knife has no finish. #WATCHED needs another player to spectate.
+
 ## Patch 1288 — Source brush $color applied in linear light, as LightmappedGeneric (hl2 plugin)
 
 **Problem.** Lex (3-4 Nov): surf_eternity's tiled stair room is much darker than in CS:S. His CS:S pair at one pose
