@@ -35,9 +35,22 @@ ranked acceptance or a native file-writer audit.
 **Continuation (4 Nov).** Official clean full Windows build and clean ARM64
 server/HL2 builds pass. Both platforms pass the 2,888 expanded native controls
 and the final source's 1,472 public native checks. Windows six-map comparison:
-90 exact parent/subject rows with actual prop contacts. Built native source stays
-`9d0a294bd` / `patch-1299`; subsequent upstream changes merged here touch only
-this journal, not any compiled source. Publication and deployment are separate.
+90 exact parent/subject rows with actual prop contacts, also byte-identical to
+ARM64. Corpus after: same 541 files/bytes and 341 pre-existing structural faults.
+Built native source stays `9d0a294bd` / `patch-1299`; subsequent upstream changes
+merged here touch only this journal, not any compiled source.
+
+**Windows delivery, 2026-11-04 18:18:26 UTC.** Both installs received the exact
+frozen client/server and five plugins (14 files), after the active game exited
+naturally. Destination and `.prev` hashes match; older predecessors were archived
+and individually rehashed; 1,441 protected config/program files are unchanged.
+Both installed dedicated binaries pass 1,472/1,472 checks. No process kill or
+progs/config/data/backend deploy. Pi is NOT deployed: read-only readiness found
+changing recorder parts and an open FD in the strict current 13-actor scope.
+No Pi stage, gate, swap or restart; the failed preservation check is not waived.
+Current backend profile is collectors84-v1, not the old 81-file helper profile.
+Safe Pi activation, historical verifier compatibility, live-client readback and
+the wider anti-cheat bank remain open.
 
 ## Patch 1300 — ramp scuff reach/seams, inspect sound warming, sky recovery (QC/tools only)
 
