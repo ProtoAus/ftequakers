@@ -1,5 +1,47 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1280 — one viewmodel light sample shared by every viewmodel entity (client exe)
+
+**Problem.** Lex (4 Nov): the CS:GO hands sink the frame rate "all the time, while rendering". Not skinning (the arms
+are GPU-skinned; forcing r_max_gpu_bones 0 doubled the cost), not the unlit fallback's missing SKELETAL permutation
+(added, no change), not the bone-uniform size (64/128/default equal) and not the QC. Stack-sampled on bhop_ceaseless
+(2b's P1277 probe, 40 s a pass): R_CalcModelLighting -> VBSP_LightPointValues -> VBSP_AddWorldLightCube ->
+VBSP_WorldLightVisible -> BIH_Trace was 25.4% of main-thread samples with the arms, 15.3% without. Every
+RF_WEAPONMODEL entity (knife, arms, sleeve) sampled r_refdef.vieworg itself, every frame, and on a Source map a
+sample traces to each world light in PVS and range.
+
+**Change.** gl_alias.c R_CalcModelLighting, renderer.c.
+- One sample (vieworg, r_modellight_seq, realtime) serves every viewmodel entity: reused while the eye has not
+  moved, and for up to 1/r_viewmodel_lightrate s while it has moved under 256qu (review 1: a teleport or respawn
+  samples at once).
+- r_viewmodel_lightrate, archived, default 60; 0 = every frame (still one sample for all of them). Off with
+  r_modellight_cache 0. The black floor, r_viewmodel_maxlight and dlights still run per entity.
+
+**Verified.** Rig, Lex's settings (renderscale 2), bhop_ceaseless, installed exe against this (r_budget_dump,
+r_frametime over 5 s):
+
+| | installed | P1280 |
+|---|---|---|
+| standing, draw calls CPU, hands | 0.76 ms | 0.36 ms |
+| standing, knife only | 0.55 ms | 0.35 ms |
+| walking, draw calls CPU, hands | 0.98 ms | 0.42 ms |
+| walking, average, hands | 462 fps | 628 fps |
+| walking, average, knife only | 783 fps | 885 fps |
+
+- Walking at r_viewmodel_lightrate 0, the hands' transparent pass (0.42 ms) matched the knife alone (0.45): once
+  shared, the arms add no light sampling. Standing, rate 0 and 60 read the same (the eye-still reuse).
+- Teleport (rate 0.2, 1,893qu): knife-area brightness 0.6 s after: pre-fix 37.0, then 46.4 once the window ran
+  out; fixed 46.5 and 46.5.
+- The ship exe (git-8197-patch-1280-0-g53951ab74, on patch-1281): the same teleport read 46.6 and 46.5, and walking with the hands cost 0.34 ms of draw-call CPU
+  (transparent 0.12). Both installs run it as exe b89fde71 with 48's plugin 5f384232.
+- One review (display feature), one round on its fix.
+
+**Left.** At two spots on bhop_ceaseless one sample traces 1248-1516 lights (hl2_lightprobe; 86 at spawn), ~10 ms:
+the shared sample halves those frames with the hands, and no rate removes them. Skipping dim lights does not either
+(below 1e-4 loses 2.5% of the visible light and still traces 420). That is Patch 1283. Also: r_modellight_seq does
+not hash the plugin's hl2_lt_* cvars (a still viewmodel, like a still prop since Patch 105, keeps its light until it
+moves); split-screen views would share one sample.
+
 ## Patch 1281 — water and glass captures redrawn about r_capturerate times a second (client exe)
 
 **Problem.** Lex (4 Nov): "can we lower the reflective/refractive fill rate even lower than 1 per 2 frames? we run
