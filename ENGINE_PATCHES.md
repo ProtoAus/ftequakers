@@ -1,5 +1,26 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1298 — TAS workshop remembers the last tab (CSQC only)
+
+**Problem.** Closing Timeline or Shared always reset the workshop to Next input.
+The dated TAS roadmap also obscured later delivered editor/signing/clock work.
+
+**Change.** Remember the client tab across close/reopen, retaining the existing
+close-time timeline invalidation, cursor release and widget reset. Reopen Timeline
+through the existing guarded request; Shared keeps its current browser/consent
+behavior. Add the tab to the existing status observer and a current TAS status map.
+No native pin/tag, qcbuild, movement, recorder, signatures or public admission change.
+
+**Verified.** Clean isolated QC builds: zero new warnings (same two existing CSQC
+F333 viewmodel diagnostics; SSQC/MENU zero). Real dedicated Windows socket and
+rendered production client: control resets Timeline/Shared, subject retains both
+and returns to Timeline; 14 checks per arm, cursor release, actual drawn frames,
+empty-timeline non-authority and terms refusal. Subject screenshot inspected;
+owned peers stopped. This is not populated-timeline, owner-feel or canonical
+replay qualification. Public queue/board and full source qualification remain
+unfinished; tools/tas-status.md and tools/p1298-tas-reopen.md in the mod describe
+scope. Deployment/live provenance is separate from these source/runtime checks.
+
 ## Patch 1292 — the QuakeC temp-string collector no longer makes the main thread wait (client exe)
 
 **Problem.** Lex (4 Nov): remove the dips, then lift the 1% and 0.1% lows. After Patches 1282-1284 the largest frames
