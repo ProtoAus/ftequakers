@@ -307,8 +307,8 @@ static void QDECL R_LightmapBicubic_Changed(struct cvar_s *var, char *oldvalue)
 	if (strcmp(var->string, v))
 		Cvar_ForceSet(var, v);
 }
-cvar_t r_lightmap_bicubic				= CVARFCD ("r_lightmap_bicubic", "1", CVAR_ARCHIVE, R_LightmapBicubic_Changed, "FTESurf Patch 1275: Source maps' lightmaps filtered bicubically (as HL2's 20th-anniversary update does): smoother shadow and light edges than bilinear on coarse lightmaps. Applies when a map's lightmaps are built (the next new map; a reload of the same map keeps its own). 0: bilinear.");
-cvar_t r_lightmap_bicubic_world			= CVARFD ("r_lightmap_bicubic_world", "0", CVAR_NOSAVE|CVAR_NOSET|CVAR_SHADERSYSTEM, "FTESurf Patch 1275: 1 when the loaded Source world's lightmap blocks were built with the border bicubic sampling needs; the vmt shaders read this, not r_lightmap_bicubic.");
+cvar_t r_lightmap_bicubic				= CVARFCD ("r_lightmap_bicubic", "1", CVAR_ARCHIVE, R_LightmapBicubic_Changed, "FTESurf Patch 1275: Source maps' lightmaps filtered bicubically (as HL2's 20th-anniversary update does): smoother shadow and light edges than bilinear on coarse lightmaps. Applies when a map's lightmaps are built (the next new map, or vid_restart; a reload of the same map keeps its own). 0: bilinear.");
+cvar_t r_lightmap_bicubic_world			= CVARFD ("r_lightmap_bicubic_world", "0", CVAR_NOSAVE|CVAR_NOSET|CVAR_SHADERSYSTEM, "FTESurf Patch 1275: 1 when the active Source world's lightmap blocks were built with the border bicubic sampling needs (set by Surf_NewMap); the vmt shaders read this, not r_lightmap_bicubic.");
 cvar_t r_lightstylesmooth					= CVARF	("r_lightstylesmooth", "0", CVAR_ARCHIVE);
 cvar_t r_lightstylesmooth_limit				= CVAR	("r_lightstylesmooth_limit", "2");
 cvar_t r_lightstylespeed					= CVAR	("r_lightstylespeed", "10");

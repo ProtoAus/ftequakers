@@ -5019,8 +5019,11 @@ void Surf_NewMap (model_t *worldmodel)
 	char *s;
 #endif
 	int		i;
+	extern cvar_t r_lightmap_bicubic_world;
 
 	cl.worldmodel = worldmodel;
+	if (worldmodel && (worldmodel->engineflags & MDLF_SOURCEBSP))	//FTESurf Patch 1275: the vmt shaders follow this world's atlas
+		Cvar_ForceSet(&r_lightmap_bicubic_world, (worldmodel->engineflags & MDLF_LMPADDED) ? "1" : "0");
 
 	/*Patch 105: every cached model-light sample belongs to the OLD world's lightdata.*/
 	if (!++r_modellight_seq)
