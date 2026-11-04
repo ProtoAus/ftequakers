@@ -291,7 +291,10 @@ uniform float cvar_r_renderscale;
 #else
 		diffuse_f = SEAMSAMP(s_diffuse);
 #endif
-		diffuse_f.rgb *= e_colourident.rgb * vec3(COLOR);
+		//FTESurf Patch 1288: LightmappedGeneric multiplies by $color raw between an sRGB read and an sRGB write
+		//(lightmappedgeneric_dx9_helper.cpp: no GammaToLinear, unlike VertexLitGeneric), so in linear light; on
+		//the gamma values here that is ^(1/2.2). surf_eternity's $color .103 walls drew 3.5x too dark.
+		diffuse_f.rgb *= e_colourident.rgb * pow(vec3(COLOR), vec3(1.0/2.2));
 
 #ifdef MASKLT
 	#ifdef FTE_ALPHACOVERAGE	// FTESurf Patch 1262: under MSAA the test's edge is a pixel of coverage, not a cut

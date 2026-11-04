@@ -178,7 +178,11 @@ varying vec2 lm1, lm2, lm3;
 		float layer = mod(e_time * float(ANIMRATE), float(sz.z));
 
 		diffuse_f = texture2D(s_anim, vec3(tex_c, layer));
+	#if defined(UNLIT) || defined(MODELLIT)
 		diffuse_f.rgb *= e_colourident.rgb * vec3(COLOR);
+	#else	//FTESurf Patch 1288: a lightmapped brush takes $color in linear light (lightmapped.glsl)
+		diffuse_f.rgb *= e_colourident.rgb * pow(vec3(COLOR), vec3(1.0/2.2));
+	#endif
 	#ifdef MODELLIT
 		diffuse_f.rgb *= mlight;
 	#elif defined(VERTEXCOL)
