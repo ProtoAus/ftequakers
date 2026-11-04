@@ -1,5 +1,30 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1302 — holiday decorations and bounded GPU mist (QC/content only)
+
+**Problem.** Requested Christmas props and light-adjacent smoke must not introduce
+unbounded particle simulation, light/trace work or blended overdraw during play.
+
+**Change.** Six CC0 Kenney Holiday Kit models converted deterministically to small
+static IQMs with namespaced palette material. Provisional Christmas/Frost/Bluewinter
+manifests place visual-only trees, gifts and snowmen, validating flat floors once
+at map load. Independent mist uses12 GPU-opened wisps/field, at most4 submitted
+fields, radius24..64, range192..1100 and summed coverage proxy<=.12. No frame-time
+simulation, allocation, trace, light query, readback, depth capture or raymarch.
+Ordinary depth/frustum culling remains; the proxy is NOT an fps guarantee. Mist
+is opt-in/default OFF until actual moving-view acceptance. Display Info toggles
+participate in Reset All. No native/API/physics/evidence or QC Build change.
+
+**Verified.** Existing isolated QC build adds zero warnings (only the two baseline
+F333 viewmodel diagnostics). Five offline content/geometry/cap controls pass,
+including nonfinite rejection, winding preservation and deterministic38-vertex/12-triangle mist.
+Inspected original archive SHA and bundled CC0 license; six meshes total5038triangles.
+Actual shader/appearance/moving-view arms remain BLOCKED: bounded shared rig wait
+expired without a quiet/4096MiB interval; no subject ran and no pass is inferred.
+No numerical performance, runtime compatibility or deployment claim. Model and
+source provenance/remaining checks in mod tools/p1302-winter.md. Owner approved
+Kenney choice and provisional map selection; actual placement remains unaccepted.
+
 ## Patch 1301 — the roof-clipped eye blends between ticks like the feet (client exe)
 
 **Problem:** P917 held the rendered eye at the newest predicted tick's roof limit for the whole interval the
@@ -65,12 +90,23 @@ frozen client/server and five plugins (14 files), after the active game exited
 naturally. Destination and `.prev` hashes match; older predecessors were archived
 and individually rehashed; 1,441 protected config/program files are unchanged.
 Both installed dedicated binaries pass 1,472/1,472 checks. No process kill or
-progs/config/data/backend deploy. Pi is NOT deployed: read-only readiness found
-changing recorder parts and an open FD in the strict current 13-actor scope.
-No Pi stage, gate, swap or restart; the failed preservation check is not waived.
-Current backend profile is collectors84-v1, not the old 81-file helper profile.
-Safe Pi activation, historical verifier compatibility, live-client readback and
-the wider anti-cheat bank remain open.
+progs/config/data/backend deploy.
+
+**Further compatibility / Pi boundary.** All 72 legacy probe rows actually
+available in the live lobby binary match their subject counterparts. The modern
+subject's 18 extra pick/ride probe rows do not exist in that older command module;
+this is not a claim of 90 old-fleet rows. Historical verifier results with the
+qualified archived progs: both known legacy HOLDs unchanged; both gravity
+references PASS, actual fleet and subject. Original parser-profile failure kept.
+
+Pi is NOT deployed. Original recorder-stability/open-FD failure in the strict
+13-actor scope remains failed. After genuinely empty/closed windows, preparation
+bound the actual collectors84-v1 profile, then failed the exact current-cohort
+hash guard: a live backend source file differs from its deployed generation
+manifest. It matches published source, but that does not waive the manifest.
+Peer-owned runtime/manifest untouched. No Pi recorder archive, canonical stage,
+gate, swap, restart or backend operation. Safe Pi activation, live-client/ranked
+readback and the wider anti-cheat bank remain open.
 
 ## Patch 1300 — ramp scuff reach/seams, inspect sound warming, sky recovery (QC/tools only)
 
