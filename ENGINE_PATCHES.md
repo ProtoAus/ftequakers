@@ -1,5 +1,30 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1302 — holiday decorations and bounded GPU mist (QC/content only)
+
+**Problem.** Requested Christmas props and light-adjacent smoke must not introduce
+unbounded particle simulation, light/trace work or blended overdraw during play.
+
+**Change.** Six CC0 Kenney Holiday Kit models converted deterministically to small
+static IQMs with namespaced palette material. Provisional Christmas/Frost/Bluewinter
+manifests place visual-only trees, gifts and snowmen, validating flat floors once
+at map load. Independent mist uses12 GPU-opened wisps/field, at most4 submitted
+fields, radius24..64, range192..1100 and summed coverage proxy<=.12. No frame-time
+simulation, allocation, trace, light query, readback, depth capture or raymarch.
+Ordinary depth/frustum culling remains; the proxy is NOT an fps guarantee. Mist
+is opt-in/default OFF until actual moving-view acceptance. Display Info toggles
+participate in Reset All. No native/API/physics/evidence or QC Build change.
+
+**Verified.** Existing isolated QC build adds zero warnings (only the two baseline
+F333 viewmodel diagnostics). Five offline content/geometry/cap controls pass,
+including nonfinite rejection, winding preservation and deterministic38-vertex/12-triangle mist.
+Inspected original archive SHA and bundled CC0 license; six meshes total5038triangles.
+Actual shader/appearance/moving-view arms remain BLOCKED: bounded shared rig wait
+expired without a quiet/4096MiB interval; no subject ran and no pass is inferred.
+No numerical performance, runtime compatibility or deployment claim. Model and
+source provenance/remaining checks in mod tools/p1302-winter.md. Owner approved
+Kenney choice and provisional map selection; actual placement remains unaccepted.
+
 ## Patch 1299 — gravity carry observation through normalized jump offsets
 
 **Problem.** The existing early gravity-use observer excluded every nonzero
