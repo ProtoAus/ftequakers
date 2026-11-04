@@ -559,6 +559,8 @@ struct programpermu_s
 	int instuniform[3];	//FTESurf Patch 831: s_instdata, s_instvc, e_instbase
 	int a2cuniform;		//FTESurf Patch 1262: e_alphacoverage, for an alpha-testing program (GLSlang_ProgAutoFields)
 	int a2cval;			//the value last written to it, -1 none
+	int lmsizeuniform;	//FTESurf Patch 1275: e_lmsize, the batch's lightmap page (w, h, 1/w, 1/h)
+	int lmsizew, lmsizeh;	//the size last written to it, 0 none
 #endif
 	unsigned int permutation;
 	unsigned int attrmask;
