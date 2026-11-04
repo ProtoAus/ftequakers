@@ -38,6 +38,7 @@ typedef struct
 
 
 extern cvar_t gl_part_flame, r_fullbrightSkins, r_fb_models, ruleset_allow_fbmodels, gl_overbright_models, r_viewmodel_maxlight, r_modellight_fallback, r_modellight_cache;
+extern cvar_t r_viewmodel_lightrate;
 extern cvar_t r_propvertexlight, r_propvertexlight_minlight, r_prop_minlight;	//nettest: baked static-prop per-vertex lighting + world-model minlight floor
 extern cvar_t r_showhitboxes;	//nettest: per-bone hitbox overlay for GoldSrc studio models
 extern cvar_t r_noaliasshadows;
@@ -1407,6 +1408,17 @@ typedef struct
 } modellightcache_t;
 static modellightcache_t modellightcache[MODELLIGHTCACHE_BUCKETS];
 
+//FTESurf Patch 1280: every RF_WEAPONMODEL entity (knife, CS:GO arms, sleeve) samples r_refdef.vieworg, and on a
+//Source map each sample traces to every world light in range. One sample serves them all, kept while the eye is
+//still and for up to 1/r_viewmodel_lightrate s while it moves (under 256qu). Per-entity clamps and dlights still run.
+static struct
+{
+	qboolean valid;
+	unsigned int seq;
+	vec3_t origin, shadelight, ambientlight, lightdir;
+	double time;
+} vmlightcache;
+
 /*The world-lightmap sample, factored out so the cache-fill path and the r_modellight_cache 2
   self-check can run byte-identical code. Pure function of e->origin (+ the world/styles/cvars
   tracked by r_modellight_seq) -- that purity is the whole basis of the cache being exact.*/
@@ -1499,7 +1511,29 @@ qboolean R_CalcModelLighting(entity_t *e, model_t *clmodel)
 	{
 		if (e->flags & RF_WEAPONMODEL)
 		{
-			cl.worldmodel->funcs.LightPointValues(cl.worldmodel, r_refdef.vieworg, shadelight, ambientlight, lightdir);
+			float rate = r_viewmodel_lightrate.value;
+			vec3_t moved;
+			VectorSubtract(r_refdef.vieworg, vmlightcache.origin, moved);
+			if (r_modellight_cache.ival && vmlightcache.valid && vmlightcache.seq == r_modellight_seq &&
+				(VectorEquals(vmlightcache.origin, r_refdef.vieworg) ||
+				 (rate > 0 && realtime >= vmlightcache.time && realtime - vmlightcache.time < 1.0 / rate &&
+				  DotProduct(moved, moved) < 256*256)))	//a teleport or respawn samples at once
+			{
+				VectorCopy(vmlightcache.shadelight, shadelight);
+				VectorCopy(vmlightcache.ambientlight, ambientlight);
+				VectorCopy(vmlightcache.lightdir, lightdir);
+			}
+			else
+			{
+				cl.worldmodel->funcs.LightPointValues(cl.worldmodel, r_refdef.vieworg, shadelight, ambientlight, lightdir);
+				vmlightcache.valid = true;
+				vmlightcache.seq = r_modellight_seq;
+				vmlightcache.time = realtime;
+				VectorCopy(r_refdef.vieworg, vmlightcache.origin);
+				VectorCopy(shadelight, vmlightcache.shadelight);
+				VectorCopy(ambientlight, vmlightcache.ambientlight);
+				VectorCopy(lightdir, vmlightcache.lightdir);
+			}
 			for (i = 0; i < 3; i++)
 			{	/*viewmodels may not be pure black*/
 				if (ambientlight[i] < 24)
