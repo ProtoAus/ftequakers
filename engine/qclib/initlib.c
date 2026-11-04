@@ -1421,9 +1421,8 @@ static size_t PR_QCGC_Sweep(progfuncs_t *progfuncs, smallbool *marked, tempstr_t
 
 			//FIXME: Security Race: its possible for a mod to do weird manipulations to access the tempstring while we're still freeing it, allowing it to read something outside of its sandbox.
 			//one option would be to have the main thread bounce it back to the worker after its complete, so we can actually free the memory only after main thread has acknowledged that its tempstrings are nulled.
-			prinst.tempstrings[p] = NULL;
-
-			externs->memfree(tempstrings[p]);
+			externs->memfree(tempstrings[p]);	//FTESurf Patch 1292: before the clear, which emptied this same array
+			prinst.tempstrings[p] = NULL;		//(the old order freed NULL and leaked every swept string)
 		}
 	}
 
@@ -1434,6 +1433,7 @@ static size_t PR_QCGC_Sweep(progfuncs_t *progfuncs, smallbool *marked, tempstr_t
 
 #ifdef THREADEDGC
 #include "quakedef.h"
+#define PR_GC_MINTEMPS	131072	//FTESurf Patch 1292: a VM making 4k temps a second collected every 2.5 s at 21504
 struct qcgccontext_s
 {
 	int done;
@@ -1442,10 +1442,27 @@ struct qcgccontext_s
 
 	size_t maxtemps;		//so it doesn't go stale
 	tempstr_t **tempstrings;//so we don't get confused over temps added while marking
+	unsigned int *dead;		//FTESurf Patch 1292: slots unmarked in the snapshot, for the main thread to clear
+	size_t ndead;
 
 	size_t memsize;
 	unsigned int amem[1];
 };
+//FTESurf Patch 1292: the dead strings' memory, freed on a worker once the main thread has cleared their slots.
+struct qcgcfree_s
+{
+	void (VARGS *memfree) (void *mem);	//the host's allocator itself: neither the VM nor its parms table are ours
+	size_t n;
+	tempstr_t *ptr[1];
+};
+static void PR_QCGC_FreeJob(void *ctx, void *data, size_t a, size_t b)
+{
+	struct qcgcfree_s *f = ctx;
+	size_t i;
+	for (i = 0; i < f->n; i++)
+		f->memfree(f->ptr[i]);
+	free(f);
+}
 void PR_QCGC_Done(void *ctx, void *data, size_t a, size_t b)
 {
 	struct qcgccontext_s *gc = ctx;
@@ -1454,7 +1471,6 @@ void PR_QCGC_Done(void *ctx, void *data, size_t a, size_t b)
 void PR_QCGC_Thread(void *ctx, void *data, size_t a, size_t b)
 {
 	struct qcgccontext_s *gc = ctx;
-	progfuncs_t *progfuncs = gc->progfuncs;
 	smallbool *marked;
 
 #ifdef GCTIMINGS
@@ -1465,10 +1481,20 @@ void PR_QCGC_Thread(void *ctx, void *data, size_t a, size_t b)
 #ifdef GCTIMINGS
 	markedtime = Sys_DoubleTime();
 #endif
-	gc->clearedtemps = PR_QCGC_Sweep(progfuncs, marked, gc->tempstrings, gc->maxtemps);
+	{	//FTESurf Patch 1292: no sweep here. A freed string left in the live table until the main thread caught up
+		//would be read or freed again by anything holding its index where the scan cannot see (hash_add, memnostrings).
+		size_t p, n = 0;
+		gc->dead = malloc(sizeof(*gc->dead) * (gc->maxtemps ? gc->maxtemps : 1));
+		for (p = 0; p < gc->maxtemps; p++)
+			if (!marked[p] && gc->tempstrings[p])
+				gc->dead[n++] = p;
+		gc->ndead = n;
+		gc->clearedtemps = 0;
+		free(marked);
+	}
 #ifdef GCTIMINGS
 	endtime = Sys_DoubleTime();
-	gc->externs->Printf("live: %u, dead: %u, threadtime: mark=%f, sweep=%f, total=%f\n", prinst.livetemps-gc->clearedtemps, gc->clearedtemps, (markedtime - starttime), (endtime - markedtime), endtime-starttime);
+	(void)markedtime;	//FTESurf Patch 1292: (this print named a gc->externs the struct never had)
 #endif
 
 	COM_InsertWork(WG_MAIN, PR_QCGC_Done, gc, NULL, 0, 0);
@@ -1493,16 +1519,7 @@ static string_t PDECL PR_AllocTempStringLen			(pubprogfuncs_t *ppf, char **str, 
 		return 0;
 
 	if (prinst.livetemps == prinst.maxtempstrings)
-	{
-#ifdef THREADEDGC
-		//need to wait for the gc to finish, otherwise it might be wiping freed strings that we're still using.
-		while (prinst.gccontext)
-		{
-			COM_WorkerPartialSync(prinst.gccontext, &prinst.gccontext->done, false);
-			PR_RunGC(progfuncs);
-		}
-#endif
-
+	{	//FTESurf Patch 1292: no wait for a running collection -- its worker writes nothing of ours (PR_QCGC_Thread)
 		PR_ExpandTempStrings(progfuncs, prinst.maxtempstrings*2 + 1024);
 	}
 
@@ -1569,6 +1586,8 @@ void PR_RunGC (progfuncs_t *progfuncs)
 			gc->done = false;
 			gc->clearedtemps = 0;
 			gc->progfuncs = progfuncs;
+			gc->dead = NULL;
+			gc->ndead = 0;
 
 			gc->memsize = memsize;
 			for (dst = (char*)gc->amem, i = 0; i < n; dst += len[i++])
@@ -1583,7 +1602,7 @@ void PR_RunGC (progfuncs_t *progfuncs)
 
 #ifdef GCTIMINGS
 			endtime = Sys_DoubleTime();
-			gc->externs->Printf("preparetime=%f\n", (endtime - starttime));
+			externs->Printf("preparetime=%f\n", (endtime - starttime));
 #endif
 			return;
 		}
@@ -1605,14 +1624,37 @@ void PR_RunGC (progfuncs_t *progfuncs)
 	}
 #ifdef THREADEDGC
 	else if (prinst.gccontext->done)
-	{
-		prinst.livetemps -= prinst.gccontext->clearedtemps;
-		free(prinst.gccontext);
+	{	//FTESurf Patch 1292: the main thread clears what the worker found dead, then a worker frees it
+		struct qcgccontext_s *gc = prinst.gccontext;
+		struct qcgcfree_s *f = malloc(sizeof(*f) - sizeof(f->ptr) + sizeof(f->ptr[0]) * (gc->ndead ? gc->ndead : 1));
+		size_t i, cleared = 0;
+		f->memfree = externs->memfree;
+		for (i = 0; i < gc->ndead; i++)
+		{
+			unsigned int p = gc->dead[i];
+			if (p < prinst.maxtempstrings && prinst.tempstrings[p] && prinst.tempstrings[p] == gc->tempstrings[p])
+			{	//still the pointer the snapshot saw unreferenced (a resize since usually changes it; either way the slot
+				//is cleared before its memory is queued, so a lookup gets "", never freed memory)
+				f->ptr[cleared++] = prinst.tempstrings[p];
+				prinst.tempstrings[p] = NULL;
+			}
+		}
+		f->n = cleared;
+		prinst.livetemps -= cleared;
+		if (cleared)
+			COM_InsertWork(WG_LOADER, PR_QCGC_FreeJob, f, NULL, 0, 0);
+		else
+			free(f);
+		free(gc->dead);
+		free(gc);
 		prinst.gccontext = NULL;
 
 		//if over half the (max)strings are still live, just increase the max so we are not spamming collections
+		//(review 2: on livetemps, as before, or a collection whose survivors sit just under half restarts at once)
 		if (prinst.livetemps >= prinst.maxtempstrings/2)
 			PR_ExpandTempStrings(progfuncs, prinst.maxtempstrings * 2);
+		if (prinst.maxtempstrings < PR_GC_MINTEMPS)	//FTESurf Patch 1292: each collection costs the main thread a copy
+			PR_ExpandTempStrings(progfuncs, PR_GC_MINTEMPS);
 	}
 #endif
 }
