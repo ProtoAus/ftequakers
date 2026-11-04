@@ -420,6 +420,7 @@ typedef struct
 //by engine/client/r_surf.c.  Bits 9-13 were unused by every loader and both plugins.
 #define SURF_LMSTRIDE_SHIFT	9
 #define SURF_LMSTRIDE_MASK	0x03e00	//0..31 extra bytes per luxel per style
+#define SURF_LMPAD			0x04000	//FTESurf Patch 1275: its lightmap block has a one-texel copy of its edge around it (vmt bicubic)
 #define SURF_NOFLAT			0x08000
 #define SURF_DRAWALPHA		0x10000
 #define SURF_NODRAW			0x20000	//set on non-vertical halflife water submodel surfaces
@@ -1211,6 +1212,7 @@ typedef struct model_s
 #define MDLF_RECALCULATERAIN 0x1000 // particles changed, recalculate any sky polys
 #define MDLF_SOURCEBSP      0x2000 // Patch 538: VBSP-only water appearance (fg_new also includes CoD/Doom).
 #define MDLF_SOURCEPITCH    0x4000 // Patch 1027: a Source studio model, drawn with Source's pitch (cl_ents.c)
+#define MDLF_LMPADDED       0x8000 // Patch 1275: its lightmap blocks have the border bicubic sampling needs (Surf_NewMap tells the shaders)
 
 //============================================================================
 #endif	// __MODEL__

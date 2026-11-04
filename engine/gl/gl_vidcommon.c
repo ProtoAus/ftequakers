@@ -1638,6 +1638,7 @@ static const char *glsl_hdrs[] =
 				"#else\n"
 				"uniform vec4 e_lmscale;\n"
 				"#endif\n"
+				"uniform vec4 e_lmsize;\n"	//FTESurf Patch 1275
 				"uniform vec3 e_origin;"
 				"uniform float e_time;"
 				"uniform vec3 e_eyepos;"
@@ -3080,6 +3081,8 @@ static void GLSlang_ProgAutoFields(program_t *prog, struct programpermu_s *pp, c
 	pp->a2cuniform = (prog && prog->name && (strstr(prog->name, "#MASKLT") || !strncmp(prog->name, "vmt/detail", 10))) ?
 		qglGetUniformLocationARB(pp->h.glsl.handle, "e_alphacoverage") : -1;
 	pp->a2cval = -1;
+	pp->lmsizeuniform = qglGetUniformLocationARB(pp->h.glsl.handle, "e_lmsize");	//FTESurf Patch 1275
+	pp->lmsizew = pp->lmsizeh = 0;
 
 	for (i = 0; shader_unif_names[i].name; i++)
 	{

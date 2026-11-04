@@ -332,6 +332,7 @@ static struct
 	vec3_t eye, fwd;		//and the eye and its forward (a teleport or a flick renders afresh)
 	int keptframe;			//host_framecount a keep was applied in: the plane's other batches share it
 	int view;				//which of its seat's world views that frame rendered them (BE_SeatView)
+	double rendered;		//realtime they rendered (r_capturerate)
 } be_capkeep = {-1};
 static int be_capfixframe = -1;	//host_framecount whose top-level draws sample a reused capture through be_capfix; -1 once a level-0 target is written
 static float be_capfix[16];	//its view-projection times the inverse of this frame's (SP_M_CAPTUREFIX)
@@ -4553,6 +4554,21 @@ static void BE_Program_Set_Attributes(const program_t *prog, struct programpermu
 
 	if (perm->factorsuniform != -1)
 		qglUniform4fvARB(perm->factorsuniform, countof(shaderstate.curshader->factors), shaderstate.curshader->factors[0]);
+	if (perm->lmsizeuniform != -1)
+	{	//FTESurf Patch 1275: the batch's lightmap page, which the per-entity cache below does not follow
+		unsigned int lmi = shaderstate.curbatch ? (unsigned short)shaderstate.curbatch->lightmap[0] : ~0u;
+		int w = 1, h = 1;
+		if (lmi < numlightmaps && lightmap[lmi]->width > 0 && lightmap[lmi]->height > 0)
+			w = lightmap[lmi]->width, h = lightmap[lmi]->height;
+		if (w != perm->lmsizew || h != perm->lmsizeh)
+		{
+			vec4_t sz;
+			Vector4Set(sz, w, h, 1.0f/w, 1.0f/h);
+			qglUniform4fvARB(perm->lmsizeuniform, 1, sz);
+			perm->lmsizew = w;
+			perm->lmsizeh = h;
+		}
+	}
 
 	/*don't bother setting it if the ent properties are unchanged (but do if the mesh changed)*/
 	if (entunchanged)
@@ -7623,8 +7639,21 @@ static void GLBE_WaterViewsEnd(void)
 	}
 }
 
-extern cvar_t r_capturehalfrate;
+extern cvar_t r_capturehalfrate, r_capturerate;
 extern int host_framecount;
+//FTESurf Patch 1281: kept captures are on at either setting; a rate redraws by the clock, else by frame count
+#define BE_CAPTUREKEEPS (r_capturehalfrate.ival || r_capturerate.value > 0)
+static qboolean GLBE_CaptureDue(void)
+{
+	if (r_capturerate.value > 0)
+	{	//at 3/4 of the interval: frames capped at the rate arrive a little early as often as late (cl_maxfps
+		//carries each frame's lateness into the next), and a full interval kept every other one of them.
+		//A clock that went back (capture, the QC debugger) is due rather than never.
+		double age = realtime - be_capkeep.rendered;
+		return age < 0 || age * max(r_capturerate.value, 20) >= 0.75;
+	}
+	return be_capkeep.reused >= r_capturehalfrate.ival;
+}
 //FTESurf Patch 1245: m_capturefix turns a reused capture's camera to this frame's and does not move it:
 //what it reflects is taken as distant. Moved too (exact on the water plane) was worse on a 24-unit slide,
 //surf_eternity s4 1.35 mean against 0.83 unmoved; a 3 degree turn 0.13 against 2.59. Without the eye's
@@ -7652,7 +7681,7 @@ static qboolean GLBE_CaptureKeep(const plane_t *p, entity_t *ent, unsigned int n
 		return true;	//another batch of the plane kept this frame
 	VectorSubtract(r_refdef.vieworg, be_capkeep.eye, d);
 	//vmt/water and vmt/lmreflect take m_capturefix; Quake's altwater does not
-	if (be_capkeep.frame != host_framecount - 1 || be_capkeep.reused >= r_capturehalfrate.ival || be_capkeep.views != 1 ||
+	if (be_capkeep.frame != host_framecount - 1 || GLBE_CaptureDue() || be_capkeep.views != 1 ||
 		be_capkeep.fbw != vid.fbpwidth || be_capkeep.fbh != vid.fbpheight ||
 		!r_worldentity.model || !(r_worldentity.model->engineflags & MDLF_SOURCEBSP) ||
 		DotProduct(d, d) > 128*128 || DotProduct(vpn, be_capkeep.fwd) < 0.866f)	//past 128 units or 30 degrees
@@ -7670,6 +7699,8 @@ static qboolean GLBE_CaptureKeep(const plane_t *p, entity_t *ent, unsigned int n
 	be_capkeep.frame = host_framecount;
 	be_capkeep.keptframe = host_framecount;
 	be_capkeep.reused++;
+	if (GLBE_CaptureLogging())
+		Con_Printf("[capture]  kept, %.1f ms old, reuse %i\n", (realtime - be_capkeep.rendered) * 1000, be_capkeep.reused);
 	{
 		float vp[16], inv[16];
 		GLBE_TurnVP(vp);
@@ -7769,7 +7800,7 @@ static qboolean GLBE_GenerateBatchTextures(batch_t *batch, shader_t *bs)
 				GLBE_CaptureLog(batch, chosenplane ? wv->chosen->shader : bs, "shared", chosenplane ? &wv->combined : &wv->other);
 				return true;
 			}
-			if (chosenplane && !r_refdef.recurse && r_capturehalfrate.ival && GLBE_CaptureKeep(&p, &r_worldentity, need & ~wv->helddone))
+			if (chosenplane && !r_refdef.recurse && BE_CAPTUREKEEPS && GLBE_CaptureKeep(&p, &r_worldentity, need & ~wv->helddone))
 			{
 				wv->helddone |= need;
 				GLBE_CaptureLog(batch, wv->chosen->shader, "kept", &wv->combined);
@@ -7801,7 +7832,7 @@ static qboolean GLBE_GenerateBatchTextures(batch_t *batch, shader_t *bs)
 	if (!viashare)
 		be_waterview[r_refdef.recurse].helddone &= ~(bs->flags & BE_WATERKINDS);
 	//FTESurf Patch 1245: one plane captured outside the water views (surf_eternity's func_reflective_glass)
-	if (!viashare && !r_refdef.recurse && r_capturehalfrate.ival && !(bs->flags & (SHADER_HASPORTAL|SHADER_HASRIPPLEMAP)) && (bs->flags & BE_WATERKINDS))
+	if (!viashare && !r_refdef.recurse && BE_CAPTUREKEEPS && !(bs->flags & (SHADER_HASPORTAL|SHADER_HASRIPPLEMAP)) && (bs->flags & BE_WATERKINDS))
 	{
 		plane_t gp;
 		if (GLR_BatchPlane(batch, &gp))
@@ -8102,6 +8133,7 @@ static qboolean GLBE_GenerateBatchTextures(batch_t *batch, shader_t *bs)
 				be_capkeep.views++;	//a second plane, entity, seat or world view this frame: nothing is kept next frame
 			be_capkeep.frame = host_framecount;
 			be_capkeep.reused = 0;
+			be_capkeep.rendered = realtime;
 			be_capkeep.kinds |= written;
 			be_capkeep.plane = keepplane;
 			be_capkeep.ent = keepent;
