@@ -44,6 +44,33 @@ assertions updated only after the actual native proof. Public suite now 1,503.
 Clean cross-platform builds, final installation and live-current-program
 acceptance pending; this is not a broader anti-cheat bank completion claim.
 
+## Patch 1304 — permanent Santa event gift (QC/backend/content only)
+
+**Problem.** A cosmetic preview/party crown is not the requested real Santa hat,
+permanently owned by people who play during Christmas. Entitlement must not come
+from client claims or web reads, and rollback must not delete newly earned data.
+
+**Change.** Original288-triangle native Santa IQM, warmed at client/map setup,
+one no-shadow mesh per wearer; standing/crouch/profile attachment and third
+inventory cell in both VMs. Server validates one headwear slot independently of
+aura. Versioned optional cosmetic payloads retain actual older client/server
+subsets. Trusted authenticated linked lobby presence grants once only while the
+operator enables the Christmas event; defaultOFF. Persistent earn/revoke markers
+prevent refill. Additive event component1, transactional creation/stamp; core
+DB26 and ahead-core refusal unchanged. An actual prior consumer ignores gift
+rows, and modern activity reconciles its later party-head choice without losing
+ownership. No native code/pin/tag, movement, recorder/evidence or QC Build change.
+
+**Verified.**20 inventory authority/persistence/legacy/cut/refusal/revision controls
+and8 existing ahead-schema/WAL controls pass. Generated native mesh header/counts,
+unit normals/bounds and byte-identical regeneration checked; existing asset writer
+controls pass. Actual QC compilation adds zero warnings beyond the2 inherited
+F333 viewmodel227 diagnostics. First prototype/schema and compile failures were
+preserved and fixed before any deployment. This is NOT native appearance, FPS,
+live activation or deployment acceptance: the quiet/4096MiB runtime guard has not
+admitted a subject. Event staysOFF pending dates; human look checks in lextest.md,
+full authority/compatibility details in mod tools/p1304-santa.md.
+
 ## Patch 1302 — holiday decorations and bounded GPU mist (QC/content only)
 
 **Problem.** Requested Christmas props and light-adjacent smoke must not introduce
@@ -68,6 +95,26 @@ expired without a quiet/4096MiB interval; no subject ran and no pass is inferred
 No numerical performance, runtime compatibility or deployment claim. Model and
 source provenance/remaining checks in mod tools/p1302-winter.md. Owner approved
 Kenney choice and provisional map selection; actual placement remains unaccepted.
+
+## Patch 1301 — the roof-clipped eye blends between ticks like the feet (client exe)
+
+**Problem:** P917 held the rendered eye at the newest predicted tick's roof limit for the whole interval the
+feet are lerped across. Under a sloping roof the limit changes every tick, so the eye stood still for a tick and
+then stepped: Lex's surf_classics lobby save 3 (735 u/s under a descending roof) stepped 2-13 units at 66 Hz.
+**Change:** cl_pred.c keeps each full predicted command's feet and world eye (feet + clipped height) by sequence;
+when a frame lerps the feet and either tick clipped, the limit is lerped from the from-tick's kept eye to the
+to-tick's with the same fraction. A flat roof blends two equal limits (P917's steady eye). A kept eye is used only
+while its feet match from.state within 1 unit: a server move the client did not predict (setpos, load, respawn)
+otherwise drew the pre-move eye for a tick. An unclipped end only bounds the limit from below (a step-down's
+positive crouch survives). Snaps and a from-tick with nothing kept use P917; f = 1 (extrapolated) frames reduce
+to it. At a roof step the eye now drops up to one tick late, as P917's rose up to one tick early on the way out.
+cl_predtrace rows gain `vhr crouchr`, the height actually drawn.
+**Verified:** dedicated server + UDP client at Lex's cl_maxfps 1000 / cl_netfps 66.67, the save's position and
+speed, 4096 traced frames each. Second difference of the drawn eye while clipped (feet's in brackets): control
+0.584 (0.046) at 0 ms and 0.654 (0.052) at 80 ms; fix 0.042 (0.044) and 0.057 (0.058). Unclipped frames are
+unchanged in both. Review 1's stale-eye case, server setpos into the clipped spot: 9 of the first 40 frames drew
+the unclipped eye under the roof without the feet check, 0 with it. The positive-crouch case is not measured.
+Owner feel pending in lextest.md.
 
 ## Patch 1299 — gravity carry observation through normalized jump offsets
 

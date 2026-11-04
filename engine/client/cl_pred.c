@@ -64,6 +64,7 @@ static struct
 	float	cmdf, cmds, cmdu;
 	vec3_t	fromvel, tovel, simvel;
 	vec3_t	fromorg, toorg, simorg;
+	float	vhr, crouchr;	/*P1301: after the roof rewrite and CL_CalcCrouch: the drawn eye is simorg + crouchr + vhr*/
 	float	viewheight, crouch;	/*Patch 269b: the reported symptom is "position
 								  flickers 0-4", and these two are the only
 								  per-frame offsets between simorg and the eye.
@@ -106,6 +107,28 @@ typedef struct
 static pring_t pring[MAX_SPLITS][PRING_MAX];
 static int pring_head[MAX_SPLITS], pring_n[MAX_SPLITS], pring_lastseq[MAX_SPLITS], pring_dumps, pring_firsti;
 static int pring_server[MAX_SPLITS];	//cl.servercount the rows belong to
+
+/* P1301: each full predicted command's Source eye height after P916's roof clip, by sequence.
+   A rendered frame lerps the feet between two ticks; the clipped eye must follow, or under a
+   sloping roof it holds one tick's limit and then steps (surf_classics: 2-13 units at 66 Hz). */
+#define SRCEYE_RING 64
+typedef struct
+{
+	int			frame, servercount;
+	vec3_t		feet;	//a kept eye is used only while from.state is still here
+	float		eye;	//world z, as P917's limit
+	qboolean	clipped;
+} srceye_t;
+static srceye_t srceye[MAX_SPLITS][SRCEYE_RING];
+static void CL_SourceEyeKeep (int seat, int frame, const vec3_t feet)
+{
+	srceye_t *e = &srceye[seat][frame & (SRCEYE_RING-1)];
+	e->frame = frame;
+	e->servercount = cl.servercount;
+	VectorCopy(feet, e->feet);
+	e->eye = feet[2] + pmove.viewheight;
+	e->clipped = pmove.pm_type == PM_NORMAL && pmove.viewheight < PMSrc_UnclippedViewHeight();
+}
 #define PRING_KEEP 120		//report files kept in data/prederr/ (a report is two)
 static cvar_t	cl_pushlatency = CVAR("pushlatency","-999");
 
@@ -1785,6 +1808,9 @@ void CL_PredictMovePNum (int seat)
 	float		pt_f = -1;			/*the blend fraction, -1 if no blend happened*/
 	qboolean	source_eye_clipped = false;
 	float		source_eye_raw = 0, source_eye_limit = 0;
+	qboolean	source_eye_valid = false;
+	float		source_eye_f = -1;	/*P1301: the fraction the feet were lerped by, -1 if they were not*/
+	int			pt_rec = -1;		/*P1301: this frame's cl_predtrace record, if any*/
 
 	/* Clear even on the early-return paths (disconnect/demo/pause/seat swap). */
 	if (!CL_SourcePracticeContext(pv))
@@ -2275,6 +2301,8 @@ void CL_PredictMovePNum (int seat)
 			CL_PredictUsercmd (seat, trackent, from.state, to.state, to.cmd);
 			cl_pred_localchain = false;
 			pt_replays++;	//FTESurf Patch 269
+			if (movevars.physicsmode == PHYSMODE_SOURCE && movevars.sourceversion >= 11)
+				CL_SourceEyeKeep(seat, to.frame, to.state->origin);	//P1301; extrapolated partial commands are not kept
 			if (i <= validsequence && simtime >= to.time)
 			{	//this frame is final keep track of our propagated values.
 				pv->prop.onground = pmove.onground;
@@ -2362,6 +2390,7 @@ void CL_PredictMovePNum (int seat)
 				source_eye_raw = PMSrc_UnclippedViewHeight();
 				source_eye_clipped = (pmove.viewheight < source_eye_raw);
 				source_eye_limit = pmove.origin[2] + pmove.viewheight;
+				source_eye_valid = true;
 			}
 			if (movevars.sourceversion >= 4)
 			{
@@ -2471,6 +2500,7 @@ void CL_PredictMovePNum (int seat)
 			else
 				VectorCopy(from.state->velocity, blendfromvel);
 
+			source_eye_f = f;	//P1301
 			for (i=0 ; i<3 ; i++)
 			{
 				pv->simorg[i] = (1-f)*from.state->origin[i]   + f*to.state->origin[i];
@@ -2563,6 +2593,7 @@ void CL_PredictMovePNum (int seat)
 		if (pt_count < want)
 		{	//record only -- no console traffic inside the measured window.
 			int n = pt_count++;
+			pt_rec = n;
 			if (!n)
 				pt_time0 = realtime;	//so the verdict can state a real framerate
 
@@ -2660,12 +2691,12 @@ void CL_PredictMovePNum (int seat)
 			else
 			{
 			Con_Printf("^5cl_predtrace: %i rendered frames\n", pt_count);
-			Con_Printf("^5ptcols: seq f nopred replays extrap cmdmsec btn cmdf cmds simvel3 fromvel3 tovel3 simorg3 vh crouch\n");
+			Con_Printf("^5ptcols: seq f nopred replays extrap cmdmsec btn cmdf cmds simvel3 fromvel3 tovel3 simorg3 vh crouch vhr crouchr\n");
 			for (n = 0; n < pt_count; n++)
 			{
 				Con_Printf("ptr %i %.4f %i %i %i %i %i %.2f %.2f "
 						"%.4f %.4f %.4f %.4f %.4f %.4f %.4f %.4f %.4f "
-						"%.3f %.3f %.3f %.3f %.3f\n",
+						"%.3f %.3f %.3f %.3f %.3f %.3f %.3f\n",
 						pt_recs[n].seq, pt_recs[n].f, pt_recs[n].nopred,
 						pt_recs[n].replays, pt_recs[n].extrap,
 						pt_recs[n].cmdmsec, pt_recs[n].btn,
@@ -2674,7 +2705,7 @@ void CL_PredictMovePNum (int seat)
 						pt_recs[n].fromvel[0], pt_recs[n].fromvel[1], pt_recs[n].fromvel[2],
 						pt_recs[n].tovel[0], pt_recs[n].tovel[1], pt_recs[n].tovel[2],
 						pt_recs[n].simorg[0], pt_recs[n].simorg[1], pt_recs[n].simorg[2],
-						pt_recs[n].viewheight, pt_recs[n].crouch);
+						pt_recs[n].viewheight, pt_recs[n].crouch, pt_recs[n].vhr, pt_recs[n].crouchr);
 			}
 			}
 			pt_count = 0;
@@ -2704,10 +2735,33 @@ void CL_PredictMovePNum (int seat)
 	CL_CalcCrouch (pv);
 	/* P917: the roof limit belongs to world space, not the last mover tick.
 	   Feet/stair interpolation must not turn it into a per-frame eye sawtooth.
-	   Do this after the legacy categorizer, which overwrites pmove.origin. */
-	if (source_eye_clipped)
-		pv->viewheight = PMSrc_ClipRenderEye(source_eye_raw, source_eye_limit,
-			pv->simorg[2] + pv->crouch);
+	   Do this after the legacy categorizer, which overwrites pmove.origin.
+	   P1301: when the feet were lerped and either tick clipped, lerp the limit too,
+	   from the from-tick's kept world eye to the to-tick's. An unclipped end only bounds the
+	   limit from below, so it carries a step-down's positive crouch. */
+	if (source_eye_valid)
+	{
+		srceye_t *e = &srceye[seat][from.frame & (SRCEYE_RING-1)];
+		vec3_t moved;
+		VectorSubtract(e->feet, from.state->origin, moved);
+		if (source_eye_f >= 0 && e->frame == from.frame && e->servercount == cl.servercount &&
+			DotProduct(moved, moved) < 1 && (e->clipped || source_eye_clipped))
+		{
+			float up = max(0, pv->crouch);
+			float fromeye = e->clipped ? e->eye : e->eye + up;
+			float toeye = source_eye_clipped ? source_eye_limit : source_eye_limit + up;
+			pv->viewheight = PMSrc_ClipRenderEye(source_eye_raw,
+				fromeye + (toeye - fromeye) * source_eye_f, pv->simorg[2] + pv->crouch);
+		}
+		else if (source_eye_clipped)
+			pv->viewheight = PMSrc_ClipRenderEye(source_eye_raw, source_eye_limit,
+				pv->simorg[2] + pv->crouch);
+	}
+	if (pt_rec >= 0)
+	{
+		pt_recs[pt_rec].vhr = pv->viewheight;
+		pt_recs[pt_rec].crouchr = pv->crouch;
+	}
 	pv->waterlevel = pmove.waterlevel;
 	if (!DotProduct(pmove.gravitydir,pmove.gravitydir))
 		VectorSet(pmove.gravitydir, 0, 0, -1);
