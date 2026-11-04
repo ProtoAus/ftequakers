@@ -1,5 +1,58 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1281 — water and glass captures redrawn about r_capturerate times a second (client exe)
+
+**Problem.** Lex (4 Nov): "can we lower the reflective/refractive fill rate even lower than 1 per 2 frames? we run
+at 1000fps on some maps." r_capturehalfrate (Patch 1245) counts frames, so its saving scales with the frame rate,
+and Lex's config captured every frame.
+
+**Measured first** (the installed exe, Lex's settings, frame counts): surf_eternity s4 208 / 292 / 388 / 459 fps
+capturing every frame / every 2nd / 4th / 8th; s10 189 / 280 / 367 / 401; surf_boreas s10 447 / 553 / 618 / 679.
+
+**Change.** r_capturerate (archived, default 144, at least 20): a kept capture (GLBE_CaptureKeep) is due once
+3/4 of 1/rate has passed since it rendered (realtime), so frames capped at the rate still all capture (cl_maxfps
+carries each frame's lateness into the next); a clock that went back is due. The 128-unit and 30-degree limits
+still redraw at once. 0 keeps r_capturehalfrate's frame count. r_capturelog prints each keep's age.
+
+**Verified.** Ship exe 9d2e564e, Lex's settings: eternity s4 194 / 203 fps capturing every frame, 281 / 276 at
+144, 420 at 60, 204 at 240 (above the frame rate, so every frame); the capture log shows keeps 5.1 ms old.
+
+**Left.** 3D sky-room water sharing the level-0 targets samples a kept capture without the turn correction
+(m_capturefix is identity at recursion > 0), up to 1/rate old.
+
+## Patch 1275 — Source maps' lightmaps filtered bicubically (client exe + hl2 plugin)
+
+**Problem.** Lex (4 Nov), passing on a chatter: HL2's 20th-anniversary update filters lightmaps bicubically. Ours
+were bilinear, so coarse lightmaps show stepped and diamond-shaped light edges.
+
+**Change.**
+- vmt/lightmapped, vmt/transition and vmt/animated sample their lightmaps through lm_bicubic, a cubic B-spline in
+  four bilinear taps, when r_lightmap_bicubic_world is 1; the deluxemap stays bilinear. e_lmsize (the batch's page,
+  w h 1/w 1/h) is a per-program uniform sent before BE_Program_Set_Attributes's per-entity cache returns, when the
+  page size changes, so the programs stay at !!ver 110 (no textureSize).
+- The kernel reads one texel past a face's luxels, so a padded face's block is allocated two texels larger with the
+  face inside (SURF_LMPAD 0x04000), and Surf_BuildLightMap copies the edge texels into that border (lightmap and
+  deluxe pages) and dirties it.
+- r_lightmap_bicubic (archived, default 1) is read when a model's lightmaps are built; the model keeps the answer
+  (MDLF_LMPADDED 0x8000), and Surf_NewMap sets the read-only r_lightmap_bicubic_world the shaders read, so a world
+  reused by a same-map reload brings its own.
+
+**Verified.** Rig, a copy of Lex's Desktop install and settings:
+- Off: lightstyled surf_affliction and bhop_orgrimmar match the old exe pixel for pixel. (Review 1 found the first
+  cut's SURF_LMPAD on SURF_LMSTRIDE_MASK's low bit, which read every lightstyled face's later styles off.)
+- On against off, GPU ms: affliction 0.37 / 0.38, sedona 0.88 / 0.91, ceaseless 0.72 / 0.72, starvald 1.30 / 1.28,
+  eternity 0.74 / 0.75. CPU stayed within run-to-run noise (0.3 ms); world batches fell (sedona 108 to 68,
+  starvald 40 to 22); eternity gained one 2048x2048 page (about 32 MB).
+- On changed 104,733 of sedona's pixels by more than 2 levels and 1,774 by more than 8 (smoother gradients);
+  bhop_ceaseless's bump relief (Patch 1264) is unchanged.
+- The ship exe 9d2e564e reports r_lightmap_bicubic_world 1 and matches the on run.
+
+**Rejected.** Always padding, so the setting switched live: review 2 measured 1.36-1.42x the lightmap texels at the
+median (8.45x worst) with the feature off. Raising the vmt programs to !!ver 130 for textureSize (animated.glsl's
+note on why they stay at 110).
+
+**Left.** A change of the setting applies when a map's lightmaps are next built (a new map, or vid_restart). An
+exe-only install pads without the plugin's bicubic shaders.
 ## Patch 1271 — an unvised Source map culled by area, as Source (hl2 plugin)
 
 **Problem.** Lex (3 Nov), surf_voyager saves 3 and 4: "reverse LOD for things outside the skybox? cutting off
