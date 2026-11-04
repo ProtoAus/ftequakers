@@ -247,6 +247,7 @@ cvar_t r_nearestsort						= CVARD ("r_nearestsort", "1", "FTESurf Patch 878: how
 cvar_t r_alphacoverage					= CVARFD ("r_alphacoverage", "1", CVAR_ARCHIVE, "FTESurf Patch 1262: under vid_multisample, surfaces cut out by an alpha test (leaves, fences, grates) spread the cut edge over the samples instead of cutting it (alpha-to-coverage), as MSAA smooths a polygon's edge. 0: cut, as without MSAA. Source maps' materials (the hl2 plugin's vmt shaders).");
 cvar_t r_reflectmultisample			= CVARFD ("r_reflectmultisample", "-1", CVAR_ARCHIVE, "FTESurf Patch 1276: MSAA samples for the main view's water and glass reflection captures (drawn at r_refractreflect_scale of the view). -1: as vid_multisample. 0: none.");
 cvar_t r_capturehalfrate				= CVARD ("r_capturehalfrate", "0", "FTESurf Patch 1245: the main view's water and glass reflection/refraction captures are reused for this many frames after each one rendered, turned with the camera in between (what they show is taken as distant: a turn lines up, a slide shows the frame-old view of nearby things). 0: every frame. 1: every second frame (surf_eternity's glass 201 -> 294 fps).");
+cvar_t r_capturerate				= CVARFD ("r_capturerate", "144", CVAR_ARCHIVE, "FTESurf Patch 1281: the main view's water and glass captures are redrawn at most this many times a second, whatever the frame rate; between, the last one is reused and turned with the camera (as r_capturehalfrate keeps it), and past 128 units or 30 degrees it is redrawn at once. 0: r_capturehalfrate's frame count alone.");
 cvar_t r_waterforcereflectentities			= CVARD ("r_waterforcereflectentities", "0", "Source's cvar. 0: a water reflection draws entities and props only if its material says $reflectentities, as Source does -- most Source water reflects only the world and the 2D sky. 1: every water reflection draws them, as before Patch 868.");
 cvar_t r_drawviewmodel						= CVARF  ("r_drawviewmodel", "1", CVAR_ARCHIVE);
 cvar_t r_drawviewmodelinvis					= CVAR  ("r_drawviewmodelinvis", "0");
@@ -1562,6 +1563,7 @@ void Renderer_Init(void)
 	Cvar_Register (&r_watertargetsize, GRAPHICALNICETIES);
 	Cvar_Register (&r_waterforcereflectentities, GRAPHICALNICETIES);
 	Cvar_Register (&r_capturehalfrate, GRAPHICALNICETIES);	//FTESurf Patch 1245
+	Cvar_Register (&r_capturerate, GRAPHICALNICETIES);	//FTESurf Patch 1281
 	Cvar_Register (&r_reflectmultisample, GRAPHICALNICETIES);	//FTESurf Patch 1276
 	Cvar_Register (&r_alphacoverage, GRAPHICALNICETIES);	//FTESurf Patch 1262
 	Cvar_Register (&r_capturelog, GRAPHICALNICETIES);	//FTESurf Patch 879
