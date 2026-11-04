@@ -18,7 +18,43 @@ static int SV_TASPlanOverlay(client_t *cl, edict_t *e, usercmd_t *cmd)
 	if (!p || !p->planmode || !p->planinput.valid || p->tape.state == SV_TAPE_ACTIVE) return 0;
 	in = p->planinput;
 	p->planair = 0;
-	if (p->planmode >= SV_PLAN_LEFT)
+	if (p->planmode == 4)
+	{
+		sv_tas_guide_t g;
+		unsigned short target;
+		eval_t *base = SV_TASRewindField(e,"run_basevelocity",ev_vector);
+		int ground = ((int)e->v->flags & FL_ONGROUND) != 0;
+		memset(&g,0,sizeof(g));
+		in.angle[YAW] = (short)p->planyaw;
+		if (!e->v->fixangle && e->v->waterlevel < 2 &&
+			cl->pmsrc.waterjumpremaining == 0 && !cl->pmsrc.srcladder && !cl->pmsrc.ducking &&
+			!SV_TASInputField(e,"run_momlimit") && !SV_TASInputField(e,"run_momslide") &&
+			in.move[2] == 0 && (!ground || (!e->v->groundentity && !(in.buttons & 1))) &&
+			(!base || (base->_vector[0] == 0 && base->_vector[1] == 0 && base->_vector[2] == 0)) &&
+			e->xv->gravitydir[0] == 0 && e->xv->gravitydir[1] == 0 &&
+			(e->xv->gravitydir[2] == 0 || e->xv->gravitydir[2] == -1))
+		{
+			g.vx=e->v->velocity[0]; g.vy=e->v->velocity[1];
+			g.forward=in.move[0]; g.side=in.move[1];
+			g.maxspeed=PMSrc_MaxSpeedForInputs(PM_NORMAL,(in.buttons & 4)?BUTTON_SPEED:0,cl->pmsrc.stamina);
+			g.ground=ground; g.ducked=cl->pmsrc.ducked; g.duckspeed=movevars.duckspeed;
+			g.accel=ground?movevars.accelerate:movevars.airaccelerate;
+			g.dt=SV_TASCurrentTick();
+			g.surface=ground?cl->pmsrc.surfacefriction:
+				((e->v->velocity[2]>0 && e->v->velocity[2]<=140)?.25f:1);
+			g.aircap=movevars.maxairspeed>0?movevars.maxairspeed:30;
+			g.friction=movevars.friction; g.stopspeed=movevars.stopspeed; g.amount=p->planamount;
+			if (SV_TASStrafeUnclipped(g.vx,g.vy,e->v->velocity[2],
+				g.accel*g.maxspeed*g.dt*g.surface,movevars.maxvelocity,sv_maxvelocity.value) &&
+				SV_TASGuideYaw(&g,&target))
+			{
+				p->planyaw=SV_TASGuideSlew(p->planyaw,target,g.dt,g.amount);
+				in.angle[YAW]=(short)p->planyaw;
+				p->planair=ground?2:1;
+			}
+		}
+	}
+	else if (p->planmode == SV_PLAN_LEFT || p->planmode == SV_PLAN_RIGHT)
 	{
 		in.angle[YAW] = (short)p->planyaw; // ground/launch follows the last authored head
 		friction = e->v->velocity[2] > 0 && e->v->velocity[2] <= 140 ? 0.25f : 1.0f;
@@ -59,7 +95,7 @@ static void SV_TASPlanComplete(client_t *cl, edict_t *e)
 	tas_rewind_pool_t *p = SV_TASInputPool(cl);
 	if (p && p->planmode >= SV_PLAN_LEFT && SV_TASStrafeFinite(e->v->v_angle[YAW]))
 	{
-		p->planyaw = (unsigned short)ANGLE2SHORT(e->v->v_angle[YAW]);
+		p->planyaw = SV_TASPlanAngleWord(e->v->v_angle[YAW]);
 		p->planpostpending = 1;
 	}
 }
