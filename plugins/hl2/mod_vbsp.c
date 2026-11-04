@@ -625,6 +625,8 @@ typedef struct vbspinfo_s
 	//file-scope static that the next caller overwrites (:6281).
 	pvsbuffer_t	wl_pvs;
 	int			wl_pvscluster;	//which cluster wl_pvs currently holds, -2 = none
+	struct vlvc_s	*lvc;		//FTESurf Patch 1283: remembered light visibility (VBSP_LightCacheCube)
+	qboolean	wl_exact;	//FTESurf Patch 1283: set round the static-prop solve and the census; they trace every light
 
 	size_t numdisplacements;
 	dispinfo_t *displacements;
@@ -8002,6 +8004,7 @@ there.  The same sharp edge already exists on r_glsl_rtenvsphere (vertexlit.glsl
 static cvar_t *hl2_lt_fold;
 static cvar_t *hl2_lt_min;
 static cvar_t *hl2_lt_occlusion;
+static cvar_t *hl2_lt_vcache, *hl2_lt_vbudget;	//FTESurf Patch 1283
 /*
 FTESurf Patch 233: WHAT IS THIS NAME, AND WILL I EVER SEE IT.
 
@@ -10537,7 +10540,9 @@ static void VBSP_PrepareFrame(model_t *mod, refdef_t *r_refdef, int area, int cl
 				if (!VBSP_LeafHasAmbient(mod, sample))
 					prv->lit_solid++;
 
+				prv->wl_exact = true;	//FTESurf Patch 1283
 				VBSP_LightPointValues(mod, sample, dif, amb, dir);
+				prv->wl_exact = false;
 
 				//FTESurf Patch 163: report the colour that is DRAWN, not the one
 				//the cube proposed.  A census of a value the renderer overrides
@@ -10942,7 +10947,9 @@ static void VBSP_PrepareFrame(model_t *mod, refdef_t *r_refdef, int area, int cl
 				//.vhv already has VRAD's own shading per vertex, so re-splitting
 				//the cube under it would shade it twice.
 				prv->fold_prop = !sent->hasbaked;
+				prv->wl_exact = true;	//FTESurf Patch 1283: solved once for the map, so every light is traced
 				HL2_CalcModelLighting(src, src->model, r_refdef, mod);
+				prv->wl_exact = false;
 				prv->wl_suppress = false;
 				prv->fold_prop = false;
 				VectorCopy(tmp, src->origin);
@@ -11905,6 +11912,367 @@ static int QDECL VBSP_OccluderTrace(model_t *mod, const vec3_t start, const vec3
 	return tr.fraction < 1;
 }
 
+//FTESurf Patch 1283: one world light's unoccluded share at point (0 = none) and the direction to it, split out of
+//VBSP_AddWorldLightCube unchanged so the remembered path computes exactly what the traced path does.
+static float VBSP_WorldLightRatio(const struct vworldlight_s *wl, const vec3_t point, vec3_t dir)
+{
+	vec3_t	delta;
+	float	d2, dist, falloff, angle, ratio;
+
+	VectorSubtract(wl->origin, point, delta);
+	d2 = DotProduct(delta, delta);
+
+	//Engine_WorldLightDistanceFalloff, worldlight.cpp:36-87.
+	if (wl->type == VWL_SURFACE)
+	{
+		if (wl->radius != 0 && d2 > wl->radius*wl->radius)
+			return 0;
+		//InvRSquared (public/mathlib/vector.h:2176-2190) clamps the
+		//DENOMINATOR to a minimum of 1, so a light inside 1 unit saturates
+		//at 1.0 rather than exploding.  That clamp is load-bearing.
+		falloff = 1.0f / ((d2 > 1.0f) ? d2 : 1.0f);
+	}
+	else
+	{
+		dist = sqrt(d2);
+		if (wl->radius != 0 && dist > wl->radius)
+			return 0;
+		falloff = wl->constant_attn + wl->linear_attn*dist + wl->quadratic_attn*d2;
+		if (falloff < 1e-6f)
+			falloff = 1e-6f;
+		falloff = 1.0f / falloff;
+	}
+	if (falloff <= 0)
+		return 0;
+
+	if (d2 < 1e-8f)
+		return 0;	//coincident with the light; no direction to give it.
+	dist = sqrt(d2);
+	VectorScale(delta, 1.0f/dist, dir);
+
+	/*
+	Engine_WorldLightAngle (leaf_ambient_lighting.cpp:57-73), emitter side
+	only.  VRAD calls it with the NORMALISED DELTA in the snormal slot for
+	cube work, which makes its first dot exactly 1 -- the receiving surface's
+	own cosine is applied per cube face below instead, which is the only way
+	a six-face cube can be built from a single call.
+	*/
+	if (wl->type == VWL_SURFACE)
+	{
+		angle = -DotProduct(dir, wl->normal);
+		if (angle <= 0.01f)		//ON_EPSILON/10; behind the emitting surface
+			return 0;
+	}
+	else if (wl->type == VWL_SPOTLIGHT)
+	{
+		float dot2 = -DotProduct(dir, wl->normal);
+		if (dot2 <= wl->stopdot2)
+			return 0;			//outside the penumbra entirely
+		if (dot2 >= wl->stopdot)
+			angle = 1.0f;		//inside the hot spot
+		else
+		{
+			float span = wl->stopdot - wl->stopdot2;
+			float e = (wl->exponent < 1.0f) ? 1.0f : wl->exponent;
+			if (span < 1e-6f)
+				span = 1e-6f;
+			angle = pow((dot2 - wl->stopdot2) / span, e);
+		}
+	}
+	else
+		angle = 1.0f;			//a point light emits equally in every direction
+
+	ratio = falloff * angle;
+	return ratio > 0 ? ratio : 0;
+}
+
+static void VBSP_AddLightToCube(vec3_t cube[6], const struct vworldlight_s *wl, const vec3_t dir, float ratio)
+{
+	int f, j;
+	for (f = 0; f < 6; f++)
+	{
+		float t = DotProduct(vbsp_boxdirections[f], dir);
+		if (t > 0)
+			for (j = 0; j < 3; j++)
+				cube[f][j] += wl->intensity[j] * (t * ratio);
+	}
+}
+
+/*FTESurf Patch 1283 (ENGINE_PATCHES.md): a caller sampling near its last point keeps a slot of per-light answers and
+  re-traces hl2_lt_vbudget a call, never-traced brightest first, then brightness x age; bursts when untraced light is
+  a large share. Untraced lights count at the share an even spread of them lets through (not the brightest: they are
+  nearer, less often blocked). Static props, the census and hl2_lightprobe trace every light. False = trace normally.*/
+#define VLVC_SLOTS	64
+#define VLVC_NEAR	128.0f		//within this of a slot's last point is that caller again
+#define VLVC_SEED	1024.0f		//a new slot within this of another starts from its answers, all stale
+#define VLVC_PICK	256			//hl2_lt_vbudget's ceiling
+#define VLVC_FIRST	128			//a first sample's budget
+#define VLVC_BURST	64			//a call whose untraced lights carry over VLVC_BURSTSHARE of the light
+#define VLVC_BURSTSHARE	0.1f
+struct vlvcslot_s
+{
+	vec3_t			org;
+	unsigned int	used;		//vlvc clock at last use; 0 = free
+	unsigned int	calls;		//this slot's own clock, which its stamps are read against
+	qbyte			*vis;		//per world light: 0 not traced here, 1 visible, 2 blocked
+	unsigned int	*when;		//calls when last traced
+};
+struct vlvccand_s
+{
+	unsigned int	light;
+	float			ratio, w;	//share at the point, and that share of the light's brightest channel
+	vec3_t			dir;
+};
+struct vlvc_s
+{
+	struct vlvcslot_s	slot[VLVC_SLOTS];
+	unsigned int		clock;
+	int					occl, wl;	//hl2_lt_occlusion/hl2_lt_worldlight the answers were traced under
+	struct vlvccand_s	*cand;		//numworldlights of scratch
+	float				heappri[VLVC_PICK];
+	qbyte				heapnew[VLVC_PICK];	//never traced here: outranks every re-trace
+	unsigned int		heapidx[VLVC_PICK];
+	double				chk_t0, chk_err, chk_errmax, chk_trc, chk_tre;	//hl2_lt_vcache 2
+	unsigned int		chk_n;
+	unsigned int		last_nc, last_unk, last_how;	//the call just made: candidates, still untraced, 0 kept 1 fresh 2 seeded
+	float				last_est, last_unkw, last_w;
+	vec3_t				chk_worg;
+	unsigned int		chk_wnc, chk_wunk, chk_whow;
+	float				chk_west, chk_wden, chk_wnum, chk_wunkw, chk_ww;
+};
+
+#define VLVC_LESS(v,a,b) ((v)->heapnew[a] != (v)->heapnew[b] ? (v)->heapnew[a] < (v)->heapnew[b] : (v)->heappri[a] < (v)->heappri[b])
+static void VBSP_LightCacheHeapDown(struct vlvc_s *v, unsigned int n, unsigned int k)
+{	//min-heap on (never traced, priority): the cheapest pick sits at the root, ready to be replaced
+	for (;;)
+	{
+		unsigned int l = 2*k+1, r = l+1, m = k;
+		if (l < n && VLVC_LESS(v, l, m)) m = l;
+		if (r < n && VLVC_LESS(v, r, m)) m = r;
+		if (m == k)
+			return;
+		{
+			float tp = v->heappri[k]; qbyte tn = v->heapnew[k]; unsigned int ti = v->heapidx[k];
+			v->heappri[k] = v->heappri[m]; v->heapnew[k] = v->heapnew[m]; v->heapidx[k] = v->heapidx[m];
+			v->heappri[m] = tp; v->heapnew[m] = tn; v->heapidx[m] = ti;
+		}
+		k = m;
+	}
+}
+
+static qboolean VBSP_LightCacheCube(model_t *mod, const vec3_t point, const qbyte *visbits, vec3_t cube[6], unsigned int *traced)
+{
+	vbspinfo_t			*prv = (vbspinfo_t*)mod->meshinfo;
+	struct vlvc_s		*v = prv->lvc;
+	struct vlvcslot_s	*s = NULL, *seed = NULL, *lru = NULL;
+	size_t				i, n = prv->numworldlights, nc = 0;
+	unsigned int		k, budget, npick = 0;
+	float				best = VLVC_NEAR*VLVC_NEAR, bestseed = VLVC_SEED*VLVC_SEED, kw = 0, vw = 0, est;
+	float				tw = 0, uw = 0, nw = 0, nvw = 0;	//all, untraced, and the guide sample (all / visible) light
+	unsigned int		un = 0, spread, hbudget;
+	int					occl = hl2_lt_occlusion ? hl2_lt_occlusion->ival : 0, wlv = hl2_lt_worldlight ? hl2_lt_worldlight->ival : 0;
+	qboolean			fresh = false;
+
+	*traced = 0;
+	if (!n)
+		return false;
+	if (!v)
+	{
+		v = prv->lvc = plugfuncs->GMalloc(&mod->memgroup, sizeof(*v));
+		v->cand = plugfuncs->GMalloc(&mod->memgroup, sizeof(*v->cand)*n);
+		v->occl = occl;
+		v->wl = wlv;
+	}
+	if (v->occl != occl || v->wl != wlv)
+	{	//answers traced under other settings are not answers
+		for (k = 0; k < VLVC_SLOTS; k++)
+			v->slot[k].used = 0;
+		v->occl = occl;
+		v->wl = wlv;
+	}
+	budget = (hl2_lt_vbudget && hl2_lt_vbudget->ival > 0) ? hl2_lt_vbudget->ival : 1;
+	if (budget > VLVC_PICK)
+		budget = VLVC_PICK;
+
+	if (!++v->clock)
+	{	//wrapped: start the slots over rather than mis-order them
+		for (k = 0; k < VLVC_SLOTS; k++)
+			v->slot[k].used = 0;
+		v->clock = 1;
+	}
+	for (k = 0; k < VLVC_SLOTS; k++)
+	{
+		struct vlvcslot_s *t = &v->slot[k];
+		if (t->used)
+		{
+			vec3_t d;
+			float d2;
+			VectorSubtract(t->org, point, d);
+			d2 = DotProduct(d, d);
+			if (d2 < best) { best = d2; s = t; }
+			if (d2 < bestseed) { bestseed = d2; seed = t; }
+		}
+		if (!lru || t->used < lru->used)
+			lru = t;	//a free slot (used 0) is always the least recent
+	}
+	if (!s)
+	{
+		s = lru;
+		if (!s->vis)
+		{
+			s->vis = plugfuncs->GMalloc(&mod->memgroup, n);
+			s->when = plugfuncs->GMalloc(&mod->memgroup, sizeof(*s->when)*n);
+		}
+		if (seed && seed != s)
+		{	//every answer stale: the brightest are re-traced first
+			memcpy(s->vis, seed->vis, n);
+			memset(s->when, 0, sizeof(*s->when)*n);
+			s->calls = 1u<<20;
+		}
+		else if (!seed)
+		{
+			memset(s->vis, 0, n);
+			s->calls = 0;
+			fresh = true;
+		}
+		//seed == s: the least recent slot is itself the near one; its own answers, as they stand
+	}
+	s->used = v->clock;
+	s->calls++;
+	VectorCopy(point, s->org);
+	v->last_how = fresh ? 1 : (seed && seed != s && s->calls == (1u<<20) + 1) ? 2 : 0;
+
+	for (i = 0; i < n; i++)
+	{
+		const struct vworldlight_s *wl = &prv->worldlights[i];
+		struct vlvccand_s *cd;
+		vec3_t dir;
+		float ratio;
+		int c = wl->cluster;
+
+		if (c >= mod->numclusters || !(visbits[c>>3] & (1<<(c&7))))
+			continue;
+		ratio = VBSP_WorldLightRatio(wl, point, dir);
+		if (ratio <= 0)
+			continue;
+		cd = &v->cand[nc++];
+		cd->light = i;
+		cd->ratio = ratio;
+		cd->w = ratio * max(wl->intensity[0], max(wl->intensity[1], wl->intensity[2]));
+		VectorCopy(dir, cd->dir);
+		tw += cd->w;
+		if (!s->vis[i])
+		{
+			uw += cd->w;
+			un++;
+		}
+	}
+	if (fresh && budget < VLVC_FIRST)
+		budget = VLVC_FIRST;
+	else if (uw > VLVC_BURSTSHARE * tw && budget < VLVC_BURST)
+		budget = VLVC_BURST;
+	spread = (un > budget) ? budget / 4 : 0;	//more new lights than the budget: keep a quarter for an even spread
+	hbudget = budget - spread;
+	if (!hbudget)
+		hbudget = 1;
+
+	for (i = 0; i < nc; i++)
+	{
+		const struct vlvccand_s *cd = &v->cand[i];
+		qbyte isnew = !s->vis[cd->light];
+		float pri = isnew ? cd->w : cd->w * (float)(s->calls - s->when[cd->light] + 1);
+		if (npick < hbudget)
+		{
+			v->heappri[npick] = pri;
+			v->heapnew[npick] = isnew;
+			v->heapidx[npick] = i;
+			npick++;
+			if (npick == hbudget)
+				for (k = hbudget/2 + 1; k-- > 0;)
+					VBSP_LightCacheHeapDown(v, npick, k);
+		}
+		else if (isnew > v->heapnew[0] || (isnew == v->heapnew[0] && pri > v->heappri[0]))
+		{
+			v->heappri[0] = pri;
+			v->heapnew[0] = isnew;
+			v->heapidx[0] = i;
+			VBSP_LightCacheHeapDown(v, npick, 0);
+		}
+	}
+	for (k = 0; k < npick; k++)
+	{
+		const struct vlvccand_s *cd = &v->cand[v->heapidx[k]];
+		qbyte a = VBSP_WorldLightVisible(mod, point, &prv->worldlights[cd->light]) ? 1 : 2;
+		if (!s->vis[cd->light])
+		{	//only a guide when there is no spread: these are the brightest, not a fair sample
+			nw += cd->w;
+			if (a == 1)
+				nvw += cd->w;
+		}
+		s->vis[cd->light] = a;
+		s->when[cd->light] = s->calls;
+		(*traced)++;
+	}
+	if (spread)
+	{	//every step-th light still untraced, in light order: a fair sample of what is left
+		unsigned int left = 0, step, seen = 0, done = 0;
+		for (i = 0; i < nc; i++)
+			if (!s->vis[v->cand[i].light])
+				left++;
+		step = left / spread;
+		if (step < 1)
+			step = 1;
+		nw = nvw = 0;
+		for (i = 0; i < nc && done < spread; i++)
+		{
+			const struct vlvccand_s *cd = &v->cand[i];
+			qbyte a;
+			if (s->vis[cd->light] || (seen++ % step))
+				continue;
+			a = VBSP_WorldLightVisible(mod, point, &prv->worldlights[cd->light]) ? 1 : 2;
+			nw += cd->w;
+			if (a == 1)
+				nvw += cd->w;
+			s->vis[cd->light] = a;
+			s->when[cd->light] = s->calls;
+			(*traced)++;
+			done++;
+		}
+	}
+
+	for (i = 0; i < nc; i++)
+		if (s->vis[v->cand[i].light])
+		{
+			kw += v->cand[i].w;
+			if (s->vis[v->cand[i].light] == 1)
+				vw += v->cand[i].w;
+		}
+	est = (nw > 0) ? nvw / nw : (kw > 0) ? vw / kw : 1;
+	v->last_nc = nc;
+	v->last_est = est;
+	v->last_unk = 0;
+	v->last_unkw = v->last_w = 0;
+	for (i = 0; hl2_lt_vcache->ival == 2 && i < nc; i++)
+	{
+		v->last_w += v->cand[i].w;
+		if (!s->vis[v->cand[i].light])
+		{
+			v->last_unk++;
+			v->last_unkw += v->cand[i].w;
+		}
+	}
+	for (i = 0; i < nc; i++)
+	{
+		const struct vlvccand_s *cd = &v->cand[i];
+		qbyte a = s->vis[cd->light];
+		if (a == 1)
+			VBSP_AddLightToCube(cube, &prv->worldlights[cd->light], cd->dir, cd->ratio);
+		else if (!a && est > 0)
+			VBSP_AddLightToCube(cube, &prv->worldlights[cd->light], cd->dir, cd->ratio * est);
+	}
+	return true;
+}
+
 static void VBSP_AddWorldLightCube (model_t *mod, const vec3_t point, vec3_t cube[6], qboolean ignoresuppress, qboolean report)
 {
 	vbspinfo_t	*prv = (vbspinfo_t*)mod->meshinfo;
@@ -11939,80 +12307,90 @@ static void VBSP_AddWorldLightCube (model_t *mod, const vec3_t point, vec3_t cub
 	if (!visbits)
 		return;
 
+	if (!report && !prv->wl_exact && hl2_lt_vcache && hl2_lt_vcache->ival && hl2_lt_occlusion && hl2_lt_occlusion->ival)
+	{
+		vec3_t got[6], want[6];
+		unsigned int trc, tre = 0;
+		if (hl2_lt_vcache->ival != 2)
+		{
+			if (VBSP_LightCacheCube(mod, point, visbits, cube, &trc))
+				return;
+		}
+		else
+		{	//check: the remembered answer against tracing every light, measured on the whole cube it lands in
+			struct vlvc_s *v;
+			double num = 0, den = 0, now;
+			memcpy(got, cube, sizeof(got));
+			memcpy(want, cube, sizeof(want));
+			if (VBSP_LightCacheCube(mod, point, visbits, got, &trc))
+			{
+				for (i = 0; i < prv->numworldlights; i++)
+				{
+					const struct vworldlight_s *wl = &prv->worldlights[i];
+					vec3_t dir;
+					float ratio;
+					int c = wl->cluster;
+					if (c >= mod->numclusters || !(visbits[c>>3] & (1<<(c&7))))
+						continue;
+					ratio = VBSP_WorldLightRatio(wl, point, dir);
+					if (ratio <= 0)
+						continue;
+					tre++;
+					if (VBSP_WorldLightVisible(mod, point, wl))
+						VBSP_AddLightToCube(want, wl, dir, ratio);
+				}
+				for (f = 0; f < 6; f++)
+					for (j = 0; j < 3; j++)
+					{
+						num += fabs(got[f][j] - want[f][j]);
+						den += fabs(want[f][j]);
+					}
+				v = prv->lvc;
+				v->chk_n++;
+				v->chk_trc += trc;
+				v->chk_tre += tre;
+				if (den > 0)
+				{
+					v->chk_err += num / den;
+					if (num / den > v->chk_errmax)
+					{
+						v->chk_errmax = num / den;
+						VectorCopy(point, v->chk_worg);
+						v->chk_wnc = v->last_nc; v->chk_wunk = v->last_unk; v->chk_whow = v->last_how;
+						v->chk_west = v->last_est; v->chk_wden = den; v->chk_wnum = num;
+						v->chk_wunkw = v->last_unkw; v->chk_ww = v->last_w;
+					}
+				}
+				now = plugfuncs->GetSeconds();
+				if (now - v->chk_t0 >= 5)
+				{
+					if (v->chk_n)
+						Con_Printf("[vcache] %u samples: traces %.1f a sample (every light: %.1f); cube error mean %.4f, max %.4f\n",
+							v->chk_n, v->chk_trc / v->chk_n, v->chk_tre / v->chk_n, v->chk_err / v->chk_n, v->chk_errmax);
+					if (v->chk_n && v->chk_errmax > 0)
+						Con_Printf("[vcache] worst at %.0f %.0f %.0f: |err| %.4f of %.4f; %u lights, %u untraced (%.4f of %.4f weight, est %.3f), %s\n",
+							v->chk_worg[0], v->chk_worg[1], v->chk_worg[2], v->chk_wnum, v->chk_wden, v->chk_wnc, v->chk_wunk,
+							v->chk_wunkw, v->chk_ww, v->chk_west, v->chk_whow == 1 ? "fresh" : v->chk_whow == 2 ? "seeded" : "kept");
+					v->chk_t0 = now;
+					v->chk_n = 0;
+					v->chk_trc = v->chk_tre = v->chk_err = v->chk_errmax = 0;
+				}
+				memcpy(cube, got, sizeof(got));
+				return;
+			}
+		}
+	}
+
 	for (i = 0; i < prv->numworldlights; i++)
 	{
 		const struct vworldlight_s *wl = &prv->worldlights[i];
-		vec3_t	delta, dir;
-		float	d2, dist, falloff, angle, ratio;
+		vec3_t	dir;
+		float	ratio;
 		int		c = wl->cluster;
 
 		if (c >= mod->numclusters || !(visbits[c>>3] & (1<<(c&7))))
 			continue;
-
-		VectorSubtract(wl->origin, point, delta);
-		d2 = DotProduct(delta, delta);
-
-		//Engine_WorldLightDistanceFalloff, worldlight.cpp:36-87.
-		if (wl->type == VWL_SURFACE)
-		{
-			if (wl->radius != 0 && d2 > wl->radius*wl->radius)
-				continue;
-			//InvRSquared (public/mathlib/vector.h:2176-2190) clamps the
-			//DENOMINATOR to a minimum of 1, so a light inside 1 unit saturates
-			//at 1.0 rather than exploding.  That clamp is load-bearing.
-			falloff = 1.0f / ((d2 > 1.0f) ? d2 : 1.0f);
-		}
-		else
-		{
-			dist = sqrt(d2);
-			if (wl->radius != 0 && dist > wl->radius)
-				continue;
-			falloff = wl->constant_attn + wl->linear_attn*dist + wl->quadratic_attn*d2;
-			if (falloff < 1e-6f)
-				falloff = 1e-6f;
-			falloff = 1.0f / falloff;
-		}
-		if (falloff <= 0)
-			continue;
-
-		if (d2 < 1e-8f)
-			continue;	//coincident with the light; no direction to give it.
-		dist = sqrt(d2);
-		VectorScale(delta, 1.0f/dist, dir);
-
-		/*
-		Engine_WorldLightAngle (leaf_ambient_lighting.cpp:57-73), emitter side
-		only.  VRAD calls it with the NORMALISED DELTA in the snormal slot for
-		cube work, which makes its first dot exactly 1 -- the receiving surface's
-		own cosine is applied per cube face below instead, which is the only way
-		a six-face cube can be built from a single call.
-		*/
-		if (wl->type == VWL_SURFACE)
-		{
-			angle = -DotProduct(dir, wl->normal);
-			if (angle <= 0.01f)		//ON_EPSILON/10; behind the emitting surface
-				continue;
-		}
-		else if (wl->type == VWL_SPOTLIGHT)
-		{
-			float dot2 = -DotProduct(dir, wl->normal);
-			if (dot2 <= wl->stopdot2)
-				continue;			//outside the penumbra entirely
-			if (dot2 >= wl->stopdot)
-				angle = 1.0f;		//inside the hot spot
-			else
-			{
-				float span = wl->stopdot - wl->stopdot2;
-				float e = (wl->exponent < 1.0f) ? 1.0f : wl->exponent;
-				if (span < 1e-6f)
-					span = 1e-6f;
-				angle = pow((dot2 - wl->stopdot2) / span, e);
-			}
-		}
-		else
-			angle = 1.0f;			//a point light emits equally in every direction
-
-		ratio = falloff * angle;
+		ratio = VBSP_WorldLightRatio(wl, point, dir);
 		if (ratio <= 0)
 			continue;
 		{
@@ -12025,14 +12403,7 @@ static void VBSP_AddWorldLightCube (model_t *mod, const vec3_t point, vec3_t cub
 			if (!visible)
 				continue;
 		}
-
-		for (f = 0; f < 6; f++)
-		{
-			float t = DotProduct(vbsp_boxdirections[f], dir);
-			if (t > 0)
-				for (j = 0; j < 3; j++)
-					cube[f][j] += wl->intensity[j] * (t * ratio);
-		}
+		VBSP_AddLightToCube(cube, wl, dir, ratio);
 	}
 }
 
@@ -14020,6 +14391,8 @@ qboolean VBSP_Init(void)
 		*/
 		cvarfuncs->GetNVFDG("hl2_lt_baked_scale", "2", 0, "Overbright applied to VRAD's baked static prop lighting. 2 is the same factor gl_overbright already gives the world lightmap and which model lighting has never had; 1 is the raw baked value, as VRAD wrote it.", MAPOPTIONS);
 		hl2_lt_occlusion = cvarfuncs->GetNVFDG("hl2_lt_occlusion", "1", 0, "Trace local worldlights against opaque world brushes and ray-collidable displacements before lighting models. Independent of movement collision. No prop/mover shadows or sky tracing. Live; 0 restores PVS-only lighting for comparison.", MAPOPTIONS);
+		hl2_lt_vcache = cvarfuncs->GetNVFDG("hl2_lt_vcache", "1", 0, "FTESurf Patch 1283: a model light sample that repeats near its last point (the view model, a moving model, lit particles) remembers which world lights it saw and re-traces hl2_lt_vbudget of them a call (more when many new lights come into view at once), never-traced first, then the brightest and stalest. Static props and hl2_lightprobe always trace every light. 0 = trace every light every call. 2 = also trace every light and print every 5 s how far the remembered answer was from it, and the worst sample (slow; for checking).", MAPOPTIONS);
+		hl2_lt_vbudget = cvarfuncs->GetNVFDG("hl2_lt_vbudget", "32", 0, "FTESurf Patch 1283: world lights re-traced per model light sample under hl2_lt_vcache (1-256). A trace is a few microseconds; a sample at a light-dense spot used to trace 1500.", MAPOPTIONS);
 		hl2_lt_blend = cvarfuncs->GetNVFDG("hl2_lt_blend", "1", 0, "FTESurf Patch 780: how a model's ambient light is read from the leaf it stands in.\n1: Source's way (default) -- every sample in the leaf, weighted by inverse squared distance. VRAD stores the samples assuming that blend.\n0: the single nearest sample, as before P780. Neighbouring props can land on very different samples.\nLive: props re-solve on the next frame.", MAPOPTIONS);
 		hl2_lt_illumpos = cvarfuncs->GetNVFDG("hl2_lt_illumpos", "1", 0, "FTESurf Patch 780: where a static prop with no usable lighting origin is lit from.\n1: the model's $illumposition through the prop's transform, as Source does (default).\n0: the prop's origin, as before P780.\nLive: props re-solve on the next frame.", MAPOPTIONS);
 		hl2_lt_min = cvarfuncs->GetNVFDG("hl2_lt_min", "16", 0, "Minimum model ambient base on Source/HL2 maps (0-255). Lift only the base toward neutral grey; never amplify the directional light. Live on unbaked props. 0 = off.", MAPOPTIONS);

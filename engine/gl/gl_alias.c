@@ -1410,7 +1410,8 @@ static modellightcache_t modellightcache[MODELLIGHTCACHE_BUCKETS];
 
 //FTESurf Patch 1280: every RF_WEAPONMODEL entity (knife, CS:GO arms, sleeve) samples r_refdef.vieworg, and on a
 //Source map each sample traces to every world light in range. One sample serves them all, kept while the eye is
-//still and for up to 1/r_viewmodel_lightrate s while it moves (under 256qu). Per-entity clamps and dlights still run.
+//still (re-sampled 4 times a second: the plugin's remembered light, Patch 1283, settles) and for up to
+//1/r_viewmodel_lightrate s while it moves (under 256qu). Per-entity clamps and dlights still run.
 static struct
 {
 	qboolean valid;
@@ -1515,7 +1516,8 @@ qboolean R_CalcModelLighting(entity_t *e, model_t *clmodel)
 			vec3_t moved;
 			VectorSubtract(r_refdef.vieworg, vmlightcache.origin, moved);
 			if (r_modellight_cache.ival && vmlightcache.valid && vmlightcache.seq == r_modellight_seq &&
-				(VectorEquals(vmlightcache.origin, r_refdef.vieworg) ||
+				((VectorEquals(vmlightcache.origin, r_refdef.vieworg) && realtime >= vmlightcache.time &&
+				  realtime - vmlightcache.time < 0.25) ||	//Patch 1283: still, 4 a second, so a remembered answer settles
 				 (rate > 0 && realtime >= vmlightcache.time && realtime - vmlightcache.time < 1.0 / rate &&
 				  DotProduct(moved, moved) < 256*256)))	//a teleport or respawn samples at once
 			{
