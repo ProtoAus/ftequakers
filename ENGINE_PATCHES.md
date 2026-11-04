@@ -1,5 +1,19 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1301 — the roof-clipped eye blends between ticks like the feet (client exe)
+
+**Problem:** P917 held the rendered eye at the newest predicted tick's roof limit for the whole interval the
+feet are lerped across. Under a sloping roof the limit changes every tick, so the eye stood still for a tick and
+then stepped: Lex's surf_classics lobby save 3 (735 u/s under a descending roof) stepped 2-13 units at 66 Hz.
+**Change:** cl_pred.c keeps each full predicted command's world eye (feet + clipped height) by sequence; when a
+frame lerps the feet and either tick clipped, the limit is lerped from the from-tick's kept eye to the to-tick's
+with the same fraction. A flat roof blends two equal limits (P917's steady eye); snaps, extrapolated frames and a
+from-tick with no kept eye use P917 unchanged. cl_predtrace rows gain `vhr crouchr`, the height actually drawn.
+**Verified:** dedicated server + UDP client at Lex's cl_maxfps 1000 / cl_netfps 66.67, the save's position and
+speed, 4096 traced frames each. Second difference of the drawn eye while clipped (feet's in brackets): control
+0.584 (0.046) at 0 ms and 0.654 (0.052) at 80 ms; fix 0.047 (0.046) and 0.054 (0.054). Unclipped frames are
+unchanged in both. Owner feel pending in lextest.md.
+
 ## Patch 1299 — gravity carry observation through normalized jump offsets
 
 **Problem.** The existing early gravity-use observer excluded every nonzero
