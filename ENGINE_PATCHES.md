@@ -1,5 +1,27 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1288 — Source brush $color applied in linear light, as LightmappedGeneric (hl2 plugin)
+
+**Problem.** Lex (3-4 Nov): surf_eternity's tiled stair room is much darker than in CS:S. His CS:S pair at one pose
+(setpos -7594.77 7642.67 7854.67, setang 1.34 -147.31) with mat_specular 0 and 1 kept the walls' warm glow both
+ways, so it is lighting, not reflection. At that pose our walls read (18, 15, 17) against CS:S's (79, 43, 52),
+unchanged with hl2_bumpmap 0, hl2_rnm 0 or hl2_envmap 0; the faces carry style 0 only and healthy baked light
+(int_p_building_02a's luxels mean linear 0.50 0.26 0.37). That material sets $color [.103 .106 .115].
+
+**Cause.** lightmappedgeneric_dx9_helper.cpp hands $color to the pixel shader raw (ComputeModulationColor times the
+lightmap scale), between an sRGB read of the base texture and an sRGB write, so it multiplies in linear light;
+VertexLitGeneric converts it with GammaToLinear first (SetModulationPixelShaderDynamicState_LinearColorSpace).
+WorldVertexTransition draws through the same DrawLightmappedGeneric_DX9. Our vmt programs work on gamma values
+and multiplied by the raw value, the same as $color^2.2 in linear: 0.103 drew as 0.0067.
+
+**Change.** vmt/lightmapped, vmt/transition and vmt/animated's lightmapped variant multiply by $color^(1/2.2).
+Unlit, two-texture, vertex-lit (model) and imposter programs keep the raw value, which matches their Source shaders.
+
+**Verified.** Same pose, installed exe b89fde71: left wall (18, 15, 17) -> (41, 28, 35), back wall (20, 12, 14) ->
+(52, 34, 43), against CS:S (79, 43, 52) and (75, 44, 62); the stairs ($color-free) unchanged at (56, 39, 46).
+
+**Left.** The room's lit surfaces without $color read about 70% of CS:S (stairs 56 against 81, the back wall now
+52 against 75) while its arch reads brighter (105 against 82): not a $color matter, not measured further.
 ## Patch 1280 — one viewmodel light sample shared by every viewmodel entity (client exe)
 
 **Problem.** Lex (4 Nov): the CS:GO hands sink the frame rate "all the time, while rendering". Not skinning (the arms
