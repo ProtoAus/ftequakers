@@ -7646,7 +7646,12 @@ extern int host_framecount;
 static qboolean GLBE_CaptureDue(void)
 {
 	if (r_capturerate.value > 0)
-		return realtime - be_capkeep.rendered >= 1.0 / r_capturerate.value;
+	{	//at 3/4 of the interval: frames capped at the rate arrive a little early as often as late (cl_maxfps
+		//carries each frame's lateness into the next), and a full interval kept every other one of them.
+		//A clock that went back (capture, the QC debugger) is due rather than never.
+		double age = realtime - be_capkeep.rendered;
+		return age < 0 || age * max(r_capturerate.value, 20) >= 0.75;
+	}
 	return be_capkeep.reused >= r_capturehalfrate.ival;
 }
 //FTESurf Patch 1245: m_capturefix turns a reused capture's camera to this frame's and does not move it:
