@@ -32,6 +32,65 @@ and dual-install deployment are pending, not implied by the native unit result.
 The wider provenance bank remains partial; this is not full anti-cheat closure,
 ranked acceptance or a native file-writer audit.
 
+**Continuation (4 Nov).** Official clean full Windows build and clean ARM64
+server/HL2 builds pass. Both platforms pass the 2,888 expanded native controls
+and the final source's 1,472 public native checks. Windows six-map comparison:
+90 exact parent/subject rows with actual prop contacts. Built native source stays
+`9d0a294bd` / `patch-1299`; subsequent upstream changes merged here touch only
+this journal, not any compiled source. Publication and deployment are separate.
+
+## Patch 1300 — ramp scuff reach/seams, inspect sound warming, sky recovery (QC/tools only)
+
+**Problem.** Ramp grooves disappeared as their rows became sub-pixel; atlas mips
+mixed unrelated faces and the large slope depth bias floated at grazing angles.
+Neighbouring bake grids did not share samples. First knife-event aliases repeatedly
+scanned the whole script string, and an off Milk sky could retain its override on
+maps with no authored sky. Christmas additions are separately requested work.
+
+**Change.** Broad-scuff LOD and configurable 12000-unit range; shared chart lattice,
+power-of-two atlas, neighbouring boarding paint, no cross-chart mip chain; fixed
+renderer-aware depthpush. Single-pass optional polish, not reflection capture.
+Line-based sound-script parsing, per-model 64-entry cache and one inspect event's
+precache per equip frame. Release only stale Milk-owned sky overrides when off or
+unsupported. No C/native pin/tag, movement, evidence, grant or QC Build change.
+
+**Verified.** Isolated existing build entrypoint: zero NEW warnings, same two CL
+F333 viewmodel diagnostics, SV/MENU zero. Three offline bake tests pass; exact old
+paint/pack fail the seam and atlas controls (two failures, no errors). Colin 77
+and Classics3 70 local demos rebaked read-only to owned staging. These are NOT new
+downloads. Renderer/audio/frame-time and original sky symptom acceptance are
+PENDING: original rendered/dedicated control confirms milk_sky=0 retains an
+explicit stale r_skybox=milk after reconnect; subject is queued at the same shared
+quiet/4-GiB gate (control waited 544 seconds). NOT DEPLOYED; no visual/no-stutter claim. Detailed limits and next controls: mod repository
+tools/p1300-visuals.md; human acceptance pending in lextest.md. Snow/ice/cosmetics,
+weather/lightning and bounded independent smoke remain in ROADMAP.md; existing
+P1287 snow-cover ownership is preserved.
+
+## Patch 1298 — TAS workshop remembers the last tab (CSQC only)
+
+**Problem.** Closing Timeline or Shared always reset the workshop to Next input.
+The dated TAS roadmap also obscured later delivered editor/signing/clock work.
+
+**Change.** Remember the client tab across close/reopen, retaining the existing
+close-time timeline invalidation, cursor release and widget reset. Reopen Timeline
+through the existing guarded request; Shared keeps its current browser/consent
+behavior. Add the tab to the existing status observer and a current TAS status map.
+No native pin/tag, qcbuild, movement, recorder, signatures or public admission change.
+
+**Verified.** Clean isolated QC builds: zero new warnings (same two existing CSQC
+F333 viewmodel diagnostics; SSQC/MENU zero). Real dedicated Windows socket and
+rendered production client: control resets Timeline/Shared, subject retains both
+and returns to Timeline; 14 checks per arm, cursor release, actual drawn frames,
+empty-timeline non-authority and terms refusal. Subject screenshot inspected;
+owned peers stopped. This is not populated-timeline, owner-feel or canonical
+replay qualification. Public queue/board and full source qualification remain
+unfinished; tools/tas-status.md and tools/p1298-tas-reopen.md in the mod describe
+scope. Deployment readback4Nov2026 17:47UTC: clean QC0fbcc763 programs match the
+acted subject and both Windows destinations; approved -PiForce warned10seconds
+with three players before restarting12lobbies. All12advertise CSQC78f388a3;
+cold download SHA517849e5, rendered board and live Timeline close/reopen act.
+Native/backend untouched; full receipt in the mod's tools/p1298-tas-reopen.md.
+
 ## Patch 1292 — the QuakeC temp-string collector no longer makes the main thread wait (client exe)
 
 **Problem.** Lex (4 Nov): remove the dips, then lift the 1% and 0.1% lows. After Patches 1282-1284 the largest frames
