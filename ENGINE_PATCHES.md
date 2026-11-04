@@ -29,7 +29,13 @@ and backend02 primary are independently hash/protocol verified, not a P1307
 installation claim. Native shader appearance, sky, inspect sound and moving-view
 frame time remain pending; prior guard refusals remain failures. No numeric FPS,
 no-hitch, native pin/tag, QC Build decision, movement or recorder change. Details:
-FTESurf tools/p1307-ramp-assets.md; deployment provenance follows actual copying.
+FTESurf tools/p1307-ramp-assets.md. Actual C95 installed both Windows22:05Z and
+QQ2+29assets all12empty lobbies22:42:09Z4Nov2026, noForce; all8parts2,821,850bytes
+verified ONBOX+OFFBOX before stage and strict13actors at execution. All46300old
+protected paths/config/native/backend unchanged,0new; exact current/.prev and
+actual native/plugin/readiness verified, lock released, known health200. CS identity
+catalog52->53 preserves old bytes, NOT ranked acceptance. Raw receipts private;
+source/installation/visual acceptance distinct. No native change by this task.
 
 ## Patch 1306 — faithful stock crouch jump gravity observation
 
