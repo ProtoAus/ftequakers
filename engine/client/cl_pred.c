@@ -115,16 +115,18 @@ static int pring_server[MAX_SPLITS];	//cl.servercount the rows belong to
 typedef struct
 {
 	int			frame, servercount;
+	vec3_t		feet;	//a kept eye is used only while from.state is still here
 	float		eye;	//world z, as P917's limit
 	qboolean	clipped;
 } srceye_t;
 static srceye_t srceye[MAX_SPLITS][SRCEYE_RING];
-static void CL_SourceEyeKeep (int seat, int frame, float feet)
+static void CL_SourceEyeKeep (int seat, int frame, const vec3_t feet)
 {
 	srceye_t *e = &srceye[seat][frame & (SRCEYE_RING-1)];
 	e->frame = frame;
 	e->servercount = cl.servercount;
-	e->eye = feet + pmove.viewheight;
+	VectorCopy(feet, e->feet);
+	e->eye = feet[2] + pmove.viewheight;
 	e->clipped = pmove.pm_type == PM_NORMAL && pmove.viewheight < PMSrc_UnclippedViewHeight();
 }
 #define PRING_KEEP 120		//report files kept in data/prederr/ (a report is two)
@@ -2300,7 +2302,7 @@ void CL_PredictMovePNum (int seat)
 			cl_pred_localchain = false;
 			pt_replays++;	//FTESurf Patch 269
 			if (movevars.physicsmode == PHYSMODE_SOURCE && movevars.sourceversion >= 11)
-				CL_SourceEyeKeep(seat, to.frame, to.state->origin[2]);	//P1301; extrapolated partial commands are not kept
+				CL_SourceEyeKeep(seat, to.frame, to.state->origin);	//P1301; extrapolated partial commands are not kept
 			if (i <= validsequence && simtime >= to.time)
 			{	//this frame is final keep track of our propagated values.
 				pv->prop.onground = pmove.onground;
@@ -2735,16 +2737,21 @@ void CL_PredictMovePNum (int seat)
 	   Feet/stair interpolation must not turn it into a per-frame eye sawtooth.
 	   Do this after the legacy categorizer, which overwrites pmove.origin.
 	   P1301: when the feet were lerped and either tick clipped, lerp the limit too,
-	   from the from-tick's kept world eye to the to-tick's. */
+	   from the from-tick's kept world eye to the to-tick's. An unclipped end only bounds the
+	   limit from below, so it carries a step-down's positive crouch. */
 	if (source_eye_valid)
 	{
 		srceye_t *e = &srceye[seat][from.frame & (SRCEYE_RING-1)];
+		vec3_t moved;
+		VectorSubtract(e->feet, from.state->origin, moved);
 		if (source_eye_f >= 0 && e->frame == from.frame && e->servercount == cl.servercount &&
-			(e->clipped || source_eye_clipped))
+			DotProduct(moved, moved) < 1 && (e->clipped || source_eye_clipped))
 		{
-			float fromeye = e->eye;
+			float up = max(0, pv->crouch);
+			float fromeye = e->clipped ? e->eye : e->eye + up;
+			float toeye = source_eye_clipped ? source_eye_limit : source_eye_limit + up;
 			pv->viewheight = PMSrc_ClipRenderEye(source_eye_raw,
-				fromeye + (source_eye_limit - fromeye) * source_eye_f, pv->simorg[2] + pv->crouch);
+				fromeye + (toeye - fromeye) * source_eye_f, pv->simorg[2] + pv->crouch);
 		}
 		else if (source_eye_clipped)
 			pv->viewheight = PMSrc_ClipRenderEye(source_eye_raw, source_eye_limit,
