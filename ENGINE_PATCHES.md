@@ -1,5 +1,46 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1292 — the QuakeC temp-string collector no longer makes the main thread wait (client exe)
+
+**Problem.** Lex (4 Nov): remove the dips, then lift the 1% and 0.1% lows. After Patches 1282-1284 the largest frames
+left on heavy maps were the QC VMs' temp-string collector. The P1277 probe with its GC timings (surf_boreas,
+surf_voyager, surf_monolith replays): each collection copies 7-12 MB of the VM's string-bearing memory on the main
+thread (1.4-3.5 ms), every 2-3.5 s for one VM (a 21504-slot table, ~4k temps/s) and every ~10 s for the other (1M
+slots). A table that filled while a collection ran made PR_AllocTempStringLen wait for it (COM_WorkerPartialSync):
+up to 6.7 ms in that run, 17-30 ms frames on the installed exe (PF_digest_hex -> PR_AllocTempString ->
+Sys_ConditionWait). It waited because the worker's sweep nulled the live table itself.
+
+**Change.** qclib/initlib.c, the threaded collector only.
+- PR_QCGC_Thread marks its snapshot and lists the dead slots (gc->dead); it frees nothing and writes nothing of the
+  VM's. PR_RunGC's done branch clears each listed slot whose live pointer still equals the snapshot's, then queues
+  PR_QCGC_FreeJob (WG_LOADER), which frees those pointers through the host allocator's function. A cleared slot reads
+  "", never freed memory.
+- PR_AllocTempStringLen expands a full table at once; nothing waits on a collection.
+- A threaded table keeps at least 131072 slots after a collection (about 6x fewer collections for the small VM);
+  growth is the original rule (livetemps after the collection).
+- The same-thread sweep (pr_gc_threaded 0) frees before it clears: both names are one array there, and the old
+  order freed NULL and leaked every swept string. The worker's GCTIMINGS print no longer names a missing field.
+
+**Verified.** Rig, Lex's settings, replay passes (no probe), installed exe 23ec25b6 against this:
+
+| map | worst frame | 0.1% low | stutters |
+|---|---|---|---|
+| surf_demise | 30.0 -> 10.0 ms | 125 -> 150 fps | 8 -> 9 |
+| surf_boreas | 17.5 -> 5.3 ms | 177 -> 202 | 15 -> 13 |
+| surf_voyager | 7.4 -> 6.6 ms | 159 -> 175 | 3 -> 1 |
+| surf_monolith | 26.7 -> 6.1 ms | 189 -> 252 | 31 -> 16 |
+
+No tempstring or memory errors in any log. The ship exe (git-8211-patch-1292-0-g82d3bebc5): 0.1% low 155 / 199 / 185 / 258 fps, worst 10.0 / 5.6 / 6.5 /
+9.6 ms; both installs run it (exe 16408c21). Two memory-safety reviews: the first cut freed on the worker
+and left the pointers in the table until the main thread caught up (use-after-free and double free for an index the
+scan cannot see: hash_add, memnostrings blocks, engine state), so the worker now frees nothing; the second found no
+memory-safety defect.
+
+**Left.** The main-thread copy at each collection's start (1.4-3.5 ms) remains, now rarer for the small VM; the floor
+counts slots, not bytes, so up to ~65k dead temps of any size wait for a collection; the done pass is O(dead slots) on
+the main thread. Pre-existing: PR_FreeAllTemps loops if pr_gc_threaded becomes 2 with a collection in flight;
+unchecked mallocs. The in-process server VM (local games) runs this path too; the lobby server binary is unchanged.
+
 ## Patch 1283 — a repeated model light sample remembers which world lights it saw (hl2 plugin, client exe)
 
 **Problem.** After Patch 1280, Lex (4 Nov): "I want to remove all dips". A model light sample on a Source map adds
