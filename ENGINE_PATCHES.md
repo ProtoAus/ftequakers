@@ -1,5 +1,32 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1304 — permanent Santa event gift (QC/backend/content only)
+
+**Problem.** A cosmetic preview/party crown is not the requested real Santa hat,
+permanently owned by people who play during Christmas. Entitlement must not come
+from client claims or web reads, and rollback must not delete newly earned data.
+
+**Change.** Original288-triangle native Santa IQM, warmed at client/map setup,
+one no-shadow mesh per wearer; standing/crouch/profile attachment and third
+inventory cell in both VMs. Server validates one headwear slot independently of
+aura. Versioned optional cosmetic payloads retain actual older client/server
+subsets. Trusted authenticated linked lobby presence grants once only while the
+operator enables the Christmas event; defaultOFF. Persistent earn/revoke markers
+prevent refill. Additive event component1, transactional creation/stamp; core
+DB26 and ahead-core refusal unchanged. An actual prior consumer ignores gift
+rows, and modern activity reconciles its later party-head choice without losing
+ownership. No native code/pin/tag, movement, recorder/evidence or QC Build change.
+
+**Verified.**20 inventory authority/persistence/legacy/cut/refusal/revision controls
+and8 existing ahead-schema/WAL controls pass. Generated native mesh header/counts,
+unit normals/bounds and byte-identical regeneration checked; existing asset writer
+controls pass. Actual QC compilation adds zero warnings beyond the2 inherited
+F333 viewmodel227 diagnostics. First prototype/schema and compile failures were
+preserved and fixed before any deployment. This is NOT native appearance, FPS,
+live activation or deployment acceptance: the quiet/4096MiB runtime guard has not
+admitted a subject. Event staysOFF pending dates; human look checks in lextest.md,
+full authority/compatibility details in mod tools/p1304-santa.md.
+
 ## Patch 1302 — holiday decorations and bounded GPU mist (QC/content only)
 
 **Problem.** Requested Christmas props and light-adjacent smoke must not introduce
