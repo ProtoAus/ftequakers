@@ -1578,7 +1578,7 @@ qboolean R_CalcModelLighting(entity_t *e, model_t *clmodel)
 				cache = &modellightcache[(unsigned int)e->keynum & (MODELLIGHTCACHE_BUCKETS-1)];
 				if (cache->seq == r_modellight_seq && VectorEquals(cache->origin, e->origin) &&
 					(!R_ModelLightSettles() || (realtime >= cache->time &&
-					 realtime - cache->time < 1 + (e->keynum & 15) * (1/16.0))))	//Patch 1283; spread, not all in one frame
+					 realtime - cache->time < 1 + (e->keynum & 63) * (1/64.0))))	//Patch 1283; spread, not all in one frame
 				{
 					VectorCopy(cache->shadelight, shadelight);
 					VectorCopy(cache->ambientlight, ambientlight);

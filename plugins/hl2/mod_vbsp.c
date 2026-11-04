@@ -626,6 +626,7 @@ typedef struct vbspinfo_s
 	pvsbuffer_t	wl_pvs;
 	int			wl_pvscluster;	//which cluster wl_pvs currently holds, -2 = none
 	struct vlvc_s	*lvc;		//FTESurf Patch 1283: remembered light visibility (VBSP_LightCacheCube)
+	double		lvc_framespent;	//FTESurf Patch 1283: seconds of its light traces in this view (VBSP_PrepareFrame zeroes it)
 	qboolean	wl_exact;	//FTESurf Patch 1283: set round the static-prop solve and the census; they trace every light
 
 	size_t numdisplacements;
@@ -10292,6 +10293,7 @@ static void VBSP_PrepareFrame(model_t *mod, refdef_t *r_refdef, int area, int cl
 	qboolean unvisedareas;	//Patch 1271: an unvised map, culled by area
 
 	refdef = r_refdef;
+	prv->lvc_framespent = 0;	//FTESurf Patch 1283: each view's light traces start a fresh VLVC_FRAMEMS
 
 	//FTESurf Patch 880: Source draws the 3D sky only where the eye's leaf has 3D sky in its PVS
 	//(viewrender.cpp:4595); a toolsskybox2d leaf shows the 2D skybox. The main view tests its eye, a
@@ -12009,12 +12011,15 @@ static void VBSP_AddLightToCube(vec3_t cube[6], const struct vworldlight_s *wl, 
 #define VLVC_FIRST	128			//a first sample's budget
 #define VLVC_BURST	64			//a call whose untraced lights carry over VLVC_BURSTSHARE of the light
 #define VLVC_BURSTSHARE	0.1f
+#define VLVC_FRAMEMS	1.0		//light traces a view may spend before later samples in it are held to VLVC_LATE
+#define VLVC_LATE		4
 struct vlvcslot_s
 {
 	vec3_t			org;
 	int				cluster;	//of org: a seed must be in the caller's, not through a wall
 	unsigned int	used;		//vlvc clock at last use; 0 = free
 	unsigned int	calls;		//this slot's own clock, which its stamps are read against
+	unsigned int	stillfrom;	//the call its caller last stood still from: answers traced since are final
 	qbyte			*vis;		//per world light: 0 not traced here, 1 visible, 2 blocked
 	unsigned int	*when;		//calls when last traced
 };
@@ -12070,7 +12075,8 @@ static qboolean VBSP_LightCacheCube(model_t *mod, const vec3_t point, int cluste
 	unsigned int		k, budget, npick = 0;
 	float				best = VLVC_NEAR*VLVC_NEAR, bestseed = VLVC_SEED*VLVC_SEED, kw = 0, vw = 0, est;
 	float				tw = 0, uw = 0, nw = 0, nvw = 0;	//all, untraced, and the guide sample (all / visible) light
-	unsigned int		un = 0, spread, hbudget;
+	unsigned int		un = 0, spread, hbudget, unsettled = 0;
+	double				t0;
 	int					occl = hl2_lt_occlusion ? hl2_lt_occlusion->ival : 0, wlv = hl2_lt_worldlight ? hl2_lt_worldlight->ival : 0;
 	qboolean			fresh = false;
 
@@ -12142,6 +12148,8 @@ static qboolean VBSP_LightCacheCube(model_t *mod, const vec3_t point, int cluste
 			s->calls = 1u<<20;
 		}
 	}
+	if (!VectorEquals(s->org, point) || fresh)
+		s->stillfrom = s->calls + 1;	//moved (or new): nothing traced before this call is final here
 	s->used = v->clock;
 	s->calls++;
 	s->cluster = cluster;
@@ -12172,17 +12180,24 @@ static qboolean VBSP_LightCacheCube(model_t *mod, const vec3_t point, int cluste
 			uw += cd->w;
 			un++;
 		}
+		if (!s->vis[i] || s->when[i] < s->stillfrom)
+			unsettled++;
 	}
+	if (!unsettled)
+		budget = 0;		//still, and every light traced since: the answers are final
 	if (fresh && budget < VLVC_FIRST)
 		budget = VLVC_FIRST;
 	else if (uw > VLVC_BURSTSHARE * tw && budget < VLVC_BURST)
 		budget = VLVC_BURST;
+	if (budget && prv->lvc_framespent * 1000 > VLVC_FRAMEMS && budget > VLVC_LATE)
+		budget = VLVC_LATE;	//this view has spent its traces: estimate, and settle on later calls
 	spread = (un > budget) ? budget / 4 : 0;	//more new lights than the budget: keep a quarter for an even spread
 	hbudget = budget - spread;
-	if (!hbudget)
+	if (!hbudget && budget)
 		hbudget = 1;
+	t0 = plugfuncs->GetSeconds();
 
-	for (i = 0; i < nc; i++)
+	for (i = 0; hbudget && i < nc; i++)
 	{
 		const struct vlvccand_s *cd = &v->cand[i];
 		qbyte isnew = !s->vis[cd->light];
@@ -12245,6 +12260,7 @@ static qboolean VBSP_LightCacheCube(model_t *mod, const vec3_t point, int cluste
 			done++;
 		}
 	}
+	prv->lvc_framespent += plugfuncs->GetSeconds() - t0;
 
 	for (i = 0; i < nc; i++)
 		if (s->vis[v->cand[i].light])
