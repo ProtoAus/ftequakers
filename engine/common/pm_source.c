@@ -3319,8 +3319,9 @@ static qboolean PMSrc_BankGravityJumpStaminaDefault(void)
 
 static qboolean PMSrc_BankGravityGroundStartDefault(vec3_t normal)
 {
+	// Stock ignores these options; nonfinite settings stay conservatively excluded.
 	// P1145: stock crouch assigns Z; normalized postures share the existing add path.
-	if (movevars.normalizejump || movevars.jumpaddrise || movevars.jumpzoffset ||
+	if (movevars.normalizejump || !isfinite(movevars.jumpaddrise) || !isfinite(movevars.jumpzoffset) ||
 		pmove.ducked || pmove.ducking || !PMSrc_BankGravityJumpStaminaDefault())
 		return false;
 	return PMSrc_BankGravityGroundStartCommon(normal);
@@ -3330,7 +3331,7 @@ static qboolean PMSrc_BankGravityGroundStartNormalized(vec3_t normal)
 {
 	if (!isfinite(movevars.normalizejump) || !movevars.normalizejump ||
 		!isfinite(movevars.jumpaddrise) ||
-		!isfinite(movevars.jumpzoffset) || movevars.jumpzoffset < 0) return false;
+		!isfinite(movevars.jumpzoffset)) return false;
 	if (!PMSrc_BankGravityJumpStaminaDefault()) return false;
 	// P1299: native relocation is gravity-independent; observe its actual origin.
 	return PMSrc_BankGravityGroundStartCommon(normal);
@@ -4914,7 +4915,7 @@ static void PMSrc_TestBankStartGravity(void)
 				PMSrc_Check("P1139 normalized jump excluded", PMSrc_BankGravityGroundStartDefault(normal), 0, 0);
 				movevars.normalizejump = 0;
 				movevars.jumpaddrise = 1;
-				PMSrc_Check("P1139 alternate rise excluded", PMSrc_BankGravityGroundStartDefault(normal), 0, 0);
+				PMSrc_Check("P1305 ignored stock rise admitted", PMSrc_BankGravityGroundStartDefault(normal), 1, 0);
 				movevars.jumpaddrise = 0;
 				movevars.ktjump = 1;
 				PMSrc_Check("P1139 KT jump excluded", PMSrc_BankGravityGroundStartDefault(normal), 0, 0);
@@ -4925,7 +4926,7 @@ static void PMSrc_TestBankStartGravity(void)
 				pmove.stamina = 0;
 				movevars.stamina = 0;
 				movevars.jumpzoffset = 1;
-				PMSrc_Check("P1139 offset jump excluded", PMSrc_BankGravityGroundStartDefault(normal), 0, 0);
+				PMSrc_Check("P1305 ignored stock offset admitted", PMSrc_BankGravityGroundStartDefault(normal), 1, 0);
 				movevars.jumpzoffset = 0;
 				pmove.ducked = true;
 				PMSrc_Check("P1139 ducked jump excluded", PMSrc_BankGravityGroundStartDefault(normal), 0, 0);
@@ -5132,7 +5133,7 @@ static void PMSrc_TestBankStartGravity(void)
 				movevars.jumpaddrise = 1;
 				movevars.normalizejump = 0;
 				PMSrc_Check("P1143 stock normalized entry excluded", PMSrc_BankGravityGroundStartNormalized(normal), 0, 0);
-				PMSrc_Check("P1143 stock rise entry excluded", PMSrc_BankGravityGroundStartDefault(normal), 0, 0);
+				PMSrc_Check("P1305 stock ignored rise entry admitted", PMSrc_BankGravityGroundStartDefault(normal), 1, 0);
 				movevars.normalizejump = 1;
 				movevars.gravity = 800;
 				movevars.jumpvelocity = 268.3281572999747f;
@@ -5660,12 +5661,39 @@ static void PMSrc_TestBankStartGravity(void)
 				i == 3 ? -.125f : i == 4 ? NAN : i == 5 ? INFINITY : i == 6 ? -INFINITY : 1.5f;
 			if (i == 7) movevars.normalizejump = 0;
 			PMSrc_BankGravityBegin(true);
-			Q_snprintfz(name, sizeof(name), "P1299 offset %i normalized admission", i);
-			PMSrc_Check(name, PMSrc_BankGravityGroundStartNormalized(normal), i < 3, 0);
-			Q_snprintfz(name, sizeof(name), "P1299 offset %i stock stays excluded", i);
-			PMSrc_Check(name, PMSrc_BankGravityGroundStartDefault(normal), 0, 0);
+			Q_snprintfz(name, sizeof(name), "P1305 offset %i normalized admission", i);
+			PMSrc_Check(name, PMSrc_BankGravityGroundStartNormalized(normal), i < 4, 0);
+			Q_snprintfz(name, sizeof(name), "P1305 offset %i stock admission", i);
+			PMSrc_Check(name, PMSrc_BankGravityGroundStartDefault(normal), i == 7, 0);
 			Q_snprintfz(name, sizeof(name), "P1299 offset %i admission alone is not use", i);
 			PMSrc_Check(name, PMSrc_BankGravityEnd(), 0, 0);
+		}
+		/* P1305: ignored finite controls do not defeat an otherwise valid model. */
+		{
+			static const float settings[] = {-5000, -.125f, 0, 1.5f, NAN, INFINITY, -INFINITY};
+			int option;
+			movevars.normalizejump = 0;
+			for (option = 0; option < 2; ++option)
+			{
+				for (i = 0; i < countof(settings); ++i)
+				{
+					movevars.jumpaddrise = option ? settings[i] : 0;
+					movevars.jumpzoffset = option ? 0 : settings[i];
+					PMSrc_BankGravityBegin(true);
+					Q_snprintfz(name, sizeof(name), "P1305 stock ignored option %i/%i", option, i);
+					PMSrc_Check(name, PMSrc_BankGravityGroundStartDefault(normal), i < 4, 0);
+					Q_snprintfz(name, sizeof(name), "P1305 stock option %i/%i is not use", option, i);
+					PMSrc_Check(name, PMSrc_BankGravityEnd(), 0, 0);
+				}
+			}
+			movevars.jumpaddrise = movevars.jumpzoffset = 1.5f;
+			pmove.ducked = true;
+			PMSrc_BankGravityBegin(true);
+			PMSrc_Check("P1305 stock duck remains excluded", PMSrc_BankGravityGroundStartDefault(normal), 0, 0);
+			pmove.ducked = false;
+			pmove.ducking = true;
+			PMSrc_Check("P1305 stock transition remains excluded", PMSrc_BankGravityGroundStartDefault(normal), 0, 0);
+			PMSrc_Check("P1305 excluded posture is not use", PMSrc_BankGravityEnd(), 0, 0);
 		}
 		pms_forwardmove = forwardmove;
 		pms_sidemove = sidemove;

@@ -1,5 +1,27 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1305 — gravity observation with ignored finite jump controls
+
+**Problem.** Native stock jumps ignore the normalized-only rise/offset controls;
+normalized jumps skip relocation for a nonpositive offset. The existing gravity
+observer nevertheless rejected those finite configurations and could miss an
+already-modeled early effect when the final velocity no longer distinguished it.
+
+**Change.** Match the actual branches: finite stock rise/offset controls no longer
+disqualify its standing-jump model; finite negative normalized offsets no longer
+disqualify its existing model. Nonfinite settings remain conservatively excluded,
+and stock duck/transition, unsupported contexts and speculative-only use remain
+excluded. No movement, capture/API/format or ranking-policy change.
+
+**Verified.** Same acting native control first: 5,894 checks, exactly 156 predicted
+admission/use failures with unchanged production predicates, no physical/oracle
+failure. Candidate 5,925/5,925 including whole-body observer OFF/ON and ignored/
+zero-setting identity, real jump/debit/contact, neutral and blocked-alternative
+controls. Original fixture-macro failure retained; three historical public scope
+assertions updated only after the actual native proof. Public suite now 1,503.
+Clean cross-platform builds, final installation and live-current-program
+acceptance pending; this is not a broader anti-cheat bank completion claim.
+
 ## Patch 1302 — holiday decorations and bounded GPU mist (QC/content only)
 
 **Problem.** Requested Christmas props and light-adjacent smoke must not introduce
