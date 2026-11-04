@@ -12012,6 +12012,7 @@ static void VBSP_AddLightToCube(vec3_t cube[6], const struct vworldlight_s *wl, 
 #define VLVC_BURST	64			//a call whose untraced lights carry over VLVC_BURSTSHARE of the light
 #define VLVC_BURSTSHARE	0.1f
 #define VLVC_FRAMEMS	1.0		//light traces a view may spend before later samples in it are held to VLVC_LATE
+#define VLVC_CALLMS		0.5		//and one sample: a burst where traces are long stops here, the rest estimated
 #define VLVC_LATE		4
 struct vlvcslot_s
 {
@@ -12223,7 +12224,13 @@ static qboolean VBSP_LightCacheCube(model_t *mod, const vec3_t point, int cluste
 	for (k = 0; k < npick; k++)
 	{
 		const struct vlvccand_s *cd = &v->cand[v->heapidx[k]];
-		qbyte a = VBSP_WorldLightVisible(mod, point, &prv->worldlights[cd->light]) ? 1 : 2;
+		qbyte a;
+		if ((k & 7) == 7 && (plugfuncs->GetSeconds() - t0) * 1000 > VLVC_CALLMS)
+		{
+			spread = 0;	//out of time: what is left stays untraced, estimated from what was traced
+			break;
+		}
+		a = VBSP_WorldLightVisible(mod, point, &prv->worldlights[cd->light]) ? 1 : 2;
 		if (!s->vis[cd->light])
 		{	//only a guide when there is no spread: these are the brightest, not a fair sample
 			nw += cd->w;
@@ -12250,6 +12257,8 @@ static qboolean VBSP_LightCacheCube(model_t *mod, const vec3_t point, int cluste
 			qbyte a;
 			if (s->vis[cd->light] || (seen++ % step))
 				continue;
+			if ((done & 7) == 7 && (plugfuncs->GetSeconds() - t0) * 1000 > VLVC_CALLMS)
+				break;
 			a = VBSP_WorldLightVisible(mod, point, &prv->worldlights[cd->light]) ? 1 : 2;
 			nw += cd->w;
 			if (a == 1)
