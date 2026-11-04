@@ -12003,8 +12003,8 @@ static void VBSP_AddLightToCube(vec3_t cube[6], const struct vworldlight_s *wl, 
   a large share. Untraced lights count at the share an even spread of them lets through (not the brightest: they are
   nearer, less often blocked). Static props, the census and hl2_lightprobe trace every light. False = trace normally.*/
 #define VLVC_SLOTS	64
-#define VLVC_NEAR	128.0f		//within this of a slot's last point is that caller again
-#define VLVC_SEED	1024.0f		//a new slot within this of another starts from its answers, all stale
+#define VLVC_NEAR	64.0f		//within this of a slot's last point is that caller again (callers this close share answers)
+#define VLVC_SEED	1024.0f		//a new slot within this of another in the same cluster starts from its answers, all stale
 #define VLVC_PICK	256			//hl2_lt_vbudget's ceiling
 #define VLVC_FIRST	128			//a first sample's budget
 #define VLVC_BURST	64			//a call whose untraced lights carry over VLVC_BURSTSHARE of the light
@@ -12012,6 +12012,7 @@ static void VBSP_AddLightToCube(vec3_t cube[6], const struct vworldlight_s *wl, 
 struct vlvcslot_s
 {
 	vec3_t			org;
+	int				cluster;	//of org: a seed must be in the caller's, not through a wall
 	unsigned int	used;		//vlvc clock at last use; 0 = free
 	unsigned int	calls;		//this slot's own clock, which its stamps are read against
 	qbyte			*vis;		//per world light: 0 not traced here, 1 visible, 2 blocked
@@ -12060,7 +12061,7 @@ static void VBSP_LightCacheHeapDown(struct vlvc_s *v, unsigned int n, unsigned i
 	}
 }
 
-static qboolean VBSP_LightCacheCube(model_t *mod, const vec3_t point, const qbyte *visbits, vec3_t cube[6], unsigned int *traced)
+static qboolean VBSP_LightCacheCube(model_t *mod, const vec3_t point, int cluster, const qbyte *visbits, vec3_t cube[6], unsigned int *traced)
 {
 	vbspinfo_t			*prv = (vbspinfo_t*)mod->meshinfo;
 	struct vlvc_s		*v = prv->lvc;
@@ -12110,7 +12111,7 @@ static qboolean VBSP_LightCacheCube(model_t *mod, const vec3_t point, const qbyt
 			VectorSubtract(t->org, point, d);
 			d2 = DotProduct(d, d);
 			if (d2 < best) { best = d2; s = t; }
-			if (d2 < bestseed) { bestseed = d2; seed = t; }
+			if (d2 < bestseed && t->cluster == cluster) { bestseed = d2; seed = t; }
 		}
 		if (!lru || t->used < lru->used)
 			lru = t;	//a free slot (used 0) is always the least recent
@@ -12135,10 +12136,15 @@ static qboolean VBSP_LightCacheCube(model_t *mod, const vec3_t point, const qbyt
 			s->calls = 0;
 			fresh = true;
 		}
-		//seed == s: the least recent slot is itself the near one; its own answers, as they stand
+		else
+		{	//seed == s: the least recent slot is itself the near one; its own answers, all stale
+			memset(s->when, 0, sizeof(*s->when)*n);
+			s->calls = 1u<<20;
+		}
 	}
 	s->used = v->clock;
 	s->calls++;
+	s->cluster = cluster;
 	VectorCopy(point, s->org);
 	v->last_how = fresh ? 1 : (seed && seed != s && s->calls == (1u<<20) + 1) ? 2 : 0;
 
@@ -12313,7 +12319,7 @@ static void VBSP_AddWorldLightCube (model_t *mod, const vec3_t point, vec3_t cub
 		unsigned int trc, tre = 0;
 		if (hl2_lt_vcache->ival != 2)
 		{
-			if (VBSP_LightCacheCube(mod, point, visbits, cube, &trc))
+			if (VBSP_LightCacheCube(mod, point, cluster, visbits, cube, &trc))
 				return;
 		}
 		else
@@ -12322,7 +12328,7 @@ static void VBSP_AddWorldLightCube (model_t *mod, const vec3_t point, vec3_t cub
 			double num = 0, den = 0, now;
 			memcpy(got, cube, sizeof(got));
 			memcpy(want, cube, sizeof(want));
-			if (VBSP_LightCacheCube(mod, point, visbits, got, &trc))
+			if (VBSP_LightCacheCube(mod, point, cluster, visbits, got, &trc))
 			{
 				for (i = 0; i < prv->numworldlights; i++)
 				{
