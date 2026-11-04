@@ -95,6 +95,7 @@ cvar_t r_glsl_warm = CVARFD("r_glsl_warm", "1", CVAR_ARCHIVE, "FTESurf Patch 127
 #define GLSLWARM_FILE "data/glslwarm.txt"
 #define GLSLWARM_BACKUP "data/glslwarm.bak"	//the old file while the new one is renamed in
 #define GLSLWARM_BYTES (4*1024*1024)		//written and read, at most
+#define GLSLWARM_SEED "glsl/warmseed.txt"	//FTESurf Patch 1282: the release's starter list, read beside this PC's
 #define GLSLWARM_MAX 65536					//permutations kept, all programs together
 #define GLSLWARM_BUDGET 2.0					//seconds of compiling per load; the rest compile at first draw, as before
 typedef struct glslwarm_s
@@ -141,15 +142,15 @@ static qboolean GLSLWarm_Add(const char *name, unsigned int perm)
 	glslwarm_count++;
 	return true;
 }
-static void GLSLWarm_Read(void)
-{	//the gamedir's own loose file (a package or download cannot supply it), merged into the list; the .bak a crash
-	//mid-swap left
-	vfsfile_t *f = FS_OpenVFS(GLSLWARM_FILE, "rb", FS_GAMEONLY);
+static void GLSLWarm_Read(const char *name, const char *fallback)
+{	//the gamedir's own loose file (a package or download cannot supply it), merged into the list; else the fallback
+	//(the .bak a crash mid-swap left)
+	vfsfile_t *f = FS_OpenVFS(name, "rb", FS_GAMEONLY);
 	char header[128], *buf, *s, *e, *sp;
 	qofs_t len;
 	size_t l;
-	if (!f)
-		f = FS_OpenVFS(GLSLWARM_BACKUP, "rb", FS_GAMEONLY);
+	if (!f && fallback)
+		f = FS_OpenVFS(fallback, "rb", FS_GAMEONLY);
 	if (!f)
 		return;
 	len = VFS_GETLEN(f);
@@ -192,7 +193,8 @@ static void GLSLWarm_Load(void)
 	if (!glslwarm_loaded)
 	{
 		glslwarm_loaded = true;
-		GLSLWarm_Read();
+		GLSLWarm_Read(GLSLWARM_FILE, GLSLWARM_BACKUP);
+		GLSLWarm_Read(GLSLWARM_SEED, NULL);	//a fresh install's first plays of the maps it was built from
 	}
 }
 //gl_backend.c's lazy compile (BE_RenderMeshProgram)
@@ -215,7 +217,7 @@ void GLSLWarm_Save(void)
 	qboolean ok;
 	if (!glslwarm_dirty)
 		return;
-	GLSLWarm_Read();	//another instance may have written since: keep its entries too
+	GLSLWarm_Read(GLSLWARM_FILE, GLSLWARM_BACKUP);	//another instance may have written since: keep its entries too
 	size = 128;
 	for (w = glslwarm_list; w; w = w->next)
 		for (p = 1; p < PERMUTATIONS; p++)
