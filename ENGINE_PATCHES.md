@@ -1,5 +1,39 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1316 -- preserve diagnostic observations across collector overlap (5 Nov 2026)
+
+**Problem:** Both pair orders were excluded before file comparison, but a reversed
+collector could commit during that comparison; final same-order INSERT OR IGNORE
+then stored/counted the pair again. A connection context alone also failed to own
+an atomic flush in legacy autocommit, and could borrow reader-opened caller work.
+
+**Change:** Backend store-only simcheck explicitly owns its short SQL flush using
+configured isolation, refuses non-idle caller work before BEGIN, and checks both
+orders after the checkpoint has acquired the write lock. Commit/rollback covers
+cursor and actual inserts; comparisons remain outside. Preserve the first current
+participating flush's original values/capture, configured modes and old rows.
+No schema, lease, raw capture, identity, API, defaults, thresholds, verdict, badge,
+consent or ranking-policy change. Published P1314/P1315 retained; no native code,
+pin/tag or QC Build change in this patch.
+
+**Verified:** Untreated exact published writer13cases EXACT3predicted reverse
+failures/10controlsPASS; additional4ownership/mode cases EXACT3predicted failures/
+configured-mode positivePASS, originals retained. Subject17/17PASS with real bounded
+parser/synthetic80row/short controls and two independent real SQLite connections,
+actual reversed competing collector, all-lost/skip preservation, real abort/cursor/
+transaction traces, caller work, configured modes and untouched legacy duplicates.
+Two independent read-only source/evidence reviews return OK with notes, no blocking
+counterexample. Actual Linux Python3.11/SQLite3.40 existing25standalone programs pass:
+202unitcases, no typed-SQLite skips, plus executable legacy checks and untreated
+EXACT6failure control. Reader949/0 after adding the exact committed QC static-test
+dependency; original missing-dependency abort, Windows timeout and failed discovery
+are retained, not passes. All3VM c24 compiler0warnings, NoDeploy only. Publication,
+guarded backend cutover remain PENDING. Fresh RUNS544record/168view bytes, presence
+and meaningful stats match prior classified inputs and unchanged parser helpers:
+344record/7view faults retained, zero drift, NOT clean/new raw reparse/SAVES evidence.
+No full fleet/reservation/hard whole-job budget/current-source/old-external-writer uniqueness
+or human/native/ranked claim. See FTESurf tools/p1316-simcheck-overlap.md.
+
 ## Patch 1315 -- winter model, mist, sky and ridden-wear rendering fixes (5 Nov 2026)
 
 **Problem:** Owner saw inward Christmas faces, weak mist with a hard close pop,
