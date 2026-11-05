@@ -22,11 +22,60 @@ body/velocity checkpoints and grant count, physically different yaw candidate,
 original byte preservation, Keep/Discard/Undo/Redo, seek-to-zero with future line
 retained, Replay head and resumed TAS ancestry with no queued work. Three QC VMs
 zero warnings; actual GUI screenshots inspected. NOT long/warm-ring/cold/all-
-recipe/world/timing coverage. Published P1310/P1312 were subsequently integrated
-without changing owned source bytes; fresh FULL integrated build, independent
-reviews and delivery are PENDING. No deployment or full-project completion claim.
+recipe/world/timing coverage. Subsequent FULL native build at f1fe93dd7/tag1314
+includes P1310/P1312, unchanged74 native warning lines and all3VM0warnings;
+actual pm_selftest passes. Corrected QC verifies real immutable-retention denial
+and exact ACL restore,9commits/8Undo/branching, acted cancellation/recovery36 and
+partial-cursor preview35 controls. Reader949/0; paired RUNS544/351faults both
+parent/candidate, exact stable bytes/findings, no clean/SAVES claim. Initial
+independent review findings corrected; corrected-source re-review and delivery
+PENDING. Published P1313 QC policy and native journal retained. No deployment
+or full-project completion claim.
 Component and limits: FTESurf tools/p1314-tas-history.md; section/recipe/constrained
 next-ramp solver acceptance remains in scope. Raw runtime evidence stays private.
+
+## Patch 1313 -- preserve practice status of unsafe fresh retry starts (SSQC only)
+
+**Problem.** Retry restores saved movement and an armed attempt's status, but did
+not apply the existing horizontal reset-speed boundary after placement.
+A fresh unsafe retry arm could therefore keep a clean status.
+
+**Change.** After successful retry placement ONLY, use the timer's existing armed
+box-group/hull-band containment and Fast reset predicate, then standard practice
+funnel. Keep exact movement and bits; running/outside/direct restores unchanged.
+Existing reset behavior includes hop-disabled bhop modes, ignores vertical-only
+falls/pushes and does not make classification-word mode a ranking bypass. The
+load-forgiveness NotFast proof was too broad and is NOT this rule. No guessed
+phase repair/clamp, native code/pin/tag, capture/API/format/flag/tier/policy/Build.
+
+**Verified.** Actual production wrapper/writer/reader/consumed-latch/deleted-state
+fixture:22explicit cases, untouched public module misses9horizontal reset marks;
+rejected NotFast candidate additionally makes4false vertical-only marks; corrected
+Fast candidate0missing/0false with exact body/bits and mode/direction/continuation
+controls. Existing5normal-load+14grant/EOF unchanged. Qualifiedc24/git-7809 allthree
+arms, actual corrected fullNoDeploy all3VM ZEROwarnings. Syntheticstate ONLY, NOT
+native map_restart/held-jump/dwell/ranked/human. Original7ccb/include-refusal/raw
+reviews and falsified class-off test assumption retained; source contract confirms
+run_class bisects words, not eligibility. No flag/body/API or global helper change.
+Reader949/0 and exact three-glob RUNS544 all prior bytes/classifications unchanged,
+344faultedREC/7faultedVIEW retained, no clean/SAVES claim. TWO independent bounded
+delta reviews clear corrected94e37cf8: original vertical finding fixed, proposed
+mode gate withdrawn under verified reset contract, class-off assertion corrected.
+Original BLOCK/failed predictions retained, not waived. Actual5NovUTC BOTHWindows
+SSQC04:22:03:4DAT/LNO+.prev/8olderarchive/18,548protectedpaths exact; unchangedCSQC/
+menu/native NOTreplaced, no processkill. Pi04:48:48 pairednative1312+QQ486e65bd:
+4hashes+.prev/12newverifiedepochs+plugininodes/0skips/46,488protecteddata exact,
+0new/changed/missing; backendgeneration/unit/OPENactor/156files unchanged. BEFORE
+ANYcanonicalstage ALL8parts+180completeCURRENTresume inclmetadata=188members/
+229,091,723sourcebytes individuallyrehashed ON/OFFBOX, strict13declaredActor FD/
+birth/namespace JIT; protectedPAMSSH NONactorlimits explicit, NOTgeneralwriter
+closure/recovery.8generatedpredecessors/olderprev OFFBOX exact.04:53:05 same12live
+actors/hash/backups;04:54:08 all544records/712rawREC-view/192,188,256bytes and3reader
+blobs atqualified+canonicalroots EXACT ->prior344REC7VIEWclassificationreuse,
+NOTfreshfullparse/SAVES/clean. No force/playerdrop/retainedgate, oldexpiryfailure
+UNWAIVED. Lobbyrestarts NOTnative map_restart/heldjump/dwell/human/rank acceptance.
+Private vectors stay private; details FTESurf tools/p1313-retry-practice.md and
+pending human lextest.md.
 
 ## Patch 1312 -- admit finite ignored KTeams context to existing observation (5 Nov 2026)
 
@@ -53,8 +102,18 @@ source blobs; exact currentRUNS544 all bytes/classifications unchanged (344fault
 7faultedVIEW), no clean/SAVES claim. Private hooks removed; symbols/outputs frozen.
 Two independent source/physics and evidence/consumer reviews found no blocking
 issues; existing bounded unsupported/general-writer/full-bank limits remain.
-Deployment pending; no canonical install, data rewrite or Pi restart yet. Raw
-vectors/original failed logs stay private.
+Actual dual-Windows native delivery verified:14primary client/server/plugin targets
+and.prev exact,18,273protected config/program/data/alias paths unchanged,28older
+predecessors archived/rehashed; installed dedicated1,578each, no process kill or
+VM/backend deploy in THAT native-only Windows transaction. ActualNanoPi5Nov
+04:48:48UTC now pairedwithreviewedQQ486e65bd/P1313:4exactfiles+.prev,all12newnative
+actors/mappedplugininodes,46,488protecteddata exact/0newchangedmissing. BEFOREstage
+all8parts+180completeCURRENTresume/188members individuallyON/OFFBOX rehashed,
+strict13declaredActor FD/birth/source JIT; backend156files/unit/OPENactor unchanged,
+no force/drop/gate. Later12responsive/4hashes+backups exact; post544/712byte+3reader
+blob identity preserves prior344REC7VIEW results byexplicitreuse, NOTnewfullparse.
+Original expiryguardfailure unwaived/no datarestore; no generalwriter/nativephase/
+humanranked claim. Raw vectors/original failed logs stay private.
 
 ## Patch 1311 -- expand Boreas/Demise shader warm coverage (assets only)
 
