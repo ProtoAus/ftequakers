@@ -27,6 +27,48 @@ No competing P1287 world snow override. Generated coarse snowmask scaffolding
 MUST NOT replace fine falling-snow masks. Details: FTESurf tools/p1309-weather.md.
 Installation/provenance recorded separately after actual delivery.
 
+## Patch 1308 — independent TAS surf controls and precise yaw cache
+
+**Problem.** The workshop coupled movement direction to an air-only selector and
+exposed a command form instead of surf controls. Grounded/crouched combined inputs
+needed their actual mover reference. Real crouch control also exposed a planner
+cache bug: a cast before the naked ANGLE2SHORT macro truncated degrees and made
+negative yaw an invalid unsigned conversion, repeatedly corrupting the turn seed.
+
+**Change.** Bounded native HOLD/GUIDE authoring preserves independent movement
+and held bits. The local gain reference uses effective production wish limits,
+ground friction/crop or air cap; adjustable delta/rate and bounded enable alignment
+are not a route solver. Unsupported states explicitly use the preset. Capture and
+restore the executed incoming recipe rather than today's draft; new capability1308
+and read-only metadata do not grant movement. Preserve fractional body words in
+all three planner seed/capture/post-physics sites, not an engine-wide macro change.
+QC adds a directional pad, fine/coarse turn controls, explicit view/server reload
+and own-body view-only travel pitch. Legacy command interfaces and TAS ancestry,
+grant/counter ownership, evidence format and board policy stay intact.
+
+**Verified.** Pre-integration isolated source:67392 actual-C objective/angle-word/
+low-speed-crouch checks, zero failed; both clocks and existing native admission/
+input/queue controls. Rendered real dedicated socket: GUI20/20;10ms held-crouch/
+restore17/17; rise/apex/fall/manual-override camera16/16; old-native compatibility/
+refusal18/18, current legacy16/16; partial-queue/Duck release/client-input ownership
+8/8. Real15ms default260/5/4/75 interior W+A curve reaches289.5414 standing and
+97.8939 fully crouched after64 guide ticks, with ground-kind2/vz0 each chunk. This
+is not Lex's unspecified W+D/map reproduction or a universal optimum. Original
+88.4018 crouch failure and observer mistakes were preserved; temporary native
+traces were removed. Full Windows build: zero NEW warnings (74/74 normalized
+native warning records; same two CL F333 diagnostics, SV/MENU zero).
+
+Combined-source Windows build and two independent source reviews completed.
+Review corrections restore default1x when native cancellation resets identity,
+and accumulate slow manual pitch before overriding Follow travel. Actual-C67399
+checks pass; the unchanged old cancel body fails exactly2 new lifecycle checks.
+Real100fps/1degree-per-second keyboard look fails on the old camera and passes
+on the corrected camera. The first reconnect observer read native-cap0/default
+UI state and is NOT live reconnect acceptance. ARM and destination qualification
+remain pending here; no deployment is implied. Human ramp/camera feel is pending. Whole-history normal-play editing, recipe/filter continuity, cold
+replay, sections and constrained solving remain in-scope work, not completed by
+this controller. Details/limits: mod `tools/p1308-tas-controller.md`.
+
 ## Patch 1307 — version ramp shader output/blend ABI (QC/assets only)
 
 **Problem.** Tracked assets and ignored progs can advance independently. P1295's
