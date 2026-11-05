@@ -1,5 +1,32 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1319 -- named historical input templates for local TAS (5 Nov 2026)
+
+**Problem:** The captured-line editor could change a selection with its current
+live draft, but could not retain a named historical input selection or reuse it
+without confusing the source's expired body/context with the current target.
+
+**Change:** QC-only named recipes reference retained immutable input revisions,
+record an exact span/count and fixed map clock, and copy only admitted input rows
+into the existing current-run preview transaction. Project has name entry,
+Save/Preview/Keep/Discard; Timeline Undo/Redo retains kept edits. Source body,
+recorder prefix, native token, signature and authority are never imported.
+Strict source/profile and fixed-clock/count checks precede placement. Native
+C, native pin/tag, recording formats and qcbuild are unchanged. These are literal
+input templates; original procedural generating intent remains unknown.
+
+**Verified:** Three VMs zero warnings. Same-line14, normal-widget16 and
+fresh-process/current-base20 acting controls pass; the last uses a separately
+saved eight-row tail, preserves every future row and the current base, and
+executes Discard/Keep/Undo/Redo with monotone counters. Count/name/missing-template
+refusals preserve native/body/project state. Reader949/0. Current runs-only544
+record/view inputs have unchanged bytes and identical per-record findings to
+the retained control:352 stored fault entries in each. The old351 summary is
+not its stored finding total; failed scalar/list-order observer receipts remain
+failed. See tools/p1319-tas-recipes.md. Review/deployment and owner feel/real-device
+Sign are pending. No cold body/world, arbitrary command-time, procedural recipe,
+long-history, section or next-ramp-solver completion is claimed.
+
 ## Patch 1316 -- preserve diagnostic observations across collector overlap (5 Nov 2026)
 
 **Problem:** Both pair orders were excluded before file comparison, but a reversed
