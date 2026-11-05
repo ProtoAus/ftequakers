@@ -1,5 +1,33 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1315 -- winter model, mist, sky and ridden-wear rendering fixes (5 Nov 2026)
+
+**Problem:** Owner saw inward Christmas faces, weak mist with a hard close pop,
+no persistent Frost sky/light change, and ridden ramp-dirt depth fighting.
+OBJ CCW indices were emitted as IQM alias indices without reversal. Mist rejected
+whole fields below192 units or at a coverage threshold. Weather could latch an
+early empty map key and previously drew only brief sky flashes, not a storm sky.
+Driver depthpush alone was insufficient for grazing ridden surfaces.
+
+**Change:** Reverse only imported OBJ triangle indices, retain UV/outward normals,
+and rebuild the six selected CC0 holiday props. Give four mist fields continuous
+projected-size shares and stronger noise opacity, without close hard rejection.
+Lift both wear paths0.75units along normalized face normals once at load. Retry
+pending native/server map identity at0.25s until ready; draw bounded portal storm
+clouds continuously, retain flashes/thunder, and reversibly tint the original
+base lightstyle once rather than adding dynamic lights/shadows. weather_info and
+r_weather_test expose the acted path. No movement/collision/damage/recording,
+native pin/tag or QC Build change. Separate Colin theme processing follows.
+
+**Verified:** Actual inspected snowman source890nondegenerate triangles proves
+old outward-normal/CCW orientation; reversed imported indices retain normals/UV.
+Four source/math controls and three existing weather geometry/roof controls pass.
+Actual all3VM compile with c24/git7809 zero warnings; first varargs diagnostic
+retained and split, not ignored. Native appearance/save2/close-motion/audio/FPS
+acceptance remains PENDING, not inferred from compilation or budget math. Public
+main's separate pending P1314 TAS work is not approved for this visual deployment;
+qualify the visual-only delta on the published fleet-qualified P1313 parent.
+
 ## Patch 1314 -- retain an exact ordinary-play base for local TAS editing (5 Nov 2026)
 
 **Problem:** Explicit TAS could retain recent authored native states, but a player
