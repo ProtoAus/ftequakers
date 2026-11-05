@@ -29,7 +29,13 @@ and exact ACL restore,9commits/8Undo/branching, acted cancellation/recovery36 an
 partial-cursor preview35 controls. Reader949/0; paired RUNS544/351faults both
 parent/candidate, exact stable bytes/findings, no clean/SAVES claim. Initial
 independent review findings corrected; corrected-source re-review and delivery
-PENDING. Published P1313 QC policy and native journal retained. No deployment
+PENDING. Project uses named tab routing and its own coalesced page pump;13
+completed controls before external-VFS observer failure verify direct entry,
+Checkpoint and throttled reopen without Timeline plus empty non-device Sign.
+Separate11-control arm after acknowledged fs_flush verifies visited-prefix
+DIVERGED/partial result and actual Project pixels with original bytes intact.
+Earlier failed receipts stay failed; real-device hosted Sign remains owner-only
+pending. Published P1313 QC policy and native journal retained. No deployment
 or full-project completion claim.
 Component and limits: FTESurf tools/p1314-tas-history.md; section/recipe/constrained
 next-ramp solver acceptance remains in scope. Raw runtime evidence stays private.
