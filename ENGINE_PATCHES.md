@@ -28,6 +28,33 @@ units. Full tagged/native runtime/deployment qualification is recorded separatel
 This proves a scheduling weakness and bounded metadata/reader correction, NOT
 that a historical save correction was caused by pressure or is now resolved.
 
+## Patch 1328 -- participating store-only collector ownership
+
+**Problem.** First-winner observation flushes prevent duplicate stored evidence,
+not duplicate concurrent work. Acting two-connection control measures the same
+80-opportunity pair twice while preserving one row and allowing a normal writer.
+
+**Change.** Nonblocking host-local ownership guards direct and whole-pass
+collection before admission. Ordinary single-link SQLite paths share a persistent
+EMPTY OS-lock sidecar; never unlink after release. Unsafe/unknown capabilities
+abstain. Comparison holds no SQLite transaction; existing atomic same/reverse
+flush protection remains for older/nonparticipating writers. No SQL schema,
+player capture, evidence format, thresholds/defaults/ranking, native/game program,
+pin/tag or qcbuild change. Cooperative scheduling, not an untrusted-host fence,
+cross-host lease, hard wall/RSS bound or completed-coverage record.
+
+**Verified.** Exact old source performs two real80comparisons; candidate only one,
+reverse participant explicitly busy/no read, independent writer still commits.
+Windows235cases0failure/error/6explicit platform skips; Linux actual3.11same235/0/0
+and legacy script0.18ownership controls include repeated contention, distinct DB/
+alias behavior, safe-file abstention, empty/noninheritable kernel handles, actual
+child crash after an80comparison/before flush and finite retry of all3fixture pairs.
+Existing nonparticipant reverse-winner/transaction controls remain. Reader949/0;
+548records/168views retain344faultedREC/7faultedVIEW,546priorREC/168VIEWexact and
+two new actual RECparsed clean. Original discovery/injection/import observer
+failures retained. Source-qualified only: independent reviews and guarded backend
+delivery pending. Broader coverage/freshness/calibration and owner acceptance OPEN.
+
 ## Patch 1327 — lit textured snow, Source steps and multi-flash owner weather
 
 **Problem.** Owner sees plain/fullbright Colin snow and no recognizable caps,
@@ -56,7 +83,14 @@ restoring the actionable info-command spelling. Existing broad ship-policy check
 blocked by absent base `ftesurf/particles` in the source-only tree; targeted new
 ship-selector/signed-path checks are separate, not a fabricated broad pass.
 Timeline checks structural only; native preview/look/listening/FPS pending.
-Native pin/tag/Build unchanged. FTESurf tools/p1327-lit-snow-weather.md.
+Delivered5Nov2026: BOTH Windows18:11UTC, guarded client/symbols+8media each;
+ALL12lobbies18:25UTC, exact client+8media, independent12new epochs/direct health
+verified. Actual client0dcee70e132d; server/menu/native/backend unchanged,
+47,420old protected entries unchanged. Original producer completed after caller
+observation timeout; no repeated activation/recovery restart. Qualified source
+2f7ececcf766 retains released native/API pins. Locks released; human-only checks
+remain in lextest.md. Native pin/tag/Build unchanged.
+FTESurf tools/p1327-lit-snow-weather.md.
 
 ## Patch 1326 — bind prediction-report inputs to the acknowledged move/seat
 
