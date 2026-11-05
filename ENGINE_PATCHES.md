@@ -1,5 +1,37 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1317 -- authored Colin Christmas terrain and environment (5 Nov 2026)
+
+**Problem:** Owner chose surf_colin_blaster_69000 for the complete theme. Its
+Strata v25 collision lumps use widened node/leaf/reference/brushside records;
+the old legacy-stride roof walk could loop, so blindly treating it as a usual
+Source map was not valid. The inspected map has103actual grass faces.
+
+**Change:** Fix the same roof reader against native v25 layouts and add bounded
+index/cycle refusal. Reuse weather/roof bakers; generate a true fine32 mask,
+376grass-snow triangles and3986exposed-cap triangles in two static cosmetic draws,
+16distributed grass-edge props,1542sky/270ice triangles, plus scoped falling
+snow/mist/wind/storm. Fine32 roof fragment clipping rejects indoor caps; steep
+ridden surfaces/liquids/sky excluded. Audio's bounded512 cells max-reduce the
+actual fine32 heights so thin roofs are not lost to centre sampling, conservatively
+quiet near edges. r_colin_winter register/default/DisplayInfo row controls ONLY
+this authored map, without writing the owner's global options. Missing fine media
+never opts older clients into unclipped snow; existing renderer-restart callback
+reuses cold Winter/Weather load paths to replace freed force-shader handles.
+No BSP, collision,
+water/lava/damage, native/tag/pin/qcbuild or award-earning change; no takeover of
+P1287's world shader. Actual generator/source binding and data-role allowlist
+preserve every original fine mask on other maps.
+
+**Verified:** Actual18,664,473-byte BSP SHAce40b496c672789f3e93bf998ae45f9376e15a24d0eae58fd0f2f729caee915f;
+all103grass faces,1760cap polygons,356roofed rejections,16provisional positions,
+4096x2048fine32 mask, bounded256x128audio roof. Legacy/Strata no-sky negatives,
+cycle refusal and thin-roof reduction controls pass, as do four rendering and
+three existing weather controls. Original timeout/fixture failures retained; no
+owned bake process survived timeout. Actual all3VM compile zero warnings; native
+appearance/placement/ridden-save2/MAX-FPS remains owner-pending, no time claim.
+Public main's pending P1314 is isolated out of the qualified visual deployment.
+
 ## Patch 1315 -- winter model, mist, sky and ridden-wear rendering fixes (5 Nov 2026)
 
 **Problem:** Owner saw inward Christmas faces, weak mist with a hard close pop,
