@@ -1,5 +1,33 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1323 -- named historical input templates for local TAS (5 Nov 2026)
+
+**Problem:** A captured selection could not be reused independently of its source
+body/context. Pre-shipment review also found keyboard ownership and unreadable
+staged-file preservation defects. Earlier unpublished labels1317/1319/1321
+collided with winter/expected-reset claims; a149-worktree census assigns1323.
+Historical receipts retain original labels; reviewed product code is unchanged.
+
+**Change:** QC-only named references copy admitted, exact-count/fixed-clock input
+rows onto the target's own warm base, preserving future rows and immutable
+Preview/Keep/Discard/Undo/Redo. No source body/token/recorder prefix/authority is
+imported. Direct per-scan tracking pairs owned QC edges, keeps repeats ahead of
+later capture, types before chat binds and forwards native stored releases even
+across unobserved original presses. Both destination names require confirmed
+uncached absence before freeze/write. No native C/pin/tag/format/qcbuild change.
+
+**Verified:** Three VMs zero warnings. Same-line14/widget16/fresh-process20 pass;
+corrected input/name/read-denied-stage19/0 and actual native-binding/capture7/0
+pass against retained acting failures. Windows stage bytes/native/body/workfile
+survive and ACL restores exactly. Reader949/0;544 input/view byte sets retain
+identical findings,352 stored entries in each. Details and failed observers:
+FTESurf tools/p1323-tas-recipes.md. Two independent reviews clear; actual declared
+client18 also passes merged7/0. Existing qualified server14 support is required
+on older dedicated receivers (server source matches18). Deployment/owner feel/
+signing remain pending. No hardware/OOM/VM-reload, concurrent-writer, cold-world,
+command-time, procedural-intent, long-history, section or next-ramp completion
+claim. A null allocation latches disabled; native allocation errors can abort QC.
+
 ## Patch 1322 -- bounded store-only similarity rotation
 
 **Problem.** Boolean cursor ordering sorted the eligible replay set before a
