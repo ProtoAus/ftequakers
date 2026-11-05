@@ -20,8 +20,10 @@ failures retained; corrected actual hseal mutation asserts changed bytes. Final
 focused30reader+7collector/history pass on Windows and actualLinux. Both platforms
 309 counted unittest cases across34related invocations retain TWO single-assertion
 connection-count failures, reproduced by pristine prefeature94ce7bb9 whole-source
-controls on each platform. Windows7platformskips versus Linux6Node-skips; not a
-clean full-suite claim. Untouched attribution gap in BACKLOG. ThreeVM0warnings,
+controls on each platform. Windows7platformskips and Linux7Node-skips, each
+300pass/2fail/7skip; not a clean full-suite claim. The original Linux aggregate
+missed a skipped case in a FAILED summary; corrected from unchanged raw logs,
+original aggregate retained, no tests rerun/regraded. Untouched gap in BACKLOG. ThreeVM0warnings,
 Windows11native/progs hashes held; reader949/0. Fresh548REC178VIEW344/7faults held:
 716exact reports reused with unchanged core reader,10newviews actuallyparsed/clean.
 Initial new-input refusal retained. Canonical census/recsim.py is OUTSIDE the
