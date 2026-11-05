@@ -18,7 +18,12 @@ snow in old code vs2correct slots in the subject (texture I/O stubbed). Native
 colour-gate/direct-VBO and proportional3xfaster timing source checks pass;
 existing GPU/mesh/PCM controls pass, qualified3VM0warnings. Native owner black
 snow/cap/quicker-flash acceptance remains separate; source timing is not measured
-frame timing/FPS. No native pin/tag/Build move. Delivery pending.
+frame timing/FPS. No native pin/tag/Build move. Delivered5Nov2026 BOTH Windows
+19:05UTC client/symbols only,41protected unchanged; ALL12lobbies19:13UTC client
+only,12new epochs independently exact, previous8media/heldnative/server/menu/
+backend exact,47,452old protected runtime entries unchanged; direct health200/
+ok/12 and lock release verified. Qualified9b2ba43a4470/CSPf6ead0e677f1; no second
+activation or recovery restart. Actual owner retest remains pending.
 Tools/p1332-snow-binding-flashes.md; prior GPU arithmetic was NOT native binding
 acceptance. Owner confirms prior flash appearance only.
 
