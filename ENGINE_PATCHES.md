@@ -1,5 +1,41 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1333 -- requested current-file consistency (backend only)
+
+**Problem:** Historical similarity captures identify the buffers measured then,
+not whether today's resolved files still contain those bytes. Default review
+correctly did not reread files, but offered no explicit bounded owner check.
+
+**Change:** A captured pair in the bounded authenticated panel gains a requested
+current-file check through the existing session/origin/CSRF control guard. Preserve
+historical A/B orientation and replay-path resolution; at most two regular source
+buffers, each stored length plus one capped at16MiB+1,64KiB reads and before/after
+metadata. Require real EOF/length/SHA agreement for matches; stable differences
+and unavailable/changing/unadmitted work are distinct. No current digests or paths
+projected. Default details, public data, old metrics/captures, schema, verdicts,
+badges, collector selection and historical skips are untouched. No new capture,
+backfill, native code/pin/tag, format, ranking, physics or qcbuild change.
+
+**Verified:** Existing unmodified source-review10cases pass. Windows old/new
+focused25cases0failures/1explicitPOSIXFIFOskip, actualLinux25/0/5Node-absentDOM
+skips; Windows executes actualDOMclick/post, Linux realFIFO. Real byte/EOF and
+extra-byte bounds, restored-mtime difference/orientation, acting mutation,
+unavailable/cap/expiry, auth/origin/CSRF, legacy/off-panel noIO, unchanged DB/public
+projections and borrowed progress handlers are covered. Two initial test-token
+failures retained: the cookie is /admin-scoped, so extract the actual page token
+instead of a test session at /. No guard weakened. Required isolated three-VM
+build0warnings/bothWindowsinstalls held, reader949/0; corpus548REC168VIEW remains
+344/7 faults (exactreader+548unchangedbuffers reused,168pairedREC/VIEW parsed).
+Full existing admin script's two UDP-amplification/snapshot assertions also fail
+with the exact unchanged prefeature admin source; retained, not repaired or called
+clean. Actual Linux full admin controls pass (Node skipped there); the first
+owned overlay lacked board.html and its one404 is retained, then that exact
+public static input fixed the fixture only. Whole-feature reviews and actual
+deployment pending at this checkpoint.
+Cooperative admission is not hard kernel/disk/global invocation bounds; requested
+bytes are not authenticity or a coherent global instant. Human readability and
+historical-skip remeasurement remain separate. tools/p1333-similarity-current.md.
+
 ## Patch 1329 -- restore historical local TAS controls (QC/tools only)
 
 **Problem:** Literal full-line replay restored the body/input but the controller
