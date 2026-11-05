@@ -1,5 +1,32 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1328 -- participating store-only collector ownership
+
+**Problem.** First-winner observation flushes prevent duplicate stored evidence,
+not duplicate concurrent work. Acting two-connection control measures the same
+80-opportunity pair twice while preserving one row and allowing a normal writer.
+
+**Change.** Nonblocking host-local ownership guards direct and whole-pass
+collection before admission. Ordinary single-link SQLite paths share a persistent
+EMPTY OS-lock sidecar; never unlink after release. Unsafe/unknown capabilities
+abstain. Comparison holds no SQLite transaction; existing atomic same/reverse
+flush protection remains for older/nonparticipating writers. No SQL schema,
+player capture, evidence format, thresholds/defaults/ranking, native/game program,
+pin/tag or qcbuild change. Cooperative scheduling, not an untrusted-host fence,
+cross-host lease, hard wall/RSS bound or completed-coverage record.
+
+**Verified.** Exact old source performs two real80comparisons; candidate only one,
+reverse participant explicitly busy/no read, independent writer still commits.
+Windows235cases0failure/error/6explicit platform skips; Linux actual3.11same235/0/0
+and legacy script0.18ownership controls include repeated contention, distinct DB/
+alias behavior, safe-file abstention, empty/noninheritable kernel handles, actual
+child crash after an80comparison/before flush and finite retry of all3fixture pairs.
+Existing nonparticipant reverse-winner/transaction controls remain. Reader949/0;
+548records/168views retain344faultedREC/7faultedVIEW,546priorREC/168VIEWexact and
+two new actual RECparsed clean. Original discovery/injection/import observer
+failures retained. Source-qualified only: independent reviews and guarded backend
+delivery pending. Broader coverage/freshness/calibration and owner acceptance OPEN.
+
 ## Patch 1326 — bind prediction-report inputs to the acknowledged move/seat
 
 **Problem:** With only one eligible incoming snapshot, an interpolation endpoint
