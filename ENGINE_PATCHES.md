@@ -16,10 +16,15 @@ and other unsupported-domain checks stay unchanged; broader bank remains partial
 candidate2,732/0. Both stock/normalized168actual fixed-tick player arms each,
 2,308assertions: guard-only counter3,886 EXACT17predicted admissions/uses, no
 physical/category/debit/clock/config/body failures; candidate3,886/0. All retained
-prior private families10,581/0; uninstrumented1,578/0; incremental gcc0warnings,
-clangd only existing unused-header hint. Full clean tagged platforms and fresh
-independent review remain pending. No publication, canonical install or Pi restart
-claimed. Private vectors/probes/raw original failed logs remain private.
+prior private families10,581/0; uninstrumented1,578/0. Exact clean source175b27c09/
+tagpatch-1312/literal8367: official FULLWindows and ARM EACH10,581expanded/1,578final,
+0NEWwarnings (unchanged74Win/17ARM);90six-map rows exact across architectures and
+predecessor, same archived program. ARMfourhistorical verdicts exact, legacy HOLDs
+retained; Windows historical verdicts NOT claimed. Reader949 at identical three
+source blobs; exact currentRUNS544 all bytes/classifications unchanged (344faultedREC,
+7faultedVIEW), no clean/SAVES claim. Private hooks removed; symbols/outputs frozen.
+Fresh independent review/publication/deployment remain pending; no canonical
+install, data rewrite or Pi restart. Raw vectors/original failed logs stay private.
 
 ## Patch 1310 — observe accepted shallow full-walk gravity use
 
