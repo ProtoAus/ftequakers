@@ -19,7 +19,12 @@ rate gate and preserve pending Follow choices; delayed metadata preserves the
 post-acknowledgement local-look anchor. Legacy view clicks do not select a new
 movement algorithm. Settled intent flushes before save serialization and editor
 row/identity comparisons, after arguments are owned; closed-panel durability no
-longer depends on a later event. File metadata cannot grant
+longer depends on a later event. The paired revision-service reader accepts v4;
+all declared-supply formats are checked against actual known-parent input rows,
+without credit from metadata or mixing base/legal domains. Reader/service support
+precedes client rollout; API storage/rate/size budgets are unchanged. The isolated
+TAS installer includes accounts' two current profile dependencies and tests its
+actual release imports outside the checkout. File metadata cannot grant
 body/native/signing/eligibility authority or input-row credit. No native C,
 engine pin/tag, recorder format or QC Build change.
 
@@ -39,6 +44,10 @@ processes quitting code0. A21-check real closed-panel control/subject reproduces
 old final-grant loss on save/native reload and metadata-only freeze/seek; the fixed
 subject retains both with raw rows identical/no input supply, while explicit
 pre-save events act as the positive control. Both pairs quit normally code0.
+Revision-service37tests pass, including3acting old known-parent supply refusal
+failures, v4 inherited credit/input-digest identity, hash tampering, late ancestry
+and base/legal separation. NanoPi37service/21installer tests pass; the actual old
+six-file release closure fails before the two missing dependencies are included.
 Python chain/supply/metadata tests pass with no
 metadata-only input credit. Recorder949/0; primary548runs/parts (716with views) retain351existing faulty
 entries on unchanged bytes; secondary has no corpus. A broader legacy kept-save
