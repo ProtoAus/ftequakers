@@ -24,6 +24,18 @@ chat-window failures retained, not counted passes. Account dependencies are
 controlled, not real cryptographic proof or a cross-lobby atomicity claim.
 Qualification and delivery limits: FTESurf tools/p1320-resume-discard.md.
 
+**Delivery,5Nov.** Two independent reviews complete; corrected product patch field
+without moving native pins/tag/Build. Actual qualified source53040f23 applies
+only this SSQC delta to deployed a79d2ec9; main's separate TAS/native work and a
+peer's newer CSQC were not overwritten. Final3VM0warnings. BOTH Windows4VM/symbol
+targets11:02UTC,18319protected unchanged; Pi ONLYqwprogs.dat11:11UTC,all12restart/
+0skip,46772protected data unchanged/0new. All8parts+180fullresume members
+individually ON/OFFBOX verified before canonical staging, with strict13actor JIT.
+Native/backend/config/peerclient preserved and.prev exact. Read-only11:15UTC
+checks12actual new actor/image pairs, liveVM/.prev, unchanged backend bindings,
+health12 and new-actor journal QC-fault scan. No healthy repeat deployment; genuine
+account/manual acceptance and the broader plan remain separate.
+
 ## Patch 1319 -- visible Colin snow, scoped snow steps and ramp clearance
 
 **Problem.** Owner confirmed Colin's props but saw purple snow undersides, not
