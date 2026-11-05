@@ -24,8 +24,16 @@ child crash after an80comparison/before flush and finite retry of all3fixture pa
 Existing nonparticipant reverse-winner/transaction controls remain. Reader949/0;
 548records/168views retain344faultedREC/7faultedVIEW,546priorREC/168VIEWexact and
 two new actual RECparsed clean. Original discovery/injection/import observer
-failures retained. Source-qualified only: independent reviews and guarded backend
-delivery pending. Broader coverage/freshness/calibration and owner acceptance OPEN.
+failures retained. Two independent reviews clear. Actual backend12f7e30e accepted
+5Nov18:38:22UTC on actual55370fb6,83other runtime/156bound origins exact;44existing
+schema/nonchurn counts and8identity hashes preserved. Private1366130688-byte history
+snapshot retained/NOrestore, SAMEdata fallback; oldCLOSED/newOPEN/fallbackCLOSED,
+4cron/MOMactive,5ROpins/2ROruntimes/RWfilesystem.18:48normal-operation canonical
+sidecar0bytes/0600/singlelink/owner observed with no forced job;18:49health12/all12
+actual ftesurf@Nunits active. Wrong receipt-directory and unit-name reader failures
+retained, no healthy redeploy. Both generation roots are mandatory live namespace/
+history dependencies. No native/QC/lobby deployment. Broader coverage/freshness/
+calibration and owner acceptance remain OPEN; not whole-plan completion.
 
 ## Patch 1327 — lit textured snow, Source steps and multi-flash owner weather
 
