@@ -25,6 +25,75 @@ remain pending. No hardware/OOM/VM-reload, concurrent-writer, cold-world,
 command-time, procedural-intent, long-history, section or next-ramp completion
 claim. A null allocation latches disabled; native allocation errors can abort QC.
 
+## Patch 1320 -- preserve paused slots until discard is authorized
+
+**Problem.** Automatic offered-slot cleanup did not share the manual command's
+ownership gate. An unreadable metadata header also was not permission to remove
+saved state or recording bytes.
+
+**Change.** Server QC re-adopts and re-reads metadata at the common discard seam,
+then applies the existing ownership predicate before any wipe, archival or offer
+clear. Per-connection notification state suppresses repeated automatic messages,
+not authorization checks. Manual requests retain an explicit explanation. All
+internal report booleans are supplied explicitly. Existing permissive modes and
+posted-stage evidence archival are unchanged. No engine/pin/tag/Build, movement,
+capture/format/flag/tier/ranking or account-protocol change.
+
+**Verified.** Untouched dedicated-socket counterpart actually deleted three
+synthetic slot files; fixed source preserves paths, bytes and offer. Final
+native-QC matrix52/0 includes16reset cases, live pending/mismatch/matching
+transitions, repeated-frame silence, running/finished/manual refusal and positive
+cleanup, unavailable headers, permissive modes, no-offer/inflight commands and
+byte-identical posted-stage recording archival. Initial optional-argument and
+chat-window failures retained, not counted passes. Account dependencies are
+controlled, not real cryptographic proof or a cross-lobby atomicity claim.
+Qualification and delivery limits: FTESurf tools/p1320-resume-discard.md.
+
+**Delivery,5Nov.** Two independent reviews complete; corrected product patch field
+without moving native pins/tag/Build. Actual qualified source53040f23 applies
+only this SSQC delta to deployed a79d2ec9; main's separate TAS/native work and a
+peer's newer CSQC were not overwritten. Final3VM0warnings. BOTH Windows4VM/symbol
+targets11:02UTC,18319protected unchanged; Pi ONLYqwprogs.dat11:11UTC,all12restart/
+0skip,46772protected data unchanged/0new. All8parts+180fullresume members
+individually ON/OFFBOX verified before canonical staging, with strict13actor JIT.
+Native/backend/config/peerclient preserved and.prev exact. Read-only11:15UTC
+checks12actual new actor/image pairs, liveVM/.prev, unchanged backend bindings,
+health12 and new-actor journal QC-fault scan. No healthy repeat deployment; genuine
+account/manual acceptance and the broader plan remain separate.
+
+## Patch 1319 -- visible Colin snow, scoped snow steps and ramp clearance
+
+**Problem.** Owner confirmed Colin's props but saw purple snow undersides, not
+snowy grass, and ramp dirt still fought while surfing. The snow IQMs registered
+their missing material before the QC definition reused that same cache name;
+all344nondegenerate grass triangles faced inward, as did3476cap triangles.
+Frost also has ten native type3 snow volumes alongside our replacement snow.
+
+**Change.** Register a distinct runtime snow material BEFORE model precache;
+correct stored-float32 IQM winding and omit degenerate triangles. Keep grass
+fully covered and caps roof-clipped. Add four original quiet snow-crunch samples
+only for Colin's authored snowy grass, including walking with general game Foley
+off. Stop only new native type3 flakes when the installed replacement was
+actually submitted; rain/other effects and native fallback stay intact. Increase
+real ramp-normal lift0.75->2units, bounded reload-applied diagnostic cvar. Retain
+constant non-slope depthpush. No collision, movement, evidence or native change.
+
+**Verified.** All3VM build0warnings. Actual hidden WGL production vertex/fragment
+snow programs: grass/open cap378white-snow pixels each; roofed cap0; reversed
+winding control0. Actual corrected IQMs344/3768CW, no degenerate triangles; old
+meshes retained as acted wrong-winding controls. Four distinct mono22050Hz
+bounded PCM files. Original caps/grass shaders compile on this driver: the initial
+reserved-keyword hypothesis was FALSIFIED, not claimed as root cause. Small native
+look/sound/ride/FPS check remains owner-pending. FTESurf tools/p1319-winter-correction.md.
+Native pin/tag and QC Build unchanged. Actual5Nov delivery: BOTH Windows102
+explicit destinations at10:47UTC (32protected paths unchanged); corrected client
+06585861c9af… and58media verified in current12-lobby fleet11:14UTC. Original
+paired rollout FAILED after5verified restarts on status timeout; subsequent
+remaining-only guard refused FD uncertainty/peer server advancement without
+further restart requests. Peer P1320 advanced all12epochs retaining this client;
+independent read-only endstate proves46,766old protected paths unchanged. Do not
+regrade the failed transaction or overwrite/restart newer healthy peer work.
+
 ## Patch 1318 -- do not cache a nonexistent startup dynamic light
 
 **Problem.** During a fresh client's map load, both a surface's untouched
