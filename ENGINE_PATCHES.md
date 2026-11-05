@@ -55,7 +55,14 @@ restoring the actionable info-command spelling. Existing broad ship-policy check
 blocked by absent base `ftesurf/particles` in the source-only tree; targeted new
 ship-selector/signed-path checks are separate, not a fabricated broad pass.
 Timeline checks structural only; native preview/look/listening/FPS pending.
-Native pin/tag/Build unchanged. FTESurf tools/p1327-lit-snow-weather.md.
+Delivered5Nov2026: BOTH Windows18:11UTC, guarded client/symbols+8media each;
+ALL12lobbies18:25UTC, exact client+8media, independent12new epochs/direct health
+verified. Actual client0dcee70e132d; server/menu/native/backend unchanged,
+47,420old protected entries unchanged. Original producer completed after caller
+observation timeout; no repeated activation/recovery restart. Qualified source
+2f7ececcf766 retains released native/API pins. Locks released; human-only checks
+remain in lextest.md. Native pin/tag/Build unchanged.
+FTESurf tools/p1327-lit-snow-weather.md.
 
 ## Patch 1326 — bind prediction-report inputs to the acknowledged move/seat
 
