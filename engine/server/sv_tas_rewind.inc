@@ -43,6 +43,12 @@ typedef struct
 } tas_rewind_pool_t;
 
 static tas_rewind_pool_t *tas_rewind_pool[MAX_CLIENTS];
+// One local live-play base, not a4000-state TAS allocation for every human.
+static struct
+{
+	int userid, spawncount;
+	tas_rewind_state_t state;
+} tas_play_base[MAX_CLIENTS];
 static unsigned int tas_rewind_token;
 static sv_tas_clock_t tas_clock_context[MAX_CLIENTS];
 
@@ -68,6 +74,7 @@ void SV_TASRewindClear(void)
 {
 	unsigned int i;
 	memset(tas_clock_context,0,sizeof(tas_clock_context));
+	memset(tas_play_base,0,sizeof(tas_play_base));
 	for (i = 0; i < countof(tas_rewind_pool); ++i)
 	{
 		if (tas_rewind_pool[i]) Z_Free(tas_rewind_pool[i]);
@@ -81,7 +88,7 @@ static eval_t *SV_TASRewindField(edict_t *e, const char *name, etype_t type)
 	return svprogfuncs->GetEdictFieldValue(svprogfuncs, e, name, type, NULL);
 }
 
-static client_t *SV_TASRewindClient(edict_t *e)
+static client_t *SV_TASMovementClient(edict_t *e, qboolean assisted)
 {
 	eval_t *f;
 	int slot;
@@ -97,11 +104,19 @@ static client_t *SV_TASRewindClient(edict_t *e)
 		PR_FindFunction(svprogfuncs, "SV_RunClientCommand", PR_ANY) ||
 		!(e->v->health > 0) ||
 		!SV_TASClockForClient(host_client,NULL)) return NULL;
-	f = SV_TASRewindField(e, "run_tas_mode", ev_float);
-	if (!f || f->_float != 1) return NULL;
-	f = SV_TASRewindField(e, "run_tas_used", ev_float);
-	if (!f || f->_float != 1) return NULL;
+	if (assisted)
+	{
+		f = SV_TASRewindField(e, "run_tas_mode", ev_float);
+		if (!f || f->_float != 1) return NULL;
+		f = SV_TASRewindField(e, "run_tas_used", ev_float);
+		if (!f || f->_float != 1) return NULL;
+	}
 	return host_client;
+}
+
+static client_t *SV_TASRewindClient(edict_t *e)
+{
+	return SV_TASMovementClient(e, true);
 }
 
 static void SV_TASTapePublish(edict_t *e, const tas_rewind_pool_t *p);
@@ -137,27 +152,45 @@ float SV_TASRewind(edict_t *e, unsigned int slot, unsigned int token, unsigned i
 	tas_rewind_state_t *s;
 	eval_t *f;
 	int index;
-	if (slot >= TAS_REWIND_SLOTS || op > 2) return 0;
-	cl = SV_TASRewindClient(e);
+	if (slot > TAS_REWIND_SLOTS || op > 3) return 0;
+	if ((op == 3 && slot != TAS_REWIND_SLOTS) || (op == 0 && slot == TAS_REWIND_SLOTS)) return 0;
+	cl = op == 3 ? SV_TASMovementClient(e, false) : SV_TASRewindClient(e);
 	if (!cl) return 0;
+	// NET_IsLoopBackAddress means an in-process listen socket, not127.0.0.1/::1.
+	if (op == 3 && NET_ClassifyAddress(&cl->netchan.remote_address, NULL) > ASCOPE_HOST) return 0;
 	index = e->entnum - 1;
 	pool = tas_rewind_pool[index];
-	if (op == 0)
+	if (pool && (pool->userid != cl->userid || pool->spawncount != svs.spawncount)) pool = NULL;
+	if (op == 0 || op == 3)
 	{
 		// Carriers are world state. Capture only a normal private walk body.
 		if (e->v->movetype != MOVETYPE_WALK ||
 			(((int)e->v->flags & FL_ONGROUND) && e->v->groundentity) ||
 			tas_rewind_token >= TAS_REWIND_LIMIT) return 0;
-		pool = SV_TASPool(cl, true);
-		if (!pool) return 0;
-		s = &pool->state[slot];
+		if (op == 0)
+		{
+			pool = SV_TASPool(cl, true);
+			if (!pool) return 0;
+			s = &pool->state[slot];
+		}
+		else
+		{
+			tas_play_base[index].userid = cl->userid;
+			tas_play_base[index].spawncount = svs.spawncount;
+			s = &tas_play_base[index].state;
+		}
 		memset(s, 0, sizeof(*s));
 		s->token = ++tas_rewind_token;
 		s->pmepoch = cl->pmepoch;
 		s->source = cl->pmsrc;
 		s->jumpheld = cl->jump_held;
 		s->planyaw = SV_TASPlanAngleWord(e->v->v_angle[YAW]);
-		if (pool->lastinput.valid && pool->lastmove == cl->movetickcount)
+		if (op == 3)
+		{
+			// Recorded live movement, not an authored recipe or human-proof grant.
+			s->planamount = 1;
+		}
+		else if (pool->lastinput.valid && pool->lastmove == cl->movetickcount)
 		{
 			s->input = pool->lastinput;
 			s->planinput = pool->lastplaninput;
@@ -194,13 +227,22 @@ float SV_TASRewind(edict_t *e, unsigned int slot, unsigned int token, unsigned i
 #undef TAS_CAPTURE_FIELD
 		return s->token;
 	}
-	if (!pool || !token || pool->userid != cl->userid || pool->spawncount != svs.spawncount) return 0;
-	s = &pool->state[slot];
+	if (!token) return 0;
+	if (slot == TAS_REWIND_SLOTS)
+	{
+		if (tas_play_base[index].userid != cl->userid || tas_play_base[index].spawncount != svs.spawncount) return 0;
+		s = &tas_play_base[index].state;
+	}
+	else
+	{
+		if (!pool) return 0;
+		s = &pool->state[slot];
+	}
 	if (s->token != token) return 0;
 	// Watch holds legitimately change the live pin epoch; do not mistake that
 	// for a different owner. Rules/world are current, not rolled back by a go.
 	if (op == 1) return 1; // read-only preflight; never changes body or recording
-	if (pool->tape.state == SV_TAPE_ACTIVE || pool->tape.state == SV_TAPE_STAGING)
+	if (pool && (pool->tape.state == SV_TAPE_ACTIVE || pool->tape.state == SV_TAPE_STAGING))
 	{
 		SV_TASTapeStop(e, pool, SV_TAPE_CANCELLED);
 		return 0; // no replay can silently attach to a different placement
@@ -208,6 +250,8 @@ float SV_TASRewind(edict_t *e, unsigned int slot, unsigned int token, unsigned i
 	if (e->v->movetype != MOVETYPE_WALK) return 0;
 	f = SV_TASRewindField(e, "run_tas_paused", ev_float);
 	if (!f || f->_float != 1) return 0;
+	if (!pool) pool = SV_TASPool(cl, true);
+	if (!pool) return 0;
 	SV_TASInputCancel(e); // a placement never revives a latent future-input plan
 	cl->pmsrc = s->source; cl->jump_held = s->jumpheld;
 	pool->lastinput = s->input; // state-only snapshots explicitly clear availability

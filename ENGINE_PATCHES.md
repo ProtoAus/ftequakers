@@ -1,5 +1,33 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1314 -- retain an exact ordinary-play base for local TAS editing (5 Nov 2026)
+
+**Problem:** Explicit TAS could retain recent authored native states, but a player
+who first played normally had no exact native base for the earlier captured input
+line. A body-only saved position is not a complete native mover/filter state.
+
+**Change:** Add one separately reserved, owner/map-bound passive native state for
+eligible local buffered ordinary play. Capture neither grants movement nor marks
+TAS; restore still needs explicit paused assistance and the existing native
+context checks. The QC editor binds its saved-prefix hash to that live cookie,
+keeps the full captured line separate from the body cursor, previews without
+replacing its original, and retains immutable revisions for Keep/Discard and
+eight undo/redo pairs. The immutable selected saved pair, not an obsolete dense
+ring buffer mark, supplies recorder restoration. Existing strict rewind checks,
+movement, recording format, ranking policy and QC Build number are unchanged.
+
+**Verified:** Matched predecessor-source dedicated Windows localhost fixture:
+30 acting controls, including unassisted ordinary input, exact original native
+body/velocity checkpoints and grant count, physically different yaw candidate,
+original byte preservation, Keep/Discard/Undo/Redo, seek-to-zero with future line
+retained, Replay head and resumed TAS ancestry with no queued work. Three QC VMs
+zero warnings; actual GUI screenshots inspected. NOT long/warm-ring/cold/all-
+recipe/world/timing coverage. Published P1310/P1312 were subsequently integrated
+without changing owned source bytes; fresh FULL integrated build, independent
+reviews and delivery are PENDING. No deployment or full-project completion claim.
+Component and limits: FTESurf tools/p1314-tas-history.md; section/recipe/constrained
+next-ramp solver acceptance remains in scope. Raw runtime evidence stays private.
+
 ## Patch 1312 -- admit finite ignored KTeams context to existing observation (5 Nov 2026)
 
 **Problem:** Source movement ignores the generic KTeams jump blend, but the

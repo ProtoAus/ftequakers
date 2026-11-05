@@ -11612,9 +11612,9 @@ static void QCBUILTIN PF_tas_rewind(pubprogfuncs_t *prinst, struct globalvars_s 
 	G_FLOAT(OFS_RETURN) = 0;
 	if (prinst != svprogfuncs || prinst->callargc != 4) return;
 	slot = G_FLOAT(OFS_PARM1); token = G_FLOAT(OFS_PARM2); op = G_FLOAT(OFS_PARM3);
-	if (!(slot >= 0 && slot < 4000 && floorf(slot) == slot) ||
+	if (!(slot >= 0 && slot <= 4000 && floorf(slot) == slot) ||
 		!(token >= 0 && token <= 16000000 && floorf(token) == token) ||
-		!(op >= 0 && op <= 2 && floorf(op) == op)) return;
+		!(op >= 0 && op <= 3 && floorf(op) == op)) return;
 	G_FLOAT(OFS_RETURN) = SV_TASRewind(G_EDICT(prinst, OFS_PARM0), slot, token, op);
 }
 
@@ -11647,7 +11647,7 @@ static BuiltinList_t BuiltinList[] = {				//nq	qw		h2		ebfs
 	{"sourcepractice_reset", PF_sourcepractice_reset, 0, 0, 0, 0, D("float(entity player)", "Trusted server VM: reset this current player's complete Source carry and jump latch at a neutral zero-duration decoded QW command. No world/transport/counter reset or eligibility grant; unsupported contexts return0.")},
 	{"tas_input", PF_tas_input, 0, 0, 0, 0, D("vector(entity player, float slot, float token, float field)", "TAS checkpoint input: availability0, moves1, signed angle words2, compact jump/duck/walk mask3, editor mode/amount/follow4. Not hardware evidence or file import.")},
 	{"tas_tape", PF_tas_tape, 0, 0, 0, 0, D("float(entity player, float op, float a, float b, vector moves, vector angles, float buttons)", "TAS-only movement authoring: cancel0, validate1, preflight2, begin3, put4, arm5, status6, plan-cap8, plan-set9, controller-set10(mode,turn amount). No transport/world restore or human eligibility.")},
-	{"tas_rewind", PF_tas_rewind, 0, 0, 0, 0, D("float(entity player, float slot, float token, float op)", "TAS-only bounded native movement checkpoints: capture0, probe1, apply2. Transient map/connection-bound handles; no world/counter or human-proof restore.")},
+	{"tas_rewind", PF_tas_rewind, 0, 0, 0, 0, D("float(entity player, float slot, float token, float op)", "Bounded native movement checkpoints: TAS capture0/probe1/apply2; loopback-only live-base capture3 at slot4000. Apply still requires paused TAS. Transient map/connection-bound handles; no world/counter or human-proof restore.")},
 	{"bank_gravity_source", PF_bank_gravity_source, 0, 0, 0, 0, D("void(entity player, entity source, int attempt, float bad)", "Server VM runtime gravity provenance. No entity fields, file persistence or evidence transport.")},
 	{"fixme",			PF_Fixme,			0,		0,		0,		0,	D("void()", "Some builtin that should never be called. Ends the game with some weird message.")},
 
