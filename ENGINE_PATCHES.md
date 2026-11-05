@@ -38,7 +38,14 @@ includes actual chat-bound-name saving and Windows read-denied/write-accessible
 stage preservation with exact ACL restoration. One partial observer looked for
 the wrong default-prefixed name and remains failed. This is synthetic chain and
 Windows namespace coverage, not hardware movement, genuine Sign, POSIX-specific
-overwrite reproduction or concurrent-writer proof. Re-review is pending.
+overwrite reproduction or concurrent-writer proof. A follow-up reader found
+bounded-observer recovery could still adopt a previously omitted repeat. The
+untreated9/1 arm acts that failure; direct per-scan keyboard tracking (1..511,
+2KiB VM allocation, no mid-hold retry on failure) removes that dependency.
+Combined19/0 replays the saturation/control transition, an acting fresh field
+press and the ordinary input/name/chat/Windows-stage checks. Unsupported scans
+are not acquired. Hardware, VM-reload continuity and allocation-failure execution
+remain unclaimed. Re-review of this correction is pending.
 
 ## Patch 1318 -- do not cache a nonexistent startup dynamic light
 
