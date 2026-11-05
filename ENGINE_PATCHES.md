@@ -55,6 +55,18 @@ owned bake process survived timeout. Actual all3VM compile zero warnings; native
 appearance/placement/ridden-save2/MAX-FPS remains owner-pending, no time claim.
 Public main's pending P1314 is isolated out of the qualified visual deployment.
 
+**Delivered5Nov:** Published qualified a79d2ec9 has the exact visual-only delta.
+Both Windows08:05:22Z:92destination hashes,32native/config/fine-mask preimages
+unchanged,2client caches seeded. Pi08:59:22Z: single paired progs-only ALL12/0,
+53runtime files read back,46638old protected paths unchanged+3new; native/plugin/
+backend/config preserved, progs.prev retained. Full8part+180resume payload/ms/state
+preimages verified ON/OFFBOX and consumed at locked13actual-actor boundary;
+no old-data restore or failure regrading. Code catalog56->57 preserves prior bytes;
+independent health200/12. Two anonymous checksum reader failures remain failures,
+not a runtime checksum pass or reason to restart healthy units. Native visuals,
+sound, placement/ridden-save2 and measured FPS remain owner-pending. No native
+binary/tag/pin/qcbuild or additional product patch claimed by this ops record.
+
 ## Patch 1316 -- preserve diagnostic observations across collector overlap (5 Nov 2026)
 
 **Problem:** Both pair orders were excluded before file comparison, but a reversed
