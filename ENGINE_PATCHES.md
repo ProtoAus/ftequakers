@@ -41,6 +41,105 @@ This is not owner feel, genuine-device signing, cold/shared-world replay or a
 completed section/next-ramp solver. Details: FTESurf tools/p1329-tas-settings.md;
 review/build/deployment provenance remains separate from these candidate checks.
 
+## Patch 1332 -- bind snow textures/colours and quicken lightning
+
+**Problem.** Owner sees black snowy grass on Colin; existing flashes look good
+but are too slow. The first clampmap does not advance native program sampler
+slots, so the following map overwrites roof0 and leaves snow1 unbound. Baked
+vertex colours also lacked the native #usemods generation/binding gate.
+
+**Change.** Two ordinary map entries with explicit roof clamp/point flags bind
+roof0/snow1; #usemods plus exactvertex/vertex alpha binds the existing IQM VBO
+without relighting/CPU colour expansion. Distinct runtime material key. Pulse,
+gap and fade run3x faster, retaining3..6strokes/brightness/post-burst thunder.
+No geometry/collision/media/native pin/tag/QW/menu/backend/Build/evidence change.
+
+**Verified.** Actual native3parser-function control reproduces1slot/unbound
+snow in old code vs2correct slots in the subject (texture I/O stubbed). Native
+colour-gate/direct-VBO and proportional3xfaster timing source checks pass;
+existing GPU/mesh/PCM controls pass, qualified3VM0warnings. Native owner black
+snow/cap/quicker-flash acceptance remains separate; source timing is not measured
+frame timing/FPS. No native pin/tag/Build move. Delivered5Nov2026 BOTH Windows
+19:05UTC client/symbols only,41protected unchanged; ALL12lobbies19:13UTC client
+only,12new epochs independently exact, previous8media/heldnative/server/menu/
+backend exact,47,452old protected runtime entries unchanged; direct health200/
+ok/12 and lock release verified. Qualified9b2ba43a4470/CSPf6ead0e677f1; no second
+activation or recovery restart. Actual owner retest remains pending.
+Tools/p1332-snow-binding-flashes.md; prior GPU arithmetic was NOT native binding
+acceptance. Owner confirms prior flash appearance only.
+
+## Patch 1328 -- participating store-only collector ownership
+
+**Problem.** First-winner observation flushes prevent duplicate stored evidence,
+not duplicate concurrent work. Acting two-connection control measures the same
+80-opportunity pair twice while preserving one row and allowing a normal writer.
+
+**Change.** Nonblocking host-local ownership guards direct and whole-pass
+collection before admission. Ordinary single-link SQLite paths share a persistent
+EMPTY OS-lock sidecar; never unlink after release. Unsafe/unknown capabilities
+abstain. Comparison holds no SQLite transaction; existing atomic same/reverse
+flush protection remains for older/nonparticipating writers. No SQL schema,
+player capture, evidence format, thresholds/defaults/ranking, native/game program,
+pin/tag or qcbuild change. Cooperative scheduling, not an untrusted-host fence,
+cross-host lease, hard wall/RSS bound or completed-coverage record.
+
+**Verified.** Exact old source performs two real80comparisons; candidate only one,
+reverse participant explicitly busy/no read, independent writer still commits.
+Windows235cases0failure/error/6explicit platform skips; Linux actual3.11same235/0/0
+and legacy script0.18ownership controls include repeated contention, distinct DB/
+alias behavior, safe-file abstention, empty/noninheritable kernel handles, actual
+child crash after an80comparison/before flush and finite retry of all3fixture pairs.
+Existing nonparticipant reverse-winner/transaction controls remain. Reader949/0;
+548records/168views retain344faultedREC/7faultedVIEW,546priorREC/168VIEWexact and
+two new actual RECparsed clean. Original discovery/injection/import observer
+failures retained. Two independent reviews clear. Actual backend12f7e30e accepted
+5Nov18:38:22UTC on actual55370fb6,83other runtime/156bound origins exact;44existing
+schema/nonchurn counts and8identity hashes preserved. Private1366130688-byte history
+snapshot retained/NOrestore, SAMEdata fallback; oldCLOSED/newOPEN/fallbackCLOSED,
+4cron/MOMactive,5ROpins/2ROruntimes/RWfilesystem.18:48normal-operation canonical
+sidecar0bytes/0600/singlelink/owner observed with no forced job;18:49health12/all12
+actual ftesurf@Nunits active. Wrong receipt-directory and unit-name reader failures
+retained, no healthy redeploy. Both generation roots are mandatory live namespace/
+history dependencies. No native/QC/lobby deployment. Broader coverage/freshness/
+calibration and owner acceptance remain OPEN; not whole-plan completion.
+
+## Patch 1327 — lit textured snow, Source steps and multi-flash owner weather
+
+**Problem.** Owner sees plain/fullbright Colin snow and no recognizable caps,
+wants Source snow footsteps, more observable lightning with several strokes before
+thunder, and supplied weather WAVs are too large. The snow shader ignored map
+lighting; the old caps were a0.35unit overlay, and the bolt axis used an unrelated
+GPU clock. Disk Opus is not enabled in this build (voice Opus is separate).
+
+**Change.** Reference mounted Source snowfloor001a/003a, bake actual HDR RGBExp32
+face samples into normalized IQM vertex colour, remove snow fullbright, and add
+2..5unit cap depth/exposed boundary skirts. Use mounted6CS:S snow steps, fallback
+to12Momentum snow steps; do not redistribute Valve media. Convert only the owner's
+three weather recordings to mono64kbps Vorbis (native decoder), keep originals.
+Use randomized3..6strokes, then delayed thunder; cached world bolt direction is
+chosen near the viewing direction at event start, not following the camera.
+Repeat-preview, interval and ambient-loop controls reuse existing weather inputs.
+No dynamic lights, hot lightstyle writes, collision, movement or evidence change.
+
+**Verified.** Actual3VM build0warnings after a retained reserved-local failure.
+Actual production WGL: old fullbright control0.97386/0.97386 bright/dark; lit
+subject0.89804/0.18039; sky0.28105->1.0. Roof/cull negative controls pass. Actual
+meshes344/11326CW,3774boundary skirts,8076face-light samples/12ambient fallback.
+Owner4,825,180B ->235,151B, all3native Vorbis mono44100Hz/64kbps decoded finite
+with bounded peaks; originals intact. Shared writer/render controls4pass after
+restoring the actionable info-command spelling. Existing broad ship-policy check
+blocked by absent base `ftesurf/particles` in the source-only tree; targeted new
+ship-selector/signed-path checks are separate, not a fabricated broad pass.
+Timeline checks structural only; native preview/look/listening/FPS pending.
+Delivered5Nov2026: BOTH Windows18:11UTC, guarded client/symbols+8media each;
+ALL12lobbies18:25UTC, exact client+8media, independent12new epochs/direct health
+verified. Actual client0dcee70e132d; server/menu/native/backend unchanged,
+47,420old protected entries unchanged. Original producer completed after caller
+observation timeout; no repeated activation/recovery restart. Qualified source
+2f7ececcf766 retains released native/API pins. Locks released; human-only checks
+remain in lextest.md. Native pin/tag/Build unchanged.
+FTESurf tools/p1327-lit-snow-weather.md.
+
 ## Patch 1326 — bind prediction-report inputs to the acknowledged move/seat
 
 **Problem:** With only one eligible incoming snapshot, an interpolation endpoint
