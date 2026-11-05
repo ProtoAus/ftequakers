@@ -17,7 +17,9 @@ ordinal lookup avoids scanning every authored span for each literal gap input.
 Canonical output normalizes negative zero. Quiet panel refreshes have their own
 rate gate and preserve pending Follow choices; delayed metadata preserves the
 post-acknowledgement local-look anchor. Legacy view clicks do not select a new
-movement algorithm. File metadata cannot grant
+movement algorithm. Settled intent flushes before save serialization and editor
+row/identity comparisons, after arguments are owned; closed-panel durability no
+longer depends on a later event. File metadata cannot grant
 body/native/signing/eligibility authority or input-row credit. No native C,
 engine pin/tag, recorder format or QC Build change.
 
@@ -33,7 +35,11 @@ seven lifecycle/UI-ownership cases, actual old runaway at30000literal inputs bef
 4096ranges, and canonical native zero emission. Their state/stat/view sources are
 synthetic; minimal-fixture owned stops are not normal game-exit or body acceptance.
 The full65-assertion workflow also passes the corrected build with both game
-processes quitting code0. Python chain/supply/metadata tests pass with no
+processes quitting code0. A21-check real closed-panel control/subject reproduces
+old final-grant loss on save/native reload and metadata-only freeze/seek; the fixed
+subject retains both with raw rows identical/no input supply, while explicit
+pre-save events act as the positive control. Both pairs quit normally code0.
+Python chain/supply/metadata tests pass with no
 metadata-only input credit. Recorder949/0; primary548runs/parts (716with views) retain351existing faulty
 entries on unchanged bytes; secondary has no corpus. A broader legacy kept-save
 prefix sweep remains access-denied, unmodified and unclaimed.
