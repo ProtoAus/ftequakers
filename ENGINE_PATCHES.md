@@ -1,5 +1,36 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1329 -- restore historical local TAS controls (QC/tools only)
+
+**Problem:** Literal full-line replay restored the body/input but the controller
+still showed its latest draft. Effective guide yaw could then overwrite the
+historical requested yaw on a new step. Missing intent was not represented as a
+revision-bound optional input property.
+
+**Change:** Version4 local base projects add bounded, canonical optional settings
+ranges to the existing revision hash. Legacy1/2/3 remain literal/unknown; no
+unimplemented legal-start version5 is accepted. Restore completed-tick controls,
+keep requested aim until explicit local look changes, retain Apply-only drafts,
+and carry/invalidate metadata through Preview/Keep/Discard/Undo/Redo. Quiet
+read-only panel refreshes have their own rate gate. File metadata cannot grant
+body/native/signing/eligibility authority or input-row credit. No native C,
+engine pin/tag, recorder format or QC Build change.
+
+**Verified:** All3 QC VMs0warnings. Actual dedicated mover workflow43 assertions:
+normal physical play/pause, distinct guide/hold spans, backward/forward replay,
+matching body/control readback, original-file preservation, raw-row-only metadata
+invalidation, history round trips, actual GUI Step1 inheritance, explicit local
+view retargeting and canonical tiny amounts. Eleven native/Python parser pairs
+include unchanged legacy2,4096-range/96000-input positives, excess ranges and
+malformed/unsupported refusals; accepted hashes agree. Combined65 assertions.
+Python chain/supply/metadata tests pass with no metadata-only input credit.
+Recorder949/0; primary548runs/parts (716with views) retain351existing faulty
+entries on unchanged bytes; secondary has no corpus. A broader legacy kept-save
+prefix sweep remains access-denied, unmodified and unclaimed.
+This is not owner feel, genuine-device signing, cold/shared-world replay or a
+completed section/next-ramp solver. Details: FTESurf tools/p1329-tas-settings.md;
+review/build/deployment provenance remains separate from these candidate checks.
+
 ## Patch 1326 — bind prediction-report inputs to the acknowledged move/seat
 
 **Problem:** With only one eligible incoming snapshot, an interpolation endpoint
