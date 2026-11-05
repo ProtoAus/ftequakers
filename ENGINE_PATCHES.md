@@ -1,5 +1,35 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1327 — lit textured snow, Source steps and multi-flash owner weather
+
+**Problem.** Owner sees plain/fullbright Colin snow and no recognizable caps,
+wants Source snow footsteps, more observable lightning with several strokes before
+thunder, and supplied weather WAVs are too large. The snow shader ignored map
+lighting; the old caps were a0.35unit overlay, and the bolt axis used an unrelated
+GPU clock. Disk Opus is not enabled in this build (voice Opus is separate).
+
+**Change.** Reference mounted Source snowfloor001a/003a, bake actual HDR RGBExp32
+face samples into normalized IQM vertex colour, remove snow fullbright, and add
+2..5unit cap depth/exposed boundary skirts. Use mounted6CS:S snow steps, fallback
+to12Momentum snow steps; do not redistribute Valve media. Convert only the owner's
+three weather recordings to mono64kbps Vorbis (native decoder), keep originals.
+Use randomized3..6strokes, then delayed thunder; cached world bolt direction is
+chosen near the viewing direction at event start, not following the camera.
+Repeat-preview, interval and ambient-loop controls reuse existing weather inputs.
+No dynamic lights, hot lightstyle writes, collision, movement or evidence change.
+
+**Verified.** Actual3VM build0warnings after a retained reserved-local failure.
+Actual production WGL: old fullbright control0.97386/0.97386 bright/dark; lit
+subject0.89804/0.18039; sky0.28105->1.0. Roof/cull negative controls pass. Actual
+meshes344/11326CW,3774boundary skirts,8076face-light samples/12ambient fallback.
+Owner4,825,180B ->235,151B, all3native Vorbis mono44100Hz/64kbps decoded finite
+with bounded peaks; originals intact. Shared writer/render controls4pass after
+restoring the actionable info-command spelling. Existing broad ship-policy check
+blocked by absent base `ftesurf/particles` in the source-only tree; targeted new
+ship-selector/signed-path checks are separate, not a fabricated broad pass.
+Timeline checks structural only; native preview/look/listening/FPS pending.
+Native pin/tag/Build unchanged. FTESurf tools/p1327-lit-snow-weather.md.
+
 ## Patch 1326 — bind prediction-report inputs to the acknowledged move/seat
 
 **Problem:** With only one eligible incoming snapshot, an interpolation endpoint
