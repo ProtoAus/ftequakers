@@ -23,8 +23,11 @@ survive and ACL restores exactly. Reader949/0;544 input/view byte sets retain
 identical findings,352 stored entries in each. Details and failed observers:
 FTESurf tools/p1323-tas-recipes.md. Two independent reviews clear; actual declared
 client18 also passes merged7/0. Existing qualified server14 support is required
-on older dedicated receivers (server source matches18). Deployment/owner feel/
-signing remain pending. No hardware/OOM/VM-reload, concurrent-writer, cold-world,
+on older dedicated receivers (server source matches18). BOTH Windows/all12lobbies
+installed5Nov12:53/13:58UTC, primary18retained. ALL8parts+180complete resume files
+ON/OFFBOX before staging;46856old Pi files unchanged, all12live pairs/targets/.prev
+verified, backend unchanged, lock released. Owner feel/real Sign still pending.
+No hardware/OOM/VM-reload, concurrent-writer, cold-world,
 command-time, procedural-intent, long-history, section or next-ramp completion
 claim. A null allocation latches disabled; native allocation errors can abort QC.
 
