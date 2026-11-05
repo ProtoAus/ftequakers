@@ -3,26 +3,30 @@
 ## Patch 1313 -- preserve practice status of unsafe fresh retry starts (SSQC only)
 
 **Problem.** Retry restores saved movement and an armed attempt's status, but did
-not apply the existing fresh-start walk/jump eligibility boundary after placement.
+not apply the existing horizontal reset-speed boundary after placement.
 A fresh unsafe retry arm could therefore keep a clean status.
 
 **Change.** After successful retry placement ONLY, use the timer's existing armed
-box-group/hull-band containment and NotFast predicate, then its standard practice
-funnel. Keep exact restored movement and existing bits; running/outside-box and
-direct Multi-Session-style restores unchanged. No guessed saved-phase repair,
-velocity clamp, native code/pin/tag, capture/API/format/flag/tier/policy or QC Build.
+box-group/hull-band containment and Fast reset predicate, then standard practice
+funnel. Keep exact movement and bits; running/outside/direct restores unchanged.
+Existing reset behavior includes hop-disabled bhop modes, ignores vertical-only
+falls/pushes and does not make classification-word mode a ranking bypass. The
+load-forgiveness NotFast proof was too broad and is NOT this rule. No guessed
+phase repair/clamp, native code/pin/tag, capture/API/format/flag/tier/policy/Build.
 
 **Verified.** Actual production wrapper/writer/reader/consumed-latch/deleted-state
-fixture: twelve explicit cases, untouched published module misses exactly five
-practice marks; candidate supplies all five with exact body/old bits and all
-boundary/continuation controls. Existing five normal-load plus fourteen grant/EOF
-controls unchanged. Qualifiedc24/git-7809 repeats both counterparts, actual full
-NoDeploy build all three VMs ZEROwarnings. Synthetic explicit state only, NOT a
-native map_restart/held-jump/dwell/ranked/human claim. Original7ccb observations
-and counter include-path refusal retained; source-local include seam fixed.
+fixture:22explicit cases, untouched public module misses9horizontal reset marks;
+rejected NotFast candidate additionally makes4false vertical-only marks; corrected
+Fast candidate0missing/0false with exact body/bits and mode/direction/continuation
+controls. Existing5normal-load+14grant/EOF unchanged. Qualifiedc24/git-7809 allthree
+arms, actual corrected fullNoDeploy all3VM ZEROwarnings. Syntheticstate ONLY, NOT
+native map_restart/held-jump/dwell/ranked/human. Original7ccb/include-refusal/raw
+reviews and falsified class-off test assumption retained; source contract confirms
+run_class bisects words, not eligibility. No flag/body/API or global helper change.
 Reader949/0 and exact three-glob RUNS544 all prior bytes/classifications unchanged,
-344faultedREC/7faultedVIEW retained, no clean/SAVES claim. Independent reviews and
-deployment pending; private vectors stay private. See FTESurf
+344faultedREC/7faultedVIEW retained, no clean/SAVES claim. Original source review
+BLOCK retained; bounded independent delta re-review and deployment pending, not
+waived. Private vectors stay private. See FTESurf
 tools/p1313-retry-practice.md and pending human lextest.md.
 
 ## Patch 1312 -- admit finite ignored KTeams context to existing observation (5 Nov 2026)
