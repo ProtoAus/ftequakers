@@ -1,5 +1,25 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1311 -- expand Boreas/Demise shader warm coverage (assets only)
+
+**Problem.** The existing starter list omitted three shader permutations observed
+while traversing surf_boreas and surf_demise replays, leaving their coverage to
+per-PC learning even with the warm loader enabled.
+
+**Change.** Add exactly the observed water, refract and animated permutations
+to the mod's existing loading-time seed. No new shader programs,
+quality reduction, settings migration, native code/pin/tag or QC Build change.
+
+**Verified.** Original fixtures learned two Boreas entries and one Demise entry.
+Expanded-seed isolated fixtures started without a per-PC list and learned no
+additional variants over two traversals of each route; actual scenes/screenshots
+and playback start/stop inspected. Seed syntax/bitmask/cap/dedup and exact delta
+checks pass. This is known-variant coverage, NOT zero runtime compiles or all-map
+readiness: the existing two-second budget and late-created programs remain.
+Boreas' separate 39-40 ms first-traversal gfx hitch persists. Native capture probe
+is diagnostic only and remains unqualified; no no-hitch/numerical FPS claim.
+Details and deployment provenance: FTESurf tools/p1311-map-prewarm.md.
+
 ## Patch 1310 — observe accepted shallow full-walk gravity use
 
 **Problem.** Native full-walk movement uses ordinary gravity in dry and shallow
