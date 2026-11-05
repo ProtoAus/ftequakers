@@ -1,5 +1,29 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1320 -- preserve paused slots until discard is authorized
+
+**Problem.** Automatic offered-slot cleanup did not share the manual command's
+ownership gate. An unreadable metadata header also was not permission to remove
+saved state or recording bytes.
+
+**Change.** Server QC re-adopts and re-reads metadata at the common discard seam,
+then applies the existing ownership predicate before any wipe, archival or offer
+clear. Per-connection notification state suppresses repeated automatic messages,
+not authorization checks. Manual requests retain an explicit explanation. All
+internal report booleans are supplied explicitly. Existing permissive modes and
+posted-stage evidence archival are unchanged. No engine/pin/tag/Build, movement,
+capture/format/flag/tier/ranking or account-protocol change.
+
+**Verified.** Untouched dedicated-socket counterpart actually deleted three
+synthetic slot files; fixed source preserves paths, bytes and offer. Final
+native-QC matrix52/0 includes16reset cases, live pending/mismatch/matching
+transitions, repeated-frame silence, running/finished/manual refusal and positive
+cleanup, unavailable headers, permissive modes, no-offer/inflight commands and
+byte-identical posted-stage recording archival. Initial optional-argument and
+chat-window failures retained, not counted passes. Account dependencies are
+controlled, not real cryptographic proof or a cross-lobby atomicity claim.
+Qualification and delivery limits: FTESurf tools/p1320-resume-discard.md.
+
 ## Patch 1318 -- do not cache a nonexistent startup dynamic light
 
 **Problem.** During a fresh client's map load, both a surface's untouched
