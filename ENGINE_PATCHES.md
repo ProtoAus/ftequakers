@@ -94,11 +94,25 @@ versus12legacy failures. Original legacy report numeric/context/SV rows and erro
 are preserved. Actual native compiler flags syntax-check changed client/server
 units. Two frozen-source reviews clear. Full tagged Windows build has the same
 74native warnings (zero additions/removals), all3VMs0warnings;19340old installed
-paths unchanged. Matching native/plugin cohort frozen; runtime/deployment still
-pending. Existing Makefile HEADcount+29 yields clean git-8417-patch-1330-0-g538de9265.
-The first caller's MSYS argv exclusion failure is retained and fixed at the env
-boundary, not in product source. This proves a scheduling weakness and bounded metadata/reader correction, NOT
-that a historical save correction was caused by pressure or is now resolved.
+paths unchanged. Existing Makefile HEADcount+29 yields clean
+`git-8417-patch-1330-0-g538de9265`. The first caller's MSYS argv exclusion failure
+is retained and fixed at the env boundary, not in product source.
+
+**Delivery (5 Nov UTC):** Matching native/plugin cohort installed BOTH Windows
+20:04UTC and native server/HL2 pair on ALL12NanoPi lobbies22:25:25UTC. All12new
+server actors and mapped plugin inodes verified; current P1329 programs/configs/
+backend unchanged. Complete8parts and180resume payload/metadata ON/OFFBOX member
+readbacks preceded canonical staging/restart; all47,542protected files exact,
+zero changed/missing/new, lock released and coupled native.prev retained. ARM
+native1578/0, phase44/0, six-map90rows and existing legacy4 expected outcomes
+(two PASS/two HOLD); actual P1314 predecessor90rows acted and matched. No new
+native warnings on ARM. The missing-fixture-input and superseded-program-source
+refusals remain failed evidence; corrected current published dependency bindings
+were used, not old progs restoration or historical regrading. GPU-only force-gate
+lane remains memory-blocked; owner save/load/TAS and in-game acceptance pending.
+No release, pin/tag or QC Build change for this delivery record. This proves a
+scheduling weakness and bounded metadata/reader correction, NOT that a historical
+save correction was caused by pressure or is now resolved.
 
 ## Patch 1332 -- bind snow textures/colours and quicken lightning
 
