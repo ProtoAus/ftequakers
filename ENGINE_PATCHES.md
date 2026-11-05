@@ -1,5 +1,27 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1326 — bind prediction-report inputs to the acknowledged move/seat
+
+**Problem:** With only one eligible incoming snapshot, an interpolation endpoint
+can retain a null command pointer and fall back to incoming-packet/player-slot
+indexing. The diagnostic row has already been remapped to an acknowledged move
+sequence, so its command duration, angles, movement and buttons can describe a
+different command. This is a reporter defect, not proof of faulty movement.
+
+**Change:** Read diagnostic inputs directly from that acknowledged outgoing
+frame's local-seat command, validating the ring slot's sequence tag. Unknown
+slots clear all command fields. Prediction inputs, movement/replay math, native
+report format, counters, recorder/verifier and APIs are unchanged.
+
+**Verified:** Literal production-block fixture: 25 cases, baseline 11 failures
+and 14 passing controls; candidate 25/0. Bypassing only the sequence guard fails
+only the poisoned stale-slot case. Standard Windows full native NoDeploy build
+passes with the same 74 baseline native warnings, zero additions; all three QC
+VMs pass with zero warnings using the previously qualified compiler. Two fresh
+independent reviews and a follow-up cleared the repaired stale-case test.
+These are source-bound metadata/compile checks, not live-network, movement or
+FPS evidence. Runtime deployment/acceptance is not claimed by this entry.
+
 ## Patch 1324 -- ship complete winter media and readable Colin weather
 
 **Problem.** The release's nonrecursive asset allowlist omitted holiday/weather

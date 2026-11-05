@@ -2225,14 +2225,17 @@ void CL_PredictMovePNum (int seat)
 					r->pground = pv->prop.onground;
 					r->sground = from.state->onground;
 					r->pmtype = from.state->pm_type;
-					if (from.cmd)
+					// Diagnostic inputs belong to this acknowledged move and local seat.
+					const outframe_t *cmdframe = &cl.outframes[from.frame & UPDATE_MASK];
+					const usercmd_t *reportcmd = cmdframe->cmd_sequence == from.frame ? &cmdframe->cmd[seat] : NULL;
+					if (reportcmd)
 					{
-						r->msec = from.cmd->msec;
-						VectorCopy(from.cmd->angles, r->ang);
-						r->fm = from.cmd->forwardmove;
-						r->sm = from.cmd->sidemove;
-						r->um = from.cmd->upmove;
-						r->buttons = (unsigned int)from.cmd->buttons;
+						r->msec = reportcmd->msec;
+						VectorCopy(reportcmd->angles, r->ang);
+						r->fm = reportcmd->forwardmove;
+						r->sm = reportcmd->sidemove;
+						r->um = reportcmd->upmove;
+						r->buttons = (unsigned int)reportcmd->buttons;
 					}
 					else
 					{
