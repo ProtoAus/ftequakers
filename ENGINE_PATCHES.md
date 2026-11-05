@@ -58,7 +58,8 @@ row/identity comparisons, after arguments are owned; closed-panel durability no
 longer depends on a later event. The paired revision-service reader accepts v4;
 all declared-supply formats are checked against actual known-parent input rows,
 without credit from metadata or mixing base/legal domains. Reader/service support
-precedes client rollout; API storage/rate/size budgets are unchanged. The isolated
+precedes any v4 uploads; the unchanged game share guard admits only portablev3,
+so local v4 editor deployment is independent. API budgets are unchanged. The isolated
 TAS installer includes accounts' two current profile dependencies and tests its
 actual release imports outside the checkout. File metadata cannot grant
 body/native/signing/eligibility authority or input-row credit. No native C,
@@ -88,9 +89,20 @@ Python chain/supply/metadata tests pass with no
 metadata-only input credit. Recorder949/0; primary548runs/parts (716with views) retain351existing faulty
 entries on unchanged bytes; secondary has no corpus. A broader legacy kept-save
 prefix sweep remains access-denied, unmodified and unclaimed.
-This is not owner feel, genuine-device signing, cold/shared-world replay or a
-completed section/next-ramp solver. Details: FTESurf tools/p1329-tas-settings.md;
-review/build/deployment provenance remains separate from these candidate checks.
+**Deployed5Nov2026UTC:** Exact qualified6progs/symbol files BOTH Windows;
+12destination/.prev checks and23native/config hashes preserved. Installed-byte
+real-dedicated7-check smoke passes; both owned games quit code0. Progs-only ALL12
+lobbies QW5e8cd6d1/CS1ca3a29c,12new native/plugin epochs verified, native/config/
+backend unchanged. Before staging/restart,8actual parts and180complete resume
+payload/state members individually rehashed ON/OFFBOX; actual locked FD/actor
+checks pass. All47525old protected paths unchanged. Outer SSH caller timeout is
+retained; original on-box activation succeeded, reconciled read-only with zero
+repeated swaps/restarts and no gate held. Shipped CSQC append-registered without
+losing prior bytes/codes. Standalone v4 API reader remains pending owner sudo;
+normal portable-v3 sharing remains compatible and local v4 cannot upload there.
+No full Windows-data-hash or ACL/workaround claim. This is not owner feel,
+genuine-device signing, cold/shared-world replay or a completed section/next-ramp
+solver. Details and separate provenance: FTESurf tools/p1329-tas-settings.md.
 
 ## Patch 1330 — preserve Source phase availability and prediction-report provenance
 
