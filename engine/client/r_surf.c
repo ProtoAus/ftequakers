@@ -1408,7 +1408,8 @@ static void Surf_BuildLightMap (model_t *model, msurface_t *surf, int map, int s
 	int			pad = (surf->flags & SURF_LMPAD) ? 1 : 0;	//FTESurf Patch 1275
 
 	shift += 7; // increase to base value
-	surf->cached_dlight = (surf->dlightframe == r_dlightframecount);
+	// Zero means no dynamic-light touch, not a contribution to remove on first draw.
+	surf->cached_dlight = (surf->dlightframe != 0 && surf->dlightframe == r_dlightframecount);
 
 	if (size > maxblocksize)
 	{	//fixme: fill in?

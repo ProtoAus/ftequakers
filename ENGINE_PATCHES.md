@@ -1,5 +1,28 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1318 -- do not cache a nonexistent startup dynamic light
+
+**Problem.** During a fresh client's map load, both a surface's untouched
+`dlightframe` marker and `r_dlightframecount` are zero. Their equality falsely
+sets `cached_dlight`, so first visibility rebuilds static lightmaps to remove a
+contribution that never existed. Boreas' first late-route water reflection
+rebuilt647surfaces for44.79ms with no live lightmap dlights or style changes.
+
+**Change.** Require a nonzero surface light marker when remembering a dynamic
+contribution in Surf_BuildLightMap. Real lights are marked only after
+R_PushDlights advances the counter. No lightmap math, quality, settings, shader,
+lightstyle, movement, recorder or protocol change.
+
+**Verified.** Acted frame sampler/census: control647false dlight rebuilds,
+subject0; the same two-pass Boreas route's subject rendered-frame worst6.64/
+7.64ms, versus control's roughly40-50ms first reflection. A36-case marker matrix
+changes only0/0. Real Source GPU light visibly acts and expires: world ROI
+before/live mean absolute RGB change54.23, before/removed0.00071. Source's CPU
+MarkLights callback is absent, so its zero CPU-light census is NOT a positive
+CPU-light test. Nonzero-marker predicate behavior is unchanged. Clean two-map
+candidate passed; collision renumber changes no executable source semantics.
+Final build/route/deployment provenance: FTESurf tools/p1318-lightmap-first-view.md.
+
 ## Patch 1317 -- authored Colin Christmas terrain and environment (5 Nov 2026)
 
 **Problem:** Owner chose surf_colin_blaster_69000 for the complete theme. Its
