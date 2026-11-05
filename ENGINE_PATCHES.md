@@ -1,5 +1,29 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1321 -- retain overlapping expected-reset report context
+
+**Problem.** CSQC kept only the newest unpredicted move request. A second reset
+could replace the first request before its delayed authoritative correction
+arrived, falsely classifying that known correction as a new prediction fault.
+
+**Change.** Keep the last16 requests in a bounded history, testing each against
+P1238's existing time/sequence bounds. The matching request supplies the reason;
+map reset clears the history. Context records its reporter revision, warp-op
+capability and request clock. Native comparison/history, movement, recording,
+ranked evidence, consent, native pins/tag and Build are unchanged.
+
+**Verified.** Exact production helper bodies compiled with qualified compiler
+c24ede65 and executed in the actual headless QC VM:23checks,0failures. The
+legacy one-slot predicate acts for the first request, then misses its delayed
+correction after request2; the subject retains both. Unrelated/pre-request/future
+sequences, expired/future clocks, strict boundaries, map clear and bounded-history
+eviction controls act. The deployed P1319 cohort rebuild matches its live CSQC
+exactly with all3VM0warnings. Changed public/qualified programs and clean committed
+runtime source0b740b6c also build all3VM0warnings; the clean rebuild reproduces all
+tested bytes, with ONLY CSQC changed. Delivery provenance is tracked separately
+in FTESurf tools/p1321-prederr-history.md. This is report
+classification, not a live-network or movement-physics acceptance claim.
+
 ## Patch 1320 -- preserve paused slots until discard is authorized
 
 **Problem.** Automatic offered-slot cleanup did not share the manual command's
