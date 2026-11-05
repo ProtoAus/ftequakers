@@ -27,6 +27,61 @@ failed. See tools/p1319-tas-recipes.md. Review/deployment and owner feel/real-de
 Sign are pending. No cold body/world, arbitrary command-time, procedural recipe,
 long-history, section or next-ramp-solver completion is claimed.
 
+## Patch 1318 -- do not cache a nonexistent startup dynamic light
+
+**Problem.** During a fresh client's map load, both a surface's untouched
+`dlightframe` marker and `r_dlightframecount` are zero. Their equality falsely
+sets `cached_dlight`, so first visibility rebuilds static lightmaps to remove a
+contribution that never existed. Boreas' first late-route water reflection
+rebuilt647surfaces for44.79ms with no live lightmap dlights or style changes.
+
+**Change.** Require a nonzero surface light marker when remembering a dynamic
+contribution in Surf_BuildLightMap. Real lights are marked only after
+R_PushDlights advances the counter. No lightmap math, quality, settings, shader,
+lightstyle, movement, recorder or protocol change.
+
+**Verified.** Acted frame sampler/census: control647false dlight rebuilds,
+subject0; the same two-pass Boreas route's subject rendered-frame worst6.64/
+7.64ms, versus control's roughly40-50ms first reflection. A36-case marker matrix
+changes only0/0. Real Source GPU light visibly acts and expires: world ROI
+before/live mean absolute RGB change54.23, before/removed0.00071. Source's CPU
+MarkLights callback is absent, so its zero CPU-light census is NOT a positive
+CPU-light test. Nonzero-marker predicate behavior is unchanged. Clean two-map
+candidate passed; collision renumber changes no executable source semantics.
+Final build/route/deployment provenance: FTESurf tools/p1318-lightmap-first-view.md.
+
+## Patch 1317 -- authored Colin Christmas terrain and environment (5 Nov 2026)
+
+**Problem:** Owner chose surf_colin_blaster_69000 for the complete theme. Its
+Strata v25 collision lumps use widened node/leaf/reference/brushside records;
+the old legacy-stride roof walk could loop, so blindly treating it as a usual
+Source map was not valid. The inspected map has103actual grass faces.
+
+**Change:** Fix the same roof reader against native v25 layouts and add bounded
+index/cycle refusal. Reuse weather/roof bakers; generate a true fine32 mask,
+376grass-snow triangles and3986exposed-cap triangles in two static cosmetic draws,
+16distributed grass-edge props,1542sky/270ice triangles, plus scoped falling
+snow/mist/wind/storm. Fine32 roof fragment clipping rejects indoor caps; steep
+ridden surfaces/liquids/sky excluded. Audio's bounded512 cells max-reduce the
+actual fine32 heights so thin roofs are not lost to centre sampling, conservatively
+quiet near edges. r_colin_winter register/default/DisplayInfo row controls ONLY
+this authored map, without writing the owner's global options. Missing fine media
+never opts older clients into unclipped snow; existing renderer-restart callback
+reuses cold Winter/Weather load paths to replace freed force-shader handles.
+No BSP, collision,
+water/lava/damage, native/tag/pin/qcbuild or award-earning change; no takeover of
+P1287's world shader. Actual generator/source binding and data-role allowlist
+preserve every original fine mask on other maps.
+
+**Verified:** Actual18,664,473-byte BSP SHAce40b496c672789f3e93bf998ae45f9376e15a24d0eae58fd0f2f729caee915f;
+all103grass faces,1760cap polygons,356roofed rejections,16provisional positions,
+4096x2048fine32 mask, bounded256x128audio roof. Legacy/Strata no-sky negatives,
+cycle refusal and thin-roof reduction controls pass, as do four rendering and
+three existing weather controls. Original timeout/fixture failures retained; no
+owned bake process survived timeout. Actual all3VM compile zero warnings; native
+appearance/placement/ridden-save2/MAX-FPS remains owner-pending, no time claim.
+Public main's pending P1314 is isolated out of the qualified visual deployment.
+
 ## Patch 1316 -- preserve diagnostic observations across collector overlap (5 Nov 2026)
 
 **Problem:** Both pair orders were excluded before file comparison, but a reversed
@@ -54,8 +109,16 @@ counterexample. Actual Linux Python3.11/SQLite3.40 existing25standalone programs
 202unitcases, no typed-SQLite skips, plus executable legacy checks and untreated
 EXACT6failure control. Reader949/0 after adding the exact committed QC static-test
 dependency; original missing-dependency abort, Windows timeout and failed discovery
-are retained, not passes. All3VM c24 compiler0warnings, NoDeploy only. Publication,
-guarded backend cutover remain PENDING. Fresh RUNS544record/168view bytes, presence
+are retained, not passes. All3VM c24 compiler0warnings, NoDeploy only. Published
+implementation QQc6fdd9eb/journalee4f8eb6; actual backend08:11:57UTC5Nov accepted
+source966781a4 on the previous live02a56b32, ONLYsimcheck changed among84runtimefiles.
+Both84cohorts passed fresh guarded fixture handoff and six acting negatives; actual
+staged writer17/17. Actual namespace5pinsRO/2runtimesRO/mutableRW, core26/event1,
+44preexisting schema tables/eight identity digests/non-churn counts preserved.
+PrimaryOPEN/cron4/MOMactive/health/source156binding audit08:26:14UTC; prepared same-
+database prior-runtime fallback, historical private backup never restored. No
+Windows/native/VM/lobby restart or unrelated public-game delta. Default-env byte
+preimage was not captured: no unchanged-env-bytes claim. Fresh RUNS544record/168view bytes, presence
 and meaningful stats match prior classified inputs and unchanged parser helpers:
 344record/7view faults retained, zero drift, NOT clean/new raw reparse/SAVES evidence.
 No full fleet/reservation/hard whole-job budget/current-source/old-external-writer uniqueness
