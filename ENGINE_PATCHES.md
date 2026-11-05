@@ -1,5 +1,27 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1332 -- bind snow textures/colours and quicken lightning
+
+**Problem.** Owner sees black snowy grass on Colin; existing flashes look good
+but are too slow. The first clampmap does not advance native program sampler
+slots, so the following map overwrites roof0 and leaves snow1 unbound. Baked
+vertex colours also lacked the native #usemods generation/binding gate.
+
+**Change.** Two ordinary map entries with explicit roof clamp/point flags bind
+roof0/snow1; #usemods plus exactvertex/vertex alpha binds the existing IQM VBO
+without relighting/CPU colour expansion. Distinct runtime material key. Pulse,
+gap and fade run3x faster, retaining3..6strokes/brightness/post-burst thunder.
+No geometry/collision/media/native pin/tag/QW/menu/backend/Build/evidence change.
+
+**Verified.** Actual native3parser-function control reproduces1slot/unbound
+snow in old code vs2correct slots in the subject (texture I/O stubbed). Native
+colour-gate/direct-VBO and proportional3xfaster timing source checks pass;
+existing GPU/mesh/PCM controls pass, qualified3VM0warnings. Native owner black
+snow/cap/quicker-flash acceptance remains separate; source timing is not measured
+frame timing/FPS. No native pin/tag/Build move. Delivery pending.
+Tools/p1332-snow-binding-flashes.md; prior GPU arithmetic was NOT native binding
+acceptance. Owner confirms prior flash appearance only.
+
 ## Patch 1328 -- participating store-only collector ownership
 
 **Problem.** First-winner observation flushes prevent duplicate stored evidence,
