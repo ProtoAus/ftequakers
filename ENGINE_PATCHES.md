@@ -24,9 +24,40 @@ Saved-state/cache/counter/actual writer-to-reader fixture15/0 with positive and
 unknown33column rows. Command-binding regression25/0; reader15tests/0failures
 versus12legacy failures. Original legacy report numeric/context/SV rows and errors
 are preserved. Actual native compiler flags syntax-check changed client/server
-units. Full tagged/native runtime/deployment qualification is recorded separately.
-This proves a scheduling weakness and bounded metadata/reader correction, NOT
+units. Two frozen-source reviews clear. Full tagged Windows build has the same
+74native warnings (zero additions/removals), all3VMs0warnings;19340old installed
+paths unchanged. Matching native/plugin cohort frozen; runtime/deployment still
+pending. Existing Makefile HEADcount+29 yields clean git-8417-patch-1330-0-g538de9265.
+The first caller's MSYS argv exclusion failure is retained and fixed at the env
+boundary, not in product source. This proves a scheduling weakness and bounded metadata/reader correction, NOT
 that a historical save correction was caused by pressure or is now resolved.
+
+## Patch 1332 -- bind snow textures/colours and quicken lightning
+
+**Problem.** Owner sees black snowy grass on Colin; existing flashes look good
+but are too slow. The first clampmap does not advance native program sampler
+slots, so the following map overwrites roof0 and leaves snow1 unbound. Baked
+vertex colours also lacked the native #usemods generation/binding gate.
+
+**Change.** Two ordinary map entries with explicit roof clamp/point flags bind
+roof0/snow1; #usemods plus exactvertex/vertex alpha binds the existing IQM VBO
+without relighting/CPU colour expansion. Distinct runtime material key. Pulse,
+gap and fade run3x faster, retaining3..6strokes/brightness/post-burst thunder.
+No geometry/collision/media/native pin/tag/QW/menu/backend/Build/evidence change.
+
+**Verified.** Actual native3parser-function control reproduces1slot/unbound
+snow in old code vs2correct slots in the subject (texture I/O stubbed). Native
+colour-gate/direct-VBO and proportional3xfaster timing source checks pass;
+existing GPU/mesh/PCM controls pass, qualified3VM0warnings. Native owner black
+snow/cap/quicker-flash acceptance remains separate; source timing is not measured
+frame timing/FPS. No native pin/tag/Build move. Delivered5Nov2026 BOTH Windows
+19:05UTC client/symbols only,41protected unchanged; ALL12lobbies19:13UTC client
+only,12new epochs independently exact, previous8media/heldnative/server/menu/
+backend exact,47,452old protected runtime entries unchanged; direct health200/
+ok/12 and lock release verified. Qualified9b2ba43a4470/CSPf6ead0e677f1; no second
+activation or recovery restart. Actual owner retest remains pending.
+Tools/p1332-snow-binding-flashes.md; prior GPU arithmetic was NOT native binding
+acceptance. Owner confirms prior flash appearance only.
 
 ## Patch 1328 -- participating store-only collector ownership
 
@@ -52,8 +83,16 @@ child crash after an80comparison/before flush and finite retry of all3fixture pa
 Existing nonparticipant reverse-winner/transaction controls remain. Reader949/0;
 548records/168views retain344faultedREC/7faultedVIEW,546priorREC/168VIEWexact and
 two new actual RECparsed clean. Original discovery/injection/import observer
-failures retained. Source-qualified only: independent reviews and guarded backend
-delivery pending. Broader coverage/freshness/calibration and owner acceptance OPEN.
+failures retained. Two independent reviews clear. Actual backend12f7e30e accepted
+5Nov18:38:22UTC on actual55370fb6,83other runtime/156bound origins exact;44existing
+schema/nonchurn counts and8identity hashes preserved. Private1366130688-byte history
+snapshot retained/NOrestore, SAMEdata fallback; oldCLOSED/newOPEN/fallbackCLOSED,
+4cron/MOMactive,5ROpins/2ROruntimes/RWfilesystem.18:48normal-operation canonical
+sidecar0bytes/0600/singlelink/owner observed with no forced job;18:49health12/all12
+actual ftesurf@Nunits active. Wrong receipt-directory and unit-name reader failures
+retained, no healthy redeploy. Both generation roots are mandatory live namespace/
+history dependencies. No native/QC/lobby deployment. Broader coverage/freshness/
+calibration and owner acceptance remain OPEN; not whole-plan completion.
 
 ## Patch 1327 — lit textured snow, Source steps and multi-flash owner weather
 
