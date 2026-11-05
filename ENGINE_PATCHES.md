@@ -1,5 +1,26 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1312 -- admit finite ignored KTeams context to existing observation (5 Nov 2026)
+
+**Problem:** Source movement ignores the generic KTeams jump blend, but the
+existing shared ordinary/normalized ground-body observer excluded all nonzero
+settings. An accepted existing effect could therefore go unobserved after a
+converged late tail, despite identical movement at zero/nonzero settings.
+
+**Change:** One guard requires finiteness instead of zero. Update the explicitly
+obsolete observer-only fixture and add seven finite/nonfinite checks. All actual
+movement, capture/API/recording format, flag/tier/ranking policy, alternative-world
+and other unsupported-domain checks stay unchanged; broader bank remains partial.
+
+**Verified:** Untreated stock2,725checks EXACT6predicted missing-use failures;
+candidate2,732/0. Both stock/normalized168actual fixed-tick player arms each,
+2,308assertions: guard-only counter3,886 EXACT17predicted admissions/uses, no
+physical/category/debit/clock/config/body failures; candidate3,886/0. All retained
+prior private families10,581/0; uninstrumented1,578/0; incremental gcc0warnings,
+clangd only existing unused-header hint. Full clean tagged platforms and fresh
+independent review remain pending. No publication, canonical install or Pi restart
+claimed. Private vectors/probes/raw original failed logs remain private.
+
 ## Patch 1310 — observe accepted shallow full-walk gravity use
 
 **Problem.** Native full-walk movement uses ordinary gravity in dry and shallow

@@ -3302,7 +3302,7 @@ static qboolean PMSrc_BankGravityStartDefault(vec3_t normal)
 static qboolean PMSrc_BankGravityGroundStartCommon(vec3_t normal)
 {
 	if (!pmove.onground || !(pmove.cmd.buttons & BUTTON_JUMP) ||
-		movevars.ktjump ||
+		!isfinite(movevars.ktjump) ||
 		!isfinite(movevars.entgravity) || !isfinite(movevars.gravity) ||
 		!isfinite(movevars.jumpvelocity) || !isfinite(movevars.maxvelocity))
 		return false;
@@ -4944,8 +4944,25 @@ static void PMSrc_TestBankStartGravity(void)
 				movevars.jumpaddrise = 1;
 				PMSrc_Check("P1305 ignored stock rise admitted", PMSrc_BankGravityGroundStartDefault(normal), 1, 0);
 				movevars.jumpaddrise = 0;
+				// Source ignores the generic KTeams blend; finite context is enough.
 				movevars.ktjump = 1;
-				PMSrc_Check("P1139 KT jump excluded", PMSrc_BankGravityGroundStartDefault(normal), 0, 0);
+				PMSrc_Check("bank gravity ignored KT setting admitted", PMSrc_BankGravityGroundStartDefault(normal), 1, 0);
+				{
+					const float finitekt[] = {-.5f, .25f, 2, 3500};
+					int k;
+					for (k = 0; k < 4; ++k)
+					{
+						movevars.ktjump = finitekt[k];
+						Q_snprintfz(name, sizeof(name), "bank gravity ignored finite KT %i admitted", k);
+						PMSrc_Check(name, PMSrc_BankGravityGroundStartDefault(normal), 1, 0);
+					}
+				}
+				movevars.ktjump = NAN;
+				PMSrc_Check("bank gravity NaN KT refused", PMSrc_BankGravityGroundStartDefault(normal), 0, 0);
+				movevars.ktjump = INFINITY;
+				PMSrc_Check("bank gravity infinite KT refused", PMSrc_BankGravityGroundStartDefault(normal), 0, 0);
+				movevars.ktjump = -INFINITY;
+				PMSrc_Check("bank gravity negative infinite KT refused", PMSrc_BankGravityGroundStartDefault(normal), 0, 0);
 				movevars.ktjump = 0;
 				movevars.stamina = 1;
 				pmove.stamina = 40;
