@@ -58,6 +58,18 @@ archive missing the existing heldmeta reader dependency. Read-only actual backen
 module matches acting baseline; no live mutation. Independent reviews, frozen
 runtime and actual delivery recorded separately: tools/p1322-simcheck-selection.md.
 
+**Delivery,5Nov12:38:28UTC.** Two independent reviews clear; actual source55370fb6
+on previous live966781a4, collector84 ONLYsimcheck changed/83exact. Both frozen
+primary/same-data fallback gunicorn cohorts and6negative controls pass. Protected
+44table schema/nonchurn counts and8identity hashes preserved,1.358GBprivate
+historical backup retained, no old-data restore. Actual5ROpins/2ROruntimes/RWfile
+preflight and156bound origins verified, oldCLOSED/primaryOPEN/fallbackCLOSED,
+4cron routes and MOMactive. Guard/dispatch/config/external3 unchanged; no native,
+VM or lobby deployment. Read-only12:40UTChealth12/all12actual units active after
+startup discovery; no healthy redeploy. Active runtime/namespace root retained,
+not cleaned as scratch. General coverage/reservation/freshness/calibration and
+deferred audit remain open; no unrecorded default-env-byte claim.
+
 ## Patch 1321 -- retain overlapping expected-reset report context
 
 **Problem.** CSQC kept only the newest unpredicted move request. A second reset
