@@ -1,5 +1,29 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1322 -- bounded store-only similarity rotation
+
+**Problem.** Boolean cursor ordering sorted the eligible replay set before a
+bounded selection. In a finite50000-row synthetic control the default selected-SQL
+allowance expired before any candidate/admission/comparison, although the same
+actual reader/data produced an80-opportunity comparison with a larger allowance.
+
+**Change.** Backend source/peer rotation selects the ascending range above its
+cursor and only the remaining disjoint lower/equal wrap. Preserve original order,
+eligibility, limit, pair exclusion, whole-query SQL abstention and reader/flush
+boundaries. No new index/table/schema, capture/format/API/default/threshold/badge/
+tier/ranking, game program, native source/pin/tag or Build change. Separate reads
+are not a coherent snapshot, work reservation/completion or global hard budget.
+
+**Verified.** Acting untouched interruption and actual native-buffer reader
+positive; fixed default reaches same80-opportunity pair with independent writer
+committing during files and exact source capture.217unittests0failures/errors,
+4known Windows skips, legacy script0; exact old-query ordering across48cursor/limit
+combinations, real sparse-selection cap/positive, required-wrap actual interruption
+without partial result/advance and legacy read-only schema. Reader949/0;546-record
+corpus344REC7VIEWfaults unchanged via545exact prior records/168views plus1new parsed
+clean. Original fixture/observer failures retained. Linux, independent reviews and
+actual delivery recorded separately: FTESurf tools/p1322-simcheck-selection.md.
+
 ## Patch 1320 -- preserve paused slots until discard is authorized
 
 **Problem.** Automatic offered-slot cleanup did not share the manual command's
