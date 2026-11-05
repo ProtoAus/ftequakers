@@ -1,5 +1,30 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1313 -- preserve practice status of unsafe fresh retry starts (SSQC only)
+
+**Problem.** Retry restores saved movement and an armed attempt's status, but did
+not apply the existing fresh-start walk/jump eligibility boundary after placement.
+A fresh unsafe retry arm could therefore keep a clean status.
+
+**Change.** After successful retry placement ONLY, use the timer's existing armed
+box-group/hull-band containment and NotFast predicate, then its standard practice
+funnel. Keep exact restored movement and existing bits; running/outside-box and
+direct Multi-Session-style restores unchanged. No guessed saved-phase repair,
+velocity clamp, native code/pin/tag, capture/API/format/flag/tier/policy or QC Build.
+
+**Verified.** Actual production wrapper/writer/reader/consumed-latch/deleted-state
+fixture: twelve explicit cases, untouched published module misses exactly five
+practice marks; candidate supplies all five with exact body/old bits and all
+boundary/continuation controls. Existing five normal-load plus fourteen grant/EOF
+controls unchanged. Qualifiedc24/git-7809 repeats both counterparts, actual full
+NoDeploy build all three VMs ZEROwarnings. Synthetic explicit state only, NOT a
+native map_restart/held-jump/dwell/ranked/human claim. Original7ccb observations
+and counter include-path refusal retained; source-local include seam fixed.
+Reader949/0 and exact three-glob RUNS544 all prior bytes/classifications unchanged,
+344faultedREC/7faultedVIEW retained, no clean/SAVES claim. Independent reviews and
+deployment pending; private vectors stay private. See FTESurf
+tools/p1313-retry-practice.md and pending human lextest.md.
+
 ## Patch 1312 -- admit finite ignored KTeams context to existing observation (5 Nov 2026)
 
 **Problem:** Source movement ignores the generic KTeams jump blend, but the
@@ -25,8 +50,12 @@ source blobs; exact currentRUNS544 all bytes/classifications unchanged (344fault
 7faultedVIEW), no clean/SAVES claim. Private hooks removed; symbols/outputs frozen.
 Two independent source/physics and evidence/consumer reviews found no blocking
 issues; existing bounded unsupported/general-writer/full-bank limits remain.
-Deployment pending; no canonical install, data rewrite or Pi restart yet. Raw
-vectors/original failed logs stay private.
+Actual dual-Windows native delivery verified:14primary client/server/plugin targets
+and.prev exact,18,273protected config/program/data/alias paths unchanged,28older
+predecessors archived/rehashed; installed dedicated1,578each, no process kill or
+VM/backend deploy. NanoPi pending fresh complete current resume preimages and
+execution-boundary checks after published TAS handoff; its original expiry guard
+failure remains unwaived. Raw vectors/original failed logs stay private.
 
 ## Patch 1311 -- expand Boreas/Demise shader warm coverage (assets only)
 
