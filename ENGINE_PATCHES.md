@@ -27,6 +27,19 @@ failed. See tools/p1319-tas-recipes.md. Review/deployment and owner feel/real-de
 Sign are pending. No cold body/world, arbitrary command-time, procedural recipe,
 long-history, section or next-ramp-solver completion is claimed.
 
+**Pre-shipment review corrections:** Two independent readers found unpaired
+name-field releases, chat-key priority and fopen-based unreadable-stage absence.
+The same Patch1319 now retains only its owned releases across focus/tab/close,
+refuses to adopt pre-focus repeats, routes focused typing before chat binds while
+respecting an existing draft/higher cursor, and checks both names with the existing
+conservative uncached namespace helper before freeze/write. The helper also checks
+its own native capabilities. Untreated8setup/4predicted failures; corrected16/0
+includes actual chat-bound-name saving and Windows read-denied/write-accessible
+stage preservation with exact ACL restoration. One partial observer looked for
+the wrong default-prefixed name and remains failed. This is synthetic chain and
+Windows namespace coverage, not hardware movement, genuine Sign, POSIX-specific
+overwrite reproduction or concurrent-writer proof. Re-review is pending.
+
 ## Patch 1318 -- do not cache a nonexistent startup dynamic light
 
 **Problem.** During a fresh client's map load, both a surface's untouched
