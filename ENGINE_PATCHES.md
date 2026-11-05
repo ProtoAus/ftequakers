@@ -27,9 +27,21 @@ Reader949/0 and exact three-glob RUNS544 all prior bytes/classifications unchang
 344faultedREC/7faultedVIEW retained, no clean/SAVES claim. TWO independent bounded
 delta reviews clear corrected94e37cf8: original vertical finding fixed, proposed
 mode gate withdrawn under verified reset contract, class-off assertion corrected.
-Original BLOCK and all failed predictions retained, not waived. Actual VMdeployment
-pending; private vectors stay private. See FTESurf
-tools/p1313-retry-practice.md and pending human lextest.md.
+Original BLOCK/failed predictions retained, not waived. Actual5NovUTC BOTHWindows
+SSQC04:22:03:4DAT/LNO+.prev/8olderarchive/18,548protectedpaths exact; unchangedCSQC/
+menu/native NOTreplaced, no processkill. Pi04:48:48 pairednative1312+QQ486e65bd:
+4hashes+.prev/12newverifiedepochs+plugininodes/0skips/46,488protecteddata exact,
+0new/changed/missing; backendgeneration/unit/OPENactor/156files unchanged. BEFORE
+ANYcanonicalstage ALL8parts+180completeCURRENTresume inclmetadata=188members/
+229,091,723sourcebytes individuallyrehashed ON/OFFBOX, strict13declaredActor FD/
+birth/namespace JIT; protectedPAMSSH NONactorlimits explicit, NOTgeneralwriter
+closure/recovery.8generatedpredecessors/olderprev OFFBOX exact.04:53:05 same12live
+actors/hash/backups;04:54:08 all544records/712rawREC-view/192,188,256bytes and3reader
+blobs atqualified+canonicalroots EXACT ->prior344REC7VIEWclassificationreuse,
+NOTfreshfullparse/SAVES/clean. No force/playerdrop/retainedgate, oldexpiryfailure
+UNWAIVED. Lobbyrestarts NOTnative map_restart/heldjump/dwell/human/rank acceptance.
+Private vectors stay private; details FTESurf tools/p1313-retry-practice.md and
+pending human lextest.md.
 
 ## Patch 1312 -- admit finite ignored KTeams context to existing observation (5 Nov 2026)
 
@@ -59,9 +71,15 @@ issues; existing bounded unsupported/general-writer/full-bank limits remain.
 Actual dual-Windows native delivery verified:14primary client/server/plugin targets
 and.prev exact,18,273protected config/program/data/alias paths unchanged,28older
 predecessors archived/rehashed; installed dedicated1,578each, no process kill or
-VM/backend deploy. NanoPi pending fresh complete current resume preimages and
-execution-boundary checks after published TAS handoff; its original expiry guard
-failure remains unwaived. Raw vectors/original failed logs stay private.
+VM/backend deploy in THAT native-only Windows transaction. ActualNanoPi5Nov
+04:48:48UTC now pairedwithreviewedQQ486e65bd/P1313:4exactfiles+.prev,all12newnative
+actors/mappedplugininodes,46,488protecteddata exact/0newchangedmissing. BEFOREstage
+all8parts+180completeCURRENTresume/188members individuallyON/OFFBOX rehashed,
+strict13declaredActor FD/birth/source JIT; backend156files/unit/OPENactor unchanged,
+no force/drop/gate. Later12responsive/4hashes+backups exact; post544/712byte+3reader
+blob identity preserves prior344REC7VIEW results byexplicitreuse, NOTnewfullparse.
+Original expiryguardfailure unwaived/no datarestore; no generalwriter/nativephase/
+humanranked claim. Raw vectors/original failed logs stay private.
 
 ## Patch 1311 -- expand Boreas/Demise shader warm coverage (assets only)
 
