@@ -24,9 +24,11 @@ native map_restart/held-jump/dwell/ranked/human. Original7ccb/include-refusal/ra
 reviews and falsified class-off test assumption retained; source contract confirms
 run_class bisects words, not eligibility. No flag/body/API or global helper change.
 Reader949/0 and exact three-glob RUNS544 all prior bytes/classifications unchanged,
-344faultedREC/7faultedVIEW retained, no clean/SAVES claim. Original source review
-BLOCK retained; bounded independent delta re-review and deployment pending, not
-waived. Private vectors stay private. See FTESurf
+344faultedREC/7faultedVIEW retained, no clean/SAVES claim. TWO independent bounded
+delta reviews clear corrected94e37cf8: original vertical finding fixed, proposed
+mode gate withdrawn under verified reset contract, class-off assertion corrected.
+Original BLOCK and all failed predictions retained, not waived. Actual VMdeployment
+pending; private vectors stay private. See FTESurf
 tools/p1313-retry-practice.md and pending human lextest.md.
 
 ## Patch 1312 -- admit finite ignored KTeams context to existing observation (5 Nov 2026)
