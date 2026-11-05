@@ -119,8 +119,19 @@ and accumulate slow manual pitch before overriding Follow travel. Actual-C67399
 checks pass; the unchanged old cancel body fails exactly2 new lifecycle checks.
 Real100fps/1degree-per-second keyboard look fails on the old camera and passes
 on the corrected camera. The first reconnect observer read native-cap0/default
-UI state and is NOT live reconnect acceptance. ARM and destination qualification
-remain pending here; no deployment is implied. Human ramp/camera feel is pending. Whole-history normal-play editing, recipe/filter continuity, cold
+UI state and is NOT live reconnect acceptance. Clean ARM source59 passes1557 native self-tests;
+normalized warnings17baseline/17current/0NEW. Exact Windows28-target promotion
+preserves18261 config/data/alias hashes and52 predecessor/prior-prev preimages.
+Installed primary core actor12checks pass; secondary GUI20assertions pass before
+an optional screenshot-name collision (failure retained). All12Pi actors now run
+source59 with exact native/plugin/QW/CS and predecessors, no force. Pi strict old-
+data postflight FAILED: one resume's recording moved byte-identically to evidence,
+and its ms/state metadata disappeared; this matches existing resume cleanup, but
+old metadata/expiry cannot be retrospectively qualified. Other46352 old paths,
+config/backend and all8archived recorder parts preserve their checks. No data was
+restored, no healthy restart repeated, no maintenance gate remains. This is NOT
+an exact-old-path preservation pass. Human ramp/camera feel and full editor remain
+pending. Source59/tag are unchanged; these are subsequent delivery observations. Whole-history normal-play editing, recipe/filter continuity, cold
 replay, sections and constrained solving remain in-scope work, not completed by
 this controller. Details/limits: mod `tools/p1308-tas-controller.md`.
 
