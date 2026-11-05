@@ -1,5 +1,32 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1309 — bounded winter weather / liquid frost preview (QC/assets only)
+
+**Problem.** The requested winter ambience, sky flash/bolt and frozen-looking
+liquids were still unbuilt. Full-world relighting/captures or runtime roof traces
+would conflict with the owner's MAX-FPS priority; native acceptance is pending.
+
+**Change.** Opt-inOFF cached-roof outdoor/sheltered original PCM wind, delayed
+muffled thunder, one transient actual sky-portal mesh with a sparse baked fork,
+and one static upward liquid frost mesh with a per-face lava bit/view highlight.
+No contents/collision/movement/damage or existing sky/soundscape change. Roof
+float table capped262144bytes, bulk fread once; no per-frame I/O/geometry/trace
+or allocation. Existing loading warm list includes ice/sky/mist variants; cosmetic
+gibs prefix reuses default native convex-decomposition exclusion without cvar
+mutation. Conservative mesh limits hold only oversized features, not the task.
+
+**Verified.** Exact approved c24 compiler, all3 VMs ZERO warnings. Three offline
+surface/roof controls; actual finite/index/size audits: Frost570sky/234ice and
+Christmas1103ice,65536roof cells each. Christmas6306sky held by4096cap; Bluewinter
+no eligible world sky/liquid and skipped, not a false outdoor pass. Original4PCM
+signals nonzero/bounded. Actual bolt671/8192alpha pixels (8.19%) passes preregistered
+10% control after retained12.13% first failure; criteria not weakened. These are
+SOURCE/DATA checks, NOT native renderer/audio/cold/moving-view acceptance. No
+numerical FPS/no-hitch, native pin/tag, QC Build, authority or evidence change.
+No competing P1287 world snow override. Generated coarse snowmask scaffolding
+MUST NOT replace fine falling-snow masks. Details: FTESurf tools/p1309-weather.md.
+Installation/provenance recorded separately after actual delivery.
+
 ## Patch 1307 — version ramp shader output/blend ABI (QC/assets only)
 
 **Problem.** Tracked assets and ignored progs can advance independently. P1295's
