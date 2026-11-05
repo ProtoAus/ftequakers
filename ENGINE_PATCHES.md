@@ -24,6 +24,32 @@ chat-window failures retained, not counted passes. Account dependencies are
 controlled, not real cryptographic proof or a cross-lobby atomicity claim.
 Qualification and delivery limits: FTESurf tools/p1320-resume-discard.md.
 
+## Patch 1319 -- visible Colin snow, scoped snow steps and ramp clearance
+
+**Problem.** Owner confirmed Colin's props but saw purple snow undersides, not
+snowy grass, and ramp dirt still fought while surfing. The snow IQMs registered
+their missing material before the QC definition reused that same cache name;
+all344nondegenerate grass triangles faced inward, as did3476cap triangles.
+Frost also has ten native type3 snow volumes alongside our replacement snow.
+
+**Change.** Register a distinct runtime snow material BEFORE model precache;
+correct stored-float32 IQM winding and omit degenerate triangles. Keep grass
+fully covered and caps roof-clipped. Add four original quiet snow-crunch samples
+only for Colin's authored snowy grass, including walking with general game Foley
+off. Stop only new native type3 flakes when the installed replacement was
+actually submitted; rain/other effects and native fallback stay intact. Increase
+real ramp-normal lift0.75->2units, bounded reload-applied diagnostic cvar. Retain
+constant non-slope depthpush. No collision, movement, evidence or native change.
+
+**Verified.** All3VM build0warnings. Actual hidden WGL production vertex/fragment
+snow programs: grass/open cap378white-snow pixels each; roofed cap0; reversed
+winding control0. Actual corrected IQMs344/3768CW, no degenerate triangles; old
+meshes retained as acted wrong-winding controls. Four distinct mono22050Hz
+bounded PCM files. Original caps/grass shaders compile on this driver: the initial
+reserved-keyword hypothesis was FALSIFIED, not claimed as root cause. Small native
+look/sound/ride/FPS check remains owner-pending. FTESurf tools/p1319-winter-correction.md.
+Native pin/tag and QC Build unchanged.
+
 ## Patch 1318 -- do not cache a nonexistent startup dynamic light
 
 **Problem.** During a fresh client's map load, both a surface's untouched
