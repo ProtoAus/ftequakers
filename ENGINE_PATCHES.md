@@ -28,6 +28,57 @@ signing remain pending. No hardware/OOM/VM-reload, concurrent-writer, cold-world
 command-time, procedural-intent, long-history, section or next-ramp completion
 claim. A null allocation latches disabled; native allocation errors can abort QC.
 
+## Patch 1322 -- bounded store-only similarity rotation
+
+**Problem.** Boolean cursor ordering sorted the eligible replay set before a
+bounded selection. In a finite50000-row synthetic control the default selected-SQL
+allowance expired before any candidate/admission/comparison, although the same
+actual reader/data produced an80-opportunity comparison with a larger allowance.
+
+**Change.** Backend source/peer rotation selects the ascending range above its
+cursor and only the remaining disjoint lower/equal wrap. Preserve original order,
+eligibility, limit, pair exclusion, whole-query SQL abstention and reader/flush
+boundaries. No new index/table/schema, capture/format/API/default/threshold/badge/
+tier/ranking, game program, native source/pin/tag or Build change. Separate reads
+are not a coherent snapshot, work reservation/completion or global hard budget.
+
+**Verified.** Acting untouched interruption and actual reader on synthetic buffers;
+fixed default reaches same80-opportunity pair with independent writer
+committing during files and exact source capture.217unittests0failures/errors,
+4known Windows skips; Linux3.11same217/0/0, legacy scripts0 on both; exact old-query
+ordering across48cursor/limit
+combinations, real sparse-selection cap/positive, required-wrap actual interruption
+without partial result/advance and legacy read-only schema. Reader949/0;546-record
+corpus344REC7VIEWfaults unchanged via545exact prior records/168views plus1new parsed
+clean. Original fixture/observer failures retained, including first sparse Linux
+archive missing the existing heldmeta reader dependency. Read-only actual backend
+module matches acting baseline; no live mutation. Independent reviews, frozen
+runtime and actual delivery recorded separately: tools/p1322-simcheck-selection.md.
+
+## Patch 1321 -- retain overlapping expected-reset report context
+
+**Problem.** CSQC kept only the newest unpredicted move request. A second reset
+could replace the first request before its delayed authoritative correction
+arrived, falsely classifying that known correction as a new prediction fault.
+
+**Change.** Keep the last16 requests in a bounded history, testing each against
+P1238's existing time/sequence bounds. The matching request supplies the reason;
+map reset clears the history. Context records its reporter revision, warp-op
+capability and request clock. Native comparison/history, movement, recording,
+ranked evidence, consent, native pins/tag and Build are unchanged.
+
+**Verified.** Exact production helper bodies compiled with qualified compiler
+c24ede65 and executed in the actual headless QC VM:23checks,0failures. The
+legacy one-slot predicate acts for the first request, then misses its delayed
+correction after request2; the subject retains both. Unrelated/pre-request/future
+sequences, expired/future clocks, strict boundaries, map clear and bounded-history
+eviction controls act. The deployed P1319 cohort rebuild matches its live CSQC
+exactly with all3VM0warnings. Changed public/qualified programs and clean committed
+runtime source0b740b6c also build all3VM0warnings; the clean rebuild reproduces all
+tested bytes, with ONLY CSQC changed. Delivery provenance is tracked separately
+in FTESurf tools/p1321-prederr-history.md. This is report
+classification, not a live-network or movement-physics acceptance claim.
+
 ## Patch 1320 -- preserve paused slots until discard is authorized
 
 **Problem.** Automatic offered-slot cleanup did not share the manual command's
