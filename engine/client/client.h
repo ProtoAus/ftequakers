@@ -795,6 +795,11 @@ struct playerview_s
 									//read by the mover.
 
 		int			sequence;
+		struct {
+			qboolean valid;
+			int sequence, pmtype, seedseq, phasehit, parts, ticks;
+			float seedcarry;
+		} diag;	// saved with this prediction, never sampled later to explain it
 	} prop;
 
 	// P1151: confirmed practice-return epoch; owned by the normal client lifecycle.

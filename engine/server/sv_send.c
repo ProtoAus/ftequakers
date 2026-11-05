@@ -2317,8 +2317,34 @@ Performs a delta update of the stats array.  This should only be performed
 when a reliable message can be delivered this frame.
 =======================
 */
+static qboolean SV_WritePendingStringStat(client_t *client, int pnum, sizebuf_t *msg, client_frame_t *frame, unsigned int i)
+{
+	const char *s;
+	if (!(client->pendingstats[(i+MAX_CL_STATS)>>5u] & (1u<<((i+MAX_CL_STATS)&0x1f))))
+		return true;
+	s = client->statss[i];
+	if (!s)
+		s = "";
+	if (msg->cursize+4+strlen(s) >= msg->maxsize)
+		return false;
+	if (frame->numresendstats >= sizeof(frame->resendstats)/sizeof(frame->resendstats[0]))
+		return false;
+	client->pendingstats[(i+MAX_CL_STATS)>>5u] &= ~(1u<<((i+MAX_CL_STATS)&0x1f));
+	frame->resendstats[frame->numresendstats++] = (i+MAX_CL_STATS) | (pnum<<12);
+	if (pnum)
+	{
+		MSG_WriteByte(msg, svcfte_choosesplitclient);
+		MSG_WriteByte(msg, pnum);
+	}
+	MSG_WriteByte(msg, svcfte_updatestatstring);
+	MSG_WriteByte(msg, i);
+	MSG_WriteString(msg, s);
+	return true;
+}
+
 void SV_UpdateClientStats (client_t *client, int pnum, sizebuf_t *msg, client_frame_t *frame)
 {
+	extern cvar_t pm_physicsmode;
 	int		statsi[MAX_CL_STATS];
 	float	statsf[MAX_CL_STATS];
 	const char	*statss[MAX_CL_STATS];
@@ -2361,6 +2387,12 @@ void SV_UpdateClientStats (client_t *client, int pnum, sizebuf_t *msg, client_fr
 				client->statss[i] = (statss[i]&&*statss[i])?Z_StrDup(statss[i]):NULL;
 			}
 		}
+
+		// A phase tag superseded before transmission cannot seed that old ACK later.
+		// Priority is opportunistic: retain the shared byte/slot/seat limits.
+		if (m > STAT_FS_SOURCEPHASE && pm_physicsmode.ival == PHYSMODE_SOURCE &&
+			!strcmp(InfoBuf_ValueForKey(&svs.info, "fs_sourcephase"), "1"))
+			SV_WritePendingStringStat(client, pnum, msg, frame, STAT_FS_SOURCEPHASE);
 
 		for (i=0 ; i<m ; i++)
 		{
@@ -2421,30 +2453,8 @@ void SV_UpdateClientStats (client_t *client, int pnum, sizebuf_t *msg, client_fr
 
 		for (i=0 ; i<m ; i++)
 		{
-			if (client->pendingstats[(i+MAX_CL_STATS)>>5u] & (1u<<((i+MAX_CL_STATS)&0x1f)))
-			{
-				const char *s = client->statss[i];
-				if (!s)
-					s = "";
-
-				//would overflow
-				if (msg->cursize+4+strlen(s) >= msg->maxsize)
-					break;
-				//can't track it
-				if (frame->numresendstats >= sizeof(frame->resendstats)/sizeof(frame->resendstats[0]))
-					break;
-				//we're going for it.
-				client->pendingstats[(i+MAX_CL_STATS)>>5u] &= ~(1u<<((i+MAX_CL_STATS)&0x1f));	//doesn't need resending any more
-				frame->resendstats[frame->numresendstats++] = (i+MAX_CL_STATS) | (pnum<<12);
-				if (pnum)
-				{
-					MSG_WriteByte(msg, svcfte_choosesplitclient);
-					MSG_WriteByte(msg, pnum);
-				}
-				MSG_WriteByte(msg, svcfte_updatestatstring);
-				MSG_WriteByte(msg, i);
-				MSG_WriteString(msg, s);
-			}
+			if (!SV_WritePendingStringStat(client, pnum, msg, frame, i))
+				break;
 		}
 	}
 	else

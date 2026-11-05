@@ -47,6 +47,38 @@ This is not owner feel, genuine-device signing, cold/shared-world replay or a
 completed section/next-ramp solver. Details: FTESurf tools/p1329-tas-settings.md;
 review/build/deployment provenance remains separate from these candidate checks.
 
+## Patch 1330 — preserve Source phase availability and prediction-report provenance
+
+**Problem:** Replacement-delta stats share32resend entries. Numeric changes can
+consume them before the command-tagged Source timing string is attempted; a
+superseded phase cannot later seed its old acknowledgment. Old comparison dumps
+also cannot show the phase/replay counts used when a prediction was created.
+Missing comparison/SV observations were being described as packet loss or
+commands that never ran, beyond what those bounded snapshots establish.
+
+**Change:** Opportunistically send existing Source phase179 first for advertised
+Source clients, preserving shared byte/slot/seat/pending/resend limits. No new
+wire message or movement formula. Native dumpv2 retains the first25columns and
+adds command validity plus saved prediction mode, FIRST replay anchor/tag/carry/
+exact-phase hit and CUMULATIVE native parts/ticks to that prediction. Missing or
+reset provenance is explicit; later cache contents cannot rewrite it. Native
+counter/cvars and the QC upload path are unchanged. Updated reader supports both
+schemas, prints provenance, removes overclaims and fails ungraded/read/fetch errors.
+
+**Verified:** Actual scheduling-block/wire fixture44checks/0failures versus two
+baseline availability failures; byte/slot/split-seat/pending/newer-tag controls act.
+Saved-state/cache/counter/actual writer-to-reader fixture15/0 with positive and
+unknown33column rows. Command-binding regression25/0; reader15tests/0failures
+versus12legacy failures. Original legacy report numeric/context/SV rows and errors
+are preserved. Actual native compiler flags syntax-check changed client/server
+units. Two frozen-source reviews clear. Full tagged Windows build has the same
+74native warnings (zero additions/removals), all3VMs0warnings;19340old installed
+paths unchanged. Matching native/plugin cohort frozen; runtime/deployment still
+pending. Existing Makefile HEADcount+29 yields clean git-8417-patch-1330-0-g538de9265.
+The first caller's MSYS argv exclusion failure is retained and fixed at the env
+boundary, not in product source. This proves a scheduling weakness and bounded metadata/reader correction, NOT
+that a historical save correction was caused by pressure or is now resolved.
+
 ## Patch 1332 -- bind snow textures/colours and quicken lightning
 
 **Problem.** Owner sees black snowy grass on Colin; existing flashes look good
