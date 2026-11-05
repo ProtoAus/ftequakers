@@ -82,8 +82,16 @@ counterexample. Actual Linux Python3.11/SQLite3.40 existing25standalone programs
 202unitcases, no typed-SQLite skips, plus executable legacy checks and untreated
 EXACT6failure control. Reader949/0 after adding the exact committed QC static-test
 dependency; original missing-dependency abort, Windows timeout and failed discovery
-are retained, not passes. All3VM c24 compiler0warnings, NoDeploy only. Publication,
-guarded backend cutover remain PENDING. Fresh RUNS544record/168view bytes, presence
+are retained, not passes. All3VM c24 compiler0warnings, NoDeploy only. Published
+implementation QQc6fdd9eb/journalee4f8eb6; actual backend08:11:57UTC5Nov accepted
+source966781a4 on the previous live02a56b32, ONLYsimcheck changed among84runtimefiles.
+Both84cohorts passed fresh guarded fixture handoff and six acting negatives; actual
+staged writer17/17. Actual namespace5pinsRO/2runtimesRO/mutableRW, core26/event1,
+44preexisting schema tables/eight identity digests/non-churn counts preserved.
+PrimaryOPEN/cron4/MOMactive/health/source156binding audit08:26:14UTC; prepared same-
+database prior-runtime fallback, historical private backup never restored. No
+Windows/native/VM/lobby restart or unrelated public-game delta. Default-env byte
+preimage was not captured: no unchanged-env-bytes claim. Fresh RUNS544record/168view bytes, presence
 and meaningful stats match prior classified inputs and unchanged parser helpers:
 344record/7view faults retained, zero drift, NOT clean/new raw reparse/SAVES evidence.
 No full fleet/reservation/hard whole-job budget/current-source/old-external-writer uniqueness
