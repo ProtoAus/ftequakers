@@ -103,7 +103,51 @@ typedef struct
 	short			ang[3];
 	int				fm, sm, um;
 	unsigned int	buttons;
+	qboolean cmdvalid, predvalid;
+	int predpm, seedseq, phasehit, parts, ticks;
+	float seedcarry;
 } pring_t;
+
+typedef struct {
+	qboolean valid;
+	int sequence, phasehit, parts, ticks;
+	float carry;
+} pred_diag_seed_t;
+
+static void CL_PredictionDiagAnchor(pred_diag_seed_t *d, int sequence, float carry, qboolean phasehit)
+{
+	if (d->valid)
+		return;
+	d->valid = true;
+	d->sequence = sequence;
+	d->carry = carry;
+	d->phasehit = phasehit;
+}
+
+static void CL_PredictionDiagKeep(playerview_t *pv, int sequence, int pmtype, int seedseq, float seedcarry, qboolean phasehit, int parts, int ticks)
+{
+	pv->prop.diag.valid = !IS_NAN(seedcarry);
+	pv->prop.diag.sequence = sequence;
+	pv->prop.diag.pmtype = pmtype;
+	pv->prop.diag.seedseq = seedseq;
+	pv->prop.diag.seedcarry = seedcarry;
+	pv->prop.diag.phasehit = phasehit;
+	pv->prop.diag.parts = parts;
+	pv->prop.diag.ticks = ticks;
+}
+
+static void CL_PredictionDiagCopy(pring_t *r, const playerview_t *pv, int sequence, qboolean cmdvalid)
+{
+	r->cmdvalid = cmdvalid;
+	r->predvalid = pv->prop.diag.valid && pv->prop.diag.sequence == sequence;
+	r->predpm = r->predvalid ? pv->prop.diag.pmtype : 0;
+	r->seedseq = r->predvalid ? pv->prop.diag.seedseq : 0;
+	r->seedcarry = r->predvalid ? pv->prop.diag.seedcarry : 0;
+	r->phasehit = r->predvalid ? pv->prop.diag.phasehit : 0;
+	r->parts = r->predvalid ? pv->prop.diag.parts : 0;
+	r->ticks = r->predvalid ? pv->prop.diag.ticks : 0;
+}
+
 static pring_t pring[MAX_SPLITS][PRING_MAX];
 static int pring_head[MAX_SPLITS], pring_n[MAX_SPLITS], pring_lastseq[MAX_SPLITS], pring_dumps, pring_firsti;
 static int pring_server[MAX_SPLITS];	//cl.servercount the rows belong to
@@ -486,6 +530,7 @@ CL_PredictUsercmd
   is keyed on the chain's sequences.  Set around the two calls in
   CL_PredictMovePNum and tested beside the hook.*/
 static qboolean cl_pred_localchain;
+static int cl_pred_diag_parts, cl_pred_diag_ticks;
 /* P924: packet snapshots never contained msec_carry. A player's last rendered
    prop is not an authoritative command's phase. One string stat keeps its tag
    and value atomic even when the stat sender runs out of packet space. */
@@ -524,26 +569,27 @@ void CL_CacheSourcePhase(int seat, const char *text)
 	cl.sourcephase[seat][slot].valid = true;
 }
 
-static void CL_PredictSourcePhase(int seat, int sequence, player_state_t *state)
+static qboolean CL_PredictSourcePhase(int seat, int sequence, player_state_t *state)
 {
 	unsigned int slot, localowner = cl.playerview[seat].playernum + 1;
 	float phase, tick = movevars.ticrate < 0.001f ? 0.015f : movevars.ticrate;
 
 	if (movevars.physicsmode != PHYSMODE_SOURCE || IS_NAN(tick) ||
 		strcmp(InfoBuf_ValueForKey(&cl.serverinfo, "fs_sourcephase"), "1"))
-		return;
+		return false;
 	if (cl.playerview[seat].source_return.minack && sequence <= cl.playerview[seat].source_return.minack)
-		return; // the neutral prepared seed has reset phase, even if a stat string is stale
+		return false; // the neutral prepared seed has reset phase, even if a stat string is stale
 	CL_CacheSourcePhase(seat, cl.playerview[seat].statsstr[STAT_FS_SOURCEPHASE]);
 	// Keep phases at receipt, including packets read between rendered frames.
 	slot = (unsigned int)sequence & UPDATE_MASK;
 	if (!cl.sourcephase[seat][slot].valid ||
 		cl.sourcephase[seat][slot].sequence != (unsigned int)sequence ||
 		cl.sourcephase[seat][slot].owner != localowner)
-		return;
+		return false;
 	phase = cl.sourcephase[seat][slot].carry;
-	if (phase < 0 || phase >= tick) return;
+	if (phase < 0 || phase >= tick) return false;
 	state->pmsrc.msec_carry = phase;
+	return true;
 }
 
 static void CL_PredictUsercmdPart (int pnum, int entnum, player_state_t *from, player_state_t *to, usercmd_t *u, float offsetmsec, qboolean *carrier_cleared, qboolean later)
@@ -676,6 +722,11 @@ static void CL_PredictUsercmdPart (int pnum, int entnum, player_state_t *from, p
 	VectorCopy(pmove.origin, preorigin);
 	preground = pmove.onground;
 	PM_PlayerMove (cl.gamespeed);
+	if (cl_pred_localchain)
+	{
+		cl_pred_diag_parts++;
+		cl_pred_diag_ticks += pmove.ticksrun;
+	}
 	if (cl_pred_localchain && pmove.portalcrossings)
 		CSQC_PredictPortalAngles(pnum, u);
 
@@ -714,6 +765,8 @@ static void CL_PredictUsercmdPart (int pnum, int entnum, player_state_t *from, p
 void CL_PredictUsercmd (int pnum, int entnum, player_state_t *from, player_state_t *to, usercmd_t *u)
 {
 	qboolean carrier_cleared = false;
+	if (cl_pred_localchain)
+		cl_pred_diag_parts = cl_pred_diag_ticks = 0;
 	CL_PredictUsercmdPart(pnum, entnum, from, to, u, 0, &carrier_cleared, false);
 }
 
@@ -1811,6 +1864,8 @@ void CL_PredictMovePNum (int seat)
 	qboolean	source_eye_valid = false;
 	float		source_eye_f = -1;	/*P1301: the fraction the feet were lerped by, -1 if they were not*/
 	int			pt_rec = -1;		/*P1301: this frame's cl_predtrace record, if any*/
+	qboolean diag_phasehit;
+	pred_diag_seed_t diag = {0};
 
 	/* Clear even on the early-return paths (disconnect/demo/pause/seat swap). */
 	if (!CL_SourcePracticeContext(pv))
@@ -2225,6 +2280,8 @@ void CL_PredictMovePNum (int seat)
 					r->pground = pv->prop.onground;
 					r->sground = from.state->onground;
 					r->pmtype = from.state->pm_type;
+					CL_PredictionDiagCopy(r, pv, from.frame,
+						cl.outframes[from.frame & UPDATE_MASK].cmd_sequence == from.frame);
 					// Diagnostic inputs belong to this acknowledged move and local seat.
 					const outframe_t *cmdframe = &cl.outframes[from.frame & UPDATE_MASK];
 					const usercmd_t *reportcmd = cmdframe->cmd_sequence == from.frame ? &cmdframe->cmd[seat] : NULL;
@@ -2298,11 +2355,14 @@ void CL_PredictMovePNum (int seat)
 			//FTESurf Patch 754: the posture the hull states, propagated or not (a
 			//resume after a no-prediction stretch seeds a zeroed pmsrc).  Our own
 			//predicted frames carry a matching hull, so this only acts on a snapshot.
-			CL_PredictSourcePhase(seat, from.frame, from.state);
+			diag_phasehit = CL_PredictSourcePhase(seat, from.frame, from.state);
 			PMSrc_ReconcileHull(&from.state->pmsrc, from.state->szmins, from.state->szmaxs, pv->statsf[STAT_VIEWHEIGHT]);
+			CL_PredictionDiagAnchor(&diag, from.frame, from.state->pmsrc.msec_carry, diag_phasehit);
 			cl_pred_localchain = true;	//FTESurf Patch 335
 			CL_PredictUsercmd (seat, trackent, from.state, to.state, to.cmd);
 			cl_pred_localchain = false;
+			diag.parts += cl_pred_diag_parts;
+			diag.ticks += cl_pred_diag_ticks;
 			pt_replays++;	//FTESurf Patch 269
 			if (movevars.physicsmode == PHYSMODE_SOURCE && movevars.sourceversion >= 11)
 				CL_SourceEyeKeep(seat, to.frame, to.state->origin);	//P1301; extrapolated partial commands are not kept
@@ -2317,6 +2377,8 @@ void CL_PredictMovePNum (int seat)
 				VectorCopy(pmove.velocity, pv->prop.velocity);	//FTESurf Patch 269c
 				VectorCopy(to.state->origin, pv->prop.origin);	//FTESurf Patch 335: for cl_prederror
 				pv->prop.sequence = i;
+				CL_PredictionDiagKeep(pv, i, to.state->pm_type, diag.sequence, diag.carry,
+					diag.phasehit, diag.parts, diag.ticks);
 			}
 		}
 
@@ -2910,18 +2972,19 @@ static void CL_PredErrDump_f(void)
 	}
 	pring_dumps++;
 	n = pring_n[seat];
-	VFS_PRINTF(f, "FTESURF-PREDRING 1\n# engine %s\n# rows %i seat %i now %.4f\n"
-		"# t seq porg(3) sorg(3) pvel(3) svel(3) pground sground pmtype msec pitch yaw roll fwd side up buttons\n",
+	VFS_PRINTF(f, "FTESURF-PREDRING 2\n# engine %s\n# command_identity ack-seat-tag-v1\n# rows %i seat %i now %.4f\n"
+		"# t seq porg(3) sorg(3) pvel(3) svel(3) pground sground pmtype msec pitch yaw roll fwd side up buttons cmdvalid predvalid predpm seedseq seedcarry phasehit parts ticks\n",
 		version_string(), n, seat, realtime);
 	for (k = 0; k < n; k++)
 	{
 		const pring_t *r = &pring[seat][(pring_head[seat] - n + k + 2 * PRING_MAX) % PRING_MAX];
-		VFS_PRINTF(f, "%.4f %i %.2f %.2f %.2f %.2f %.2f %.2f %.1f %.1f %.1f %.1f %.1f %.1f %i %i %i %.2f %.3f %.3f %.3f %i %i %i %u\n",
+		VFS_PRINTF(f, "%.4f %i %.2f %.2f %.2f %.2f %.2f %.2f %.1f %.1f %.1f %.1f %.1f %.1f %i %i %i %.2f %.3f %.3f %.3f %i %i %i %u %i %i %i %i %.9g %i %i %i\n",
 			r->t, r->seq, r->porg[0], r->porg[1], r->porg[2], r->sorg[0], r->sorg[1], r->sorg[2],
 			r->pvel[0], r->pvel[1], r->pvel[2], r->svel[0], r->svel[1], r->svel[2],
 			r->pground, r->sground, r->pmtype, r->msec,
 			SHORT2ANGLE(r->ang[0]), SHORT2ANGLE(r->ang[1]), SHORT2ANGLE(r->ang[2]),
-			r->fm, r->sm, r->um, r->buttons);
+			r->fm, r->sm, r->um, r->buttons, r->cmdvalid, r->predvalid, r->predpm,
+			r->seedseq, r->seedcarry, r->phasehit, r->parts, r->ticks);
 	}
 	VFS_CLOSE(f);
 	FS_FlushFSHashWritten(path);	//as COM_WriteFile: else QC's fopen cannot see the new file (P1195 arm 1)
