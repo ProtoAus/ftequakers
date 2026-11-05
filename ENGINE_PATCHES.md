@@ -1,5 +1,35 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1334 — distinguish unmodelled similarity input from malformed input
+
+**Problem.** An existing unsupported clock-model refusal was reported as malformed
+input by both the comparison API and standalone diagnostics. This is an absence
+of a supported measurement, not a demonstrated input defect or measured zero.
+
+**Change.** Add a typed unmodelled refusal without widening parser eligibility;
+project a fixed skip category through collector/summary/authenticated review and
+standalone pair/census. Malformed native/move input and valid comparisons retain
+their old meanings. Existing historical rows are not reclassified or retried.
+No new raw field/format/schema, clock model, threshold/player-verdict/enforcement,
+identity/retention policy, native code/pin/tag or qcbuild change.
+
+**Verified.** Baseline14reader/5collector cases pass; four unsupported-format and
+one collector falsifier fail as predicted. Fixed native structural compare/bad
+witness and seven collector/history cases pass. Initial absent-tag negative fixture
+failures retained; corrected actual hseal mutation asserts changed bytes. Final
+focused30reader+7collector/history pass on Windows and actualLinux. Both platforms
+309 counted unittest cases across34related invocations retain TWO single-assertion
+connection-count failures, reproduced by pristine prefeature94ce7bb9 whole-source
+controls on each platform. Windows7platformskips versus Linux6Node-skips; not a
+clean full-suite claim. Untouched attribution gap in BACKLOG. ThreeVM0warnings,
+Windows11native/progs hashes held; reader949/0. Fresh548REC178VIEW344/7faults held:
+716exact reports reused with unchanged core reader,10newviews actuallyparsed/clean.
+Initial new-input refusal retained. Canonical census/recsim.py is OUTSIDE the
+collectors84 seal and needs separate exact helper provenance/rollback. Two whole-
+feature reviews and delivery pending. This is not native replay/hardware acceptance
+or historical remeasurement coverage.
+Details: tools/p1334-similarity-unmodelled.md.
+
 ## Patch 1333 -- requested current-file consistency (backend only)
 
 **Problem:** Historical similarity captures identify the buffers measured then,
