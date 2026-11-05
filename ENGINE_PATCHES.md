@@ -23,8 +23,30 @@ predecessor, same archived program. ARMfourhistorical verdicts exact, legacy HOL
 retained; Windows historical verdicts NOT claimed. Reader949 at identical three
 source blobs; exact currentRUNS544 all bytes/classifications unchanged (344faultedREC,
 7faultedVIEW), no clean/SAVES claim. Private hooks removed; symbols/outputs frozen.
-Fresh independent review/publication/deployment remain pending; no canonical
-install, data rewrite or Pi restart. Raw vectors/original failed logs stay private.
+Two independent source/physics and evidence/consumer reviews found no blocking
+issues; existing bounded unsupported/general-writer/full-bank limits remain.
+Deployment pending; no canonical install, data rewrite or Pi restart yet. Raw
+vectors/original failed logs stay private.
+
+## Patch 1311 -- expand Boreas/Demise shader warm coverage (assets only)
+
+**Problem.** The existing starter list omitted three shader permutations observed
+while traversing surf_boreas and surf_demise replays, leaving their coverage to
+per-PC learning even with the warm loader enabled.
+
+**Change.** Add exactly the observed water, refract and animated permutations
+to the mod's existing loading-time seed. No new shader programs,
+quality reduction, settings migration, native code/pin/tag or QC Build change.
+
+**Verified.** Original fixtures learned two Boreas entries and one Demise entry.
+Expanded-seed isolated fixtures started without a per-PC list and learned no
+additional variants over two traversals of each route; actual scenes/screenshots
+and playback start/stop inspected. Seed syntax/bitmask/cap/dedup and exact delta
+checks pass. This is known-variant coverage, NOT zero runtime compiles or all-map
+readiness: the existing two-second budget and late-created programs remain.
+Boreas' separate 39-40 ms first-traversal gfx hitch persists. Native capture probe
+is diagnostic only and remains unqualified; no no-hitch/numerical FPS claim.
+Details and deployment provenance: FTESurf tools/p1311-map-prewarm.md.
 
 ## Patch 1310 — observe accepted shallow full-walk gravity use
 
@@ -125,8 +147,19 @@ and accumulate slow manual pitch before overriding Follow travel. Actual-C67399
 checks pass; the unchanged old cancel body fails exactly2 new lifecycle checks.
 Real100fps/1degree-per-second keyboard look fails on the old camera and passes
 on the corrected camera. The first reconnect observer read native-cap0/default
-UI state and is NOT live reconnect acceptance. ARM and destination qualification
-remain pending here; no deployment is implied. Human ramp/camera feel is pending. Whole-history normal-play editing, recipe/filter continuity, cold
+UI state and is NOT live reconnect acceptance. Clean ARM source59 passes1557 native self-tests;
+normalized warnings17baseline/17current/0NEW. Exact Windows28-target promotion
+preserves18261 config/data/alias hashes and52 predecessor/prior-prev preimages.
+Installed primary core actor12checks pass; secondary GUI20assertions pass before
+an optional screenshot-name collision (failure retained). All12Pi actors now run
+source59 with exact native/plugin/QW/CS and predecessors, no force. Pi strict old-
+data postflight FAILED: one resume's recording moved byte-identically to evidence,
+and its ms/state metadata disappeared; this matches existing resume cleanup, but
+old metadata/expiry cannot be retrospectively qualified. Other46352 old paths,
+config/backend and all8archived recorder parts preserve their checks. No data was
+restored, no healthy restart repeated, no maintenance gate remains. This is NOT
+an exact-old-path preservation pass. Human ramp/camera feel and full editor remain
+pending. Source59/tag are unchanged; these are subsequent delivery observations. Whole-history normal-play editing, recipe/filter continuity, cold
 replay, sections and constrained solving remain in-scope work, not completed by
 this controller. Details/limits: mod `tools/p1308-tas-controller.md`.
 
