@@ -30,8 +30,18 @@ Full existing admin script's two UDP-amplification/snapshot assertions also fail
 with the exact unchanged prefeature admin source; retained, not repaired or called
 clean. Actual Linux full admin controls pass (Node skipped there); the first
 owned overlay lacked board.html and its one404 is retained, then that exact
-public static input fixed the fixture only. Whole-feature reviews and actual
-deployment pending at this checkpoint.
+public static input fixed the fixture only. Two fresh independent whole-feature
+reviews clear with stated limits. Backend-only generation5bf3bda3b6c69bbc5ef63624ab88984dbc9b8b49
+DELIVERED5Nov22:45:40UTC: actual12f7 predecessor plus ONLYadmin.py/admin_run.html;
+other82runtime and guards/external origins unchanged. Both CLOSED real candidates
+and6closure negatives pass; synthetic login/POST primary200/fallback404 plus
+401/400/403 refusal controls. Real156bound origins/5ROpins/2ROruntimes/RWdata,
+44schemas/nonchurn counts/eight identity tables/default environment held; core26/
+event1 unchanged,4cron/MOMactive, old+fallbackCLOSED/newOPEN. Historical backup
+BEFORE live closure, SAMEdata rollback/no restore. Live anonymous401 and public
+health200/directory12 pass; actual owner panel acceptance pending. Failed observer
+result-key and guessed directory-path probes retained, fixed read-only without a
+second healthy activation/restart. Required production/history roots retained.
 Cooperative admission is not hard kernel/disk/global invocation bounds; requested
 bytes are not authenticity or a coherent global instant. Human readability and
 historical-skip remeasurement remain separate. tools/p1333-similarity-current.md.
