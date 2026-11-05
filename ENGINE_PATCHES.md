@@ -23,9 +23,44 @@ alternative; whole observer OFF/ON body and config identity hold. Private hooks
 removed; final public1,571/1,571. Two independent whole-feature source reviews
 support the correction; the evidence reviewer identified the airborne/full-entry
 proof gap, now independently re-reviewed and resolved by the extended native arms.
-Clean exact-source platforms, integration/reader/corpus and installation remain
-in progress; no live/ranked/full-bank or general native-writer audit claim.
-Raw fixture values, private vectors and native/failed logs remain private.
+Clean combined sourcef09/tagpatch-1310 preserves published TAS1308 and winter
+journals. Both Windows/ARM repeat8,266 expanded and1,571 final controls;90six-map
+rows and4historical verdicts exact. Reader949PASS; exact current RUNS544inputs
+have identical old/current-reader findings (344faultedREC,7faultedVIEW), not a
+clean-corpus or SAVES claim. BOTH actual Windows primary client/server/plugin
+sets installed00:21:06UTC5Nov:14destinations/.prev exact,18,273protected paths
+unchanged, installed dedicated1,571each. Secondary primary isfteqw64.exe; the
+optionalftesurf64.exe alias stays protected. Pi build qualified but promotion
+pending a peer preservation reconciliation; no P1310 lobby restart yet.
+No live/ranked/full-bank or general native-writer audit claim. Raw fixture
+values, private vectors and native/failed logs remain private.
+
+## Patch 1309 — bounded winter weather / liquid frost preview (QC/assets only)
+
+**Problem.** The requested winter ambience, sky flash/bolt and frozen-looking
+liquids were still unbuilt. Full-world relighting/captures or runtime roof traces
+would conflict with the owner's MAX-FPS priority; native acceptance is pending.
+
+**Change.** Opt-inOFF cached-roof outdoor/sheltered original PCM wind, delayed
+muffled thunder, one transient actual sky-portal mesh with a sparse baked fork,
+and one static upward liquid frost mesh with a per-face lava bit/view highlight.
+No contents/collision/movement/damage or existing sky/soundscape change. Roof
+float table capped262144bytes, bulk fread once; no per-frame I/O/geometry/trace
+or allocation. Existing loading warm list includes ice/sky/mist variants; cosmetic
+gibs prefix reuses default native convex-decomposition exclusion without cvar
+mutation. Conservative mesh limits hold only oversized features, not the task.
+
+**Verified.** Exact approved c24 compiler, all3 VMs ZERO warnings. Three offline
+surface/roof controls; actual finite/index/size audits: Frost570sky/234ice and
+Christmas1103ice,65536roof cells each. Christmas6306sky held by4096cap; Bluewinter
+no eligible world sky/liquid and skipped, not a false outdoor pass. Original4PCM
+signals nonzero/bounded. Actual bolt671/8192alpha pixels (8.19%) passes preregistered
+10% control after retained12.13% first failure; criteria not weakened. These are
+SOURCE/DATA checks, NOT native renderer/audio/cold/moving-view acceptance. No
+numerical FPS/no-hitch, native pin/tag, QC Build, authority or evidence change.
+No competing P1287 world snow override. Generated coarse snowmask scaffolding
+MUST NOT replace fine falling-snow masks. Details: FTESurf tools/p1309-weather.md.
+Installation/provenance recorded separately after actual delivery.
 
 ## Patch 1308 — independent TAS surf controls and precise yaw cache
 
