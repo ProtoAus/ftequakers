@@ -48,7 +48,14 @@ meshes retained as acted wrong-winding controls. Four distinct mono22050Hz
 bounded PCM files. Original caps/grass shaders compile on this driver: the initial
 reserved-keyword hypothesis was FALSIFIED, not claimed as root cause. Small native
 look/sound/ride/FPS check remains owner-pending. FTESurf tools/p1319-winter-correction.md.
-Native pin/tag and QC Build unchanged.
+Native pin/tag and QC Build unchanged. Actual5Nov delivery: BOTH Windows102
+explicit destinations at10:47UTC (32protected paths unchanged); corrected client
+06585861c9af… and58media verified in current12-lobby fleet11:14UTC. Original
+paired rollout FAILED after5verified restarts on status timeout; subsequent
+remaining-only guard refused FD uncertainty/peer server advancement without
+further restart requests. Peer P1320 advanced all12epochs retaining this client;
+independent read-only endstate proves46,766old protected paths unchanged. Do not
+regrade the failed transaction or overwrite/restart newer healthy peer work.
 
 ## Patch 1318 -- do not cache a nonexistent startup dynamic light
 
