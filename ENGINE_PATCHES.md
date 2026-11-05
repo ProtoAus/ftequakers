@@ -1,5 +1,27 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1324 -- ship complete winter media and readable Colin weather
+
+**Problem.** The release's nonrecursive asset allowlist omitted holiday/weather
+subdirectories and the Kenney notice. Colin's theme producer also emitted an
+eight-token `wxroof` header rejected by the existing ten-token `weather` reader.
+
+**Change.** Add seven narrow, nonrecursive runtime globs and the exact license
+file. Both weather producers share the existing header formatter; Colin supplies
+actual bounded sky/ice counts while preserving its conservative fine32-derived
+roof reduction. No native, movement, evidence-format, pin/tag or Build change.
+
+**Verified.** All three QC VMs compile with zero warnings at the combined public
+base. Standard isolated full Windows native build and clean pinned Linux build
+pass (Linux gates G1-G10). Original missing-asset preflight is retained; the fixed
+full release asset/policy preflight passes. All58 previously qualified corrected
+runtime media members are individually rehashed against their retained archive;
+tracked source is never replaced by old media. Four existing/extended theme tests
+pass, including legacy/Strata/cycle controls and old-header rejection. The actual
+producer reruns against exact inspected Colin BSP ce40b496; header now has10tokens
+and actual IQM1542/270counts. All131072roof payload bytes and corrected grass/caps
+IQMs remain byte-identical. Native appearance/audio/FPS acceptance is not claimed.
+
 ## Patch 1323 -- named historical input templates for local TAS (5 Nov 2026)
 
 **Problem:** A captured selection could not be reused independently of its source
