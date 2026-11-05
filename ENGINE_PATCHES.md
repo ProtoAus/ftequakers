@@ -14,15 +14,18 @@ boundaries. No new index/table/schema, capture/format/API/default/threshold/badg
 tier/ranking, game program, native source/pin/tag or Build change. Separate reads
 are not a coherent snapshot, work reservation/completion or global hard budget.
 
-**Verified.** Acting untouched interruption and actual native-buffer reader
-positive; fixed default reaches same80-opportunity pair with independent writer
+**Verified.** Acting untouched interruption and actual reader on synthetic buffers;
+fixed default reaches same80-opportunity pair with independent writer
 committing during files and exact source capture.217unittests0failures/errors,
-4known Windows skips, legacy script0; exact old-query ordering across48cursor/limit
+4known Windows skips; Linux3.11same217/0/0, legacy scripts0 on both; exact old-query
+ordering across48cursor/limit
 combinations, real sparse-selection cap/positive, required-wrap actual interruption
 without partial result/advance and legacy read-only schema. Reader949/0;546-record
 corpus344REC7VIEWfaults unchanged via545exact prior records/168views plus1new parsed
-clean. Original fixture/observer failures retained. Linux, independent reviews and
-actual delivery recorded separately: FTESurf tools/p1322-simcheck-selection.md.
+clean. Original fixture/observer failures retained, including first sparse Linux
+archive missing the existing heldmeta reader dependency. Read-only actual backend
+module matches acting baseline; no live mutation. Independent reviews, frozen
+runtime and actual delivery recorded separately: tools/p1322-simcheck-selection.md.
 
 ## Patch 1320 -- preserve paused slots until discard is authorized
 
