@@ -1,51 +1,29 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
-## Patch 1319 -- named historical input templates for local TAS (5 Nov 2026)
+## Patch 1321 -- named historical input templates for local TAS (5 Nov 2026)
 
-**Problem:** The captured-line editor could change a selection with its current
-live draft, but could not retain a named historical input selection or reuse it
-without confusing the source's expired body/context with the current target.
+**Problem:** A captured selection could not be reused independently of its source
+body/context. Pre-shipment review also found keyboard ownership and unreadable
+staged-file preservation defects. Earlier unpublished labels1317/1319 collided
+with separate winter work; historical receipts retain their original labels.
 
-**Change:** QC-only named recipes reference retained immutable input revisions,
-record an exact span/count and fixed map clock, and copy only admitted input rows
-into the existing current-run preview transaction. Project has name entry,
-Save/Preview/Keep/Discard; Timeline Undo/Redo retains kept edits. Source body,
-recorder prefix, native token, signature and authority are never imported.
-Strict source/profile and fixed-clock/count checks precede placement. Native
-C, native pin/tag, recording formats and qcbuild are unchanged. These are literal
-input templates; original procedural generating intent remains unknown.
+**Change:** QC-only named references copy admitted, exact-count/fixed-clock input
+rows onto the target's own warm base, preserving future rows and immutable
+Preview/Keep/Discard/Undo/Redo. No source body/token/recorder prefix/authority is
+imported. Direct per-scan tracking pairs owned QC edges, keeps repeats ahead of
+later capture, types before chat binds and forwards native stored releases even
+across unobserved original presses. Both destination names require confirmed
+uncached absence before freeze/write. No native C/pin/tag/format/qcbuild change.
 
-**Verified:** Three VMs zero warnings. Same-line14, normal-widget16 and
-fresh-process/current-base20 acting controls pass; the last uses a separately
-saved eight-row tail, preserves every future row and the current base, and
-executes Discard/Keep/Undo/Redo with monotone counters. Count/name/missing-template
-refusals preserve native/body/project state. Reader949/0. Current runs-only544
-record/view inputs have unchanged bytes and identical per-record findings to
-the retained control:352 stored fault entries in each. The old351 summary is
-not its stored finding total; failed scalar/list-order observer receipts remain
-failed. See tools/p1319-tas-recipes.md. Review/deployment and owner feel/real-device
-Sign are pending. No cold body/world, arbitrary command-time, procedural recipe,
-long-history, section or next-ramp-solver completion is claimed.
-
-**Pre-shipment review corrections:** Two independent readers found unpaired
-name-field releases, chat-key priority and fopen-based unreadable-stage absence.
-The same Patch1319 now retains only its owned releases across focus/tab/close,
-refuses to adopt pre-focus repeats, routes focused typing before chat binds while
-respecting an existing draft/higher cursor, and checks both names with the existing
-conservative uncached namespace helper before freeze/write. The helper also checks
-its own native capabilities. Untreated8setup/4predicted failures; corrected16/0
-includes actual chat-bound-name saving and Windows read-denied/write-accessible
-stage preservation with exact ACL restoration. One partial observer looked for
-the wrong default-prefixed name and remains failed. This is synthetic chain and
-Windows namespace coverage, not hardware movement, genuine Sign, POSIX-specific
-overwrite reproduction or concurrent-writer proof. A follow-up reader found
-bounded-observer recovery could still adopt a previously omitted repeat. The
-untreated9/1 arm acts that failure; direct per-scan keyboard tracking (1..511,
-2KiB VM allocation, no mid-hold retry on failure) removes that dependency.
-Combined19/0 replays the saturation/control transition, an acting fresh field
-press and the ordinary input/name/chat/Windows-stage checks. Unsupported scans
-are not acquired. Hardware, VM-reload continuity and allocation-failure execution
-remain unclaimed. Re-review of this correction is pending.
+**Verified:** Three VMs zero warnings. Same-line14/widget16/fresh-process20 pass;
+corrected input/name/read-denied-stage19/0 and actual native-binding/capture7/0
+pass against retained acting failures. Windows stage bytes/native/body/workfile
+survive and ACL restores exactly. Reader949/0;544 input/view byte sets retain
+identical findings,352 stored entries in each. Details and failed observers:
+FTESurf tools/p1321-tas-recipes.md. Re-review, deployment and owner feel/signing
+remain pending. No hardware/OOM/VM-reload, concurrent-writer, cold-world,
+command-time, procedural-intent, long-history, section or next-ramp completion
+claim. A null allocation latches disabled; native allocation errors can abort QC.
 
 ## Patch 1318 -- do not cache a nonexistent startup dynamic light
 
