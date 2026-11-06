@@ -1,5 +1,28 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1335 -- Christmas master, optional marks and close ramp dirt
+
+**Problem.** Seasonal effects need a Christmas gate; marks/dirt should default
+off. Dirt floats because lift defaults2units while depthpush is not an FTE
+shader keyword. Current live P1329/P1330 APIs must not be downgraded.
+
+**Change.** r_christmas0 gates snow, weather loading/frame/audio, Colin theme,
+props/mist; existing preferences retained. Display Info/reset rows for master,
+marks and dirt. Marks0/dirt0, default lift1/32unit bounded1/8 for old saved2;
+live lift change reloads mesh once, disabled marks skip setup/draw. Supported
+polygonoffset1 replaces ignored depthpush, distinct material cache keys. Exact
+client-defaultcfg hunk only; no peer config overwrite. No native pin/tag/QW/
+menu/backend/media/physics/evidence/QC Build change.
+
+**Verified.**8source-bound master/map/manual cases include acted ON controls;
+load/frame/default/UI/clear-sound/source guards pass. Actual native offset
+function executes with negative units/factor and flag set (parser stubs only).
+Ramp bake/blend4controls and native sampler/colour/flash regressions pass;
+current-main3VM0warnings. Fixture declaration/cache-expectation failures retained,
+not product waivers. Exact-commit clean qualification/scoped delivery pending.
+Same-ramp grazing/flicker/bleed and seasonal off/on owner acceptance remain
+manual, no native timing/FPS claim. Tools/p1335-christmas-ramp-defaults.md.
+
 ## Patch 1334 — distinguish unmodelled similarity input from malformed input
 
 **Problem.** An existing unsupported clock-model refusal was reported as malformed
