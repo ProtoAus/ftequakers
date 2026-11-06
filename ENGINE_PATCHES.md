@@ -1,5 +1,32 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1354 -- report non-finite similarity output as unavailable
+
+**Problem.** The actual comparison reader can return NaN or infinite optional
+recording tickrate metadata after doing real comparisons. SQLite INSERT OR IGNORE
+silently omits NaN observations; infinities can instead persist despite being
+unusable by the existing admin projection. Neither reported a pair availability
+failure. An initial whole-batch-loss prediction was disproved: good peers survive.
+
+**Change.** Require finite match/cover and both rates before packing an observation.
+Invalid output uses the existing pair-failed/unmeasured path, not a fabricated
+skip, zero score, malformed-player accusation or clean result. Preserve finite
+legacy/mismatched rates, parser, source capture/history/schema, SQL rollback,
+thresholds, ranking, native pin/tag and QC Build. No historical rewrite/backfill.
+
+**Verified.** Clean sourcebf9c7b306bce2c8f538fcf13cc0c3be48e719005: Windows69focused
+cases pass; actual untreated10case suite fails23 assertions and missing-guard
+mutant fails realNaN/80opportunity control. ARM270unitcases/no skips and68standalone
+checks pass. Finite measured zero retains76opportunities; actual collector-step,
+admission, independent writer, captured-byte/old-row and wholeSQL-abort controls
+act. Reader949/0, stable548REC/178VIEW corpus retains351existing faults with reader
+and heldmeta byte-identical to prefeature. Two differently-lensed independent
+clean-source reviews find no blockers. Original disproved hypothesis, fixture/
+wrapper and ARM pre-execution permission/directory refusals retained; not one
+uninterrupted clean run. Actual guarded backend delivery is separately recorded
+in tools/p1354-simcheck-finite.md. This is finite-output availability validation,
+not comprehensive type/range semantics, fleet completeness or hard resource proof.
+
 ## Patch 1353 -- reported prediction, line labels, editor and texture fixes
 
 **Problem.** The NanoPi's Q1 snapshot converted negative float skins directly to
