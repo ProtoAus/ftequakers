@@ -5973,6 +5973,8 @@ void CL_LinkStaticEntities(void *pvs, int *areas)
 		stat = &cl_static_entities[i];
 
 		clmodel = stat->ent.model;
+		if ((r_refdef.flags & RDF_WORLDONLY) && clmodel && clmodel->type != mod_brush)
+			continue;
 
 		if (!clmodel)
 		{
@@ -5991,6 +5993,8 @@ void CL_LinkStaticEntities(void *pvs, int *areas)
 			if (!cl.worldmodel || cl.worldmodel->loadstate != MLS_LOADED)
 				continue;
 
+			if ((r_refdef.flags & RDF_WORLDONLY) && clmodel->type != mod_brush)
+				continue;
 			stat->ent.model = clmodel;
 
 			//figure out the correct axis for the model
@@ -6019,7 +6023,7 @@ void CL_LinkStaticEntities(void *pvs, int *areas)
 		}
 		else if (clmodel->loadstate != MLS_LOADED)
 		{
-			if (clmodel->loadstate == MLS_NOTLOADED)	//flushed?
+			if (clmodel->loadstate == MLS_NOTLOADED && !(r_refdef.flags & RDF_WORLDONLY)) //flushed?
 				Mod_LoadModel(clmodel, MLV_WARN);		//load it, but don't otherwise care for now.
 			continue;
 		}
@@ -6029,15 +6033,18 @@ void CL_LinkStaticEntities(void *pvs, int *areas)
 			continue;
 
 
-		// emit particles for statics (we don't need to cheat check statics)
-		if (stat->state.u.q1.emiteffectnum)
-			P_EmitEffect (stat->ent.origin, stat->ent.axis, MDLF_EMITFORWARDS, CL_TranslateParticleFromServer(stat->state.u.q1.emiteffectnum), &(stat->emit));
-		else if (clmodel)
+		// P1345: keep structural statics, not their emitters.
+		if (!(r_refdef.flags & RDF_WORLDONLY))
 		{
-			if (clmodel->particleeffect >= 0 && gl_part_flame.ival)
-				P_EmitEffect(stat->ent.origin, stat->ent.axis, clmodel->engineflags, clmodel->particleeffect, &stat->emit);
-			if ((!r_drawflame.ival) && (clmodel->engineflags & MDLF_FLAME))
-				continue;
+			if (stat->state.u.q1.emiteffectnum)
+				P_EmitEffect (stat->ent.origin, stat->ent.axis, MDLF_EMITFORWARDS, CL_TranslateParticleFromServer(stat->state.u.q1.emiteffectnum), &(stat->emit));
+			else if (clmodel)
+			{
+				if (clmodel->particleeffect >= 0 && gl_part_flame.ival)
+					P_EmitEffect(stat->ent.origin, stat->ent.axis, clmodel->engineflags, clmodel->particleeffect, &stat->emit);
+				if ((!r_drawflame.ival) && (clmodel->engineflags & MDLF_FLAME))
+					continue;
+			}
 		}
 
 		//prepare to draw it
@@ -6635,7 +6642,8 @@ void CL_LinkPacketEntities (void)
 						VectorCopy(le->origin, timer->origin);
 				}
 			}*/
-			R_AddItemTimer(timer->origin, cl.time*90 + timer->origin[0] + timer->origin[1] + timer->origin[2], timer->radius, (cl.time - timer->start) / timer->duration, timer->rgb);
+			if (!(r_refdef.flags & RDF_WORLDONLY))
+				R_AddItemTimer(timer->origin, cl.time*90 + timer->origin[0] + timer->origin[1] + timer->origin[2], timer->radius, (cl.time - timer->start) / timer->duration, timer->rgb);
 		}
 	}
 
@@ -6647,6 +6655,15 @@ void CL_LinkPacketEntities (void)
 		if (CSQC_DeltaUpdate(state))
 			continue;
 #endif
+		//P1345: retain actual brush geometry, reject decorative models before effects/lighting.
+		if (r_refdef.flags & RDF_WORLDONLY)
+		{
+			if (state->modelindex <= 0 || state->modelindex >= countof(cl.model_precache))
+				continue;
+			model = cl.model_precache[state->modelindex];
+			if (!model || model->type != mod_brush)
+				continue;
+		}
 
 		if (cl_numvisedicts == cl_maxvisedicts)
 			break;
@@ -6675,7 +6692,7 @@ void CL_LinkPacketEntities (void)
 		VectorCopy(le->origin, ent->origin);
 
 		//bots or powerup glows. items always glow, bots can be disabled
-		if (state->modelindex != cl_playerindex || r_powerupglow.ival)
+		if (!(r_refdef.flags & RDF_WORLDONLY) && (state->modelindex != cl_playerindex || r_powerupglow.ival))
 		if (state->effects & (EF_GREEN | EF_BLUE | EF_RED | EF_BRIGHTLIGHT | EF_DIMLIGHT))
 		{
 			vec3_t colour;
@@ -6724,7 +6741,7 @@ void CL_LinkPacketEntities (void)
 				}
 			}
 		}
-		if ((state->lightpflags & (PFLAGS_FULLDYNAMIC|PFLAGS_CORONA)) && ((state->lightpflags&PFLAGS_FULLDYNAMIC)||state->light[3]))
+		if (!(r_refdef.flags & RDF_WORLDONLY) && (state->lightpflags & (PFLAGS_FULLDYNAMIC|PFLAGS_CORONA)) && ((state->lightpflags&PFLAGS_FULLDYNAMIC)||state->light[3]))
 		{
 			vec3_t colour;
 			if (!state->light[0] && !state->light[1] && !state->light[2])
@@ -6765,7 +6782,7 @@ void CL_LinkPacketEntities (void)
 #endif
 		}
 
-		if (r_torch.ival && state->number <= cl.allocated_client_slots)
+		if (!(r_refdef.flags & RDF_WORLDONLY) && r_torch.ival && state->number <= cl.allocated_client_slots)
 		{
 			dlight_t *dl;
 			dl = CL_NewDlight(state->number, ent->origin, 300, r_torch.ival, 0.9, 0.9, 0.6);
@@ -7126,6 +7143,8 @@ void CL_LinkPacketEntities (void)
 		ent->framestate.g[FS_REG].frame[0] &= ~0x8000;
 		ent->framestate.g[FS_REG].frame[1] &= ~0x8000;
 
+		if (r_refdef.flags & RDF_WORLDONLY)
+			continue; // structural entity already linked; no shells, vweaps, emission or trails.
 		CLQ1_AddShadow(ent);
 		CLQ1_AddPowerupShell(ent, false, state->effects);
 
@@ -7208,6 +7227,8 @@ void CL_LinkPacketEntities (void)
 	CSQC_DeltaEnd();
 #endif
 
+	if (r_refdef.flags & RDF_WORLDONLY)
+		return;
 	CLQ1_AddVisibleBBoxes();
 	CLQ1_AddVisibleHulls();
 	CLQ1_AddVisibleBrushes();	//FTESurf Patch 319

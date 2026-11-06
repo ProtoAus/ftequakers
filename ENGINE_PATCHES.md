@@ -29,6 +29,32 @@ separate, still pending at this source checkpoint. Initial census:955/955 map me
 43 tier7/8 maps,1348 course/style boards;236 complete,26613 held times,718 playable
 advertised replays. This is NOT a claim that all upstream times/replays are acquired.
 
+## Patch 1346 -- recover interrupted similarity source admissions (backend only)
+
+**Problem.** Source rotation was durable before comparison, but an interrupted
+comparison had no durable recovery slot. Later sweeps could rotate past that
+admitted source without first recovering its unfinished comparison.
+
+**Change.** Reuse a distinct source key in existing cursor storage. Atomically
+commit rotation plus reservation before file work; recover an eligible reserved
+source before ordinary bounded keyset/wrap selection; clear only the matching
+reservation after handled completion. Abrupt exits and failed completion retain
+it. Comparisons remain outside owned write transactions. No schema, recording,
+comparison threshold, historical observation, ranking, enforcement, native, VM,
+Build or release-version change; engine commit/tag pins are unchanged.
+
+**Verified.** Exact frozen product diff passed two independent fresh-context
+read-only reviews. Windows and Linux each pass all 28 simcheck test programs,
+including 11 new reservation cases; baseline and admission-removed controls each
+have seven intended failures. Real 80-opportunity comparisons, child interruption,
+reopen, transaction/contender ownership and old capture preservation act. A new
+Windows combined cap/wrap/budget falsifier stores both real 80-opportunity pairs;
+baseline SQL selects but fails recovery order. Its manually seeded reservation
+cannot discriminate the admission-removed control; that is not claimed as new
+mutation coverage. Reader 949 checks pass; primary RUNS corpus faults do not
+increase and protected input bytes are unchanged. Existing saves unreadability,
+legacy test import and baseline warning limits remain explicit, not waived.
+Source validation is not deployment or a fairness/hard-time/exactly-once claim.
 
 ## Patch 1343 -- relative teleport enable, lookahead and report parity (QC only)
 
@@ -56,9 +82,12 @@ baseline, NOT fault-free. Both independent rechecks closed runtime findings.
 Deployed6Nov2026UTC: both Windows verified09:17, all12Pi09:33; new actors,
 paired programs/.prev exact,19340Windows and47924Pi protected paths unchanged.
 All8parts/183resume files byte-exact after ON/OFFBOX capture/restart; native,
-menu/config/backend unchanged; all join capacities restored. Graphical served-
-code/render smoke NOT run:4-GiB gate observed2719MiB, no game launched. Native
-PVS/feel and owner check remain pending, not a pass. Provenance/limits:
+menu/config/backend unchanged; all join capacities restored. Cold served-client/
+UI smoke passed6Nov10:28:42UTC after RAM freed:66squiet/min5212MiB,4096-MiB gate
+unchanged. Exact Pi CS01815ce0download, board cols9/type14, exit0/completion,
+no detected QC runtime errors; screenshot HUD/empty-state inspected, NOT populated
+rows or textured-world correctness. Own rig retired/proof retained/lock released;
+no rebuild/deploy/restart. Native PVS/feel and human check still pending. Limits:
 tools/p1342-save-release.md and tools/p1343-relative-teleports.md; lextest.md.
 
 
@@ -93,12 +122,66 @@ prior runtime findings; remaining stale shared D38 comment corrected to D42 with
 same-line comment equivalence, no program rebuilt or evidence redated. Paired
 rollout completed6Nov2026UTC (Windows09:17, all12Pi09:33); full protected/data/
 rollback/actor checks above passed. Reader949pass reused on unchanged source;
-final primary RUNS548/351equals baseline, NOT fault-free. Native served-client/
-render smoke is blocked at4-GiB gate (2719MiB); human/native feel still pending.
-Source/program provenance and validation limits: tools/p1342-save-release.md.
+final primary RUNS548/351equals baseline, NOT fault-free. Cold native served-client/
+UI smoke passed6Nov10:28:42UTC: exact Pi CS01815ce0download, board cols9/type14,
+exit0/completion and no detected QC runtime errors; screenshot empty-state inspected.
+66squiet/min5212MiB preserved4096-MiB game gate; unique proof retained, own copied
+rig retired/lock released. Not rapid-save release/packet ordering/physics/PVS/feel
+acceptance; human check still pending. No source rebuild/redeploy/restart.
+Source/program provenance and limits: tools/p1342-save-release.md.
 No full packet/collision/PVS/feel/historical-cause claim; tools/p1342-save-release.md,
 lextest.md.
 
+
+## Patch 1345 -- exact frame reports and smoother map-only noclip
+
+**Problem:** Slow-frame ties could retain an expired slot, use the wrong camera
+location or repeatedly rebuild the ring. Long real stalls were omitted and dump
+histogram tails/ranks were approximate. Full-map noclip also paid for unnecessary
+props/effects. At the first void crossing, recursive reflections cleared the new
+map-only policy and revived static props' cold exact lighting-visibility traces.
+
+**Change:** Retain slot identity/newest-first ties, include long intervals and
+report focus exclusions/coverage. Live histogram estimates stay cheap; an explicit
+dump sorts captured raw samples for exact tails, nearest-rank percentiles and
+median-threshold stutters, with a checked256KiB temporary cap and atomic OOM
+refusal/rebase. Read-only VF_WORLDONLY228 classifies the final primary noclip
+camera. With r_voidvis, nonarchived r_voidscene defaults1: retain BSP, loaded
+structural brushes, authored func_lod eligibility and frustum policy; omit native
+and QC decoration/effects. Preserve the explicit parent's policy in recursive
+reflection children instead of restarting cosmetic prop lighting there. Fresh
+primary/named scenes clear/rederive it; the raw void predicate remains view-local.
+Normal parents never acquire the bit. Keep reflection geometry and exact normal
+lighting; omit the optional3D skyroom only in map-only scenes, not normal views. Clear uncovered
+primary mono single-seat forced-void pixels in both scene modes; exclude native
+secondary/recursive/stereo/named-target/loading contexts and supply every native
+point-query output. Observe scoped primary offered candidates BEFORE culling, not
+rendered-model totals. Avoid sprite name/prefix work without changing trace/cache
+scheduling. No physics formula, wire or recording-format change by this patch.
+
+**Verified:** Actual sampler controls:440/10 original failures,13992/0 corrected;
+pre-exact dump fails58of14100, exact source14100/0 including OOM/ties/ranks/stalls.
+Literal query5760/0, loaded-brush classifier280/0/no loads, color-clear4423680/0
+with acting old/null-output/stereo/secondary controls. Actual candidate-census
+fragments432/0; the legacy nested overwrite control acts. Actual policy-reset
+fragment1280/0; primary clears stale policy, recursive children retain only an
+existing bit, unrelated flags and pure query bodies unchanged. Native three-map
+pixel/geometry controls and complete CSQC profiles are retained separately from
+rejected/print-stalled/one-ULP comparisons. Initial native gate and narrow authored
+LOD callback act; counters are not draw counts. Qualified current-mode1 native
+attribution binds exact EXE/debug/plugin symbols: first boundary161samples,
+154BIH_Trace/156HL2_CalcModelLighting, in recursive reflections. After policy fix,
+first/repeat natural crossing events have no armed12ms spike/sample. Instrumented
+attribution is NOT product FPS or proof of no smaller hitches; one setup outlier
+before the boundary remains explicit. No positive lazy-compile hook control, so
+P0 is not universal no-compilation evidence. Probe source removed from exact owned
+preimages; no diagnostic sampler may ship. Canonical7ccb compiler's two known
+F333227 miscompilations are NOT a safe fleet baseline; final programs use the
+read-only qualified c24ede65 tool in the isolated source tree. Final normal build,
+source pins, compatible Pi CS-only profile and deployment are recorded separately.
+No all-resource readiness barrier or universal numerical FPS gain is claimed.
+See FTESurf tools/p1345-smoothness.md. Unpublished reservation1331 superseded by
+ONE1345 claim after fresh full-worktree census; original evidence identities kept.
 
 ## Patch 1341 -- clearing teleports clear the predicted carrier (CSQC only)
 

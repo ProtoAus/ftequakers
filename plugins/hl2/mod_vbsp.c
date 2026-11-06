@@ -10484,7 +10484,7 @@ static void VBSP_PrepareFrame(model_t *mod, refdef_t *r_refdef, int area, int cl
 
 
 	//FTESurf Patch 868: a water reflection without $reflectentities draws only the world, as Source's.
-	if (prv->numstaticprops && !(r_refdef->flags & RDF_NOENTS))
+	if (prv->numstaticprops && !(r_refdef->flags & (RDF_NOENTS|RDF_WORLDONLY)))
 	{
 		struct staticprop_s *sent;
 		entity_t *src, *ent;
@@ -11102,7 +11102,7 @@ static void VBSP_PrepareFrame(model_t *mod, refdef_t *r_refdef, int area, int cl
 	}
 
 	//FTESurf Patch 1038: detail props, under the props' RDF_NOENTS rule.
-	if (prv->detailraw && hl2_detail && hl2_detail->ival && !(r_refdef->flags & RDF_NOENTS))
+	if (prv->detailraw && hl2_detail && hl2_detail->ival && !(r_refdef->flags & (RDF_NOENTS|RDF_WORLDONLY)))
 		VBSP_DetailDraw(mod, surfvis, area);
 }
 static void VBSP_InfoForPoint (struct model_s *mod, vec3_t pos, int *area, int *cluster, unsigned int *contentbits)
