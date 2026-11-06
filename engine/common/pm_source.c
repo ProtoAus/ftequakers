@@ -200,6 +200,65 @@ qboolean PMSrc_BankGravityEnd(void)
 	return used;
 }
 
+// P1344: command-local annotation; only the chosen StepMove path survives.
+// 0 no observed ramp, 1 world ramp, 2 nonworld, 3 ambiguous/unsupported.
+typedef struct
+{
+	int kind;
+	vec3_t normal, point;
+	float distance;
+} pms_tas_contact_t;
+static qboolean pms_tas_contact_observe;
+static pms_tas_contact_t pms_tas_contact;
+
+void PMSrc_TASContactBegin(qboolean enabled)
+{
+	pms_tas_contact_observe = enabled;
+	memset(&pms_tas_contact, 0, sizeof(pms_tas_contact));
+}
+
+int PMSrc_TASContactEnd(vec3_t normal, float *distance, vec3_t point)
+{
+	int kind = pms_tas_contact_observe ? pms_tas_contact.kind : 0;
+	VectorClear(normal);
+	VectorClear(point);
+	*distance = 0;
+	if (kind == 1 || kind == 2)
+	{
+		VectorCopy(pms_tas_contact.normal, normal);
+		VectorCopy(pms_tas_contact.point, point);
+		*distance = pms_tas_contact.distance;
+	}
+	PMSrc_TASContactBegin(false);
+	return kind;
+}
+
+static void PMSrc_TASContactHit(const trace_t *trace)
+{
+	int kind;
+	if (!pms_tas_contact_observe || pms_tas_contact.kind == 3) return;
+	if (!isfinite(trace->plane.dist) || !isfinite(trace->plane.normal[0]) ||
+		!isfinite(trace->plane.normal[1]) || !isfinite(trace->plane.normal[2]) ||
+		!isfinite(trace->endpos[0]) || !isfinite(trace->endpos[1]) || !isfinite(trace->endpos[2]) ||
+		fabs(DotProduct(trace->plane.normal, trace->plane.normal) - 1) > 0.01f)
+	{
+		pms_tas_contact.kind = 3;
+		return;
+	}
+	kind = trace->entnum >= 0 && trace->entnum < pmove.numphysent &&
+		pmove.numphysent <= MAX_PHYSENTS ?
+		(pmove.physents[trace->entnum].info == 0 ? 1 : 2) : 3;
+	if (pms_tas_contact.kind)
+		if (kind != pms_tas_contact.kind ||
+			DotProduct(pms_tas_contact.normal, trace->plane.normal) < 0.99999f ||
+			fabs(pms_tas_contact.distance - trace->plane.dist) > 0.1f)
+			kind = 3;
+	pms_tas_contact.kind = kind;
+	VectorCopy(trace->plane.normal, pms_tas_contact.normal);
+	VectorCopy(trace->endpos, pms_tas_contact.point);
+	pms_tas_contact.distance = trace->plane.dist;
+}
+
 static vec3_t pms_forward, pms_right, pms_up;
 
 /* The STANDING hull, captured from the entity on entry.  The duck hull is
@@ -1426,6 +1485,7 @@ static int PMSrc_TryPlayerMoveCore (vec3_t firstdest, trace_t *firsttrace, qbool
 			float nz = fabs(pm.plane.normal[2]);
 			if (nz >= PMSRC_MIN_RAMP_NZ && nz <= standable)
 			{
+				PMSrc_TASContactHit(&pm);
 				pmove.rampcontact = 1;
 
 				/* Patch 137: the plane THIS tick clipped, unlatched.  The
@@ -1709,7 +1769,9 @@ static void PMSrc_StepMove (vec3_t vecDestination, trace_t *trace)
 	vec3_t vecUpPos;
 	trace_t t;
 	float flDownDist, flUpDist;
+	pms_tas_contact_t contactBefore, contactDown;
 
+	contactBefore = pms_tas_contact;
 	VectorCopy (vecDestination, vecEndPos);
 	VectorCopy (pmove.origin, vecPos);
 	VectorCopy (pmove.velocity, vecVel);
@@ -1729,7 +1791,10 @@ static void PMSrc_StepMove (vec3_t vecDestination, trace_t *trace)
 
 	VectorCopy (pmove.origin, vecDownPos);
 	VectorCopy (pmove.velocity, vecDownVel);
+	contactDown = pms_tas_contact;
 
+	/* Reset only annotation with the trial; movement policy is unchanged. */
+	pms_tas_contact = contactBefore;
 	/* Reset and try again, stepped up. */
 	VectorCopy (vecPos, pmove.origin);
 	VectorCopy (vecVel, pmove.velocity);
@@ -1776,6 +1841,7 @@ static void PMSrc_StepMove (vec3_t vecDestination, trace_t *trace)
 	{
 		VectorCopy (vecDownPos, pmove.origin);
 		VectorCopy (vecDownVel, pmove.velocity);
+		pms_tas_contact = contactDown;
 		return;
 	}
 
@@ -1794,6 +1860,7 @@ static void PMSrc_StepMove (vec3_t vecDestination, trace_t *trace)
 	{
 		VectorCopy (vecDownPos, pmove.origin);
 		VectorCopy (vecDownVel, pmove.velocity);
+		pms_tas_contact = contactDown;
 	}
 	else
 	{	/* keep the stepped position, but the flat move's Z velocity */
@@ -4072,6 +4139,8 @@ static void PMSrc_Tick (void)
 	   without needing a timestamp anywhere. */
 	pmove.rampcontact = 0;
 	VectorClear (pmove.rampnormal);	/* Patch 137: re-derived below, like rampcontact */
+	if (pms_tas_contact_observe)
+		memset(&pms_tas_contact, 0, sizeof(pms_tas_contact));
 	pmove.rampoff += pms_frametime;
 	if (pmove.landticks < PMLIM_LANDMAX)
 		pmove.landticks++;	/* Patch 882: tickcount - m_iLandTick */
@@ -4425,6 +4494,77 @@ static void PMSrc_Check (const char *what, float got, float expect, float tol)
 		Con_Printf ("  ^1FAIL^7 %-34s %12.5f  (expected %.5f)\n", what, got, expect);
 		pms_test_fails++;
 	}
+}
+
+static void PMSrc_TASContactTests(void)
+{
+	trace_t trace;
+	vec3_t normal, point;
+	float distance;
+	int count = pmove.numphysent, world = pmove.physents[0].info;
+	int other = pmove.physents[1].info;
+	qboolean enabled = pms_tas_contact_observe;
+	pms_tas_contact_t saved = pms_tas_contact;
+
+	memset(&trace, 0, sizeof(trace));
+	trace.plane.normal[0] = 0.8660254f;
+	trace.plane.normal[2] = 0.5f;
+	trace.plane.dist = 32;
+	trace.endpos[0] = 12;
+	pmove.numphysent = 2;
+	pmove.physents[0].info = 0;
+	pmove.physents[1].info = 17;
+	PMSrc_TASContactBegin(false);
+	PMSrc_TASContactHit(&trace);
+	PMSrc_Check("P1344 disabled contact observer", PMSrc_TASContactEnd(normal, &distance, point), 0, 0);
+	PMSrc_TASContactBegin(true);
+	PMSrc_Check("P1344 no contact is not a ramp", PMSrc_TASContactEnd(normal, &distance, point), 0, 0);
+	PMSrc_TASContactBegin(true);
+	PMSrc_TASContactHit(&trace);
+	PMSrc_Check("P1344 actual world index0", PMSrc_TASContactEnd(normal, &distance, point), 1, 0);
+	PMSrc_Check("P1344 actual normal retained", normal[2], 0.5f, 0);
+	PMSrc_Check("P1344 actual plane retained", distance, 32, 0);
+	PMSrc_Check("P1344 actual trace point retained", point[0], 12, 0);
+	PMSrc_Check("P1344 end closes observation", PMSrc_TASContactEnd(normal, &distance, point), 0, 0);
+	PMSrc_Check("P1344 unarmed normal cleared", DotProduct(normal, normal), 0, 0);
+	PMSrc_Check("P1344 unarmed point cleared", DotProduct(point, point), 0, 0);
+	PMSrc_Check("P1344 unarmed plane cleared", distance, 0, 0);
+	trace.entnum = 1;
+	PMSrc_TASContactBegin(true);
+	PMSrc_TASContactHit(&trace);
+	PMSrc_Check("P1344 nonworld does not qualify", PMSrc_TASContactEnd(normal, &distance, point), 2, 0);
+	trace.entnum = 2;
+	PMSrc_TASContactBegin(true);
+	PMSrc_TASContactHit(&trace);
+	PMSrc_Check("P1344 invalid positive entity", PMSrc_TASContactEnd(normal, &distance, point), 3, 0);
+	trace.entnum = -1;
+	PMSrc_TASContactBegin(true);
+	PMSrc_TASContactHit(&trace);
+	PMSrc_Check("P1344 invalid negative entity", PMSrc_TASContactEnd(normal, &distance, point), 3, 0);
+	trace.entnum = 0;
+	PMSrc_TASContactBegin(true);
+	PMSrc_TASContactHit(&trace);
+	PMSrc_TASContactHit(&trace);
+	PMSrc_Check("P1344 same plane is stable", PMSrc_TASContactEnd(normal, &distance, point), 1, 0);
+	PMSrc_TASContactBegin(true);
+	PMSrc_TASContactHit(&trace);
+	trace.plane.dist = 33;
+	PMSrc_TASContactHit(&trace);
+	PMSrc_Check("P1344 two planes are ambiguous", PMSrc_TASContactEnd(normal, &distance, point), 3, 0);
+	trace.plane.dist = HUGE_VALF;
+	PMSrc_TASContactBegin(true);
+	PMSrc_TASContactHit(&trace);
+	PMSrc_Check("P1344 infinite plane refused", PMSrc_TASContactEnd(normal, &distance, point), 3, 0);
+	trace.plane.dist = 32;
+	VectorClear(trace.plane.normal);
+	PMSrc_TASContactBegin(true);
+	PMSrc_TASContactHit(&trace);
+	PMSrc_Check("P1344 invalid normal refused", PMSrc_TASContactEnd(normal, &distance, point), 3, 0);
+	pmove.numphysent = count;
+	pmove.physents[0].info = world;
+	pmove.physents[1].info = other;
+	pms_tas_contact_observe = enabled;
+	pms_tas_contact = saved;
 }
 
 /*
@@ -5828,6 +5968,8 @@ static void PMSrc_SelfTest_f (void)
 		movevars.physicsmode, movevars.accelerate, movevars.airaccelerate,
 		movevars.friction, movevars.stopspeed, movevars.gravity,
 		movevars.jumpvelocity, movevars.maxairspeed);
+
+	PMSrc_TASContactTests();
 
 	/* The Momentum-surf reference set the checks below are written against.
 	   Deliberately NOT the running config: movevars are zero until a server

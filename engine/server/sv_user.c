@@ -65,6 +65,7 @@ file-scope caches (pr_cmds.c:1028-1029) on every progs load.  Ours simply were
 not on that list.  Every other evalc_t in the tree is a local, zeroed per use.
 */
 evalc_t	evalc_bnorm, evalc_bvel, evalc_bcount, evalc_rcontact, evalc_rnorm;
+static evalc_t evalc_tascontactinfo, evalc_tascontactplane, evalc_tascontactpoint;
 evalc_t	evalc_forceduck;	//FTESurf Patch 142
 evalc_t	evalc_basevel;		//FTESurf Patch 240
 evalc_t	evalc_mtick, evalc_mtickrate, evalc_mcarry;	//FTESurf Patch 325
@@ -97,6 +98,10 @@ void SV_FS_ResetFieldCaches(void)
 	memset(&evalc_bcount,    0, sizeof(evalc_bcount));
 	memset(&evalc_rcontact,  0, sizeof(evalc_rcontact));
 	memset(&evalc_rnorm,     0, sizeof(evalc_rnorm));
+	memset(&evalc_tascontactinfo, 0, sizeof(evalc_tascontactinfo));
+	memset(&evalc_tascontactplane, 0, sizeof(evalc_tascontactplane));
+	memset(&evalc_tascontactpoint, 0, sizeof(evalc_tascontactpoint));
+	PMSrc_TASContactBegin(false);
 	memset(&evalc_forceduck, 0, sizeof(evalc_forceduck));
 	memset(&evalc_basevel,   0, sizeof(evalc_basevel));
 	memset(&evalc_mtick,     0, sizeof(evalc_mtick));		//FTESurf Patch 325
@@ -9239,12 +9244,61 @@ if (sv_player->v->health > 0 && before && !after )
 	Con_Printf ("player %s got stuck in playermove!!!!\n", host_client->name);
 }
 #else
-	SV_HeldSourceBoundary(host_client, HELD_MOVER_ENTER);
-	PMSrc_BankGravityBegin(!held && movevars.physicsmode == PHYSMODE_SOURCE && SV_BankGravityEnabled());
-	PM_PlayerMove (sv.gamespeed);
-	SV_HeldSourceBoundary(host_client, HELD_MOVER_EXIT);
-	if (PMSrc_BankGravityEnd())
-		SV_BankGravityUsed(host_client);
+	{
+		eval_t *meta, *plane, *hit;
+		vec3_t normal, point;
+		float distance;
+		int kind, j;
+		qboolean observe, capable;
+
+		meta = svprogfuncs->GetEdictFieldValue(svprogfuncs, sv_player,
+			"run_tas_contactinfo", ev_vector, &evalc_tascontactinfo);
+		plane = svprogfuncs->GetEdictFieldValue(svprogfuncs, sv_player,
+			"run_tas_contactplane", ev_vector, &evalc_tascontactplane);
+		hit = svprogfuncs->GetEdictFieldValue(svprogfuncs, sv_player,
+			"run_tas_contactpoint", ev_vector, &evalc_tascontactpoint);
+		capable = meta && plane && hit && movevars.physicsmode == PHYSMODE_SOURCE;
+		observe = capable && !held;
+		PMSrc_TASContactBegin(observe);
+		SV_HeldSourceBoundary(host_client, HELD_MOVER_ENTER);
+		PMSrc_BankGravityBegin(!held && movevars.physicsmode == PHYSMODE_SOURCE && SV_BankGravityEnabled());
+		PM_PlayerMove (sv.gamespeed);
+		SV_HeldSourceBoundary(host_client, HELD_MOVER_EXIT);
+		if (PMSrc_BankGravityEnd())
+			SV_BankGravityUsed(host_client);
+		kind = PMSrc_TASContactEnd(normal, &distance, point);
+		if (observe)
+		{
+			if (pmove.ticksrun != 1 || pmove.pm_type != PM_NORMAL ||
+				pmove.srcladder || pmove.waterlevel > 1 || pmove.portalcrossings ||
+				pmove.numtouch < 0 || pmove.numtouch > MAX_PHYSENTS ||
+				pmove.numphysent < 1 || pmove.numphysent > MAX_PHYSENTS)
+				kind = 3;
+			// A nonworld touch in either trial is conservatively unsupported.
+			for (j = 0; kind != 3 && j < pmove.numtouch; ++j)
+			{
+				int index = pmove.touchindex[j];
+				if (index < 0 || index >= pmove.numphysent ||
+					pmove.physents[index].info != 0) kind = 3;
+			}
+		}
+		if (meta)
+		{
+			meta->_vector[0] = capable ? 1 : 0;
+			meta->_vector[1] = observe ? kind : 3;
+			meta->_vector[2] = observe && kind == 1 ? distance : 0;
+		}
+		if (plane)
+		{
+			VectorClear(plane->_vector);
+			if (observe && kind == 1) VectorCopy(normal, plane->_vector);
+		}
+		if (hit)
+		{
+			VectorClear(hit->_vector);
+			if (observe && kind == 1) VectorCopy(point, hit->_vector);
+		}
+	}
 #endif
 	if (tas_step)
 	{

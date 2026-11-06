@@ -396,6 +396,9 @@ void PMSrc_PlayerMove (float gamespeed);
 // P1129: command-local observer, not carried/captured movement state.
 void PMSrc_BankGravityBegin(qboolean enabled);
 qboolean PMSrc_BankGravityEnd(void);
+// P1344: output-only committed contact, never carried movement/input state.
+void PMSrc_TASContactBegin(qboolean enabled);
+int PMSrc_TASContactEnd(vec3_t normal, float *distance, vec3_t point);
 float PMSrc_MaxSpeedForInputs (int pm_type, int buttons, float stamina);
 void PMSrc_Init (void);		//registers the pm_selftest command
 

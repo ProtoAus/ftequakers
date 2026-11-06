@@ -1,5 +1,40 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1344 -- source-bound native TAS contact observations
+
+**Problem:** A paused full input line had no native collision annotations for
+choosing ramp sections. Speed, HUD surf state and guessed free flight are not
+substitutes for the committed mover's actual geometry. Rewinding or adding a
+manual marker must not discard the original future or relabel another line's
+observations as current.
+
+**Change:** Add a passive, command-local Source-mover observer and three optional
+output-only QC vectors. Preserve the actually chosen StepMove branch; expose
+committed world ramp normal, plane distance and hull trace endpoint, or explicit
+nonworld/ambiguous/unsupported state. No movement math, portable restore field,
+input credit or evidence authority changes. QC keeps bounded live and separate
+whole-revision caches, identified by the exact retained input revision. The new
+Sections > Observed contacts browser navigates/selects existing input ranges;
+manual markers remain separate overrides. Metadata-only immutable saves retag a
+cache only after unchanged-input validation and successful strict readback.
+Changed-input previews invalidate current proposals; Discard restores the
+complete original source/map. Old native producers say unavailable, not air.
+
+**Verified:** Supported isolated Windows FULL native build and all three QCC VMs
+complete; VMs report zero warnings, modified native files have no compiler
+warnings. All 17 production observer helper checks and the existing native
+`pm_selftest` act and pass. A real dedicated-socket static BSP ramp run verifies
+native normal/plane/endpoint, complete input-source coverage, held-step dedup,
+independent cached rows, earlier start/end navigation, metadata-only retag while
+earlier (28 checks), and an actually divergent input preview followed by complete
+original-map/source restoration (24 checks). Prior acting old-native control
+reports unavailable. Scope: fixed single-step static BSP observations; no claim
+of live moving-world/ladder coverage, universal ramp grouping, globally optimal
+solving or human acceptance. Native vectors and cached first/last post-step
+velocities are derived annotations, never portable poses or submission proof.
+Final tagged-source build, independent reviews and destination/live deployment
+verification are separate gates recorded with the delivery evidence.
+
 ## Patch 1341 -- clearing teleports clear the predicted carrier (CSQC only)
 
 **Problem.** Ordinary non-landmark VelocityMode1-3 teleports call SV_ClearCarrier
