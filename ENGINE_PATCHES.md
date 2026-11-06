@@ -9,8 +9,7 @@ must not lose the original future or relabel an invalid source as current.
 **Change:** Passive optional Source-mover outputs retain only the chosen path's
 world plane and hull endpoint, with explicit unavailable/unsupported states;
 normal-recovery and initial stuck searches abstain without changing movement.
-Bounded complete-source maps back
-Observed contacts beside Manual markers. Raw edits invalidate independently of
+Bounded complete-source maps back Observed contacts beside Manual markers. Raw edits invalidate independently of
 intent; metadata-only retag and both fresh/cached binding require exact-source
 canonical retained readback. Failed ordinary reads invalidate its exact key;
 ordinary load reuses its first strict read instead of parsing the whole line twice.
@@ -42,14 +41,48 @@ ARM1598 applies to a439, not the new source. Historical test IDs retain1344/1347
 No live moving-world/ladder, universal ramp-ID, global optimum, owner comfort or
 public TAS-admission claim.
 
+## Patch 1349 -- preserve compiler output errors and optional capabilities
+
+**Problem.** A failed primary output close only printed and returned from the
+writer, while its caller ignored that return; a requested debug-output close
+was unchecked. Synchronous compilation could therefore report success after a
+required output callback refused its buffer. The trusted decompile command also
+called an optional callback absent from the default VM table.
+
+**Change.** Route only failed required primary/debug closes through the existing
+compiler error/unwind path, retaining legitimate empty/no-output returns. After
+normal lazy VM setup, refuse unavailable decompilation with a diagnostic. Do not
+enable the old decompiler or change command provenance, recording, comparison
+policy, VM layouts, Build or release version. No header change.
+
+**Verified.** Exact real compiler/parser/writer plus actual host write callback
+against an in-memory filesystem spy: 16 original success/refusal/parse-control
+results discriminate both corrections and each branch-removal control. Actual
+program headers/functions/statements and requested debug bytes acted. Output
+failure now returns false through existing unwind without falsely incrementing
+parser-error counts; ordinary successful output is unchanged. Extracted real
+handlers with a safe dispatch spy discriminate four absent-capability paths,
+four valid paths and sixteen untrusted refusals per arm; no original NULL call
+or installed crash was executed. Existing argument/provenance controls remain.
+The real compiler and synthetic handler controls also discriminate on ARM.
+Two independent source reviews found no issues in their assigned scopes. Initial
+clean Windows client/server and ARM server/paired-plugin builds add no warning
+sites; each native image passes 1,578 checks and reaches the unavailable-decompile
+diagnostic. The Windows 4-GiB gate first refused, then passed without terminating
+owner processes. These controls do not establish full VM ABI, real filesystem
+failure handling, allocation balance, asynchronous lifecycle or atomic multi-output
+acceptance. A debug-output failure may follow an already accepted primary file.
+Exact source/build/integration/deployment provenance is recorded separately.
+
 ## Patch 1348 -- isolate overview lightmaps and retire hidden weapon feedback
 
 **Problem:** Independent1345 source reviews found current-view dynamic lighting
 leaking through a persistent eligibility flag/unchanged light epoch, packet models
 accepting an unloaded type0/mod_brush, hidden bursts/recoil/events replaying on
 exit, and nonvisual VM preference/profile sync paused with weapon drawing.
-Original1345 source/tag and rejected candidate images remain unchanged; this
-session deployed none of them and admitted no rejected client to the code catalog.
+Original1345 source/tag and rejected candidate images remain unchanged. Those
+original binaries were not deployed; no rejected client was admitted. Only the
+qualified compositions recorded below were shipped.
 
 **Change:** Always advance the scene light epoch, reject overview light marking
 and both RGB/luminance additions from CURRENT explicit flags. Restore the original
@@ -80,6 +113,20 @@ delivery separately in FTESurf tools/p1348-overview-state.md. Normal unprofiled
 GPU admission was resource-refused, never regraded or weakened. One1348 claim
 follows fresh both-repo/164-tree/335-fixture census max1347; no tag/history rewrite.
 
+**Delivery6Nov2026:** Both Windows installs verified13:40:56UTC, main2f2f3946 /
+CSa45e87ee5133, native1355c256a/tagpatch-1348 through public journal818f3681;
+26destinations/paired previous files and19307protected non-target paths exact.
+Latest compatible Pi490280cc preserves5cb18943 KSF and all12accepted render/
+weapon/editor bodies; actual baseline reproduced, THREE VMs0warnings. All12
+lobbies activated13:51:33UTC, CS2d70a779b200 and BYTE-IDENTICAL current QWe7b8a26b.
+Native/plugin/menu/config/backend preserved;48215old protected data entries
+unchanged,6new entries retained, join capacities restored, rollback retained.
+Actual read-only postflight checked live/previous programs, all12new actors and
+directory, config/native/menu/backend and real code-catalog consumer. Exact public
+source/program provenance: FTESurf tools/p1348-overview-state.md. Fresh graphical
+smoke was resource-refused below4GiB; no launch/relaxed gate or FPS claim. Owner
+out/back-twice feel, final unprofiled timing and broader readiness remain pending.
+
 ## Patch 1347: visible KSF fetch and gentler replay retries (6 Nov 2026)
 
 Problem: leaderboard request handlers existed without visible in-game/menu controls.
@@ -101,13 +148,25 @@ with qualified compiler c24ede65. Initial older-compiler baseline/candidate both
 had two cl_viewmodel property227 warnings; that compiler was replaced, not waived.
 Actual pointer clicks in CSQC and menu sent style-isolated POST202 requests and
 persisted the intended queues; FW/SW/HSW/BW reads acted. Ranked/segmented controls
-were absent; wide/narrow menu geometry remained on-screen. KSF top-up17/0;
-replay importer84/0, including missing files, repeated500 recovery,503/429 Retry-After,
-HTTP-date validation and byte-preservation of a pre-existing active park. Screenshots
-inspected; no owner manual acceptance claimed. Deployment and tier7/8 backfill are
-separate, still pending at this source checkpoint. Initial census:955/955 map metadata,
-43 tier7/8 maps,1348 course/style boards;236 complete,26613 held times,718 playable
-advertised replays. This is NOT a claim that all upstream times/replays are acquired.
+were absent; wide/narrow menu geometry remained on-screen. KSF top-up8/0
+(corrects the earlier17 count; retained unittest log runs8); replay importer84/0
+on Windows AND Linux, including missing files, repeated500 recovery,503/429
+Retry-After, HTTP-date validation and preservation of a pre-existing active park.
+Backend activated11:24:42UTC6Nov2026 with current-data rollback retained; both
+Windows installs verified8UI/symbol destinations plus paired previous files.
+Pi compatible CSQC-only component5cb18943 activated12:27:00UTC: all12warned10s
+and restarted,48122old protected entries unchanged,6new files preserved;
+8recorder parts/183resume files independently verified on/off box, capacities
+restored/no gate left. Native/SSQC/plugin/menu/config/backend unchanged by that
+Pi swap. Fresh installed-native/no-CSQC-cache client downloaded the exact served
+component, drew a board, exit0/no QC error/0smoke failures. Screenshot inspected:
+empty/no-zone kitsune, terms unaccepted; NOT populated KSF click, geometry,
+playback, owner consent/feel or performance evidence. Human check still pending.
+Fresh full provider metadata13:11:35UTC confirms955maps/same43tier7/8 scope.
+Acquisition remains ACTIVE:13:34:30UTC1167/1348boards,39759held times,
+1160ready replay entries; pending/binding/conversion gaps remain explicit.
+Public snapshot/limits: FTESurf tools/p1347-ksf-audit.md. This is NOT a claim that
+all upstream times/replays are acquired; no native pin/tag or Build change.
 
 ## Patch 1346 -- recover interrupted similarity source admissions (backend only)
 

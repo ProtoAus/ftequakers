@@ -3029,7 +3029,7 @@ strofs = (strofs+3)&~3;
 
 	if (!SafeClose (h))
 	{
-		externs->Printf("%sError%s while writing output %s\n", col_error, col_none, destfile);
+		QCC_Error(ERR_INTERNAL, "Error while writing output %s", destfile);
 		return false;
 	}
 
@@ -3110,7 +3110,8 @@ strofs = (strofs+3)&~3;
 			SafeWrite (h, &numfielddefs, sizeof(int));
 			SafeWrite (h, &numstatements, sizeof(int));
 			SafeWrite (h, statement_linenums, numstatements*sizeof(int));
-			SafeClose (h);
+			if (!SafeClose (h))
+				QCC_Error(ERR_INTERNAL, "Error while writing debug output %s", destfile);
 		}
 	}
 
