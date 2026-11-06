@@ -3756,7 +3756,8 @@ void SV_Snapshot_BuildStateQ1(entity_state_t *state, edict_t *ent, client_t *cli
 	state->modelindex = ent->v->modelindex;
 	state->modelindex2 = ent->xv->vw_index;
 	state->frame = ent->v->frame;
-	state->skinnum = ent->v->skin;
+	// Preserve negative Q1 contents tags: AArch64 float->unsigned clamps them to 0.
+	state->skinnum = ent->v->skin < 0 ? (unsigned int)(int)ent->v->skin : (unsigned int)ent->v->skin;
 	state->effects = ent->v->effects;
 	state->effects |= (int)ent->xv->modelflags<<24;
 #ifdef HEXEN2

@@ -725,7 +725,8 @@ static void GL_Texturemode_Apply(GLenum targ, unsigned int flags)
 	}
 	else
 	{
-		if ((filter[1] && !(flags & IF_NEAREST)) || (flags & IF_LINEAR))
+		// Point-sampled world texels can still blend user-selected mip levels.
+		if ((filter[1] && (!(flags & IF_NEAREST) || !(flags & IF_UIPIC))) || (flags & IF_LINEAR))
 		{
 			if ((filter[0] && !(flags & IF_NEAREST)) || (flags & IF_LINEAR))
 				min = GL_LINEAR_MIPMAP_LINEAR;
@@ -750,10 +751,11 @@ static void GL_Texturemode_Apply(GLenum targ, unsigned int flags)
 	qglTexParameteri(targ, GL_TEXTURE_MAG_FILTER, mag);
 	if (gl_anisotropy_factor)	//0 means driver doesn't support
 	{
-		//only use anisotrophy when using linear any linear, because of drivers that forces linear sampling when anis is active (annoyingly this is allowed by the spec - even for the mag filter).
-		//WARNING: older intel drivers can be expected to glitch with anisotropic lego mode.
-		//  Note that we do not check mag filters here - 'gl_texturemode nll' will have crunch anistrophy, unfortunately swbanding requires nnn right now (and should be picking mips based on surface distance rather than pixel coverage instead).
-		if (min == GL_LINEAR_MIPMAP_LINEAR || min == GL_LINEAR_MIPMAP_NEAREST)
+		// Mipmapped authored point textures need the grazing-angle footprint too.
+		// Keep their nearest MAG filter and leave UI/nonmip textures alone. Old Intel
+		// drivers can force linear magnification with anisotropy; factor 1 opts out.
+		if (min == GL_LINEAR_MIPMAP_LINEAR || min == GL_LINEAR_MIPMAP_NEAREST
+			|| ((flags & IF_NEAREST) && !(flags & IF_UIPIC) && min == GL_NEAREST_MIPMAP_LINEAR))
 			qglTexParameterf(targ, GL_TEXTURE_MAX_ANISOTROPY_EXT, gl_anisotropy_factor);
 		else
 			qglTexParameterf(targ, GL_TEXTURE_MAX_ANISOTROPY_EXT, 1);

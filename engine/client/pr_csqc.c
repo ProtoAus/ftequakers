@@ -36,6 +36,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 #include "pr_common.h"
 #include "snd_vis.h"
+#include "com_bih.h"
 
 extern usercmd_t cl_pendingcmd[MAX_SPLITS];
 extern cvar_t sv_demo_write_csqc;
@@ -3324,6 +3325,106 @@ static void QCBUILTIN PF_cs_pointcontentsmask(pubprogfuncs_t *prinst, struct glo
 	else
 		cont = World_PointContentsAllBSPs(w, v);
 	G_UINT(OFS_RETURN) = cont;
+}
+
+#if defined(Q2BSPS) || defined(Q3BSPS)
+typedef struct
+{
+	model_t *world;
+	int servercount, frame, count;
+	vec3_t point, normal;
+	float distance;
+	vecV_t verts[64];
+} csqcbrushface_t;
+
+static void CSQC_BrushFace(void *ctx, const q2cbrush_t *brush)
+{
+	csqcbrushface_t *face = ctx;
+	vec4_t planes[512];
+	vecV_t verts[64];
+	vec3_t p, edge, side, delta;
+	float d, v, tolerance;
+	qboolean positive, negative;
+	int i, j;
+	size_t n;
+
+	if (!(brush->contents & MASK_PLAYERSOLID) || brush->numsides < 4 || brush->numsides > countof(planes))
+		return;
+	for (i = 0; i < brush->numsides; i++)
+	{
+		VectorCopy(brush->brushside[i].plane->normal, planes[i]);
+		planes[i][3] = brush->brushside[i].plane->dist;
+	}
+	for (i = 0; i < brush->numsides; i++)
+	{
+		if (DotProduct(face->normal, planes[i]) < 0.9999f)
+			continue;
+		d = DotProduct(face->point, planes[i]) - planes[i][3];
+		if (fabs(d) > face->distance)
+			continue;
+		n = Fragment_ClipPlaneToBrush(verts, countof(verts), planes, sizeof(planes[0]), brush->numsides, planes[i]);
+		if (n < 3)
+			continue; // supporting bevels have no winding
+		VectorMA(face->point, -d, planes[i], p);
+		positive = negative = false;
+		for (j = 0; j < n; j++)
+		{
+			VectorSubtract(verts[(j+1)%n], verts[j], edge);
+			CrossProduct(edge, planes[i], side);
+			VectorSubtract(p, verts[j], delta);
+			v = DotProduct(delta, side);
+			tolerance = 0.01f * VectorLength(edge);
+			positive |= v > tolerance;
+			negative |= v < -tolerance;
+		}
+		if (positive && negative)
+			continue;
+		face->distance = fabs(d);
+		face->count = (int)n;
+		memcpy(face->verts, verts, n * sizeof(*verts));
+	}
+}
+#endif
+
+// World collision-brush winding at an actual trace hit. Index -1 returns [count,0,0].
+// This uses the same brush-plane cutter as surf_view; no render surface or ABI alias.
+static void QCBUILTIN PF_cs_getworldbrushfacepoint(pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
+{
+	VectorClear(G_VECTOR(OFS_RETURN));
+#if defined(Q2BSPS) || defined(Q3BSPS)
+	world_t *w = prinst->parms->user;
+	static csqcbrushface_t face;
+	vec3_t mins, maxs, normal;
+	const float *point = G_VECTOR(OFS_PARM0), *nrm = G_VECTOR(OFS_PARM1);
+	float vertex = G_FLOAT(OFS_PARM2);
+	int i;
+
+	if (!w->worldmodel || w->worldmodel->loadstate != MLS_LOADED || !isfinite(vertex))
+		return;
+	for (i = 0; i < 3; i++)
+		if (!isfinite(point[i]) || !isfinite(nrm[i]))
+			return;
+	VectorCopy(nrm, normal);
+	if (VectorNormalize(normal) < 0.5f)
+		return;
+	if (face.world != w->worldmodel || face.servercount != cl.servercount || face.frame != host_framecount
+		|| !VectorCompare(face.point, point) || !VectorCompare(face.normal, normal))
+	{
+		face.world = w->worldmodel;
+		face.servercount = cl.servercount;
+		face.frame = host_framecount;
+		VectorCopy(point, face.point);
+		VectorCopy(normal, face.normal);
+		face.count = 0;
+		face.distance = 0.5f; // includes the native trace's 1/32-unit surface bias
+		for (i = 0; i < 3; i++) { mins[i] = point[i]-2; maxs[i] = point[i]+2; }
+		BIH_EnumBrushes(w->worldmodel, mins, maxs, CSQC_BrushFace, &face);
+	}
+	if (vertex == -1)
+		G_VECTOR(OFS_RETURN)[0] = face.count;
+	else if (vertex >= 0 && vertex < face.count && vertex == floor(vertex))
+		VectorCopy(face.verts[(int)vertex], G_VECTOR(OFS_RETURN));
+#endif
 }
 
 static model_t *csqc_setmodel(pubprogfuncs_t *prinst, csqcedict_t *ent, int modelindex)
@@ -7513,6 +7614,7 @@ static struct {
 	{"getsurfacepoint",			PF_getsurfacepoint,					435},		// #435 vector(entity e, float s, float n) getsurfacepoint (DP_QC_GETSURFACE)
 	{"getsurfacenormal",		PF_getsurfacenormal,				436},		// #436 vector(entity e, float s) getsurfacenormal (DP_QC_GETSURFACE)
 	{"getsurfacetexture",		PF_getsurfacetexture,				437},			// #437 string(entity e, float s) getsurfacetexture (DP_QC_GETSURFACE)
+	{"getworldbrushfacepoint", PF_cs_getworldbrushfacepoint, 0},
 	{"getsurfacenearpoint",		PF_getsurfacenearpoint,				438},		// #438 float(entity e, vector p) getsurfacenearpoint (DP_QC_GETSURFACE)
 	{"getsurfaceclippedpoint",	PF_getsurfaceclippedpoint,			439},			// #439 vector(entity e, float s, vector p) getsurfaceclippedpoint (DP_QC_GETSURFACE)
 

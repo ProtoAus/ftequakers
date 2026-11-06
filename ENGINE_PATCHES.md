@@ -1,5 +1,40 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1353 -- reported prediction, line labels, editor and texture fixes
+
+**Problem.** The NanoPi's Q1 snapshot converted negative float skins directly to
+unsigned, losing authored EMPTY contents before P919's client rule could see it.
+Board path switches also suppressed their independently enabled labels. Ramp
+boarding had only its pre-contact label, editor aiming could not query invisible
+clip windings, teleport names used fractional unbaked sizes, and authored point
+textures suppressed mip blending and grazing-angle filtering.
+
+**Change.** Preserve negative Q1 skins via signed conversion while leaving the
+nonnegative unsigned range unchanged. Separate board strokes from number/name
+passes; add a second-row sample-to-sample boarding energy change with full label
+height; query a world collision-brush winding through an optional CSQC builtin
+using surf_view's existing plane cutter and a player-clip-aware editor probe.
+Snap destination labels to the loaded font ladder and integer placement. Keep
+nearest texel magnification while honoring mip blending and opt-in anisotropy on
+mipmapped authored point textures; leave nonmip/UI sampling alone.
+
+**Verified.** Supported full Windows native base plus rebuilt leaf/plugin targets;
+qualified c24ede65 compiler builds all three VMs with zero warnings. Existing
+native PF_resourcestatus address warning is unchanged. Windows pm_selftest acts:
+all checks pass. Native AArch64 conversion control has five acting original
+failures, ten corrected constant-bit expectations and unchanged nonnegative
+controls. Real dedicated board path on/off preserves two name labels; 32 boarding
+rows agree with the sampled mechanical-energy change after display rounding,
+and the second row is visible below the pre-contact label. Four actual invisible
+clip corners and four same-plane grid controls pass with no render surface;
+the existing render-surface snap regression also passed. Recreated Dragonfall's
+saved view and identified its mipmapped point/alpha-tested material: oblique
+filtering improves on NVIDIA, while a 280,000-pixel magnified crop is identical.
+Destination text is baked-size/pixel-aligned and was inspected in the editor.
+Final clean-commit ARM gates/rollout and owner feel/other-GPU acceptance remain
+separate pending steps; no fleet or owner acceptance is claimed here. No evidence
+grammar, mover policy or qcbuild/Build bump.
+
 ## Patch 1352 -- bounded retirement of orphan similarity cursors
 
 **Problem.** Store-only similarity scheduling kept each replay's peer position
