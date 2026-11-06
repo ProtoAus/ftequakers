@@ -233,6 +233,14 @@ int PMSrc_TASContactEnd(vec3_t normal, float *distance, vec3_t point)
 	return kind;
 }
 
+// Recovery's normal can be synthesized; its trace distance/entity is unrelated.
+// Keep the mover's existing substitution, but never call that a real BSP plane.
+static void PMSrc_TASContactRecovery(trace_t *trace, const vec3_t normal)
+{
+	VectorCopy(normal, trace->plane.normal);
+	if (pms_tas_contact_observe) pms_tas_contact.kind = 3;
+}
+
 static void PMSrc_TASContactHit(const trace_t *trace)
 {
 	int kind;
@@ -1243,7 +1251,7 @@ static int PMSrc_TryPlayerMoveCore (vec3_t firstdest, trace_t *firsttrace, qbool
 			   probe from an origin we invented, and a traversal launched from an
 			   invented position would be one the player never actually made. */
 			pm = PMSrc_TraceHull (fixed_origin, end);
-			VectorCopy (valid_plane, pm.plane.normal);
+			PMSrc_TASContactRecovery (&pm, valid_plane);
 		}
 		else
 			pm = PM_PlayerTracePortals (pmove.origin, end, MASK_PLAYERSOLID, &tookportal);
@@ -4498,7 +4506,7 @@ static void PMSrc_Check (const char *what, float got, float expect, float tol)
 
 static void PMSrc_TASContactTests(void)
 {
-	trace_t trace;
+	trace_t trace, recovered;
 	vec3_t normal, point;
 	float distance;
 	int count = pmove.numphysent, world = pmove.physents[0].info;
@@ -4560,6 +4568,21 @@ static void PMSrc_TASContactTests(void)
 	PMSrc_TASContactBegin(true);
 	PMSrc_TASContactHit(&trace);
 	PMSrc_Check("P1344 invalid normal refused", PMSrc_TASContactEnd(normal, &distance, point), 3, 0);
+	// The old normal-only recovery trace looks valid without a witness.
+	// Exercise the production substitution/abstention, leaving trace bytes
+	// identical to the old mover's normal substitution.
+	VectorSet(trace.plane.normal, 0.8660254f, 0, 0.5f);
+	memcpy(&recovered, &trace, sizeof(trace));
+	VectorSet(normal, 0, 0.8660254f, 0.5f);
+	VectorCopy(normal, trace.plane.normal);
+	PMSrc_TASContactBegin(true);
+	PMSrc_TASContactHit(&trace);
+	PMSrc_Check("P1344 recovery normal-only control qualifies", PMSrc_TASContactEnd(normal, &distance, point), 1, 0);
+	PMSrc_TASContactBegin(true);
+	PMSrc_TASContactRecovery(&recovered, normal);
+	PMSrc_TASContactHit(&recovered);
+	PMSrc_Check("P1344 recovery witness refuses synthetic plane", PMSrc_TASContactEnd(normal, &distance, point), 3, 0);
+	PMSrc_Check("P1344 recovery movement trace unchanged", memcmp(&trace, &recovered, sizeof(trace)) == 0, 1, 0);
 	pmove.numphysent = count;
 	pmove.physents[0].info = world;
 	pmove.physents[1].info = other;

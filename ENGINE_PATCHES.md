@@ -18,16 +18,27 @@ Sections > Observed contacts browser navigates/selects existing input ranges;
 manual markers remain separate overrides. Metadata-only immutable saves retag a
 cache only after unchanged-input validation and successful strict readback.
 Changed-input previews invalidate current proposals; Discard restores the
-complete original source/map. Old native producers say unavailable, not air.
+complete original source/map. Literal raw edits also invalidate binding, even
+without authored intent metadata: a transient raw-change flag is maintained at
+mutation/harvest boundaries, not by an unbounded page-time scan. Ramp recovery
+keeps its existing movement-normal substitution but abstains from geometry
+metadata: that normal may be synthetic and cannot share an unrelated trace's
+distance/entity as a committed plane. Old producers say unavailable, not air.
 
 **Verified:** Supported isolated Windows FULL native build and all three QCC VMs
 complete; VMs report zero warnings, modified native files have no compiler
-warnings. All 17 production observer helper checks and the existing native
-`pm_selftest` act and pass. A real dedicated-socket static BSP ramp run verifies
+warnings. The supported post-review native/QC build also has zero VM warnings;
+all 20 production observer helper checks and existing native `pm_selftest` act
+and pass, including an old normal-only recovery control, production recovery
+abstention and unchanged trace bytes. A real dedicated-socket static BSP ramp run verifies
 native normal/plane/endpoint, complete input-source coverage, held-step dedup,
 independent cached rows, earlier start/end navigation, metadata-only retag while
-earlier (28 checks), and an actually divergent input preview followed by complete
-original-map/source restoration (24 checks). Prior acting old-native control
+earlier (29 post-review checks), and an actually divergent input preview followed
+by complete original-map/source restoration (24 checks). A separate fully literal
+unknown-input line proves the old changed-yaw cache bug (29 control checks), then
+the fixed path preserves complete maps on unchanged cold/warm replay and returns
+an unbound empty view on changed raw input (29 checks), retaining original bytes.
+Prior acting old-native control
 reports unavailable. Scope: fixed single-step static BSP observations; no claim
 of live moving-world/ladder coverage, universal ramp grouping, globally optimal
 solving or human acceptance. Native vectors and cached first/last post-step
