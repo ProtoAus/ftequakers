@@ -35,6 +35,33 @@ profile2f5; no global zero-warning/native/performance claim. >128
 selected rows, changed-winner Keep/history, finish-specific context and owner
 familiar two-ramp acceptance remain unverified. See tools/p1355-tas-solve.md.
 
+## Patch 1354 -- report non-finite similarity output as unavailable
+
+**Problem.** The actual comparison reader can return NaN or infinite optional
+recording tickrate metadata after doing real comparisons. SQLite INSERT OR IGNORE
+silently omits NaN observations; infinities can instead persist despite being
+unusable by the existing admin projection. Neither reported a pair availability
+failure. An initial whole-batch-loss prediction was disproved: good peers survive.
+
+**Change.** Require finite match/cover and both rates before packing an observation.
+Invalid output uses the existing pair-failed/unmeasured path, not a fabricated
+skip, zero score, malformed-player accusation or clean result. Preserve finite
+legacy/mismatched rates, parser, source capture/history/schema, SQL rollback,
+thresholds, ranking, native pin/tag and QC Build. No historical rewrite/backfill.
+
+**Verified.** Clean sourcebf9c7b306bce2c8f538fcf13cc0c3be48e719005: Windows69focused
+cases pass; actual untreated10case suite fails23 assertions and missing-guard
+mutant fails realNaN/80opportunity control. ARM270unitcases/no skips and68standalone
+checks pass. Finite measured zero retains76opportunities; actual collector-step,
+admission, independent writer, captured-byte/old-row and wholeSQL-abort controls
+act. Reader949/0, stable548REC/178VIEW corpus retains351existing faults with reader
+and heldmeta byte-identical to prefeature. Two differently-lensed independent
+clean-source reviews find no blockers. Original disproved hypothesis, fixture/
+wrapper and ARM pre-execution permission/directory refusals retained; not one
+uninterrupted clean run. Actual guarded backend delivery is separately recorded
+in tools/p1354-simcheck-finite.md. This is finite-output availability validation,
+not comprehensive type/range semantics, fleet completeness or hard resource proof.
+
 ## Patch 1353 -- reported prediction, line labels, editor and texture fixes
 
 **Problem.** The NanoPi's Q1 snapshot converted negative float skins directly to
@@ -53,10 +80,13 @@ Snap destination labels to the loaded font ladder and integer placement. Keep
 nearest texel magnification while honoring mip blending and opt-in anisotropy on
 mipmapped authored point textures; leave nonmip/UI sampling alone.
 
-**Verified.** Supported full Windows native base plus rebuilt leaf/plugin targets;
-qualified c24ede65 compiler builds all three VMs with zero warnings. Existing
-native PF_resourcestatus address warning is unchanged. Windows pm_selftest acts:
-all checks pass. Native AArch64 conversion control has five acting original
+**Verified.** Final exact-commit full Windows native and ARM server/HL2 builds
+complete; qualified c24ede65 compiler builds all three VMs with zero warnings.
+The full Windows rebuild has74inherited compiler warnings, no new warning sites;
+the modified-unit PF_resourcestatus address warning is unchanged. Windows and ARM
+pm_selftest each act:1608checks, zero failures;90named physics rows across6maps
+match bit-for-bit. Both documented historical reader controls pass in their
+archived-VM context, not as latest-world admission. Native AArch64 conversion control has five acting original
 failures, ten corrected constant-bit expectations and unchanged nonnegative
 controls. Real dedicated board path on/off preserves two name labels; 32 boarding
 rows agree with the sampled mechanical-energy change after display rounding,
@@ -66,9 +96,17 @@ the existing render-surface snap regression also passed. Recreated Dragonfall's
 saved view and identified its mipmapped point/alpha-tested material: oblique
 filtering improves on NVIDIA, while a 280,000-pixel magnified crop is identical.
 Destination text is baked-size/pixel-aligned and was inspected in the editor.
-Final clean-commit ARM gates/rollout and owner feel/other-GPU acceptance remain
-separate pending steps; no fleet or owner acceptance is claimed here. No evidence
-grammar, mover policy or qcbuild/Build bump.
+BOTH Windows installed6Nov19:47UTC:28exact targets,18642protected files unchanged,
+52predecessor/prior-prev preimages archived. ALL12lobbies paired-promoted20:30UTC;
+0skipped,48556protected files unchanged, full8part/183resume-member preimages
+verified on/off box before role staging/restart. Final20:35UTC readback proves
+all12native hashes/loaded-plugin inodes, canonical QW/CS/cache and backend health;
+the existing sweep lock is released. A separately published backend changed
+before staging: original refusal/evidence retained, only its volatile boundary
+refreshed after fresh retired-actor/FD/data-equality closure; no pinned handoff
+bypassed. Receipt and corrected full compiler fingerprint are in FTESurf
+`tools/p1353-reported-bugs.md`. Owner feel/other-GPU acceptance remains pending;
+no human acceptance, evidence grammar, mover policy or qcbuild/Build bump.
 
 ## Patch 1352 -- bounded retirement of orphan similarity cursors
 
