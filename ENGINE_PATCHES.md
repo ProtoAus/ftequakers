@@ -65,7 +65,15 @@ order compile and immediate-status driver oracle failures remain explicit. Exist
 verifier regression949/0. All3VMs compile0warnings. Native component
 profile2f5; no global zero-warning/native/performance claim. >128
 selected rows, changed-winner Keep/history, finish-specific context and owner
-familiar two-ramp acceptance remain unverified. See tools/p1355-tas-solve.md.
+familiar two-ramp acceptance remain unverified. Published QC runtimec489d56a is
+installed BOTH Windows22:02Z/all12lobbies22:14Z6November UTC: all14Windows and
+2lobby-program targets/.prev exact,12fresh actor births/native hashes verified;
+18656Windows/48617Pi protected originals unchanged.8recorder parts and183full
+resume payload/metadata members individually ON/OFFBOX rehashed before staging,
+locked JIT closure checked, catalog77 preserves76prior entries. Native/config/
+backend unchanged; sweep lock released. Transport deadlines reconciled read-only,
+no repeated promotion/restart. Build89/native pin1353 unchanged; no release or
+owner-acceptance claim. See tools/p1355-tas-solve.md.
 
 ## Patch 1354 -- report non-finite similarity output as unavailable
 
