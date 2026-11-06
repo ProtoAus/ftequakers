@@ -1,5 +1,35 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1347: visible KSF fetch and gentler replay retries (6 Nov 2026)
+
+Problem: leaderboard request handlers existed without visible in-game/menu controls.
+Three missing/broken replay files could also be promoted into a six-hour whole-host
+refusal, stalling healthy record boards. HTTP500 is not proof of rate limiting.
+
+Change: Fetch KSF buttons queue the selected course/direction through the existing
+bounded +100-times endpoint and ordinary replay-interest path. Unsupported sources
+and segmented categories hide the control; narrow menu layouts give it its own row.
+Replay requests now default to six-second spacing, with slower probes after transient
+failure. Missing404/410 leaves are deferred per file, never counted as host failures.
+Repeated500/broken bodies and other5xx use a replay-only60s exponential backoff capped
+at30min. Real429/access refusals retain existing host-wide exponential protection;
+Retry-After seconds/HTTP-dates are honored. Existing active parks are not shortened.
+No converter, replay format, PB binding, ranking, schema, native pin/tag or QC Build change.
+
+Verified: actual src/build.ps1 -Jobs8 -NoDeploy, all three VMs, zero warnings
+with qualified compiler c24ede65. Initial older-compiler baseline/candidate both
+had two cl_viewmodel property227 warnings; that compiler was replaced, not waived.
+Actual pointer clicks in CSQC and menu sent style-isolated POST202 requests and
+persisted the intended queues; FW/SW/HSW/BW reads acted. Ranked/segmented controls
+were absent; wide/narrow menu geometry remained on-screen. KSF top-up17/0;
+replay importer84/0, including missing files, repeated500 recovery,503/429 Retry-After,
+HTTP-date validation and byte-preservation of a pre-existing active park. Screenshots
+inspected; no owner manual acceptance claimed. Deployment and tier7/8 backfill are
+separate, still pending at this source checkpoint. Initial census:955/955 map metadata,
+43 tier7/8 maps,1348 course/style boards;236 complete,26613 held times,718 playable
+advertised replays. This is NOT a claim that all upstream times/replays are acquired.
+
+
 ## Patch 1343 -- relative teleport enable, lookahead and report parity (QC only)
 
 **Problem.** Enable before Disable changed a relative clip trigger to SOLID_BSP;
