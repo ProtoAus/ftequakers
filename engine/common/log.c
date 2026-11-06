@@ -575,6 +575,11 @@ static void IPLog_Dump_f(void)
 {
 	char displaypath[MAX_OSPATH];
 	const char *fname = Cmd_Argv(1);
+	if (Cmd_IsInsecure())
+	{
+		Con_Printf("%s is not permitted from untrusted commands\n", Cmd_Argv(0));
+		return;
+	}
 	if (FS_DisplayPath(fname, FS_GAMEONLY, displaypath, sizeof(displaypath)))
 		Q_strncpyz(displaypath, fname, sizeof(displaypath));
 	IPLog_Merge_File(fname);	//merge from the existing file, so that we're hopefully more robust if multiple processes are poking the same file.

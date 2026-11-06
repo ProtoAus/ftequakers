@@ -1693,6 +1693,11 @@ static void PR_SSPoke_f(void)
 
 static void PR_SSCoreDump_f(void)
 {
+	if (Cmd_IsInsecure())
+	{
+		Con_Printf("%s is not permitted from untrusted commands\n", Cmd_Argv(0));
+		return;
+	}
 	if (!svprogfuncs)
 	{
 		Con_Printf("Progs not running, you need to start a server first\n");

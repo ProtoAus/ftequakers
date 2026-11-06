@@ -2866,6 +2866,11 @@ static void Mod_SaveEntFile_f(void)
 	model_t *mod = NULL;
 	char *n = Cmd_Argv(1);
 	const char *ents;
+	if (Cmd_IsInsecure())
+	{
+		Con_Printf("%s is not permitted from untrusted commands\n", Cmd_Argv(0));
+		return;
+	}
 	if (*n)
 		mod = Mod_ForName(n, MLV_WARN);
 #ifndef CLIENTONLY

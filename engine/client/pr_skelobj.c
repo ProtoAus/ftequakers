@@ -896,11 +896,17 @@ void skel_generateragdoll_f(void)
 {
 	char *modname = Cmd_Argv(1);
 	char *outname;
-	model_t *mod = Mod_ForName(modname, MLV_SILENT);
+	model_t *mod;
 	galiasbone_t *bones;
 	vfsfile_t *f;
 	int i;
 	int numbones;
+	if (Cmd_IsInsecure())
+	{
+		Con_Printf("%s is not permitted from untrusted commands\n", Cmd_Argv(0));
+		return;
+	}
+	mod = Mod_ForName(modname, MLV_SILENT);
 	if (!mod)
 	{
 		Con_Printf("Cannot open %s\n", modname);
@@ -915,6 +921,11 @@ void skel_generateragdoll_f(void)
 	outname = va("%s.doll", mod->name);
 	
 	f = FS_OpenVFS(outname, "wb", FS_GAMEONLY);
+	if (!f)
+	{
+		Con_Printf("Cannot write %s\n", outname);
+		return;
+	}
 	VFS_PUTS(f, va("//basic ragdoll info for model %s\n", mod->name));
 	VFS_PUTS(f, va("//generated with: %s %s\n", Cmd_Argv(0), Cmd_Args()));
 	VFS_PUTS(f, "//this file will need editing by hand\n");

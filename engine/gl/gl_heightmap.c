@@ -9089,8 +9089,11 @@ void Mod_Terrain_Convert_f(void)
 {
 	model_t *mod;
 	heightmap_t *hm;
-	if (Cmd_FromGamecode())
+	if (Cmd_IsInsecure())
+	{
+		Con_Printf("%s is not permitted from untrusted commands\n", Cmd_Argv(0));
 		return;
+	}
 
 	if (Cmd_Argc() >= 2)
 		mod = Mod_FindName(va("maps/%s.hmp", Cmd_Argv(1)));

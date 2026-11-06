@@ -3908,6 +3908,11 @@ void PIN_MakeMessage(char *from, char *msg);
 
 static void SV_Pin_Save_f(void)
 {
+	if (Cmd_IsInsecure())
+	{
+		Con_Printf("%s is not permitted from untrusted commands\n", Cmd_Argv(0));
+		return;
+	}
 	PIN_SaveMessages();
 }
 static void SV_Pin_Reload_f(void)

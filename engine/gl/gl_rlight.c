@@ -1584,6 +1584,16 @@ static void R_SaveRTLights_f(void)
 	char displayname[MAX_OSPATH];
 	vec3_t ang;
 	int ver = 0;
+	if (Cmd_IsInsecure())
+	{
+		Con_Printf("%s is not permitted from untrusted commands\n", Cmd_Argv(0));
+		return;
+	}
+	if (!cl.worldmodel)
+	{
+		Con_Printf("No world loaded\n");
+		return;
+	}
 	COM_StripExtension(cl.worldmodel->name, fname, sizeof(fname));
 	strncat(fname, ".rtlights", MAX_QPATH-1);
 
