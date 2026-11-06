@@ -2838,6 +2838,11 @@ static void P_ExportAllEffects_f(void)
 	int i, assoc, n;
 	vfsfile_t *outf;
 	char fname[64] = "particles/export.cfg";
+	if (Cmd_IsInsecure())
+	{
+		Con_Printf("%s is not permitted from untrusted commands\n", Cmd_Argv(0));
+		return;
+	}
 	FS_CreatePath("particles/", FS_GAMEONLY);
 	outf = FS_OpenVFS(fname, "wb", FS_GAMEONLY);
 	if (!outf)
@@ -3595,6 +3600,11 @@ static void P_ConvertEffectInfo_f(void)
 	char effect[1024];
 	char fname[64] = "particles/effectinfo.cfg";
 
+	if (Cmd_IsInsecure())
+	{
+		Con_Printf("%s is not permitted from untrusted commands\n", Cmd_Argv(0));
+		return;
+	}
 	R_Particles_KillAllEffects();
 	P_ImportEffectInfo_Name("effectinfo");
 
@@ -3844,6 +3854,11 @@ static void P_ExportBuiltinSet_f(void)
 	char *file = NULL;
 	int i;
 
+	if (Cmd_IsInsecure())
+	{
+		Con_Printf("%s is not permitted from untrusted commands\n", Cmd_Argv(0));
+		return;
+	}
 	if (!*efname)
 	{
 		Con_Printf("Please name the built in effect (faithful, spikeset, tsshaft, minimal or highfps)\n");

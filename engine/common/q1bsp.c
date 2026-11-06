@@ -3784,6 +3784,16 @@ static void Mod_BuildCubemaps_f(void)
 static void Mod_Realign_f(void)
 {
 	struct bspxrw bspctx;
+	if (Cmd_IsInsecure())
+	{
+		Con_Printf("%s is not permitted from untrusted commands\n", Cmd_Argv(0));
+		return;
+	}
+	if (!cl.worldmodel)
+	{
+		Con_Printf("No world loaded\n");
+		return;
+	}
 	if (Mod_BSPXRW_Read(&bspctx, cl.worldmodel->name))
 		Mod_BSPXRW_Write(&bspctx);
 }

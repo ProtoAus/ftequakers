@@ -679,9 +679,10 @@ void VARGS PR_BIError(pubprogfuncs_t *progfuncs, char *format, ...)
 pbool QDECL QC_WriteFile(const char *name, void *data, int len)
 {
 	char buffer[256];
+	if (len < 0 || strlen(name) >= sizeof(buffer))
+		return false;
 	Q_snprintfz(buffer, sizeof(buffer), "%s", name);
-	COM_WriteFile(buffer, FS_GAMEONLY, data, len);
-	return true;
+	return COM_WriteFile(buffer, FS_GAMEONLY, data, len);
 }
 
 //a little loop so we can keep track of used mem

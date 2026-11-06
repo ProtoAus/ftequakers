@@ -3123,6 +3123,11 @@ void Shader_WriteOutGenerics_f(void)
 {
 	int i;
 	char *name;
+	if (Cmd_IsInsecure())
+	{
+		Con_Printf("%s is not permitted from untrusted commands\n", Cmd_Argv(0));
+		return;
+	}
 	for (i = 0; *sbuiltins[i].name; i++)
 	{
 		name = NULL;

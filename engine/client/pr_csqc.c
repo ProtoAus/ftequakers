@@ -8865,6 +8865,11 @@ void CSQC_WorldLoaded(void)
 
 void CSQC_CoreDump(void)
 {
+	if (Cmd_IsInsecure())
+	{
+		Con_Printf("%s is not permitted from untrusted commands\n", Cmd_Argv(0));
+		return;
+	}
 	if (!csqcprogs)
 	{
 		Con_Printf("Can't core dump, you need to be running the CSQC progs first.");

@@ -20,6 +20,26 @@ missing/unused declarations repaired with originals retained, no product waiver.
 Native consumer contract inspected, NOT executed by this fixture; full network,
 measured correction distance, deployment and owner feel not yet claimed.
 
+## Patch 1340 — Finish the developer writer-command census
+
+**Problem.** The remaining developer export/dump callbacks inconsistently
+validated command provenance before model, VM or filesystem work. Some failure
+paths dereferenced an absent world or failed output handle; compiler output
+plumbing hid write failures and silently truncated output names.
+
+**Change.** Apply the existing trusted-command boundary to thirteen developer
+callbacks, preserving their trusted paths. Refuse absent-world/failed-open cases
+cleanly. Propagate compiler output failures and reject invalid lengths or names
+instead of aliasing a truncated destination. Deliberate game-controlled recording,
+receipt/journal contracts, movement and evidence policy remain unchanged.
+
+**Verified.** Safe actual-callback tests: ten full functions and three bounded
+large-function prologues; trusted effects, 26 untrusted-context checks, missing
+VM/model/world/output and preserved shader-file controls. Untreated source and
+removed-guard controls fail as predicted; compiler callback has three baseline
+failures versus zero after the fix. Initial supported Full Windows build has
+74 inherited warnings and zero new sites. Exact tagged platform qualification
+and deployment are recorded separately; no whole-engine/parser security claim.
 
 ## Patch 1337 — Validate developer-tool command contexts and arguments
 
