@@ -21,8 +21,15 @@ compiler0warnings, exit0. Positive spawn/toggle/ordinary-eye and actual detach,
 registry/gating/bound/different-destination controls act; same-point guard has an
 acting counterfactual. Touch/zone/render/bank dependencies explicitly stubbed;
 NOT full collision/PVS network/feel evidence. Both profiles' three-VM builds0
-warnings; reader949pass, primary RUNS548/351fault baseline held as predeployment
-control, not fault-free. Reviews/native smoke/paired rollout pending; tools/p1343-relative-teleports.md, human check in lextest.md.
+warnings; reader949pass, final primary RUNS548/351fault results equal the true
+baseline, NOT fault-free. Both independent rechecks closed runtime findings.
+Deployed6Nov2026UTC: both Windows verified09:17, all12Pi09:33; new actors,
+paired programs/.prev exact,19340Windows and47924Pi protected paths unchanged.
+All8parts/183resume files byte-exact after ON/OFFBOX capture/restart; native,
+menu/config/backend unchanged; all join capacities restored. Graphical served-
+code/render smoke NOT run:4-GiB gate observed2719MiB, no game launched. Native
+PVS/feel and owner check remain pending, not a pass. Provenance/limits:
+tools/p1342-save-release.md and tools/p1343-relative-teleports.md; lextest.md.
 
 
 ## Patch 1342 -- short save chains and coherent hold release
@@ -51,8 +58,14 @@ refuse validation stub (not full file IO); acknowledged refused-cursor release
 matches server600, not cursor700. Same-shape junk/nonfinite/overflow/invalid flag
 are refused; accepted/thaw/legacy/known/unknown controls act. Original43/18baseline
 and relative24/7baseline retained separately, not summed across baselines. Both
-post-fix standard three-VM builds0warnings; renewed reviews/paired/native smoke pending. Reader949pass; primary RUNS548/351
-fault count is true predeployment baseline, unchanged reader, NOT fault-free.
+post-fix standard three-VM builds0warnings. Both independent rechecks closed
+prior runtime findings; remaining stale shared D38 comment corrected to D42 with
+same-line comment equivalence, no program rebuilt or evidence redated. Paired
+rollout completed6Nov2026UTC (Windows09:17, all12Pi09:33); full protected/data/
+rollback/actor checks above passed. Reader949pass reused on unchanged source;
+final primary RUNS548/351equals baseline, NOT fault-free. Native served-client/
+render smoke is blocked at4-GiB gate (2719MiB); human/native feel still pending.
+Source/program provenance and validation limits: tools/p1342-save-release.md.
 No full packet/collision/PVS/feel/historical-cause claim; tools/p1342-save-release.md,
 lextest.md.
 
