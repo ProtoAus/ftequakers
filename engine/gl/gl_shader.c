@@ -97,7 +97,46 @@ cvar_t r_glsl_warm = CVARFD("r_glsl_warm", "1", CVAR_ARCHIVE, "FTESurf Patch 127
 #define GLSLWARM_BYTES (4*1024*1024)		//written and read, at most
 #define GLSLWARM_SEED "glsl/warmseed.txt"	//FTESurf Patch 1282: the release's starter list, read beside this PC's
 #define GLSLWARM_MAX 65536					//permutations kept, all programs together
-#define GLSLWARM_BUDGET 2.0					//seconds of compiling per load; the rest compile at first draw, as before
+cvar_t r_mapready_budget = CVARFD("r_mapready_budget", "2", CVAR_ARCHIVE, "Soft seconds (0..10) for registered models/images and remembered active GLSL permutations at activation. A single upload/driver compile cannot be preempted. Expiry is incomplete, NOT server timer admission; see r_mapready_info.");
+static struct
+{
+	qboolean observing, warming, invalidated, budgethit, overflow;
+	int programs, eligible, available, compiled, failed, pending, unavailable;
+	int models, modelpending, modelfailed, modelunrequested;
+	int images, imagepending, imagefailed, imageunrequested;
+	unsigned int latecompiles, latefailed, lateimages, lateimagefailed;
+	double seconds, lateseconds, lateimageseconds;
+	char lastprogram[MAX_QPATH], lastimage[MAX_QPATH];
+	unsigned int lastperm;
+	const char *state;
+} mapready;
+
+static void MapReady_Compiled(program_t *prog, unsigned int perm, double start, qboolean failed)
+{
+	if (!mapready.observing || mapready.warming)
+		return;
+	mapready.latecompiles++;
+	mapready.latefailed += failed;
+	mapready.lateseconds += Sys_DoubleTime() - start;
+	Q_strncpyz(mapready.lastprogram, prog->name ? prog->name : "<unnamed>", sizeof(mapready.lastprogram));
+	mapready.lastperm = perm;
+}
+
+double R_MapReadyImageStart(void)
+{
+	return (mapready.observing && !mapready.warming && Sys_IsMainThread()) ? Sys_DoubleTime() : -1;
+}
+
+void R_MapReadyImageDone(const char *name, double start, qboolean failed)
+{
+	if (start < 0 || !mapready.observing || mapready.warming || !Sys_IsMainThread())
+		return;
+	mapready.lateimages++;
+	mapready.lateimagefailed += failed;
+	mapready.lateimageseconds += Sys_DoubleTime() - start;
+	Q_strncpyz(mapready.lastimage, name, sizeof(mapready.lastimage));
+}
+
 typedef struct glslwarm_s
 {
 	bucket_t bucket;
@@ -2121,6 +2160,7 @@ struct programpermu_s *Shader_LoadPermutation(program_t *prog, unsigned int p)
 	char defines[8192];
 	size_t offset;
 	qboolean fail = false;
+	double ready_start = (mapready.observing && !mapready.warming) ? Sys_DoubleTime() : 0;
 
 	extern cvar_t r_glsl_pbr, gl_specular, gl_specular_power;
 	extern cvar_t r_shadows_throwfade;	//nettest: contact-shadow gap fade, injected alongside FAKESHADOWS
@@ -2284,6 +2324,7 @@ struct programpermu_s *Shader_LoadPermutation(program_t *prog, unsigned int p)
 		cvarnames[i] = NULL; //no more
 		sh_config.pProgAutoFields(prog, pp, cvarnames, cvartypes);
 	}
+	MapReady_Compiled(prog, p, ready_start, fail);
 	if (fail)
 	{
 		Z_Free(pp);
@@ -5674,53 +5715,188 @@ static void Shader_Regenerate(parsestate_t *ps, const char *shortname)
 		ps->s->generator(ps, shortname, ps->s->genargs);
 }
 
-//FTESurf Patch 1277: CL_MakeActive, after its shader reload (which rebuilds the generics with permutation 0), before
-//the loading screen ends. Every protocol, a demo and a reconnect pass through it. Not warmed: a shader first
-//registered mid-run, a program no shader owns (programfixedemu), and anything a later reload deletes
-//(r_shader_reload_afterframe 1, a vid_restart).
+static void MapReady_Model(model_t *mod, const char *name)
+{
+	if (!name || !*name)
+		return;
+	mapready.models++;
+	if (!mod || mod->loadstate == MLS_NOTLOADED)
+		mapready.modelunrequested++;
+	else if (mod->loadstate == MLS_FAILED)
+		mapready.modelfailed++;
+	else if (mod->loadstate != MLS_LOADED)
+		mapready.modelpending++;
+}
+
+static void MapReady_Resources(void)
+{
+	int i;
+	mapready.models = mapready.modelpending = mapready.modelfailed = mapready.modelunrequested = 0;
+	for (i = 0; i < MAX_PRECACHE_MODELS; i++)
+		MapReady_Model(cl.model_precache[i], cl.model_name[i]);
+	for (i = 0; i < MAX_CSMODELS; i++)
+		MapReady_Model(cl.model_csqcprecache[i], cl.model_csqcname[i]);
+	for (i = 0; i < MAX_VWEP_MODELS; i++)
+		MapReady_Model(cl.model_precache_vwep[i], cl.model_name_vwep[i]);
+	Image_Readiness(&mapready.images, &mapready.imagepending, &mapready.imagefailed, &mapready.imageunrequested);
+}
+
+static void MapReady_Drain(double deadline)
+{
+	for (;;)
+	{
+		MapReady_Resources();
+		if (!mapready.modelpending && !mapready.imagepending)
+			break;
+		if (Sys_DoubleTime() >= deadline)
+		{
+			mapready.budgethit = true;
+			break;
+		}
+		// COM_HasWork omits executing workers. Poll actual resource states instead.
+		// One completion per deadline check; never an unbounded full worker sync.
+		if (!COM_DoWork(0, false))
+			Sys_Sleep(0.001);
+	}
+}
+
+static int QDECL MapReady_ComparePrograms(const void *a, const void *b)
+{
+	quintptr_t x = (quintptr_t)*(program_t *const *)a;
+	quintptr_t y = (quintptr_t)*(program_t *const *)b;
+	return (x > y) - (x < y);
+}
+
+void R_MapReadyInfo_f(void)
+{
+	const char *state = mapready.invalidated ? "invalidated" :
+		(mapready.latecompiles || mapready.lateimages) ? "late-work" : mapready.state;
+	Con_Printf("mapready: %s activation %s time %.3f budget-hit %i overflow %i\n",
+		state ? state : "not-started", mapready.state ? mapready.state : "not-started",
+		mapready.seconds, mapready.budgethit, mapready.overflow);
+	Con_Printf("mapready: programs %i unavailable %i eligible %i available %i compiled %i failed %i pending %i\n",
+		mapready.programs, mapready.unavailable, mapready.eligible, mapready.available, mapready.compiled, mapready.failed, mapready.pending);
+	Con_Printf("mapready: activation models %i pending %i failed %i unrequested %i images %i pending %i failed %i unrequested %i\n",
+		mapready.models, mapready.modelpending, mapready.modelfailed, mapready.modelunrequested,
+		mapready.images, mapready.imagepending, mapready.imagefailed, mapready.imageunrequested);
+	Con_Printf("mapready: late compiles %u failed %u ms %.3f last %s perm %u\n", mapready.latecompiles, mapready.latefailed,
+		mapready.lateseconds*1000, mapready.lastprogram, mapready.lastperm);
+	Con_Printf("mapready: late image completions %u failed %u upload-ms %.3f last %s\n",
+		mapready.lateimages, mapready.lateimagefailed, mapready.lateimageseconds*1000, mapready.lastimage);
+	Con_Printf("mapready: closure excludes future registrations, render targets, audio, driver first-draw and route coverage; NOT timer admission\n");
+}
+
+// CL_MakeActive: bounded known closure, not a universal loading/residency promise.
 void GLSLWarm_MapActive(void)
 {
 	unsigned int i, j, perm, p;
-	int warmed = 0;
-	qboolean over = false;
-	double start = Sys_DoubleTime();
+	int count = 0, capacity;
+	unsigned int seen[(PERMUTATIONS + 31) / 32];
 	shader_t *s;
-	program_t *prog;
+	program_t *prog, **programs;
 	glslwarm_t *w;
-	if (r_glsl_warm.ival && qrenderer == QR_OPENGL && r_shaders)
+	double start = Sys_DoubleTime();
+	double deadline = start + bound(0, r_mapready_budget.value, 10);
+	memset(&mapready, 0, sizeof(mapready));
+	mapready.state = "incomplete";
+	mapready.warming = true;
+	MapReady_Resources();
+	if (!r_glsl_warm.ival || qrenderer != QR_OPENGL || !r_shaders)
+		mapready.state = !r_glsl_warm.ival ? "disabled" : "unsupported";
+	else
 	{
 		GLSLWarm_Load();
-		for (i = 0; glslwarm_mem && i < r_numshaders && !over; i++)
+		MapReady_Drain(deadline);
+		capacity = min(r_numshaders, 32768) * (SHADER_PASS_MAX + 1);
+		programs = malloc(max(1, capacity) * sizeof(*programs));
+		if (!programs || !glslwarm_mem)
+			mapready.overflow = true;
+		else
 		{
-			s = r_shaders[i];
-			if (!s || s->uses <= 0)
-				continue;
-			for (j = 0; j <= (unsigned int)s->numpasses && j <= SHADER_PASS_MAX && !over; j++)
-			{	//the shader's program, then each pass's
-				prog = j ? s->passes[j-1].prog : s->prog;
-				if (!prog || !prog->name || !prog->permu[0] || !(w = Hash_Get(&glslwarm_hash, prog->name)))
+			for (i = 0; i < r_numshaders; i++)
+			{
+				s = r_shaders[i];
+				if (!s || s->uses <= 0)
 					continue;
-				for (perm = 1; perm < PERMUTATIONS && !over; perm++)
+				for (j = 0; j <= (unsigned int)s->numpasses && j <= SHADER_PASS_MAX; j++)
+				{
+					prog = j ? s->passes[j-1].prog : s->prog;
+					if (!prog)
+						continue;
+					if (count == capacity)
+					{
+						mapready.overflow = true;
+						break;
+					}
+					programs[count++] = prog;
+				}
+				if (mapready.overflow)
+					break;
+			}
+			qsort(programs, count, sizeof(*programs), MapReady_ComparePrograms);
+			for (i = 0; i < (unsigned int)count; i++)
+			{
+				prog = programs[i];
+				if (i && prog == programs[i-1])
+					continue;
+				mapready.programs++;
+				if (!prog->name || !prog->permu[0])
+				{
+					mapready.unavailable++;
+					continue;
+				}
+				w = Hash_Get(&glslwarm_hash, prog->name);
+				if (!w)
+					continue;
+				memset(seen, 0, sizeof(seen));
+				for (perm = 1; perm < PERMUTATIONS; perm++)
 				{
 					if (!(w->bits[perm >> 5] & (1u << (perm & 31))))
 						continue;
 					p = perm & prog->supportedpermutations;
-					if (p && !prog->permu[p])
+					if (!p || (seen[p >> 5] & (1u << (p & 31))))
+						continue;
+					seen[p >> 5] |= 1u << (p & 31);
+					mapready.eligible++;
+					if (prog->permu[p])
 					{
-						prog->permu[p] = Shader_LoadPermutation(prog, p);
-						if (!prog->permu[p])	//as gl_backend.c's draw does, or the draw retries it mid-run
-							prog->permu[p] = prog->permu[0];
-						warmed++;
-						over = Sys_DoubleTime() - start >= GLSLWARM_BUDGET;
+						if (prog->permu[p] == prog->permu[0])
+							mapready.failed++;
+						else
+							mapready.available++;
+						continue;
 					}
+					if (Sys_DoubleTime() >= deadline)
+					{
+						mapready.budgethit = true;
+						mapready.pending++;
+						continue;
+					}
+					prog->permu[p] = Shader_LoadPermutation(prog, p);
+					if (!prog->permu[p])
+					{
+						prog->permu[p] = prog->permu[0];
+						mapready.failed++;
+					}
+					else
+						mapready.compiled++;
 				}
 			}
 		}
-		if (warmed)
-			Con_DPrintf("glslwarm: %i remembered permutations compiled while loading, %.0f ms\n", warmed,
-				(Sys_DoubleTime() - start) * 1000);
+		free(programs);
+		MapReady_Drain(deadline);
+		if (!mapready.overflow && !mapready.unavailable && !mapready.failed && !mapready.pending &&
+			!mapready.modelpending && !mapready.modelfailed && !mapready.modelunrequested &&
+			!mapready.imagepending && !mapready.imagefailed && !mapready.imageunrequested)
+			mapready.state = "ready-closure";
 	}
-	GLSLWarm_Save();
+	mapready.seconds = Sys_DoubleTime() - start;
+	mapready.invalidated = shader_reload_needed;
+	mapready.warming = false;
+	mapready.observing = true;
+	GLSLWarm_Save(); // loading boundary only, never late-work telemetry
+	Con_DPrintf("mapready: %s compiled %i pending %i failed %i in %.1fms%s\n", mapready.state,
+		mapready.compiled, mapready.pending, mapready.failed, mapready.seconds*1000, mapready.budgethit ? " (budget)" : "");
 }
 void Shader_Shutdown (void)
 {
@@ -9857,6 +10033,8 @@ const char *shader_needreload_why = "?";
 
 void Shader_NeedReload(qboolean rescanfs)
 {
+	if (mapready.observing && !mapready.warming)
+		mapready.invalidated = true;
 	if (!shader_reload_needed && developer.ival >= 2)
 		Con_DPrintf("^5shaders^7 reload requested by %s%s\n",
 			shader_needreload_why, rescanfs?" (+filesystem rescan)":"");

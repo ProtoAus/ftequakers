@@ -589,6 +589,9 @@ qboolean Image_LoadTextureFromMemory(texid_t tex, int flags, const char *iname, 
 qboolean Image_LocateHighResTexture(image_t *tex, flocation_t *bestloc, char *bestname, size_t bestnamesize, unsigned int *bestflags);
 void Image_Upload			(texid_t tex, uploadfmt_t fmt, void *data, void *palette, int width, int height, int depth, unsigned int flags);
 void Image_Purge(void);	//purge any textures which are not needed any more (releases memory, but doesn't give null pointers).
+void Image_Readiness(int *total, int *pending, int *failed, int *unrequested);
+double R_MapReadyImageStart(void);
+void R_MapReadyImageDone(const char *name, double start, qboolean failed);
 void Image_Init(void);
 void Image_InitCore(void);	//nettest Patch 120d: renderer-independent half; safe (and required) with no renderer
 void Image_Shutdown(void);

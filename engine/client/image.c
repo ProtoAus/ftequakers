@@ -4784,7 +4784,9 @@ void BoostGamma(qbyte *rgba, int width, int height, uploadfmt_t fmt)
 static void Image_LoadTexture_Failed(void *ctx, void *data, size_t a, size_t b)
 {
 	texid_t tex = ctx;
+	double ready_start = R_MapReadyImageStart();
 	tex->status = TEX_FAILED;
+	R_MapReadyImageDone(tex->ident, ready_start, true);
 }
 static void Image_FixupImageSize(texid_t tex, unsigned int w, unsigned int h, unsigned int d)
 {
@@ -4844,6 +4846,7 @@ static void Image_LoadTextureMips(void *ctx, void *data, size_t a, size_t b)
 	int i;
 	texid_t tex = ctx;
 	struct pendingtextureinfo *mips = data;
+	double ready_start = R_MapReadyImageStart();
 
 	//setting the dimensions here can break npot textures, so lets not do that.
 //	tex->width = mips->mip[0].width;
@@ -4913,6 +4916,7 @@ static void Image_LoadTextureMips(void *ctx, void *data, size_t a, size_t b)
 	if (mips->extrafree)
 		BZ_Free(mips->extrafree);
 	BZ_Free(mips);
+	R_MapReadyImageDone(tex->ident, ready_start, tex->status == TEX_FAILED);
 }
 #endif
 
@@ -15386,6 +15390,32 @@ void Image_Purge(void)
 	}
 }
 
+
+// Loading closure, not a residency promise: only this map's registered file images.
+// Keep optional failed lookups visible instead of silently calling them ready.
+void Image_Readiness(int *total, int *pending, int *failed, int *unrequested)
+{
+	image_t *tex;
+	*total = *pending = *failed = *unrequested = 0;
+#ifdef LOADERTHREAD
+	Sys_LockMutex(com_resourcemutex);
+#endif
+	for (tex = imagelist; tex; tex = tex->next)
+	{
+		if (tex->regsequence != r_regsequence || (tex->flags & IF_RENDERTARGET))
+			continue;
+		(*total)++;
+		if (tex->status == TEX_LOADING)
+			(*pending)++;
+		else if (tex->status == TEX_FAILED)
+			(*failed)++;
+		else if (tex->status != TEX_LOADED)
+			(*unrequested)++;
+	}
+#ifdef LOADERTHREAD
+	Sys_UnlockMutex(com_resourcemutex);
+#endif
+}
 
 void Image_List_f(void)
 {

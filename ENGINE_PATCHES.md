@@ -1,5 +1,46 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1351 -- bounded activation readiness and late resource diagnostics
+
+**Problem.** The remembered-permutation warmer stopped after two seconds without
+reporting the remaining closure, counted failed fallback attempts as warmed, and
+could not explain work first performed after loading. Worker queue emptiness
+also does not prove a resource has finished loading.
+
+**Change.** Inventory named server/CSQC/viewweapon model slots, current-registration
+file images and remembered/seeded supported permutations of active shader/pass
+programs. Share a configurable, clamped two-second soft budget across actual
+pending resource states and additional compiles; check before each completion or
+compile, without full-worker sync. Deduplicate program pointers and masked
+permutations; distinguish available, successfully compiled, pending, failed and
+unrequested resources. Base fallback is not readiness. `r_mapready_info` preserves
+the activation result and reports subsequent GLSL compile and main-thread image
+completion counts/time/last resource. Reload invalidates the snapshot. Late
+telemetry performs no file I/O. Unsupported/disabled and incomplete are explicit.
+
+**Verified.** Full isolated supported Windows client/server/plugin build passed;
+three QC passes, zero warnings, no native warning from changed implementation
+files (untouched baseline warnings retained). Literal-source deterministic C
+controls pass30 checks under `-Wall -Wextra -Werror`: acting compile/completion,
+duplicate/masked aliases, repeat, zero budget, failed/pre-existing fallback,
+executing worker, timeout, failed/unrequested resources, old images/render-target
+exclusions, renderer modes, late work, main-thread/warm exclusions and reset.
+Real Tensor2 client/socket smoke warmed61 known permutations and reported8 failed
+registered image lookups as **incomplete**, not ready. Zero-budget control left
+pending work; subsequent drawing recorded6 late compiles plus image completion;
+PBR setting change invalidated activation. Owned actors quit normally. See
+FTESurf `tools/p1351-mapreadiness.md` for evidence and scope.
+
+**Limits.** Informational closure at the existing loading boundary, NOT server
+timer/start admission or universal map residency. Future/unremembered resources,
+unowned fixed-emulation programs, render targets, audio, driver first-draw work
+and route coverage remain outside it. Optional failed image probes remain
+visible. One synchronous driver call/upload is not preemptible; the soft budget
+does not cover prior reload, history I/O or enumeration. No final performance
+improvement or owner void-transition acceptance is claimed. Initial source-edit
+build failure and detached make stall are retained; synchronous supported build
+succeeded. Release0.1.41 is not rebuilt or republished.
+
 ## Patch 1350 -- source-bound native TAS contact observations
 
 **Problem:** A paused full input line lacked native collision annotations for

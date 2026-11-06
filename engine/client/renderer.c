@@ -127,6 +127,7 @@ extern cvar_t r_vertexlight;
 extern cvar_t r_forceprogramify;
 extern cvar_t r_glsl_precache;
 extern cvar_t r_glsl_warm;	//FTESurf Patch 1277
+extern cvar_t r_mapready_budget;
 extern cvar_t r_halfrate;
 extern cvar_t dpcompat_nopremulpics;
 #ifdef PSKMODELS
@@ -1577,6 +1578,8 @@ void Renderer_Init(void)
 	Cmd_AddCommandD("r_viewstats", R_ViewStats_f, "FTESurf Patch 850: per top-level view since the last call -- views by depth, 3D skies drawn and skipped, entities a nested view passed over, 3D skies from the sky camera, screen copies and their megapixels.");
 	{
 		extern void R_VoidSceneInfo_f(void);
+		extern void R_MapReadyInfo_f(void);
+		Cmd_AddCommandD("r_mapready_info", R_MapReadyInfo_f, "Bounded activation closure and late GLSL compile diagnostics. Not universal residency or timer admission.");
 		Cmd_AddCommandD("r_voidscene_info", R_VoidSceneInfo_f, "P1345: untimed current-view gate, exact camera and world mesh-shape counts; developer 1 enables the last primary offered-model census, before culling. Not a frame-time sampler.");
 	}
 	Cvar_Register (&r_refractreflect_scale, GRAPHICALNICETIES);
@@ -1763,6 +1766,7 @@ void Renderer_Init(void)
 	Cvar_Register (&r_forceprogramify, GLRENDEREROPTIONS);
 	Cvar_Register (&r_glsl_precache, GLRENDEREROPTIONS);
 	Cvar_Register (&r_glsl_warm, GLRENDEREROPTIONS);
+	Cvar_Register (&r_mapready_budget, GLRENDEREROPTIONS);
 	Cvar_Register (&r_halfrate, GRAPHICALNICETIES);
 #ifdef HAVE_LEGACY
 	Cvar_Register (&dpcompat_nopremulpics, GLRENDEREROPTIONS);
