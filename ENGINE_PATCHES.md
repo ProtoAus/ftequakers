@@ -57,6 +57,56 @@ No full packet/collision/PVS/feel/historical-cause claim; tools/p1342-save-relea
 lextest.md.
 
 
+## Patch 1345 -- exact frame reports and smoother map-only noclip
+
+**Problem:** Slow-frame ties could retain an expired slot, use the wrong camera
+location or repeatedly rebuild the ring. Long real stalls were omitted and dump
+histogram tails/ranks were approximate. Full-map noclip also paid for unnecessary
+props/effects. At the first void crossing, recursive reflections cleared the new
+map-only policy and revived static props' cold exact lighting-visibility traces.
+
+**Change:** Retain slot identity/newest-first ties, include long intervals and
+report focus exclusions/coverage. Live histogram estimates stay cheap; an explicit
+dump sorts captured raw samples for exact tails, nearest-rank percentiles and
+median-threshold stutters, with a checked256KiB temporary cap and atomic OOM
+refusal/rebase. Read-only VF_WORLDONLY228 classifies the final primary noclip
+camera. With r_voidvis, nonarchived r_voidscene defaults1: retain BSP, loaded
+structural brushes, authored func_lod eligibility and frustum policy; omit native
+and QC decoration/effects. Preserve the explicit parent's policy in recursive
+reflection children instead of restarting cosmetic prop lighting there. Fresh
+primary/named scenes clear/rederive it; the raw void predicate remains view-local.
+Normal parents never acquire the bit. Keep reflection geometry and exact normal
+lighting; omit the optional3D skyroom only in map-only scenes, not normal views. Clear uncovered
+primary mono single-seat forced-void pixels in both scene modes; exclude native
+secondary/recursive/stereo/named-target/loading contexts and supply every native
+point-query output. Observe scoped primary offered candidates BEFORE culling, not
+rendered-model totals. Avoid sprite name/prefix work without changing trace/cache
+scheduling. No physics formula, wire or recording-format change by this patch.
+
+**Verified:** Actual sampler controls:440/10 original failures,13992/0 corrected;
+pre-exact dump fails58of14100, exact source14100/0 including OOM/ties/ranks/stalls.
+Literal query5760/0, loaded-brush classifier280/0/no loads, color-clear4423680/0
+with acting old/null-output/stereo/secondary controls. Actual candidate-census
+fragments432/0; the legacy nested overwrite control acts. Actual policy-reset
+fragment1280/0; primary clears stale policy, recursive children retain only an
+existing bit, unrelated flags and pure query bodies unchanged. Native three-map
+pixel/geometry controls and complete CSQC profiles are retained separately from
+rejected/print-stalled/one-ULP comparisons. Initial native gate and narrow authored
+LOD callback act; counters are not draw counts. Qualified current-mode1 native
+attribution binds exact EXE/debug/plugin symbols: first boundary161samples,
+154BIH_Trace/156HL2_CalcModelLighting, in recursive reflections. After policy fix,
+first/repeat natural crossing events have no armed12ms spike/sample. Instrumented
+attribution is NOT product FPS or proof of no smaller hitches; one setup outlier
+before the boundary remains explicit. No positive lazy-compile hook control, so
+P0 is not universal no-compilation evidence. Probe source removed from exact owned
+preimages; no diagnostic sampler may ship. Canonical7ccb compiler's two known
+F333227 miscompilations are NOT a safe fleet baseline; final programs use the
+read-only qualified c24ede65 tool in the isolated source tree. Final normal build,
+source pins, compatible Pi CS-only profile and deployment are recorded separately.
+No all-resource readiness barrier or universal numerical FPS gain is claimed.
+See FTESurf tools/p1345-smoothness.md. Unpublished reservation1331 superseded by
+ONE1345 claim after fresh full-worktree census; original evidence identities kept.
+
 ## Patch 1341 -- clearing teleports clear the predicted carrier (CSQC only)
 
 **Problem.** Ordinary non-landmark VelocityMode1-3 teleports call SV_ClearCarrier

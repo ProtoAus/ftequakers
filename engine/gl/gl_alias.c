@@ -3796,6 +3796,9 @@ void BE_GenModelBatches(batch_t **batches, const dlight_t *dl, unsigned int bemo
 	model_t *emodel;
 	unsigned int orig_numstris = cl_numstris;
 	unsigned int orig_numvisedicts = cl_numvisedicts;
+	qboolean countcensus = (bemode == BEM_STANDARD && developer.ival && !r_secondaryview &&
+		!r_refdef.recurse && r_refdef.playerview &&
+		(!*r_refdef.rt_destcolour[0].texname || !strcmp(r_refdef.rt_destcolour[0].texname, "megascreeny")));
 //	unsigned int orig_numstrisidx = cl_numstrisidx;
 //	unsigned int orig_numstrisvert = cl_numstrisvert;
 	extern cvar_t r_ignoreentpvs; //legacy value is 1...
@@ -3850,26 +3853,12 @@ void BE_GenModelBatches(batch_t **batches, const dlight_t *dl, unsigned int bemo
 	}
 
 	/*
-	  FTESurf build 19: the void census, and it is the evidence that removed two
-	  cvar modes rather than a leftover from them.
-
-	  r_voidvis shipped in build 17 with two entity-dropping modes here -- one
-	  that skipped non-brush models and one that skipped everything -- on the
-	  reasoning that the props are what the void costs you.  This counter is what
-	  disproved that: aimed straight at the map from outside it, at EVERY mode
-	  including the one where no gate runs, it reads zero.  There are no entities
-	  out there; VBSP's own PVS and radius culls have already rejected them.  So
-	  both gates were inert and both are gone; see the essay on r_voidvis in
-	  renderer.c for the numbers.
-
-	  Kept, because the next person to propose dropping entities in the void
-	  should be able to read the answer off one frame instead of spending two
-	  benchmark runs on it.  STANDARD pass only -- the shadow and depth passes
-	  walk this same list for their own reasons, and folding them in would triple
-	  the number and make it mean nothing -- and developer-gated, because it is a
-	  whole extra walk of the visedict list for a print nobody is reading.
+	  Developer census: PRIMARY screen STANDARD candidates, not drawn models.
+	  Nested/offscreen views must not overwrite the observation after BE_DrawWorld.
+	  Skip ranges, PVS/frustum and model-specific culls still run below. Historical
+	  zero counts on one map did not prove the absence of effects on other maps.
 	*/
-	if (bemode == BEM_STANDARD && developer.ival)
+	if (countcensus)
 	{
 		r_voidvis_edicts = cl_numvisedicts - r_refdef.firstvisedict;
 		r_voidvis_brush = 0;
@@ -3905,6 +3894,15 @@ void BE_GenModelBatches(batch_t **batches, const dlight_t *dl, unsigned int bemo
 			continue;
 		}
 		ent = &cl_visedicts[i];
+		if (r_refdef.flags & RDF_WORLDONLY)
+		{
+			if (ent->rtype != RT_MODEL || !ent->model || ent->model->type != mod_brush)
+			{
+				if (countcensus)
+					r_voidvis_dropped++;
+				continue;
+			}
+		}
 
 		if ((r_refdef.externalview || chase_active.ival) && (ent->flags & RF_FIRSTPERSON))
 			continue;
@@ -4038,7 +4036,7 @@ void BE_GenModelBatches(batch_t **batches, const dlight_t *dl, unsigned int bemo
 		}
 	}
 
-	if (cl_numstris && !(r_refdef.flags & RDF_DISABLEPARTICLES))
+	if (cl_numstris && !(r_refdef.flags & (RDF_DISABLEPARTICLES|RDF_WORLDONLY)))
 		BE_GenPolyBatches(batches);
 
 	if (r_batchsort.ival == 2)

@@ -11026,7 +11026,8 @@ void GLBE_DrawLightPrePass(void)
 #ifdef RTLIGHTS
 	/*regular lighting now*/
 	GLBE_SelectEntity(&r_worldentity);
-	Sh_DrawLights(r_refdef.scenevis);
+	if (!(r_refdef.flags & RDF_WORLDONLY))
+		Sh_DrawLights(r_refdef.scenevis);
 #endif
 
 	qglClearColor (1,0,0,1);
@@ -11196,7 +11197,8 @@ void GLBE_DrawWorld (batch_t **worldbatches)
 
 	//memset(batches, 0, sizeof(batches));
 	BE_GenModelBatches(batches, shaderstate.curdlight, BEM_STANDARD, r_refdef.scenevis, r_refdef.sceneareas);
-	R_GenDlightBatches(batches);
+	if (!(r_refdef.flags & RDF_WORLDONLY))
+		R_GenDlightBatches(batches);
 	shaderstate.curentity = &r_worldentity;
 //	if (cl.paused || cls.state < ca_active)
 		shaderstate.updatetime = r_refdef.time;
@@ -11210,7 +11212,7 @@ void GLBE_DrawWorld (batch_t **worldbatches)
 		//FTESurf Patch 868: a water capture shows the 2D skybox, not the 3D sky (r_waterskyroom), as
 		//Source's above-water views do; with the eye under water its refraction keeps the 3D sky
 		//(viewrender.cpp:5912-5927).
-		if (worldbatches[SHADER_SORT_SKY] && r_refdef.skyroom_enabled && !r_refdef.skyroom_noleafsky &&	//Patch 880
+		if (!(r_refdef.flags & RDF_WORLDONLY) && worldbatches[SHADER_SORT_SKY] && r_refdef.skyroom_enabled && !r_refdef.skyroom_noleafsky &&	//Patch 880
 			!(r_refdef.capturekind >= 1 && !r_refdef.insideportal && !r_waterskyroom.ival &&
 			  !(r_viewcontents & (FTECONTENTS_WATER|FTECONTENTS_SLIME|FTECONTENTS_LAVA))))	//FLUID includes SKY
 		{
@@ -11257,7 +11259,7 @@ void GLBE_DrawWorld (batch_t **worldbatches)
 		}
 
 #ifdef RTLIGHTS
-		if (worldbatches && r_shadow_realtime_world.ival)
+		if (worldbatches && r_shadow_realtime_world.ival && !(r_refdef.flags & RDF_WORLDONLY))
 			shaderstate.identitylighting = r_shadow_realtime_world_lightmaps.value;
 		else
 #endif
@@ -11311,7 +11313,7 @@ void GLBE_DrawWorld (batch_t **worldbatches)
 			RSpeedEnd(RSPEED_OPAQUE);
 
 #ifdef RTLIGHTS
-			if (worldbatches)
+			if (worldbatches && !(r_refdef.flags & RDF_WORLDONLY))
 			{
 				RSpeedRemark();
 				TRACE(("GLBE_DrawWorld: drawing lights\n"));

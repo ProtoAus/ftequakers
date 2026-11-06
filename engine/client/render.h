@@ -829,6 +829,8 @@ in Surf_SetupFrame and read by the entity gates in CL_LinkStaticEntities and
 BE_GenModelBatches.  Declared here because those three live in three files.
 */
 extern	cvar_t	r_voidvis;
+extern	cvar_t	r_voidscene;
+qboolean Surf_WorldOnlyView(playerview_t *pv);
 extern	cvar_t	r_blendsort;	//FTESurf Patch 218 -- see the essay in renderer.c
 extern	qboolean r_voidview;
 /*
