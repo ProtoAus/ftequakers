@@ -27,9 +27,20 @@ original aggregate retained, no tests rerun/regraded. Untouched gap in BACKLOG. 
 Windows11native/progs hashes held; reader949/0. Fresh548REC178VIEW344/7faults held:
 716exact reports reused with unchanged core reader,10newviews actuallyparsed/clean.
 Initial new-input refusal retained. Canonical census/recsim.py is OUTSIDE the
-collectors84 seal and needs separate exact helper provenance/rollback. Two whole-
-feature reviews and delivery pending. This is not native replay/hardware acceptance
-or historical remeasurement coverage.
+collectors84 seal. Two fresh WHOLE re-reviews clear after report corrections.
+Backend9150481fa48de38cdfde9cc6c605a130fcb5492a +separately hash-bound canonical
+reader DELIVERED6Nov00:19:37UTC/audit00:19:38. Actual156sealedorigins/5ROpins/
+2ROruntimes/RWdata/44schemas+nonchurncounts/8identities/defaultenv preserved;
+core26event1 held, primaryOPEN/old+fallbackCLOSED,4cron/MOMactive. Reader exact
+through actualprocessnamespace, configuredtoolspath/heldmeta held; NOTguardsealed.
+Oldreader/SAMEcurrentdata rollback/historicalbackup retained, no DBrestore.
+Interrupted helper-variable transaction restoredoldreader then blockedbothlaunches
+beforeacceptance; repairedparameter and resumed SAMEtransaction's actual existing
+gates after a pre-mutation badalias resume. Failures kept, not an uninterrupted/
+singlepass claim. Collectorholdreleased/sidecar0bytes-nlink1, no reservation;
+liveanon401/health200/directory12. Actual oldpair reread nowunmodelled, storedrow
+unchanged. No native/VM/lobby swap. Requiredproduction/namespace/history roots kept.
+This is not native replay/hardware acceptance or durable historical remeasurement.
 Details: tools/p1334-similarity-unmodelled.md.
 
 ## Patch 1333 -- requested current-file consistency (backend only)
