@@ -1,6 +1,6 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
-## Patch 1347 -- source-bound native TAS contact observations
+## Patch 1350 -- source-bound native TAS contact observations
 
 **Problem:** A paused full input line lacked native collision annotations for
 ramp sections. Earlier navigation, raw edits or failed retained-file readback
@@ -11,10 +11,14 @@ world plane and hull endpoint, with explicit unavailable/unsupported states;
 recovery abstains without changing movement. Bounded complete-source maps back
 Observed contacts beside Manual markers. Raw edits invalidate independently of
 intent; metadata-only retag and both fresh/cached binding require exact-source
-strict retained readback. Pages compare the checked SHA, never rescan the line.
-Decode signed normals and the native inclusive/configurable ramp band. No input,
-portable-pose, evidence-format or submission authority change. Unpublished1344
-renumbered forward; published1345/1346 code and receipts are preserved.
+canonical retained readback. Failed ordinary reads invalidate its exact key;
+ordinary load reuses its first strict read instead of parsing the whole line twice.
+Pages only queue one separate canonical-only Think read when proof is unknown.
+That proof is NOT live-body admission: native command-context/restore gates stay
+unchanged. Pending UI replies are empty and retry finitely. Decode signed normals
+and the native inclusive/configurable ramp band. No input, portable-pose,
+evidence-format or submission authority change. Unpublished prototype renumbered
+forward; published1345/1346/1347/1348 code and receipts are preserved.
 
 **Verified:** Isolated Windows FULL native/three-VM builds, zero VM/new modified-
 native warnings; native20 helper cases include recovery control/abstention/trace
@@ -22,9 +26,13 @@ parity. Real dedicated static BSP checks cover complete planes/extent, earlier
 metadata retag, literal cold/warm edits and divergent-preview/Discard restoration.
 Test-only packet/readback fault variants reproduce both old defects (32checks)
 and pass corrections (35); wall/zero normals refuse, original bytes stay exact.
-Uninstrumented production metadata28/literal29/preview25 and48000-row budget22
-pass. These precede final merged/tagged delivery qualification. Helper test IDs
-retain their prototype1344 label. No live moving-world/ladder, universal ramp-ID,
+Uninstrumented production metadata, literal, preview/Discard and48000-row budget
+pass. Actual96000-row ordinary load and separate validation avoid the reproduced
+old VM runaway; failed ordinary syntax/expected-hash reads invalidate prior proof,
+file existence alone cannot restore it, and actual CSQC pending replies retry to a
+complete map without body/grant work. Fresh949 reader checks pass; stable corpus
+558 CLI inputs retain351 existing faults, no increase. Final merged/tagged delivery
+qualification is separate. Historical test IDs retain their1344/1347 source labels. No live moving-world/ladder, universal ramp-ID,
 global optimum, owner comfort or public TAS-admission claim.
 
 ## Patch 1346 -- recover interrupted similarity source admissions (backend only)
