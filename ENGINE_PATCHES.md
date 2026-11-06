@@ -1,6 +1,6 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
-## Patch 1335 -- manual full-line TAS sections (QC only)
+## Patch 1336 -- manual full-line TAS sections (QC only)
 
 **Problem:** Named checkpoints existed but there was no practical section browser
 or safe automatic marker-metadata save while paused earlier than the retained
@@ -63,8 +63,10 @@ runs/parts548 plus178views retain351existing faulty entries on unchanged bytes;
 10additional views actually parse clean, all726inventory members unchanged. Not
 a clean corpus. Broader legacy kept-save prefix remains separately blocked/unmodified.
 Initial missing internal name-list terminator was correctly rejected by canonical
-read-back; fix was in producer, not validation. Final frozen whole-feature
-re-review/publication/deployment pending. Actual-contact proposals, next-ramp best-FOUND solving,
+read-back; fix was in producer, not validation. Two final independent whole-feature
+reviews cleared the corrected code. Qualified under provisional P1335; renumbered
+before publication to avoid an existing reservation, with no runtime source change.
+Publication/deployment pending. Actual-contact proposals, next-ramp best-FOUND solving,
 public TAS admission/board stages and owner feel are NOT complete.
 
 ## Patch 1334 — distinguish unmodelled similarity input from malformed input
