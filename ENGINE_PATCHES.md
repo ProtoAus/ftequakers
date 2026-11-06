@@ -49,8 +49,21 @@ large-function prologues; trusted effects, 26 untrusted-context checks, missing
 VM/model/world/output and preserved shader-file controls. Untreated source and
 removed-guard controls fail as predicted; compiler callback has three baseline
 failures versus zero after the fix. Initial supported Full Windows build has
-74 inherited warnings and zero new sites. Exact tagged platform qualification
-and deployment are recorded separately; no whole-engine/parser security claim.
+74 inherited warnings and zero new sites. Final tagged source `7e271da76`
+(`1340`) passed the same acting controls on Windows and ARM, 1,578 native checks
+per platform, and ARM's exact 1,131-blob source check; zero new warning sites
+(74 Windows, 16 server + 1 plugin ARM inherited diagnostics).
+
+**Delivered 6 November 2026.** Both Windows installs' ten native/plugin targets
+and their `.prev` hashes verified. All twelve Pi lobbies warned with the default
+ten-second countdown, then restarted to the exact qualified native/plugin pair;
+new process epochs and mapped plugin inodes verified, none skipped. Before any
+canonical staging, the complete recorder/resume preimages were individually
+verified on- and off-box. All 47,758 previously inventoried protected data paths
+stayed unchanged; eleven new files were retained. Configuration and backend
+launch/files stayed unchanged, and the short canonical sweep lock was released.
+No VM/config/backend shipment, data restore, owner-client kill, or whole-engine/
+parser security claim. Frozen images and rollback history remain retained.
 
 ## Patch 1337 — Validate developer-tool command contexts and arguments
 
