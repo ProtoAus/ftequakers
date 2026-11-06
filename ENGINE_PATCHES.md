@@ -20,9 +20,15 @@ load/frame/default/UI/clear-sound/source guards pass. Actual native offset
 function executes with negative units/factor and flag set (parser stubs only).
 Ramp bake/blend4controls and native sampler/colour/flash regressions pass;
 current-main3VM0warnings. Fixture declaration/cache-expectation failures retained,
-not product waivers. Exact-commit clean qualification/scoped delivery pending.
-Same-ramp grazing/flicker/bleed and seasonal off/on owner acceptance remain
-manual, no native timing/FPS claim. Tools/p1335-christmas-ramp-defaults.md.
+not product waivers. Clean C4/D911 qualifications0warnings. Concurrent live
+Windows P1336 pair66/b639 invalidated C4/b7 candidate; guard refused downgrade.
+D911 retains exact own5modules and builds QW66 equal already-installed Windows
+server. BOTH Windows6Nov02:50UTC CSP117d627ace2d/symbols only,4targets/caches
+exact,41protected unchanged,2exact defaults hunks preserve all unrelated bytes.
+Lobbies still5e8/1ca; safe-empty prepare exit75,1client/no archive/stage/restart.
+No lobby delivery claimed; retarget only after fresh current-pair proof if it
+advances. Same-ramp grazing/flicker/bleed and seasonal off/on owner acceptance
+remain manual, no native timing/FPS claim. Tools/p1335-christmas-ramp-defaults.md.
 
 ## Patch 1336 -- manual full-line TAS sections (QC only)
 
