@@ -20,7 +20,7 @@ input mutation, existing invalidation/history and source proof; no pose/world
 injection, new evidence format, public admission, native pin/tag or Build change.
 Published P1351-1353 source/native fixes remain intact.
 
-**Verified.** Final integrated real dedicated-socket34/34 controls ACT: baseline,
+**Verified.** Final integrated real dedicated-socket37/37 controls ACT: baseline,
 all9 candidates, measured authored work, full-future replay, genuine GUI completion
 and Cancel, stale job1 cannot cancel job2, cancelled Keep disabled, exact Original
 input/settings/future recovery and preview/operation clearing. Baseline was best:
@@ -29,8 +29,12 @@ Preview recovery setup, invalid QC8/compact2 helper oracle, driver status regex
 and whole-file versus canonical-chain domain failures are preserved/diagnosed,
 not counted as passes. Actual old21helpers covered all72 masks against existing
 editor. Final fair-baseline22production helpers ACT with0failed, including the
-bounded first-qualified-window baseline control; same34native controls pass after
-that change, all own processes quit0. All3VMs compile0warnings. Native component
+bounded first-qualified-window baseline control; same37native controls pass after
+that change, all own processes quit0. Two independent review rounds caught/fixed
+optimizer admission ownership and preview status loss after workshop reopen;
+actual same-batch exclusion and reopen/preview controls pass. Initial declaration-
+order compile and immediate-status driver oracle failures remain explicit. Existing
+verifier regression949/0. All3VMs compile0warnings. Native component
 profile2f5; no global zero-warning/native/performance claim. >128
 selected rows, changed-winner Keep/history, finish-specific context and owner
 familiar two-ramp acceptance remain unverified. See tools/p1355-tas-solve.md.
