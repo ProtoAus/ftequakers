@@ -1,5 +1,31 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1352 -- bounded retirement of orphan similarity cursors
+
+**Problem.** Store-only similarity scheduling kept each replay's peer position
+indefinitely after that replay row disappeared. Repeated enabled collection and
+process reopen did not reclaim orphan scheduling state, even while real
+comparisons succeeded. This is metadata growth, not a finding against a player.
+
+**Change.** Examine at most64 indexed peer-cursor slots per enabled collection
+pass. A separate position in the existing cursor table crosses live windows and
+survives reopen. Retire only peer state whose replay is still absent at DELETE;
+commit deletion and maintenance position together, including legacy autocommit.
+Source rotation, in-flight recovery and live positions stay intact. No replay,
+observation/history, capture, schema, reader, threshold, ranking/enforcement,
+native pin/tag or QC Build change; no hard total RSS/time/fleet bound is claimed.
+
+**Verified.** Untouched source fails3production-entrypoint controls after actual
+80-opportunity comparisons; missing-late-guard mutant fails real two-connection
+source-resurrection control. Windows72focused/existing tests pass. ARM260unit
+cases and68standalone checks pass in segmented invocations; original discovery
+loader error is preserved (successful standalone SystemExit imported as a test),
+not a product workaround or uninterrupted-clean claim. Fourteen focused controls
+cover bounded restart/wrap progress, protected live/old rows, late resurrection,
+SQL interruption, callback ownership, no disabled/expired/borrowed/read-only
+mutation, and deletion-before-failed-checkpoint rollback. Guarded generation and
+actual delivery recorded separately in tools/p1352-simcheck-cursors.md.
+
 ## Patch 1351 -- bounded activation readiness and late resource diagnostics
 
 **Problem.** The remembered-permutation warmer stopped after two seconds without
