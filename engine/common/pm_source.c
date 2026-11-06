@@ -3665,6 +3665,7 @@ static qboolean PMSrc_CheckStuck (void)
 	if (PM_TestPlayerPosition (pmove.origin, false))
 		return false;	/* not stuck */
 
+	if (pms_tas_contact_observe) pms_tas_contact.kind = 3;
 	VectorCopy (pmove.origin, base);
 
 	for (d = 0; d < countof(dists); d++)
@@ -4583,6 +4584,53 @@ static void PMSrc_TASContactTests(void)
 	PMSrc_TASContactHit(&recovered);
 	PMSrc_Check("P1344 recovery witness refuses synthetic plane", PMSrc_TASContactEnd(normal, &distance, point), 3, 0);
 	PMSrc_Check("P1344 recovery movement trace unchanged", memcmp(&trace, &recovered, sizeof(trace)) == 0, 1, 0);
+	{
+		playermove_t *held = BZ_Malloc(sizeof(*held));
+		vec3_t control;
+		physent_t *floor;
+		qboolean stuck;
+		*held = pmove;
+		memset(&pmove, 0, sizeof(pmove));
+		pmove.skipent = -1;
+		pmove.pm_type = PM_NORMAL;
+		pmove.numphysent = 1;
+		VectorSet(pmove.player_mins, -16, -16, 0);
+		VectorSet(pmove.player_maxs, 16, 16, 62);
+		floor = &pmove.physents[0];
+		VectorSet(floor->mins, -128, -128, -100);
+		VectorSet(floor->maxs, 128, 128, -0.25f);
+		PMSrc_TASContactBegin(true);
+		PMSrc_CheckStuck();
+		PMSrc_TASContactHit(&trace);
+		PMSrc_Check("P1350 clear origin keeps world contact", PMSrc_TASContactEnd(normal, &distance, point), 1, 0);
+		VectorSet(pmove.origin, 0, 0, -0.5f);
+		PMSrc_Check("P1350 initial solid actually acts", PM_TestPlayerPosition(pmove.origin, false), 0, 0);
+		PMSrc_TASContactBegin(true);
+		// Compiled-out-witness control: the SAME real recovery still runs.
+		pms_tas_contact_observe = false;
+		stuck = PMSrc_CheckStuck();
+		pms_tas_contact_observe = true;
+		VectorCopy(pmove.origin, control);
+		PMSrc_Check("P1350 old unstuck physically acts", !stuck && control[2] > -0.5f && PM_TestPlayerPosition(control, false), 1, 0);
+		PMSrc_TASContactHit(&trace);
+		PMSrc_Check("P1350 old unstuck witness omission", PMSrc_TASContactEnd(normal, &distance, point), 1, 0);
+		VectorSet(pmove.origin, 0, 0, -0.5f);
+		PMSrc_TASContactBegin(true);
+		stuck = PMSrc_CheckStuck();
+		PMSrc_Check("P1350 observed unstuck physically acts", !stuck && PM_TestPlayerPosition(pmove.origin, false), 1, 0);
+		PMSrc_TASContactHit(&trace);
+		PMSrc_Check("P1350 unstuck cannot become world ramp", PMSrc_TASContactEnd(normal, &distance, point), 3, 0);
+		PMSrc_Check("P1350 unstuck body matches old path", VectorCompare(pmove.origin, control), 1, 0);
+		VectorSet(floor->mins, -1024, -1024, -1024);
+		VectorSet(floor->maxs, 1024, 1024, 1024);
+		VectorClear(pmove.origin);
+		PMSrc_TASContactBegin(true);
+		PMSrc_Check("P1350 unresolved stuck actually acts", PMSrc_CheckStuck(), 1, 0);
+		PMSrc_Check("P1350 unresolved stuck is unsupported", PMSrc_TASContactEnd(normal, &distance, point), 3, 0);
+		PMSrc_Check("P1350 unresolved stuck body unchanged", VectorCompare(pmove.origin, vec3_origin), 1, 0);
+		pmove = *held;
+		BZ_Free(held);
+	}
 	pmove.numphysent = count;
 	pmove.physents[0].info = world;
 	pmove.physents[1].info = other;

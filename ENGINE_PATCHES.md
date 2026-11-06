@@ -8,7 +8,8 @@ must not lose the original future or relabel an invalid source as current.
 
 **Change:** Passive optional Source-mover outputs retain only the chosen path's
 world plane and hull endpoint, with explicit unavailable/unsupported states;
-recovery abstains without changing movement. Bounded complete-source maps back
+normal-recovery and initial stuck searches abstain without changing movement.
+Bounded complete-source maps back
 Observed contacts beside Manual markers. Raw edits invalidate independently of
 intent; metadata-only retag and both fresh/cached binding require exact-source
 canonical retained readback. Failed ordinary reads invalidate its exact key;
@@ -32,7 +33,12 @@ old VM runaway; failed ordinary syntax/expected-hash reads invalidate prior proo
 file existence alone cannot restore it, and actual CSQC pending replies retry to a
 complete map without body/grant work. Fresh949 reader checks pass; stable corpus
 558 CLI inputs retain351 existing faults, no increase. Final merged/tagged delivery
-qualification is separate. Historical test IDs retain their1344/1347 source labels.
+qualification is separate. Follow-up review found first-validation completion could
+leave an exhausted pending view and initial unsticking could lack an unsupported
+witness. Completion now notifies and actual stuck searches abstain; ten added native
+numeric checks include the same real recovery with/without its report witness and
+unchanged body. These latest corrections await build/runtime qualification; prior
+ARM1598 applies to a439, not the new source. Historical test IDs retain1344/1347 labels.
 No live moving-world/ladder, universal ramp-ID, global optimum, owner comfort or
 public TAS-admission claim.
 
