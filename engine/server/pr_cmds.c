@@ -1489,6 +1489,11 @@ static progsnum_t AddProgs(const char *name)
 
 static void PR_Decompile_f(void)
 {
+	if (Cmd_IsInsecure())
+	{
+		Con_Printf("%s is not permitted from untrusted commands\n", Cmd_Argv(0));
+		return;
+	}
 	if (!svprogfuncs)
 	{
 		Q_SetProgsParms(false);
@@ -1508,6 +1513,16 @@ static void PR_Compile_f(void)
 	double time = Sys_DoubleTime();
 	const char *argv[64] = {"", "-src", pr_sourcedir.string, "-srcfile", "progs.src"};
 
+	if (Cmd_IsInsecure())
+	{
+		Con_Printf("%s is not permitted from untrusted commands\n", Cmd_Argv(0));
+		return;
+	}
+	if (Cmd_Argc() > (int)countof(argv))
+	{
+		Con_Printf("Too many compiler arguments\n");
+		return;
+	}
 	if (Cmd_Argc()>2)
 	{
 		for (argc = 0; argc < Cmd_Argc(); argc++)

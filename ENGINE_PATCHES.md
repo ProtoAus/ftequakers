@@ -1,5 +1,21 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1337 — Validate developer-tool command contexts and arguments
+
+**Problem.** Developer-tool console callbacks did not consistently check the
+caller's command context or validate argument-vector capacity before use.
+
+**Change.** Refuse untrusted compiler/decompiler command contexts before VM or
+filesystem work. Reject excessive compiler arguments before copying them; retain
+trusted defaults, explicit arguments and the existing supported capacity.
+
+**Verified.** Write-free tests compile the actual production handlers with strict
+warnings. Trusted paths, VM-present/absent cases, compiler lifecycle and argument
+boundaries pass; untreated and test-only missing-guard/too-small-cap controls fail
+as predicted. Native m-rel/sv-rel and plugins build with zero new warning sites
+(74 inherited baseline diagnostics). No movement, recording, policy or QC Build
+change. This is a bounded hardening fix, not completion of the native audit.
+
 
 ## Patch 1335 -- Christmas master, optional marks and close ramp dirt
 
