@@ -6661,7 +6661,7 @@ void CL_LinkPacketEntities (void)
 			if (state->modelindex <= 0 || state->modelindex >= countof(cl.model_precache))
 				continue;
 			model = cl.model_precache[state->modelindex];
-			if (!model || model->type != mod_brush)
+			if (!model || model->loadstate != MLS_LOADED || model->type != mod_brush)
 				continue;
 		}
 

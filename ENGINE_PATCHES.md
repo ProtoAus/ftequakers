@@ -23,11 +23,53 @@ parser-error counts; ordinary successful output is unchanged. Extracted real
 handlers with a safe dispatch spy discriminate four absent-capability paths,
 four valid paths and sixteen untrusted refusals per arm; no original NULL call
 or installed crash was executed. Existing argument/provenance controls remain.
-These are Windows synthetic controls, not full engine/ABI/ARM/filesystem,
-allocation-balance, asynchronous lifecycle or atomic multi-output acceptance.
-A debug-output failure may follow an already accepted primary file. Native
-build/review/deployment provenance is tracked separately; Windows build first
-refused the unchanged 4-GiB resource gate, without killing owner processes.
+The real compiler and synthetic handler controls also discriminate on ARM.
+Two independent source reviews found no issues in their assigned scopes. Initial
+clean Windows client/server and ARM server/paired-plugin builds add no warning
+sites; each native image passes 1,578 checks and reaches the unavailable-decompile
+diagnostic. The Windows 4-GiB gate first refused, then passed without terminating
+owner processes. These controls do not establish full VM ABI, real filesystem
+failure handling, allocation balance, asynchronous lifecycle or atomic multi-output
+acceptance. A debug-output failure may follow an already accepted primary file.
+Exact source/build/integration/deployment provenance is recorded separately.
+
+## Patch 1348 -- isolate overview lightmaps and retire hidden weapon feedback
+
+**Problem:** Independent1345 source reviews found current-view dynamic lighting
+leaking through a persistent eligibility flag/unchanged light epoch, packet models
+accepting an unloaded type0/mod_brush, hidden bursts/recoil/events replaying on
+exit, and nonvisual VM preference/profile sync paused with weapon drawing.
+Original1345 source/tag and rejected candidate images remain unchanged; this
+session deployed none of them and admitted no rejected client to the code catalog.
+
+**Change:** Always advance the scene light epoch, reject overview light marking
+and both RGB/luminance additions from CURRENT explicit flags. Restore the original
+base lightmap eligibility assignment and keep its cache/realtime overrides intact;
+blindly reinitializing that global inside light pushing would erase those rules.
+Require MLS_LOADED before the packet brush-type exception. Keep VM_Frame active;
+a lightweight WP_OverviewFrame discards hidden cosmetic bursts/recoil/flash/scope/
+inspect state and consumes the current event, while normal WP calls are unchanged.
+Recompose only TWELVE client files onto deployed218721aa Pi, not superseded9debcfc9.
+Keep zone-editor frame/input/drag maintenance active with an explicit draw flag;
+only its world overlays are suppressed, never deferred clicks at a later camera. No physics formula, input capture, wire/recording format or
+QC Build change. No new probe code, unbounded preload or readiness-barrier claim.
+
+**Verified:** Literal production light-push/caller/RGB+Lum/packet/QC-helper/caller
+fragments with explicit synthetic dependencies:1102checks, original743failures,
+corrected0, both fixture compiles0warnings. Current-scene normal/overview/normal,
+stale-epoch, cache/realtime base-eligibility preservation, unloaded zero-type,
+loaded-positive, hidden sequence/burst/recoil and VM-poll controls ACT. These are
+NOT GPU/pixel/full animation/physics or FPS evidence. A first over-broad assignment
+selector and missing UCRT child-tool PATH were diagnosed at the existing compiler
+seam; original failures retained. Current Pi baseline reproduces CS01815ce0 and
+QWe7b8a26b; corrected main/Pi THREE-VM builds0warnings, Pi QW/menu/source unchanged.
+Native tagged1355 full build74old/74current warnings/no additions. Fresh reviews
+closed all five findings. Editor caller/two production bodies68checks/17control
+failures/0corrected, synthetic UI/geometry and QC->C++ syntax only, NOT native UI
+or file IO. Pi9fcd95b1/main27970c37 THREE VMs0warnings; source pins and guarded
+delivery separately in FTESurf tools/p1348-overview-state.md. Normal unprofiled
+GPU admission was resource-refused, never regraded or weakened. One1348 claim
+follows fresh both-repo/164-tree/335-fixture census max1347; no tag/history rewrite.
 
 ## Patch 1347: visible KSF fetch and gentler replay retries (6 Nov 2026)
 
