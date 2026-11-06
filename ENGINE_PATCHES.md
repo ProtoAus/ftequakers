@@ -29,23 +29,32 @@ control, not fault-free. Reviews/native smoke/paired rollout pending; tools/p134
 
 **Problem.** Only neighboring save rows were published. Unpublished steps left
 release using the previous row's speed; atomic cursor could also outrun HOLDVEL.
+Independent review found that rejected validation leaves cursor and held row
+DIFFERENT, so even a coherent cursor cannot prove settled release speed.
 
 **Change.** Optional stat207 publishes +2/-2/+3/-3 with the COMPLETE original C
-snapshot in one quoted token: D38tokens/inner C50,1400-byte cap, no mixed packets.
-Prefer whole D or legacy C/numeric fallback. Include far rows in refresh signature;
-update D even with C unchanged. Resolve release from coherent virtual row, or mark
-existing BLIND if unknown. Preserve refusals/queue/backstop/legacy/missing-ring.
+snapshot PLUS actual-held validity/velocity: D42tokens/inner C50,1400-byte cap,
+no mixed packets. Whole D or legacy row fallback; every numeric token uses the
+existing strict finite decimal codec. Far/held-only changes refresh with C unchanged.
+Pending non-rate-refused loads may speculate via virtual row; settled release
+uses actual held speed, NOT a refused load's selected cursor. C-only/unproven
+settled hold is BLIND; numeric-only legacy remains. Refusal/queue/backstop/ring
+behavior retained.
 No native engine/wire type, server physics, evidence/save format, threshold/quiet
 period, raw capture, backend or Build change. Beyond+-3 and historical report
 causes are not claimed; no full999row dump.
 
-**Verified.** Actual dedicated QC VM executes exact server/client helpers:43checks,
-baseline18intended failures, subject0, compiler0warnings, exit0. Coherence,
-serialization, positive legacy/known/refusal/recovery and full release/apply arms
-act. Both source profiles' standard THREE-VM NoDeploy0warnings. Test-only setup
-failures retained. Reader949pass; primary RUNS548/351fault count is the real
-predeployment baseline, reader unchanged; not fault-free. Not full native packet/
-physics or human acceptance. Reviews/native smoke/paired deployment pending; tools/p1342-save-release.md, lextest.md.
+**Verified.** Actual dedicated QC VM metadata31/release29/relative24=84/0,
+compiler0warnings/exit0.17added review checks expose12failures in original candidate
+(metadata8/release4), now0. Production server step/release act with explicit accept/
+refuse validation stub (not full file IO); acknowledged refused-cursor release
+matches server600, not cursor700. Same-shape junk/nonfinite/overflow/invalid flag
+are refused; accepted/thaw/legacy/known/unknown controls act. Original43/18baseline
+and relative24/7baseline retained separately, not summed across baselines. Both
+post-fix standard three-VM builds0warnings; renewed reviews/paired/native smoke pending. Reader949pass; primary RUNS548/351
+fault count is true predeployment baseline, unchanged reader, NOT fault-free.
+No full packet/collision/PVS/feel/historical-cause claim; tools/p1342-save-release.md,
+lextest.md.
 
 
 ## Patch 1341 -- clearing teleports clear the predicted carrier (CSQC only)
