@@ -386,6 +386,9 @@ cvar_t r_voidvis							= CVARFD ("r_voidvis", "1", CVAR_ARCHIVE,
 												"0: Patch 138 -- keep the last visible cluster you could see from.\n"
 												"1: Draw the whole world, with the frustum and area culls kept.\n"
 												"Has no effect anywhere except in the void while noclipping.");
+//FTESurf P1345: independent suppression control keeps identical world visibility for A/B.
+cvar_t r_voidscene = CVARFD("r_voidscene", "1", 0,
+	"Fast noclip-void overview: world and structural brush models, no props, entities, particles, decals or 3D skyroom. 0 retains the old effects for comparison; does not change r_voidvis or saved quality settings.");
 /*
 FTESurf Patch 329: no fog while the view is in the void.
 
@@ -1428,6 +1431,7 @@ void Renderer_Init(void)
 
 	Cvar_Register (&r_novis, GLRENDEREROPTIONS);
 	Cvar_Register (&r_voidvis, GLRENDEREROPTIONS);
+	Cvar_Register (&r_voidscene, GLRENDEREROPTIONS);
 	Cvar_Register (&r_voidfog, GLRENDEREROPTIONS);	//FTESurf Patch 329
 	Cvar_Register (&r_blendsort, GLRENDEREROPTIONS);
 #ifdef GLQUAKE
@@ -1571,6 +1575,10 @@ void Renderer_Init(void)
 	Cvar_Register (&r_waterviews, GRAPHICALNICETIES);
 	Cvar_Register (&r_nearestsort, GRAPHICALNICETIES);
 	Cmd_AddCommandD("r_viewstats", R_ViewStats_f, "FTESurf Patch 850: per top-level view since the last call -- views by depth, 3D skies drawn and skipped, entities a nested view passed over, 3D skies from the sky camera, screen copies and their megapixels.");
+	{
+		extern void R_VoidSceneInfo_f(void);
+		Cmd_AddCommandD("r_voidscene_info", R_VoidSceneInfo_f, "P1345: untimed current-view gate, exact camera and world mesh-shape counts; developer 1 enables the last primary offered-model census, before culling. Not a frame-time sampler.");
+	}
 	Cvar_Register (&r_refractreflect_scale, GRAPHICALNICETIES);
 	Cvar_Register (&r_postprocshader, GRAPHICALNICETIES);
 	Cvar_Register (&r_scenedepth, GRAPHICALNICETIES);	//FTESurf Patch 1230

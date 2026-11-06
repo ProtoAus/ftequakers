@@ -1,50 +1,58 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
-## Patch 1344 -- source-bound native TAS contact observations
+## Patch 1347 -- source-bound native TAS contact observations
 
-**Problem:** A paused full input line had no native collision annotations for
-choosing ramp sections. Speed, HUD surf state and guessed free flight are not
-substitutes for the committed mover's actual geometry. Rewinding or adding a
-manual marker must not discard the original future or relabel another line's
-observations as current.
+**Problem:** A paused full input line lacked native collision annotations for
+ramp sections. Earlier navigation, raw edits or failed retained-file readback
+must not lose the original future or relabel an invalid source as current.
 
-**Change:** Add a passive, command-local Source-mover observer and three optional
-output-only QC vectors. Preserve the actually chosen StepMove branch; expose
-committed world ramp normal, plane distance and hull trace endpoint, or explicit
-nonworld/ambiguous/unsupported state. No movement math, portable restore field,
-input credit or evidence authority changes. QC keeps bounded live and separate
-whole-revision caches, identified by the exact retained input revision. The new
-Sections > Observed contacts browser navigates/selects existing input ranges;
-manual markers remain separate overrides. Metadata-only immutable saves retag a
-cache only after unchanged-input validation and successful strict readback.
-Changed-input previews invalidate current proposals; Discard restores the
-complete original source/map. Literal raw edits also invalidate binding, even
-without authored intent metadata: a transient raw-change flag is maintained at
-mutation/harvest boundaries, not by an unbounded page-time scan. Ramp recovery
-keeps its existing movement-normal substitution but abstains from geometry
-metadata: that normal may be synthetic and cannot share an unrelated trace's
-distance/entity as a committed plane. Old producers say unavailable, not air.
+**Change:** Passive optional Source-mover outputs retain only the chosen path's
+world plane and hull endpoint, with explicit unavailable/unsupported states;
+recovery abstains without changing movement. Bounded complete-source maps back
+Observed contacts beside Manual markers. Raw edits invalidate independently of
+intent; metadata-only retag and both fresh/cached binding require exact-source
+strict retained readback. Pages compare the checked SHA, never rescan the line.
+Decode signed normals and the native inclusive/configurable ramp band. No input,
+portable-pose, evidence-format or submission authority change. Unpublished1344
+renumbered forward; published1345/1346 code and receipts are preserved.
 
-**Verified:** Supported isolated Windows FULL native build and all three QCC VMs
-complete; VMs report zero warnings, modified native files have no compiler
-warnings. The supported post-review native/QC build also has zero VM warnings;
-all 20 production observer helper checks and existing native `pm_selftest` act
-and pass, including an old normal-only recovery control, production recovery
-abstention and unchanged trace bytes. A real dedicated-socket static BSP ramp run verifies
-native normal/plane/endpoint, complete input-source coverage, held-step dedup,
-independent cached rows, earlier start/end navigation, metadata-only retag while
-earlier (29 post-review checks), and an actually divergent input preview followed
-by complete original-map/source restoration (24 checks). A separate fully literal
-unknown-input line proves the old changed-yaw cache bug (29 control checks), then
-the fixed path preserves complete maps on unchanged cold/warm replay and returns
-an unbound empty view on changed raw input (29 checks), retaining original bytes.
-Prior acting old-native control
-reports unavailable. Scope: fixed single-step static BSP observations; no claim
-of live moving-world/ladder coverage, universal ramp grouping, globally optimal
-solving or human acceptance. Native vectors and cached first/last post-step
-velocities are derived annotations, never portable poses or submission proof.
-Final tagged-source build, independent reviews and destination/live deployment
-verification are separate gates recorded with the delivery evidence.
+**Verified:** Isolated Windows FULL native/three-VM builds, zero VM/new modified-
+native warnings; native20 helper cases include recovery control/abstention/trace
+parity. Real dedicated static BSP checks cover complete planes/extent, earlier
+metadata retag, literal cold/warm edits and divergent-preview/Discard restoration.
+Test-only packet/readback fault variants reproduce both old defects (32checks)
+and pass corrections (35); wall/zero normals refuse, original bytes stay exact.
+Uninstrumented production metadata28/literal29/preview25 and48000-row budget22
+pass. These precede final merged/tagged delivery qualification. Helper test IDs
+retain their prototype1344 label. No live moving-world/ladder, universal ramp-ID,
+global optimum, owner comfort or public TAS-admission claim.
+
+## Patch 1346 -- recover interrupted similarity source admissions (backend only)
+
+**Problem.** Source rotation was durable before comparison, but an interrupted
+comparison had no durable recovery slot. Later sweeps could rotate past that
+admitted source without first recovering its unfinished comparison.
+
+**Change.** Reuse a distinct source key in existing cursor storage. Atomically
+commit rotation plus reservation before file work; recover an eligible reserved
+source before ordinary bounded keyset/wrap selection; clear only the matching
+reservation after handled completion. Abrupt exits and failed completion retain
+it. Comparisons remain outside owned write transactions. No schema, recording,
+comparison threshold, historical observation, ranking, enforcement, native, VM,
+Build or release-version change; engine commit/tag pins are unchanged.
+
+**Verified.** Exact frozen product diff passed two independent fresh-context
+read-only reviews. Windows and Linux each pass all 28 simcheck test programs,
+including 11 new reservation cases; baseline and admission-removed controls each
+have seven intended failures. Real 80-opportunity comparisons, child interruption,
+reopen, transaction/contender ownership and old capture preservation act. A new
+Windows combined cap/wrap/budget falsifier stores both real 80-opportunity pairs;
+baseline SQL selects but fails recovery order. Its manually seeded reservation
+cannot discriminate the admission-removed control; that is not claimed as new
+mutation coverage. Reader 949 checks pass; primary RUNS corpus faults do not
+increase and protected input bytes are unchanged. Existing saves unreadability,
+legacy test import and baseline warning limits remain explicit, not waived.
+Source validation is not deployment or a fairness/hard-time/exactly-once claim.
 
 ## Patch 1343 -- relative teleport enable, lookahead and report parity (QC only)
 
@@ -67,8 +75,15 @@ compiler0warnings, exit0. Positive spawn/toggle/ordinary-eye and actual detach,
 registry/gating/bound/different-destination controls act; same-point guard has an
 acting counterfactual. Touch/zone/render/bank dependencies explicitly stubbed;
 NOT full collision/PVS network/feel evidence. Both profiles' three-VM builds0
-warnings; reader949pass, primary RUNS548/351fault baseline held as predeployment
-control, not fault-free. Reviews/native smoke/paired rollout pending; tools/p1343-relative-teleports.md, human check in lextest.md.
+warnings; reader949pass, final primary RUNS548/351fault results equal the true
+baseline, NOT fault-free. Both independent rechecks closed runtime findings.
+Deployed6Nov2026UTC: both Windows verified09:17, all12Pi09:33; new actors,
+paired programs/.prev exact,19340Windows and47924Pi protected paths unchanged.
+All8parts/183resume files byte-exact after ON/OFFBOX capture/restart; native,
+menu/config/backend unchanged; all join capacities restored. Graphical served-
+code/render smoke NOT run:4-GiB gate observed2719MiB, no game launched. Native
+PVS/feel and owner check remain pending, not a pass. Provenance/limits:
+tools/p1342-save-release.md and tools/p1343-relative-teleports.md; lextest.md.
 
 
 ## Patch 1342 -- short save chains and coherent hold release
@@ -97,11 +112,67 @@ refuse validation stub (not full file IO); acknowledged refused-cursor release
 matches server600, not cursor700. Same-shape junk/nonfinite/overflow/invalid flag
 are refused; accepted/thaw/legacy/known/unknown controls act. Original43/18baseline
 and relative24/7baseline retained separately, not summed across baselines. Both
-post-fix standard three-VM builds0warnings; renewed reviews/paired/native smoke pending. Reader949pass; primary RUNS548/351
-fault count is true predeployment baseline, unchanged reader, NOT fault-free.
+post-fix standard three-VM builds0warnings. Both independent rechecks closed
+prior runtime findings; remaining stale shared D38 comment corrected to D42 with
+same-line comment equivalence, no program rebuilt or evidence redated. Paired
+rollout completed6Nov2026UTC (Windows09:17, all12Pi09:33); full protected/data/
+rollback/actor checks above passed. Reader949pass reused on unchanged source;
+final primary RUNS548/351equals baseline, NOT fault-free. Native served-client/
+render smoke is blocked at4-GiB gate (2719MiB); human/native feel still pending.
+Source/program provenance and validation limits: tools/p1342-save-release.md.
 No full packet/collision/PVS/feel/historical-cause claim; tools/p1342-save-release.md,
 lextest.md.
 
+
+## Patch 1345 -- exact frame reports and smoother map-only noclip
+
+**Problem:** Slow-frame ties could retain an expired slot, use the wrong camera
+location or repeatedly rebuild the ring. Long real stalls were omitted and dump
+histogram tails/ranks were approximate. Full-map noclip also paid for unnecessary
+props/effects. At the first void crossing, recursive reflections cleared the new
+map-only policy and revived static props' cold exact lighting-visibility traces.
+
+**Change:** Retain slot identity/newest-first ties, include long intervals and
+report focus exclusions/coverage. Live histogram estimates stay cheap; an explicit
+dump sorts captured raw samples for exact tails, nearest-rank percentiles and
+median-threshold stutters, with a checked256KiB temporary cap and atomic OOM
+refusal/rebase. Read-only VF_WORLDONLY228 classifies the final primary noclip
+camera. With r_voidvis, nonarchived r_voidscene defaults1: retain BSP, loaded
+structural brushes, authored func_lod eligibility and frustum policy; omit native
+and QC decoration/effects. Preserve the explicit parent's policy in recursive
+reflection children instead of restarting cosmetic prop lighting there. Fresh
+primary/named scenes clear/rederive it; the raw void predicate remains view-local.
+Normal parents never acquire the bit. Keep reflection geometry and exact normal
+lighting; omit the optional3D skyroom only in map-only scenes, not normal views. Clear uncovered
+primary mono single-seat forced-void pixels in both scene modes; exclude native
+secondary/recursive/stereo/named-target/loading contexts and supply every native
+point-query output. Observe scoped primary offered candidates BEFORE culling, not
+rendered-model totals. Avoid sprite name/prefix work without changing trace/cache
+scheduling. No physics formula, wire or recording-format change by this patch.
+
+**Verified:** Actual sampler controls:440/10 original failures,13992/0 corrected;
+pre-exact dump fails58of14100, exact source14100/0 including OOM/ties/ranks/stalls.
+Literal query5760/0, loaded-brush classifier280/0/no loads, color-clear4423680/0
+with acting old/null-output/stereo/secondary controls. Actual candidate-census
+fragments432/0; the legacy nested overwrite control acts. Actual policy-reset
+fragment1280/0; primary clears stale policy, recursive children retain only an
+existing bit, unrelated flags and pure query bodies unchanged. Native three-map
+pixel/geometry controls and complete CSQC profiles are retained separately from
+rejected/print-stalled/one-ULP comparisons. Initial native gate and narrow authored
+LOD callback act; counters are not draw counts. Qualified current-mode1 native
+attribution binds exact EXE/debug/plugin symbols: first boundary161samples,
+154BIH_Trace/156HL2_CalcModelLighting, in recursive reflections. After policy fix,
+first/repeat natural crossing events have no armed12ms spike/sample. Instrumented
+attribution is NOT product FPS or proof of no smaller hitches; one setup outlier
+before the boundary remains explicit. No positive lazy-compile hook control, so
+P0 is not universal no-compilation evidence. Probe source removed from exact owned
+preimages; no diagnostic sampler may ship. Canonical7ccb compiler's two known
+F333227 miscompilations are NOT a safe fleet baseline; final programs use the
+read-only qualified c24ede65 tool in the isolated source tree. Final normal build,
+source pins, compatible Pi CS-only profile and deployment are recorded separately.
+No all-resource readiness barrier or universal numerical FPS gain is claimed.
+See FTESurf tools/p1345-smoothness.md. Unpublished reservation1331 superseded by
+ONE1345 claim after fresh full-worktree census; original evidence identities kept.
 
 ## Patch 1341 -- clearing teleports clear the predicted carrier (CSQC only)
 

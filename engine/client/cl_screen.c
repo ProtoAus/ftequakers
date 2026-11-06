@@ -809,7 +809,7 @@ static void R_Budget_Dump_f(void)
 //FTESurf Patch 801: r_frametime. One sample per rendered frame, from RSpeedShow. The graph keeps the
 //slowest frame of each column's slice, so a spike is never averaged away; the lows come from a
 //histogram updated as frames arrive and expire, so computing them never costs a frame of its own.
-cvar_t r_frametime = CVARFD("r_frametime", "0", 0, "FTESurf Patch 801. A frame-time graph at the top right: the last r_frametime_seconds, each column the slowest frame in its slice, green, yellow over 1.5x the median and red over 2.5x (a stutter). Above it the last second's fps (show_fps' figure), then the average fps and the 1% and 0.1% lows (the average of the slowest 1% and 0.1% of frames) over r_frametime_window. r_frametime_dump lists the worst frames and where you were; r_frametime_reset starts the window again.");
+cvar_t r_frametime = CVARFD("r_frametime", "0", 0, "FTESurf Patch 801. A frame-time graph at the top right: the last r_frametime_seconds, each column the slowest frame in its slice, green, yellow over 1.5x the median and red over 2.5x (a stutter). Above it the last second's fps (show_fps' figure), then estimated average fps and the 1% and 0.1% tails (histogram estimates of the slowest fractions' mean) over r_frametime_window. r_frametime_dump sorts retained raw samples for exact tail means and nearest-rank percentiles, with sample coverage, focus-idle exclusions since reset, the worst frames and where you were; r_frametime_reset starts the window again.");
 cvar_t r_frametime_seconds = CVARFD("r_frametime_seconds", "10", 0, "FTESurf Patch 801. Seconds the r_frametime graph spans.");
 cvar_t r_frametime_window = CVARFD("r_frametime_window", "30", 0, "FTESurf Patch 801. Seconds r_frametime's lows and stutter count cover (1 to 120).");
 
@@ -821,7 +821,7 @@ cvar_t r_frametime_window = CVARFD("r_frametime_window", "30", 0, "FTESurf Patch
 #define FT_KEEP 64			//the window's slowest, kept exactly (with where the view was, when known)
 #define FT_STUTTER 2.5f		//times the median
 #define FT_EYE 64			//PM_VIEW_OFS standing: setpos takes the origin, the view is above it
-typedef struct {float ms, at; vec3_t org, ang; qboolean known;} ftbad_t;
+typedef struct {float ms, at; vec3_t org, ang; qboolean known; int slot;} ftbad_t;
 static struct
 {
 	qboolean on;
@@ -829,6 +829,8 @@ static struct
 	float ms[FT_RING], at[FT_RING];	//each frame in the window, and when (s since base)
 	int head, count;
 	int bins[FT_BINS];
+	double excludedms;			//focus-idle intervals since reset (not a rolling-window total)
+	unsigned int excluded;
 	double sum, oversum;		//ms: the window's, and the last bin's
 	float colmax[FT_COLS];
 	int colcount[FT_COLS];
@@ -843,20 +845,29 @@ static struct
 
 static int R_FrameTime_Bin(float ms)
 {
-	int b = ms / FT_BINMS;
+	int b;
+	if (ms >= (FT_BINS-1) * FT_BINMS)
+		return FT_BINS-1;
+	b = ms / FT_BINMS;
 	return b < FT_BINS-1 ? b : FT_BINS-1;
 }
-static void R_FrameTime_Drop(void)
+static qboolean R_FrameTime_Drop(void)
 {
-	int t = (ft.head - ft.count) & (FT_RING-1), b = R_FrameTime_Bin(ft.ms[t]);
+	int t = (ft.head - ft.count) & (FT_RING-1), b = R_FrameTime_Bin(ft.ms[t]), i;
+	qboolean rebuild = false;
+	for (i = 0; i < FT_KEEP && ft.bad[i].ms; i++)
+		if (ft.bad[i].slot == t)
+			rebuild = true;
 	ft.bins[b]--;
 	ft.sum -= ft.ms[t];
 	if (b == FT_BINS-1)
 		ft.oversum -= ft.ms[t];
 	ft.count--;
+	return rebuild;
 }
 //when one of the kept slowest leaves the window, the next may be in the ring but not the list: take
-//them from the ring again (rare: only on an expiry). Where the view was survives for frames kept then.
+//them from the ring again. Rebuild before writing a new slot so retained camera identities stay exact.
+//Equal times keep the newest frames, so steady pacing does not rebuild on every oldest-frame eviction.
 static void R_FrameTime_Rebuild(void)
 {
 	static ftbad_t old[FT_KEEP];
@@ -868,18 +879,19 @@ static void R_FrameTime_Rebuild(void)
 	{
 		k = (ft.head - ft.count + i) & (FT_RING-1);
 		ms = ft.ms[k];
-		if (ms <= ft.bad[FT_KEEP-1].ms)
+		if (ms < ft.bad[FT_KEEP-1].ms)
 			continue;
-		for (j = 0; ms <= ft.bad[j].ms; j++)
+		for (j = 0; ms < ft.bad[j].ms; j++)
 			;
 		memmove(&ft.bad[j+1], &ft.bad[j], sizeof(ft.bad[0]) * (FT_KEEP-1 - j));
 		memset(&ft.bad[j], 0, sizeof(ft.bad[j]));
 		ft.bad[j].ms = ms;
 		ft.bad[j].at = ft.at[k];
+		ft.bad[j].slot = k;
 	}
 	for (j = 0; j < FT_KEEP && ft.bad[j].ms; j++)
 		for (i = 0; i < FT_KEEP && old[i].ms; i++)
-			if (old[i].known && old[i].at == ft.bad[j].at && old[i].ms == ft.bad[j].ms)
+			if (old[i].known && old[i].slot == ft.bad[j].slot)
 			{
 				ft.bad[j] = old[i];
 				break;
@@ -961,6 +973,7 @@ static void R_FrameTime_Sample(void)
 	double now = Sys_DoubleTime(), window, span;
 	float ms, at;
 	int b, i;
+	qboolean rebuild = false;
 
 	if (!r_frametime.ival)
 	{
@@ -976,20 +989,29 @@ static void R_FrameTime_Sample(void)
 	}
 	if (R_FrameTime_Throttled())
 	{
+		if (now > ft.last)
+		{
+			ft.excluded++;
+			ft.excludedms += (now - ft.last) * 1000;
+		}
 		ft.last = now;
 		return;
 	}
 	ms = (now - ft.last) * 1000;
 	ft.last = now;
-	if (ms <= 0 || ms > 1000)
-		return;	//minimised, or a load: not a frame anyone watched
+	if (ms <= 0)
+		return;
 	at = now - ft.base;
 
 	window = bound(1, r_frametime_window.value, 120);
 	while (ft.count && at - ft.at[(ft.head - ft.count) & (FT_RING-1)] > window)
-		R_FrameTime_Drop();
+		if (R_FrameTime_Drop())
+			rebuild = true;
 	if (ft.count == FT_RING)
-		R_FrameTime_Drop();
+		if (R_FrameTime_Drop())
+			rebuild = true;
+	if (rebuild)
+		R_FrameTime_Rebuild();
 	ft.ms[ft.head] = ms;
 	ft.at[ft.head] = at;
 	ft.head = (ft.head + 1) & (FT_RING-1);
@@ -1001,19 +1023,14 @@ static void R_FrameTime_Sample(void)
 		ft.oversum += ms;
 
 	//the window's slowest, and where the view was for each
-	for (i = 0; i < FT_KEEP && ft.bad[i].ms; i++)
-		if (at - ft.bad[i].at > window)
-		{
-			R_FrameTime_Rebuild();
-			break;
-		}
-	if (ms > ft.bad[FT_KEEP-1].ms)
+	if (ms >= ft.bad[FT_KEEP-1].ms)
 	{
-		for (i = 0; ms <= ft.bad[i].ms; i++)
+		for (i = 0; ms < ft.bad[i].ms; i++)
 			;
 		memmove(&ft.bad[i+1], &ft.bad[i], sizeof(ft.bad[0]) * (FT_KEEP-1 - i));
 		ft.bad[i].ms = ms;
 		ft.bad[i].at = at;
+		ft.bad[i].slot = (ft.head - 1) & (FT_RING-1);
 		VectorCopy(r_refdef.vieworg, ft.bad[i].org);
 		ft.bad[i].org[2] -= FT_EYE;
 		VectorCopy(r_refdef.viewangles, ft.bad[i].ang);
@@ -1064,12 +1081,13 @@ static void R_FrameTime_Draw(void)
 		scale = nice[countof(nice)-1];
 
 	R2D_ImageColours(0, 0, 0, 0.6);
-	R2D_FillBlock(x - 4, y - 4, gw + 8, gh + 3*cw + 8);
+	R2D_FillBlock(x - 4, y - 4, gw + 8, gh + 4*cw + 8);
 	R2D_ImageColours(1, 1, 1, 1);
-	Draw_FunStringWidthFont(font_console, x, y, va("^3frametime^7 %.0f fps  %gs avg %.0f  ^31%% low %.0f  0.1%% low %.0f", ft.fps1, bound(1, r_frametime_window.value, 120), ft.avg > 0 ? 1000/ft.avg : 0, ft.low1 > 0 ? 1000/ft.low1 : 0, ft.low01 > 0 ? 1000/ft.low01 : 0), gw, false, false);
+	Draw_FunStringWidthFont(font_console, x, y, va("^3frametime est.^7 %.0f fps  %gs avg %.0f", ft.fps1, bound(1, r_frametime_window.value, 120), ft.avg > 0 ? 1000/ft.avg : 0), gw, false, false);
+	Draw_FunStringWidthFont(font_console, x, y + cw, va("^31%% tail %.0f  0.1%% tail %.0f", ft.low1 > 0 ? 1000/ft.low1 : 0, ft.low01 > 0 ? 1000/ft.low01 : 0), gw, false, false);
 	R2D_ImageColours(1, 1, 1, 1);
-	Draw_FunStringWidthFont(font_console, x, y + cw, va("^7median %.2f ms  worst %.1f  ^1stutters %i^7/%gs  top %g", ft.median, ft.worst, ft.stutters, bound(1, r_frametime_window.value, 120), scale), gw, false, false);
-	y += 2*cw + 4;
+	Draw_FunStringWidthFont(font_console, x, y + 2*cw, va("^7median %.2f ms  worst %.1f  ^1stutters %i^7/%gs  top %g", ft.median, ft.worst, ft.stutters, bound(1, r_frametime_window.value, 120), scale), gw, false, false);
+	y += 3*cw + 4;
 
 	//oldest on the left; each column the slowest frame of its slice
 	for (i = 0; i < FT_COLS; i++)
@@ -1103,38 +1121,71 @@ static void R_FrameTime_Reset_f(void)
 {
 	ft.on = false;	//the next frame starts clean
 }
+static int R_FrameTime_RawCompare(const void *a, const void *b)
+{
+	float x = *(const float *)a, y = *(const float *)b;
+	return (x > y) - (x < y);
+}
 static void R_FrameTime_Dump_f(void)
 {
 	char out[4096];
-	int i, b, c, n, p;
-	static const float pct[] = {50, 90, 99, 99.9f};
-	double now;
+	float *raw;
+	int i, n, p, n1, n01, stutters = 0;
+	static const int pct[] = {500, 900, 990, 999};
+	double now, sum = 0, tail1 = 0, tail01 = 0, median, threshold;
 	if (!ft.on || !ft.count)
 	{
 		Con_Printf("r_frametime_dump: turn r_frametime on first\n");
 		return;
 	}
-	R_FrameTime_Stats();
+	//Explicit dumps alone allocate/sort: at most FT_RING floats (256 KiB).
+	raw = malloc(ft.count * sizeof(*raw));
+	if (!raw)
+	{
+		Con_Printf("r_frametime_dump: out of memory; no new report\n");
+		R_FrameTime_AfterDump();
+		return;
+	}
+	for (i = 0; i < ft.count; i++)
+		raw[i] = ft.ms[(ft.head - ft.count + i) & (FT_RING-1)];
+	qsort(raw, ft.count, sizeof(*raw), R_FrameTime_RawCompare);
+	n1 = max(1, ft.count / 100);
+	n01 = max(1, ft.count / 1000);
+	median = raw[(ft.count - 1) / 2]; //nearest-rank p50, including even sample counts
+	threshold = median * FT_STUTTER;
+	for (i = 0; i < ft.count; i++)
+	{
+		sum += raw[i];
+		if (i >= ft.count - n1)
+			tail1 += raw[i];
+		if (i >= ft.count - n01)
+			tail01 += raw[i];
+		if (raw[i] > threshold)
+			stutters++;
+	}
+	tail1 /= n1;
+	tail01 /= n01;
 	now = Sys_DoubleTime() - ft.base;
 	*out = 0;
 	Q_strncatz(out, va("frametime over %.1f s, %i frames (%s, %s)\n", ft.at[(ft.head-1) & (FT_RING-1)] - ft.at[(ft.head - ft.count) & (FT_RING-1)], ft.count,
 		cl.worldmodel ? cl.worldmodel->name : "no map", version_string()), sizeof(out));
-	Q_strncatz(out, va("  avg %.2f ms (%.0f fps)  1%% low %.2f ms (%.0f fps)  0.1%% low %.2f ms (%.0f fps)\n", ft.avg, 1000/ft.avg,
-		ft.low1, 1000/ft.low1, ft.low01, 1000/ft.low01), sizeof(out));
+	Q_strncatz(out, "  exact raw samples; percentiles/median use nearest rank; tail counts floor(N*fraction), min 1\n", sizeof(out));
+	Q_strncatz(out, va("  sampled %.3f s; focus-idle excluded since reset: %u intervals, %.3f s\n", sum / 1000, ft.excluded, ft.excludedms / 1000), sizeof(out));
+	Q_strncatz(out, va("  avg %.2f ms (%.0f fps)  1%% tail mean %.2f ms (%.0f fps)  0.1%% tail mean %.2f ms (%.0f fps)\n", sum / ft.count, 1000 * ft.count / sum,
+		tail1, 1000/tail1, tail01, 1000/tail01), sizeof(out));
 	for (p = 0; p < countof(pct); p++)
 	{
-		n = ft.count * pct[p] / 100;
-		for (b = 0, c = 0; b < FT_BINS && (c += ft.bins[b]) <= n; b++)
-			;
-		Q_strncatz(out, va("  p%-4g %7.2f ms\n", pct[p], b < FT_BINS-1 ? (b + 0.5) * FT_BINMS : R_FrameTime_Over(ft.count - 1 - n)), sizeof(out));
+		n = (ft.count * pct[p] + 999) / 1000 - 1;
+		Q_strncatz(out, va("  p%-4g %7.2f ms\n", pct[p] / 10.0, raw[n]), sizeof(out));
 	}
-	Q_strncatz(out, va("  stutters (over %.1fx the median, %.2f ms): %i\n", FT_STUTTER, ft.median * FT_STUTTER, ft.stutters), sizeof(out));
+	Q_strncatz(out, va("  stutters (over %.1fx the median, %.2f ms): %i\n", FT_STUTTER, threshold, stutters), sizeof(out));
 	Q_strncatz(out, "  slowest frames: ms, seconds ago, where you stood (standing height) and looked\n", sizeof(out));
 	for (i = 0; i < FT_WORST && ft.bad[i].ms; i++)
 		Q_strncatz(out, ft.bad[i].known
 			? va("    %7.2f  %6.1f s ago  setpos %.0f %.0f %.0f %.0f %.0f 0\n", ft.bad[i].ms, now - ft.bad[i].at,
 				ft.bad[i].org[0], ft.bad[i].org[1], ft.bad[i].org[2], ft.bad[i].ang[0], ft.bad[i].ang[1])
 			: va("    %7.2f  %6.1f s ago  (where was not kept)\n", ft.bad[i].ms, now - ft.bad[i].at), sizeof(out));
+	free(raw);
 	{
 		char *line = out, *nl;
 		while ((nl = strchr(line, '\n')))
@@ -5068,7 +5119,7 @@ void SCR_Init (void)
 	Cmd_AddCommandD ("screenshot_cubemap",SCR_ScreenShot_Cubemap_f, "screenshot_cubemap <name> [size]\nTakes 6 screenshots forming a single cubemap.");
 	Cmd_AddCommandD ("envmap",SCR_ScreenShot_Envmap_f, "Legacy name for the screenshot_cubemap command.");	//legacy 
 	Cmd_AddCommand ("screenshot",SCR_ScreenShot_f);
-	Cmd_AddCommandD ("r_frametime_dump", R_FrameTime_Dump_f, "FTESurf Patch 801. Prints r_frametime's lows, percentiles and slowest frames (with a setpos for each) and copies them to the clipboard.");
+	Cmd_AddCommandD ("r_frametime_dump", R_FrameTime_Dump_f, "FTESurf Patch 801. Sorts retained raw frame times for exact tail means and nearest-rank percentiles, lists slowest frames (with a setpos for each), and copies the report to the clipboard. The live HUD remains estimated.");
 	Cmd_AddCommandD ("r_frametime_reset", R_FrameTime_Reset_f, "FTESurf Patch 801. Starts r_frametime's window again.");
 	Cmd_AddCommandD ("r_budget_dump", R_Budget_Dump_f, "FTESurf Patch 782. Prints r_budget's breakdown as text and copies it to the clipboard.");
 	Cmd_AddCommandD ("r_speeds_dump", RSpeed_Dump_f, "Prints the current r_speeds 2 sample table to the console as text, so it can be logged with -condebug and reconciled arithmetically instead of read off a screenshot.");

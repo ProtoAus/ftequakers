@@ -760,7 +760,8 @@ static void R_RenderScene_Internal(void)
 //	R_DrawDecals();
 
 	TRACE(("dbg: calling R_RenderDlights\n"));
-	R_RenderDlights ();
+	if (!(r_refdef.flags & RDF_WORLDONLY))
+		R_RenderDlights ();
 
 	if (r_refdef.recurse)
 		RQ_RenderBatch();
@@ -2266,16 +2267,31 @@ int gldepthfunc = GL_LEQUAL;
 qboolean depthcleared;
 void R_Clear (qboolean fbo)
 {
+	// P1345: forced void visibility leaves uncovered pixels, even with decoration on.
+	// Clear both modes consistently; never erase another seat, eye, inset or target.
+	qboolean clearoverview = false;
+	model_t *w = cl.worldmodel;
+	int cluster, area;
+	unsigned int contents;
+	if (!r_secondaryview && cl.splitclients <= 1 && r_refdef.stereomethod == STEREO_OFF &&
+		cls.state == ca_active && !r_refdef.recurse && !*r_refdef.rt_destcolour[0].texname &&
+		!(r_refdef.flags & RDF_NOWORLDMODEL) && r_voidvis.ival && r_refdef.playerview &&
+		(r_refdef.playerview->pmovetype == PM_SPECTATOR || r_refdef.playerview->pmovetype == PM_OLD_SPECTATOR) &&
+		w && w->loadstate == MLS_LOADED && w->funcs.InfoForPoint)
+	{
+		w->funcs.InfoForPoint(w, r_refdef.vieworg, &area, &cluster, &contents);
+		clearoverview = (cluster == -1);
+	}
 	/*tbh, this entire function should be in the backend*/
 	{
-		if (!depthcleared || fbo)
+		if (!depthcleared || fbo || clearoverview)
 		{
 			GL_ForceDepthWritable();
 			//we no longer clear colour here. we only ever (need to) do that at the start of the frame, and this point can be called multiple times per frame.
 			//for performance, we clear the depth at the same time we clear colour, so we can skip clearing depth here the first time around each frame.
 			//but for multiple scenes, we do need to clear depth still.
 			//fbos always get cleared depth, just in case (colour fbos may contain junk, but hey).
-			if ((fbo && r_clear.ival) || r_refdef.stereomethod==STEREO_RED_BLUE||r_refdef.stereomethod==STEREO_RED_GREEN)
+			if (clearoverview || (fbo && r_clear.ival) || r_refdef.stereomethod==STEREO_RED_BLUE||r_refdef.stereomethod==STEREO_RED_GREEN)
 			{
 				qglClearColor(0, 0, 0, 1);
 				qglClear (GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);

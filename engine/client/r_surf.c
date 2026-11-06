@@ -2415,7 +2415,7 @@ loader believed it emitted.
 */
 int r_voidvis_edicts;		/*visedicts offered to the batch generator*/
 int r_voidvis_brush;		/*...of which are brush models*/
-int r_voidvis_dropped;		/*...dropped before drawing.  Zero since build 19*/
+int r_voidvis_dropped;		/*...rejected by the same primary STANDARD world-only gate*/
 
 /*
 An all-visible PVS, handed to the world through r_refdef.forcedvis.
@@ -2455,12 +2455,24 @@ static qbyte *Surf_VoidVis(model_t *w)
 	return surf_voidvis;
 }
 
-static qboolean Surf_PlayerIsNoclipping(void)
+static qboolean Surf_PlayerIsNoclipping(playerview_t *pv)
 {
-	if (!r_refdef.playerview)
+	return pv && (pv->pmovetype == PM_SPECTATOR || pv->pmovetype == PM_OLD_SPECTATOR);
+}
+
+//P1345: CSQC asks after its final camera, before submitting entities/effects.
+qboolean Surf_WorldOnlyView(playerview_t *pv)
+{
+	int area, cluster;
+	unsigned int contents;
+	model_t *w = cl.worldmodel;
+	if (!r_voidscene.ival || !r_voidvis.ival || !Surf_PlayerIsNoclipping(pv) || r_refdef.recurse ||
+		(r_refdef.flags & RDF_NOWORLDMODEL) || !w || w->loadstate != MLS_LOADED || !w->funcs.InfoForPoint)
 		return false;
-	return r_refdef.playerview->pmovetype == PM_SPECTATOR ||
-		   r_refdef.playerview->pmovetype == PM_OLD_SPECTATOR;
+	if (*r_refdef.rt_destcolour[0].texname && strcmp(r_refdef.rt_destcolour[0].texname, "megascreeny"))
+		return false;
+	w->funcs.InfoForPoint(w, r_refdef.vieworg, &area, &cluster, &contents);
+	return cluster == -1;
 }
 
 /*
@@ -2495,9 +2507,9 @@ static void Surf_VoidVisReport(qboolean fired)
 	lastvv = r_voidvis.ival;
 	lastfired = fired;
 
-	Con_Printf("voidvis: cluster %i  pmovetype %i (noclip %i)  r_voidvis %i  -> %s\n",
-		lastcluster, lastpm, Surf_PlayerIsNoclipping()?1:0, lastvv,
-		fired?"VOID VIEW":"off");
+	Con_Printf("voidvis: cluster %i  pmovetype %i (noclip %i)  r_voidvis %i  -> %s frame %i\n",
+		lastcluster, lastpm, Surf_PlayerIsNoclipping(r_refdef.playerview)?1:0, lastvv,
+		fired?"VOID VIEW":"off", host_framecount);
 	/*
 	  Build 19.  LAST FRAME'S counts, deliberately: this runs in Surf_SetupFrame,
 	  before BE_GenModelBatches has touched them this frame.  One frame stale is
@@ -2505,11 +2517,55 @@ static void Surf_VoidVisReport(qboolean fired)
 	  reasoning is printed -- and the numbers that matter here are steady-state,
 	  not per-frame transients.
 
-	  "entities N (brush B), dropped D" reads directly: D of 0 with N large is a
-	  mode doing nothing, and B tells you what mode 2 alone could ever add.
+	  Offered primary STANDARD candidates, before PVS/frustum and other culls.
+	  Not rendered-model totals; nested/offscreen passes cannot overwrite them.
 	*/
 	Con_Printf("        entities %i (brush %i) -- world counts are r_speeds\n",
 		r_voidvis_edicts, r_voidvis_brush);
+}
+
+//P1345: sample transient batches in the next primary view, before PopChains clears them.
+static qboolean voidscene_infopending;
+void R_VoidSceneInfo_f(void)
+{
+	if (!cl.worldmodel || cl.worldmodel->loadstate != MLS_LOADED)
+		Con_Printf("voidscene: no loaded world\n");
+	else
+		voidscene_infopending = true;
+}
+static void Surf_VoidSceneInfo(void)
+{
+	model_t *w = cl.worldmodel;
+	batch_t *b;
+	mesh_t *m;
+	int i, j, meshes = 0, batches = 0, verts = 0, indexes = 0, area = -1, cluster = -1;
+	unsigned int contents = 0, shape = 2166136261u;
+	if (!w || w->loadstate != MLS_LOADED)
+	{
+		Con_Printf("voidscene: no loaded world\n");
+		return;
+	}
+	if (w->funcs.InfoForPoint)
+		w->funcs.InfoForPoint(w, r_refdef.vieworg, &area, &cluster, &contents);
+	for (i = 0; i < SHADER_SORT_COUNT; i++)
+		for (b = w->batches[i]; b; b = b->next)
+			if (b->meshes > b->firstmesh)
+			{
+				batches++;
+				for (j = b->firstmesh; j < b->meshes; j++)
+				{
+					m = b->mesh[j];
+					meshes++; verts += m->numvertexes; indexes += m->numindexes;
+					shape = (shape ^ (unsigned int)m->numvertexes) * 16777619u;
+					shape = (shape ^ (unsigned int)m->numindexes) * 16777619u;
+				}
+			}
+	Con_Printf("voidscene: mode %i active %i predicate %i cluster %i area %i recurse %i rt '%s'\n",
+		r_voidscene.ival, !!(r_refdef.flags & RDF_WORLDONLY), Surf_WorldOnlyView(r_refdef.playerview),
+		cluster, area, r_refdef.recurse, r_refdef.rt_destcolour[0].texname);
+	Con_Printf("  eye %.3f %.3f %.3f angles %.3f %.3f %.3f\n", r_refdef.vieworg[0], r_refdef.vieworg[1], r_refdef.vieworg[2], r_refdef.viewangles[0], r_refdef.viewangles[1], r_refdef.viewangles[2]);
+	Con_Printf("  world meshes %i batches %i verts %i indexes %i shape %08x; census %i brush %i rejected %i (primary offered candidates before culling; developer 1)\n",
+		meshes, batches, verts, indexes, shape, r_voidvis_edicts, r_voidvis_brush, r_voidvis_dropped);
 }
 
 //most of this is a direct copy from gl
@@ -2586,7 +2642,7 @@ void Surf_SetupFrame(void)
 	*/
 
 	/*
-	  Cleared for EVERY view, including the recursive ones, and cleared before
+	  The legacy r_voidview predicate is cleared for EVERY view, including the recursive ones, before
 	  anything below can set it.  A skyroom or a mirror renders with its own
 	  pvsorigin that may legitimately be in solid (see the note at the top of
 	  this function), and it must not inherit the main view's answer -- but it
@@ -2594,6 +2650,10 @@ void Surf_SetupFrame(void)
 	  true here would silently drop every entity out of the reflection.
 	*/
 	r_voidview = false;
+	//Map-only is an explicit parent policy, not the recursive view's void predicate.
+	//Keep it in reflection children; fresh primary/named scenes rederive it below.
+	if (!r_refdef.recurse)
+		r_refdef.flags &= ~RDF_WORLDONLY;
 
 	/*
 	  And the forced vis with it, for the primary view only.
@@ -2629,9 +2689,11 @@ void Surf_SetupFrame(void)
 		  Without the noclip test it would fire on the ordinary fall into the
 		  void, which is the exact case Patch 138 exists to keep playable.
 		*/
-		if (r_viewcluster == -1 && r_voidvis.ival && Surf_PlayerIsNoclipping())
+		if (r_viewcluster == -1 && r_voidvis.ival && Surf_PlayerIsNoclipping(r_refdef.playerview))
 		{
 			r_voidview = true;
+			if (Surf_WorldOnlyView(r_refdef.playerview))
+				r_refdef.flags |= RDF_WORLDONLY;
 
 			/*
 			  All bits set, so every cluster is "visible" and the world falls
@@ -3757,7 +3819,7 @@ void Surf_DrawWorld (void)
 	currentmodel = cl.worldmodel;
 	currententity = &r_worldentity;
 
-	r_dlightlightmaps = !!r_dynamic.ival;
+	r_dlightlightmaps = !!r_dynamic.ival && !(r_refdef.flags & RDF_WORLDONLY);
 
 	{
 #ifdef THREADEDWORLD
@@ -4015,11 +4077,11 @@ void Surf_DrawWorld (void)
 				areas[1] = r_viewarea;
 				CL_LinkStaticEntities(entvis, areas);
 				TRACE(("dbg: calling R_DrawParticles\n"));
-				if (!r_refdef.recurse && !(r_refdef.flags & RDF_DISABLEPARTICLES))
+				if (!r_refdef.recurse && !(r_refdef.flags & (RDF_DISABLEPARTICLES|RDF_WORLDONLY)))
 					P_DrawParticles ();
-				if (!r_refdef.recurse)
+				if (!r_refdef.recurse && !(r_refdef.flags & RDF_WORLDONLY))
 					CL_EmitPersistentDecals ();	//nettest: persistent lit decals (before BE_DrawWorld consumes cl_stris)
-				else if (!(r_refdef.flags & RDF_DISABLEPARTICLES))
+				else if (r_refdef.recurse && !(r_refdef.flags & (RDF_DISABLEPARTICLES|RDF_WORLDONLY)))
 					CL_PersistentDecals_PortalView ();	//FTESurf Patch 772
 
 				TRACE(("dbg: calling BE_DrawWorld\n"));
@@ -4097,11 +4159,11 @@ void Surf_DrawWorld (void)
 		{
 			CL_LinkStaticEntities(entvis, r_refdef.sceneareas);
 			TRACE(("dbg: calling R_DrawParticles\n"));
-			if (!r_refdef.recurse && !(r_refdef.flags & RDF_DISABLEPARTICLES))
+			if (!r_refdef.recurse && !(r_refdef.flags & (RDF_DISABLEPARTICLES|RDF_WORLDONLY)))
 				P_DrawParticles ();
-			if (!r_refdef.recurse)
+			if (!r_refdef.recurse && !(r_refdef.flags & RDF_WORLDONLY))
 				CL_EmitPersistentDecals ();	//nettest: persistent lit decals
-			else if (!(r_refdef.flags & RDF_DISABLEPARTICLES))
+			else if (r_refdef.recurse && !(r_refdef.flags & (RDF_DISABLEPARTICLES|RDF_WORLDONLY)))
 				CL_PersistentDecals_PortalView ();	//FTESurf Patch 772
 		}
 
@@ -4114,6 +4176,12 @@ void Surf_DrawWorld (void)
 		r_refdef.scenevis = surfvis;
 		BE_DrawWorld(cl.worldmodel->batches);
 
+		if (voidscene_infopending && !r_secondaryview && !r_refdef.recurse && r_refdef.playerview &&
+			(!*r_refdef.rt_destcolour[0].texname || !strcmp(r_refdef.rt_destcolour[0].texname, "megascreeny")))
+		{
+			voidscene_infopending = false;
+			Surf_VoidSceneInfo();
+		}
 		Surf_PopChains(cl.worldmodel->batches);
 
 		/*FIXME: move this away*/

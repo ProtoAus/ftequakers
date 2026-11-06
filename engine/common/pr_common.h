@@ -918,6 +918,7 @@ typedef enum
 	VF_VRBASEORIENTATION= 225,	//specifies the worldspace coords+angles of the VR room space.
 	VF_RT_COVERAGE		= 226,	//FTESurf Patch 871: 2D drawn into a render target keeps its coverage in alpha
 	VF_VIEWMODEL_AFOV	= 227,	//FTESurf P970: scene-only weapon FOV; 0=default, -1=world
+	VF_WORLDONLY		= 228,	//FTESurf P1345: read-only final-camera noclip overview predicate.
 	//WARNING: update fteqcc when new entries are added.
 
 

@@ -1487,15 +1487,31 @@ void QCBUILTIN PF_cs_addwaterripple(pubprogfuncs_t *prinst, struct globalvars_s 
 	R_AddWaterRipple(org, amplitude, size, speed, lifetime);
 }
 
+//P1345: loaded geometry only; never late-load a decorative CSQC model to classify it.
+static qboolean CSQC_OverviewBrush(csqcedict_t *ent)
+{
+	int index = ent->v->modelindex;
+	model_t *model = NULL;
+	if (index > 0 && index < MAX_PRECACHE_MODELS)
+		model = cl.model_precache[index];
+	else if (index < 0 && index > -MAX_CSMODELS)
+		model = cl.model_csqcprecache[-index];
+	return model && model->loadstate == MLS_LOADED && model->type == mod_brush;
+}
+
 static void QCBUILTIN PF_R_AddEntityMask(pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
 {
 	int mask = G_FLOAT(OFS_PARM0);
+	qboolean worldonly = Surf_WorldOnlyView(csqc_playerview);
 	csqcedict_t *ent;
 	entity_t rent;
 	int e;
 	int maxe;
 
 	int oldself = *csqcg.self;
+	r_refdef.flags &= ~RDF_WORLDONLY;
+	if (worldonly)
+		r_refdef.flags |= RDF_WORLDONLY;
 	RSpeedMark();
 	prinst->ProfileExclude(prinst, true);	//FTESurf Patch 800: "entity setup" is World's; predraw QC still counts
 
@@ -1509,7 +1525,8 @@ static void QCBUILTIN PF_R_AddEntityMask(pubprogfuncs_t *prinst, struct globalva
 			else
 #endif
 			{
-				CL_LinkPlayers ();
+				if (!worldonly)
+					CL_LinkPlayers ();
 				CL_LinkPacketEntities ();
 			}
 		}
@@ -1530,7 +1547,9 @@ static void QCBUILTIN PF_R_AddEntityMask(pubprogfuncs_t *prinst, struct globalva
 				if (ED_ISFREE(ent))
 					continue;
 			}
-			if (ent->xv->predraw)
+			if (worldonly && !CSQC_OverviewBrush(ent))
+				continue;
+			if (!worldonly && ent->xv->predraw)
 			{
 				*csqcg.self = EDICT_TO_PROG(prinst, (void*)ent);
 				PR_ExecuteProgram(prinst, ent->xv->predraw);
@@ -1555,10 +1574,12 @@ static void QCBUILTIN PF_R_AddEntityMask(pubprogfuncs_t *prinst, struct globalva
 			ent = (void*)EDICT_NUM_PB(prinst, e);
 			if (ED_ISFREE(ent))
 				continue;
+			if (worldonly && !CSQC_OverviewBrush(ent))
+				continue;
 
 			if ((int)ent->xv->drawmask & mask)
 			{
-				if (ent->xv->predraw)
+				if (!worldonly && ent->xv->predraw)
 				{
 					*csqcg.self = EDICT_TO_PROG(prinst, (void*)ent);
 					PR_ExecuteProgram(prinst, ent->xv->predraw);
@@ -1578,11 +1599,11 @@ static void QCBUILTIN PF_R_AddEntityMask(pubprogfuncs_t *prinst, struct globalva
 
 	if (cl.worldmodel)
 	{
-		if (mask & MASK_STDVIEWMODEL)
+		if (!worldonly && (mask & MASK_STDVIEWMODEL))
 		{
 			CL_LinkViewModel ();
 		}
-		if (mask & MASK_DELTA)
+		if (!worldonly && (mask & MASK_DELTA))
 		{
 			CL_LinkProjectiles ();
 			CL_UpdateTEnts ();
@@ -2319,6 +2340,9 @@ nogameaccess:
 	case VF_VIEWMODEL_AFOV:
 		*r = r_refdef.viewmodel_afov;
 		break;
+	case VF_WORLDONLY:
+		*r = Surf_WorldOnlyView(csqc_playerview);
+		break;
 
 	case VF_SKYROOM_CAMERA:
 		if (r_refdef.skyroom_enabled)
@@ -2869,6 +2893,8 @@ void R_DrawNameTags(void);
 static void QCBUILTIN PF_R_RenderScene(pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
 {
 	qboolean scissored;
+	qboolean worldonly = Surf_WorldOnlyView(csqc_playerview);
+	static qboolean lastworldonly;
 	//FTESurf Patch 1230: not screenshot_mega's target, which is the screen view at another size
 	qboolean rtview = *r_refdef.rt_destcolour[0].texname && strcmp(r_refdef.rt_destcolour[0].texname, "megascreeny");
 	vrect_t oldvrect = r_refdef.vrect;
@@ -2893,7 +2919,17 @@ static void QCBUILTIN PF_R_RenderScene(pubprogfuncs_t *prinst, struct globalvars
 
 	R2D_ImageColours(1,1,1,1);	//apparently does matter.
 
-	if (cl.worldmodel)
+	r_refdef.flags &= ~RDF_WORLDONLY;
+	if (worldonly)
+		r_refdef.flags |= RDF_WORLDONLY;
+	if (!r_refdef.recurse && (!*r_refdef.rt_destcolour[0].texname || !strcmp(r_refdef.rt_destcolour[0].texname, "megascreeny")))
+	{
+		//P1345: discard hidden transient state at either edge, never replay it on reentry.
+		if (worldonly != lastworldonly && cl.splitclients <= 1 && pe)
+			P_ClearParticles();
+		lastworldonly = worldonly;
+	}
+	if (cl.worldmodel && !worldonly)
 		R_PushDlights ();
 
 	r_refdef.playerview = csqc_playerview;
@@ -2904,7 +2940,8 @@ static void QCBUILTIN PF_R_RenderScene(pubprogfuncs_t *prinst, struct globalvars
 	prinst->ProfileExclude(prinst, true);	//FTESurf Patch 800: the 3D view has its own r_budget groups
 	R_RenderView();
 	prinst->ProfileExclude(prinst, false);
-	R2D_PolyBlend ();
+	if (!worldonly)
+		R2D_PolyBlend ();
 
 	if (r_refdef.grect.x || r_refdef.grect.y || r_refdef.grect.width != vid.fbvwidth || r_refdef.grect.height != vid.fbvheight)
 	{
@@ -2924,7 +2961,8 @@ static void QCBUILTIN PF_R_RenderScene(pubprogfuncs_t *prinst, struct globalvars
 
 	if (!vrui.enabled)	//when we're using the vrui, this stuff needs to be part of the scene, drawn seperately for each eye
 	{
-		R_DrawNameTags();
+		if (!worldonly)
+			R_DrawNameTags();
 #ifdef RTLIGHTS
 		R_EditLights_DrawInfo();
 #endif
