@@ -1,5 +1,26 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1341 -- clearing teleports clear the predicted carrier (CSQC only)
+
+**Problem.** Ordinary non-landmark VelocityMode1-3 teleports call SV_ClearCarrier
+on the server but left the client's held push velocity intact after arrival.
+Relative clear also left a queued earlier push and erased a later same-pass push.
+
+**Change.** Share a capability-gated CSQC clear helper: zero the carrier through
+existing BVSET, discard earlier push/accumulator writes, and let a later continuous
+push replace the clear. Keep mode0/landmark/no-destination/gates unchanged. No
+native code/API/pin/tag, SSQC physics, recorder/verifier/format, report threshold,
+backend, QC Build or release change; no historical save-report cause inferred.
+
+**Verified.** Actual dedicated CPU-only QC VM compiles exact production client
+helpers, SV_ClearCarrier and server mode arm:42checks, baseline8failures, subject
+zero, exit0; positive velocity/gate/push controls act. Public fixture entrypoint
+also42/0. Standard clean-source THREE-VM NoDeploy build zero warnings. Test-only
+missing/unused declarations repaired with originals retained, no product waiver.
+Native consumer contract inspected, NOT executed by this fixture; full network,
+measured correction distance, deployment and owner feel not yet claimed.
+
+
 ## Patch 1337 — Validate developer-tool command contexts and arguments
 
 **Problem.** Developer-tool console callbacks did not consistently check the
