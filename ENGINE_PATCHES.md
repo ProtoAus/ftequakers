@@ -1,5 +1,6 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+
 ## Patch 1335 -- Christmas master, optional marks and close ramp dirt
 
 **Problem.** Seasonal effects need a Christmas gate; marks/dirt should default
@@ -22,6 +23,76 @@ current-main3VM0warnings. Fixture declaration/cache-expectation failures retaine
 not product waivers. Exact-commit clean qualification/scoped delivery pending.
 Same-ramp grazing/flicker/bleed and seasonal off/on owner acceptance remain
 manual, no native timing/FPS claim. Tools/p1335-christmas-ramp-defaults.md.
+
+## Patch 1336 -- manual full-line TAS sections (QC only)
+
+**Problem:** Named checkpoints existed but there was no practical section browser
+or safe automatic marker-metadata save while paused earlier than the retained
+end. Reusing ordinary forced partial save would discard the future. The existing
+ordinary save correctly refused that operation and must keep doing so.
+
+**Change:** Add a four-row Sections page over manual endpoints and the complete
+retained tail. Input selection uses [body-start+1,body-end] without execution;
+start/end use existing bound seek/replay. Hash/body/request/endpoint-bound add,
+rename, remove and move-to-actual-body clone metadata and write all unchanged
+retained raw inputs/settings through the existing typed writer, with no supplied
+input. Preserve future snapshots, the real retained-head checkpoint and immutable
+original; restore the previous RAM marker map on writer failure. Share the
+existing eight-edit history append with input Keep, including a new branch after
+undo only over known retained editor history, not an unrelated named revision.
+Separate marker/recipe drafts use the existing scan owner, fresh/repeat rules
+and forwarded native key releases. Tab changes blur without clearing held keys.
+Refresh first obtains project metadata so unsaved legacy CP changes cannot trap
+its count guard. After successful marker persistence, synchronize its emitted
+local parent name and recompute made/signed indicators for the child hash before
+publishing; failure rollback remains untouched. Canonical refusal gains its line
+number; strict format is unchanged. Marker transactions now preflight actual
+named/original sizes, reserve stage/child reads, and scope ALL nested strict
+reads to a conservative1440000cumulative opened bytes, including settings/token
+lengths. Optional branch/repair reads consume it, reserve is rechecked BEFORE
+CP RAM staging, zero remaining stays limited, and all exits clear the scope.
+Require unchanged saved input/settings before Freeze to avoid an implicit save.
+Large otherwise-readable projects may explicitly refuse synchronous marker edits;
+no truncation, raised VM limit or complete bulk-stage editing claim. Ordinary
+non-marker reader behavior remains unchanged. No native C, movement, recorder
+format, engine pin/tag, QC Build, API or admission change.
+
+**Verified:** Three actual QC VMs zero warnings. Acting old real-dedicated
+control14; new browser20; metadata58; actual widgets31. Covers exact/final-short
+pages, range selection/no tick, retained future at earlier bodies, full raw and
+authored settings unchanged, exact parent/no input supply, typed writer refusal
+and RAM/file rollback with fixture restored, retained-head name removal, stale
+revision refusal, explicit Undo/Redo and a branch after undo preserving the newer
+immutable node. Marker text/Add/Rename/Remove, independent recipe text/save and
+cross-tab native held-key releases act; screenshot inspected for bounded readable
+layout/no clipping. Independent whole-feature review found three P2 consistency
+issues; actual old-code control24 acts stuck unsaved-CP Refresh and subsequent
+ordinary-save parent loss, corrected subject24 fixes both without changing the
+input/body/credit baseline. Synthetic literal success-tail VM: five old assertions
+fail and unchanged hash/head passes; all six corrected pass, including child
+made/signed flags both directions before event. No real signature is fabricated;
+minimal fixtures finish checks; only their own spawned processes are stopped
+after the quit deadline during later map setup (exit1), NOT normal world acceptance.
+Further whole-feature review found a cumulative-read P1: real old control18 first
+strictly reads/loads a real captured CP and browses a48000-row explicitly authored
+local plan, then marker hits a recorded VM runaway; ONLY owned old test server
+exits1. No fake future pose or signature. Corrected22 refuses BEFORE file/RAM/body/
+grant change, remains responsive and accepts a short marker on the SAME server;
+normal0cl+sv. Corrected metadata58 also passes rollback/undo-branch. Literal actual
+budget helpers16checks pass with SYNTHETIC sizes, exact/over/zero/negative/default/
+optional/different-file cases; own minimal process stopped after later map-setup
+quit deadline, not world/signature acceptance. Other full dedicated pairs normal0.
+Mandatory reader949/0 rerun after scoped-reader change; required primary
+runs/parts548 plus178views retain351existing faulty entries on unchanged bytes;
+10additional views actually parse clean, all726inventory members unchanged. Not
+a clean corpus. Broader legacy kept-save prefix remains separately blocked/unmodified.
+Initial missing internal name-list terminator was correctly rejected by canonical
+read-back; fix was in producer, not validation. Two final independent whole-feature
+reviews cleared the corrected code. Qualified under provisional P1335; renumbered
+before publication to avoid an existing reservation, with no runtime source change.
+Publication/deployment pending. Actual-contact proposals, next-ramp best-FOUND solving,
+public TAS admission/board stages and owner feel are NOT complete.
+
 
 ## Patch 1334 — distinguish unmodelled similarity input from malformed input
 
