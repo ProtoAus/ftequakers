@@ -39,8 +39,9 @@ Exact source/build/integration/deployment provenance is recorded separately.
 leaking through a persistent eligibility flag/unchanged light epoch, packet models
 accepting an unloaded type0/mod_brush, hidden bursts/recoil/events replaying on
 exit, and nonvisual VM preference/profile sync paused with weapon drawing.
-Original1345 source/tag and rejected candidate images remain unchanged; this
-session deployed none of them and admitted no rejected client to the code catalog.
+Original1345 source/tag and rejected candidate images remain unchanged. Those
+original binaries were not deployed; no rejected client was admitted. Only the
+qualified compositions recorded below were shipped.
 
 **Change:** Always advance the scene light epoch, reject overview light marking
 and both RGB/luminance additions from CURRENT explicit flags. Restore the original
@@ -70,6 +71,20 @@ or file IO. Pi9fcd95b1/main27970c37 THREE VMs0warnings; source pins and guarded
 delivery separately in FTESurf tools/p1348-overview-state.md. Normal unprofiled
 GPU admission was resource-refused, never regraded or weakened. One1348 claim
 follows fresh both-repo/164-tree/335-fixture census max1347; no tag/history rewrite.
+
+**Delivery6Nov2026:** Both Windows installs verified13:40:56UTC, main2f2f3946 /
+CSa45e87ee5133, native1355c256a/tagpatch-1348 through public journal818f3681;
+26destinations/paired previous files and19307protected non-target paths exact.
+Latest compatible Pi490280cc preserves5cb18943 KSF and all12accepted render/
+weapon/editor bodies; actual baseline reproduced, THREE VMs0warnings. All12
+lobbies activated13:51:33UTC, CS2d70a779b200 and BYTE-IDENTICAL current QWe7b8a26b.
+Native/plugin/menu/config/backend preserved;48215old protected data entries
+unchanged,6new entries retained, join capacities restored, rollback retained.
+Actual read-only postflight checked live/previous programs, all12new actors and
+directory, config/native/menu/backend and real code-catalog consumer. Exact public
+source/program provenance: FTESurf tools/p1348-overview-state.md. Fresh graphical
+smoke was resource-refused below4GiB; no launch/relaxed gate or FPS claim. Owner
+out/back-twice feel, final unprofiled timing and broader readiness remain pending.
 
 ## Patch 1347: visible KSF fetch and gentler replay retries (6 Nov 2026)
 
