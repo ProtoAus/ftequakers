@@ -32,8 +32,76 @@ old VM runaway; failed ordinary syntax/expected-hash reads invalidate prior proo
 file existence alone cannot restore it, and actual CSQC pending replies retry to a
 complete map without body/grant work. Fresh949 reader checks pass; stable corpus
 558 CLI inputs retain351 existing faults, no increase. Final merged/tagged delivery
-qualification is separate. Historical test IDs retain their1344/1347 source labels. No live moving-world/ladder, universal ramp-ID,
-global optimum, owner comfort or public TAS-admission claim.
+qualification is separate. Historical test IDs retain their1344/1347 source labels.
+No live moving-world/ladder, universal ramp-ID, global optimum, owner comfort or
+public TAS-admission claim.
+
+## Patch 1348 -- isolate overview lightmaps and retire hidden weapon feedback
+
+**Problem:** Independent1345 source reviews found current-view dynamic lighting
+leaking through a persistent eligibility flag/unchanged light epoch, packet models
+accepting an unloaded type0/mod_brush, hidden bursts/recoil/events replaying on
+exit, and nonvisual VM preference/profile sync paused with weapon drawing.
+Original1345 source/tag and rejected candidate images remain unchanged; this
+session deployed none of them and admitted no rejected client to the code catalog.
+
+**Change:** Always advance the scene light epoch, reject overview light marking
+and both RGB/luminance additions from CURRENT explicit flags. Restore the original
+base lightmap eligibility assignment and keep its cache/realtime overrides intact;
+blindly reinitializing that global inside light pushing would erase those rules.
+Require MLS_LOADED before the packet brush-type exception. Keep VM_Frame active;
+a lightweight WP_OverviewFrame discards hidden cosmetic bursts/recoil/flash/scope/
+inspect state and consumes the current event, while normal WP calls are unchanged.
+Recompose only TWELVE client files onto deployed218721aa Pi, not superseded9debcfc9.
+Keep zone-editor frame/input/drag maintenance active with an explicit draw flag;
+only its world overlays are suppressed, never deferred clicks at a later camera. No physics formula, input capture, wire/recording format or
+QC Build change. No new probe code, unbounded preload or readiness-barrier claim.
+
+**Verified:** Literal production light-push/caller/RGB+Lum/packet/QC-helper/caller
+fragments with explicit synthetic dependencies:1102checks, original743failures,
+corrected0, both fixture compiles0warnings. Current-scene normal/overview/normal,
+stale-epoch, cache/realtime base-eligibility preservation, unloaded zero-type,
+loaded-positive, hidden sequence/burst/recoil and VM-poll controls ACT. These are
+NOT GPU/pixel/full animation/physics or FPS evidence. A first over-broad assignment
+selector and missing UCRT child-tool PATH were diagnosed at the existing compiler
+seam; original failures retained. Current Pi baseline reproduces CS01815ce0 and
+QWe7b8a26b; corrected main/Pi THREE-VM builds0warnings, Pi QW/menu/source unchanged.
+Native tagged1355 full build74old/74current warnings/no additions. Fresh reviews
+closed all five findings. Editor caller/two production bodies68checks/17control
+failures/0corrected, synthetic UI/geometry and QC->C++ syntax only, NOT native UI
+or file IO. Pi9fcd95b1/main27970c37 THREE VMs0warnings; source pins and guarded
+delivery separately in FTESurf tools/p1348-overview-state.md. Normal unprofiled
+GPU admission was resource-refused, never regraded or weakened. One1348 claim
+follows fresh both-repo/164-tree/335-fixture census max1347; no tag/history rewrite.
+
+## Patch 1347: visible KSF fetch and gentler replay retries (6 Nov 2026)
+
+Problem: leaderboard request handlers existed without visible in-game/menu controls.
+Three missing/broken replay files could also be promoted into a six-hour whole-host
+refusal, stalling healthy record boards. HTTP500 is not proof of rate limiting.
+
+Change: Fetch KSF buttons queue the selected course/direction through the existing
+bounded +100-times endpoint and ordinary replay-interest path. Unsupported sources
+and segmented categories hide the control; narrow menu layouts give it its own row.
+Replay requests now default to six-second spacing, with slower probes after transient
+failure. Missing404/410 leaves are deferred per file, never counted as host failures.
+Repeated500/broken bodies and other5xx use a replay-only60s exponential backoff capped
+at30min. Real429/access refusals retain existing host-wide exponential protection;
+Retry-After seconds/HTTP-dates are honored. Existing active parks are not shortened.
+No converter, replay format, PB binding, ranking, schema, native pin/tag or QC Build change.
+
+Verified: actual src/build.ps1 -Jobs8 -NoDeploy, all three VMs, zero warnings
+with qualified compiler c24ede65. Initial older-compiler baseline/candidate both
+had two cl_viewmodel property227 warnings; that compiler was replaced, not waived.
+Actual pointer clicks in CSQC and menu sent style-isolated POST202 requests and
+persisted the intended queues; FW/SW/HSW/BW reads acted. Ranked/segmented controls
+were absent; wide/narrow menu geometry remained on-screen. KSF top-up17/0;
+replay importer84/0, including missing files, repeated500 recovery,503/429 Retry-After,
+HTTP-date validation and byte-preservation of a pre-existing active park. Screenshots
+inspected; no owner manual acceptance claimed. Deployment and tier7/8 backfill are
+separate, still pending at this source checkpoint. Initial census:955/955 map metadata,
+43 tier7/8 maps,1348 course/style boards;236 complete,26613 held times,718 playable
+advertised replays. This is NOT a claim that all upstream times/replays are acquired.
 
 ## Patch 1346 -- recover interrupted similarity source admissions (backend only)
 
@@ -88,9 +156,12 @@ baseline, NOT fault-free. Both independent rechecks closed runtime findings.
 Deployed6Nov2026UTC: both Windows verified09:17, all12Pi09:33; new actors,
 paired programs/.prev exact,19340Windows and47924Pi protected paths unchanged.
 All8parts/183resume files byte-exact after ON/OFFBOX capture/restart; native,
-menu/config/backend unchanged; all join capacities restored. Graphical served-
-code/render smoke NOT run:4-GiB gate observed2719MiB, no game launched. Native
-PVS/feel and owner check remain pending, not a pass. Provenance/limits:
+menu/config/backend unchanged; all join capacities restored. Cold served-client/
+UI smoke passed6Nov10:28:42UTC after RAM freed:66squiet/min5212MiB,4096-MiB gate
+unchanged. Exact Pi CS01815ce0download, board cols9/type14, exit0/completion,
+no detected QC runtime errors; screenshot HUD/empty-state inspected, NOT populated
+rows or textured-world correctness. Own rig retired/proof retained/lock released;
+no rebuild/deploy/restart. Native PVS/feel and human check still pending. Limits:
 tools/p1342-save-release.md and tools/p1343-relative-teleports.md; lextest.md.
 
 
@@ -125,9 +196,13 @@ prior runtime findings; remaining stale shared D38 comment corrected to D42 with
 same-line comment equivalence, no program rebuilt or evidence redated. Paired
 rollout completed6Nov2026UTC (Windows09:17, all12Pi09:33); full protected/data/
 rollback/actor checks above passed. Reader949pass reused on unchanged source;
-final primary RUNS548/351equals baseline, NOT fault-free. Native served-client/
-render smoke is blocked at4-GiB gate (2719MiB); human/native feel still pending.
-Source/program provenance and validation limits: tools/p1342-save-release.md.
+final primary RUNS548/351equals baseline, NOT fault-free. Cold native served-client/
+UI smoke passed6Nov10:28:42UTC: exact Pi CS01815ce0download, board cols9/type14,
+exit0/completion and no detected QC runtime errors; screenshot empty-state inspected.
+66squiet/min5212MiB preserved4096-MiB game gate; unique proof retained, own copied
+rig retired/lock released. Not rapid-save release/packet ordering/physics/PVS/feel
+acceptance; human check still pending. No source rebuild/redeploy/restart.
+Source/program provenance and limits: tools/p1342-save-release.md.
 No full packet/collision/PVS/feel/historical-cause claim; tools/p1342-save-release.md,
 lextest.md.
 

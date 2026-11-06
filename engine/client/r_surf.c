@@ -1646,7 +1646,7 @@ static void Surf_BuildLightMap (model_t *model, msurface_t *surf, int map, int s
 		}
 
 		// add all the dynamic lights
-		if (surf->dlightframe == r_dlightframecount)
+		if (!(r_refdef.flags & RDF_WORLDONLY) && surf->dlightframe == r_dlightframecount)
 			Surf_AddDynamicLights_RGB (surf);
 
 		Surf_StoreLightmap_RGB(dest, blocklights, smax, tmax, shift, stainsrc, lm);
@@ -1748,7 +1748,7 @@ static void Surf_BuildLightMap (model_t *model, msurface_t *surf, int map, int s
 				}
 			}
 // add all the dynamic lights
-			if (surf->dlightframe == r_dlightframecount)
+			if (!(r_refdef.flags & RDF_WORLDONLY) && surf->dlightframe == r_dlightframecount)
 				Surf_AddDynamicLights_Lum (surf);
 		}
 
@@ -3819,7 +3819,7 @@ void Surf_DrawWorld (void)
 	currentmodel = cl.worldmodel;
 	currententity = &r_worldentity;
 
-	r_dlightlightmaps = !!r_dynamic.ival && !(r_refdef.flags & RDF_WORLDONLY);
+	r_dlightlightmaps = !!r_dynamic.ival;
 
 	{
 #ifdef THREADEDWORLD
