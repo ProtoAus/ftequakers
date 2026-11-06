@@ -45,10 +45,13 @@ Snap destination labels to the loaded font ladder and integer placement. Keep
 nearest texel magnification while honoring mip blending and opt-in anisotropy on
 mipmapped authored point textures; leave nonmip/UI sampling alone.
 
-**Verified.** Supported full Windows native base plus rebuilt leaf/plugin targets;
-qualified c24ede65 compiler builds all three VMs with zero warnings. Existing
-native PF_resourcestatus address warning is unchanged. Windows pm_selftest acts:
-all checks pass. Native AArch64 conversion control has five acting original
+**Verified.** Final exact-commit full Windows native and ARM server/HL2 builds
+complete; qualified c24ede65 compiler builds all three VMs with zero warnings.
+The full Windows rebuild has74inherited compiler warnings, no new warning sites;
+the modified-unit PF_resourcestatus address warning is unchanged. Windows and ARM
+pm_selftest each act:1608checks, zero failures;90named physics rows across6maps
+match bit-for-bit. Both documented historical reader controls pass in their
+archived-VM context, not as latest-world admission. Native AArch64 conversion control has five acting original
 failures, ten corrected constant-bit expectations and unchanged nonnegative
 controls. Real dedicated board path on/off preserves two name labels; 32 boarding
 rows agree with the sampled mechanical-energy change after display rounding,
@@ -58,9 +61,17 @@ the existing render-surface snap regression also passed. Recreated Dragonfall's
 saved view and identified its mipmapped point/alpha-tested material: oblique
 filtering improves on NVIDIA, while a 280,000-pixel magnified crop is identical.
 Destination text is baked-size/pixel-aligned and was inspected in the editor.
-Final clean-commit ARM gates/rollout and owner feel/other-GPU acceptance remain
-separate pending steps; no fleet or owner acceptance is claimed here. No evidence
-grammar, mover policy or qcbuild/Build bump.
+BOTH Windows installed6Nov19:47UTC:28exact targets,18642protected files unchanged,
+52predecessor/prior-prev preimages archived. ALL12lobbies paired-promoted20:30UTC;
+0skipped,48556protected files unchanged, full8part/183resume-member preimages
+verified on/off box before role staging/restart. Final20:35UTC readback proves
+all12native hashes/loaded-plugin inodes, canonical QW/CS/cache and backend health;
+the existing sweep lock is released. A separately published backend changed
+before staging: original refusal/evidence retained, only its volatile boundary
+refreshed after fresh retired-actor/FD/data-equality closure; no pinned handoff
+bypassed. Receipt and corrected full compiler fingerprint are in FTESurf
+`tools/p1353-reported-bugs.md`. Owner feel/other-GPU acceptance remains pending;
+no human acceptance, evidence grammar, mover policy or qcbuild/Build bump.
 
 ## Patch 1352 -- bounded retirement of orphan similarity cursors
 
