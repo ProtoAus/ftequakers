@@ -49,8 +49,16 @@ current production d035 passed65/65 real dedicated-socket checks, including fail
 Go/template reads, binder/share opens, exact-source invalidation, automatic UI
 recovery only after strict readback, no-op refusals and unchanged source/counters.
 Both arms stopped their own client/server with rc0. Two final independent
-whole-feature source reviews cleared all28 paths. Prior ARM1598 remains bound
-to a439. Historical test IDs retain1344/1347 labels. Delivery remains separate.
+whole-feature source reviews cleared all28 paths. BOTH Windows installs received
+28 exact qualified targets17:23:49Z6Nov; all12 positive-empty lobbies received the
+paired native/QW/CS transaction17:33:46Z. New native/plugin actor epochs match;
+18642 Windows/48466 Pi protected files and active backend/configs stay unchanged.
+All8 actual recorder parts and183 full resume members/metadata were individually
+rehashed ONBOX/OFFBOX before ANY stage/restart and rechecked at the locked boundary;
+ordinary `.prev` and exact preimages remain. No process killed, data restored or
+backend redeployed. Downloaded-client smoke still lacks the4GiB/quiet admission
+window; owner two-ramp acceptance is pending. Prior ARM1598 remains bound to a439.
+Historical test IDs retain1344/1347 labels.
 No live moving-world/ladder, universal ramp-ID, global optimum, owner comfort or
 public TAS-admission claim.
 
