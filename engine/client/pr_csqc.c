@@ -2929,7 +2929,8 @@ static void QCBUILTIN PF_R_RenderScene(pubprogfuncs_t *prinst, struct globalvars
 			P_ClearParticles();
 		lastworldonly = worldonly;
 	}
-	if (cl.worldmodel && !worldonly)
+	//P1348: suppressed scenes must still retire the previous light epoch.
+	if (cl.worldmodel)
 		R_PushDlights ();
 
 	r_refdef.playerview = csqc_playerview;

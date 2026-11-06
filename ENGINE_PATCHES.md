@@ -1,5 +1,39 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1348 -- isolate overview lightmaps and retire hidden weapon feedback
+
+**Problem:** Independent1345 source reviews found current-view dynamic lighting
+leaking through a persistent eligibility flag/unchanged light epoch, packet models
+accepting an unloaded type0/mod_brush, hidden bursts/recoil/events replaying on
+exit, and nonvisual VM preference/profile sync paused with weapon drawing.
+Original1345 source/tag and rejected candidate images remain unchanged; this
+session deployed none of them and admitted no rejected client to the code catalog.
+
+**Change:** Always advance the scene light epoch, reject overview light marking
+and both RGB/luminance additions from CURRENT explicit flags. Restore the original
+base lightmap eligibility assignment and keep its cache/realtime overrides intact;
+blindly reinitializing that global inside light pushing would erase those rules.
+Require MLS_LOADED before the packet brush-type exception. Keep VM_Frame active;
+a lightweight WP_OverviewFrame discards hidden cosmetic bursts/recoil/flash/scope/
+inspect state and consumes the current event, while normal WP calls are unchanged.
+Recompose only TEN client files onto the now-deployed218721aa Pi profile, not the
+superseded9debcfc9 API. No physics formula, input capture, wire/recording format or
+QC Build change. No new probe code, unbounded preload or readiness-barrier claim.
+
+**Verified:** Literal production light-push/caller/RGB+Lum/packet/QC-helper/caller
+fragments with explicit synthetic dependencies:1102checks, original743failures,
+corrected0, both fixture compiles0warnings. Current-scene normal/overview/normal,
+stale-epoch, cache/realtime base-eligibility preservation, unloaded zero-type,
+loaded-positive, hidden sequence/burst/recoil and VM-poll controls ACT. These are
+NOT GPU/pixel/full animation/physics or FPS evidence. A first over-broad assignment
+selector and missing UCRT child-tool PATH were diagnosed at the existing compiler
+seam; original failures retained. Current Pi baseline reproduces CS01815ce0 and
+QWe7b8a26b; corrected main/Pi THREE-VM builds0warnings, Pi QW/menu/source unchanged.
+Native full tagged build, fresh delta re-reviews, source pins and guarded delivery
+are recorded separately in FTESurf tools/p1348-overview-state.md. Normal unprofiled
+GPU admission was resource-refused, never regraded or weakened. One1348 claim
+follows fresh both-repo/164-tree/335-fixture census max1347; no tag/history rewrite.
+
 ## Patch 1346 -- recover interrupted similarity source admissions (backend only)
 
 **Problem.** Source rotation was durable before comparison, but an interrupted

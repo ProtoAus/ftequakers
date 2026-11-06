@@ -849,6 +849,10 @@ void R_PushDlights (void)
 	r_dlightframecount++;	// because the count hasn't
 											//  advanced yet for this frame
 
+	//P1348: current scene policy, without overwriting cache/realtime lightmap eligibility.
+	if (r_refdef.flags & RDF_WORLDONLY)
+		return;
+
 #ifdef RTLIGHTS
 	/*if we're doing full rtlighting only, then don't bother calculating old-style dlights as they won't be visible anyway*/
 	if (r_shadow_realtime_world.ival && r_shadow_realtime_world_lightmaps.value < 0.1)
