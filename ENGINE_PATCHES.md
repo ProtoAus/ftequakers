@@ -53,9 +53,12 @@ baseline, NOT fault-free. Both independent rechecks closed runtime findings.
 Deployed6Nov2026UTC: both Windows verified09:17, all12Pi09:33; new actors,
 paired programs/.prev exact,19340Windows and47924Pi protected paths unchanged.
 All8parts/183resume files byte-exact after ON/OFFBOX capture/restart; native,
-menu/config/backend unchanged; all join capacities restored. Graphical served-
-code/render smoke NOT run:4-GiB gate observed2719MiB, no game launched. Native
-PVS/feel and owner check remain pending, not a pass. Provenance/limits:
+menu/config/backend unchanged; all join capacities restored. Cold served-client/
+UI smoke passed6Nov10:28:42UTC after RAM freed:66squiet/min5212MiB,4096-MiB gate
+unchanged. Exact Pi CS01815ce0download, board cols9/type14, exit0/completion,
+no detected QC runtime errors; screenshot HUD/empty-state inspected, NOT populated
+rows or textured-world correctness. Own rig retired/proof retained/lock released;
+no rebuild/deploy/restart. Native PVS/feel and human check still pending. Limits:
 tools/p1342-save-release.md and tools/p1343-relative-teleports.md; lextest.md.
 
 
@@ -90,9 +93,13 @@ prior runtime findings; remaining stale shared D38 comment corrected to D42 with
 same-line comment equivalence, no program rebuilt or evidence redated. Paired
 rollout completed6Nov2026UTC (Windows09:17, all12Pi09:33); full protected/data/
 rollback/actor checks above passed. Reader949pass reused on unchanged source;
-final primary RUNS548/351equals baseline, NOT fault-free. Native served-client/
-render smoke is blocked at4-GiB gate (2719MiB); human/native feel still pending.
-Source/program provenance and validation limits: tools/p1342-save-release.md.
+final primary RUNS548/351equals baseline, NOT fault-free. Cold native served-client/
+UI smoke passed6Nov10:28:42UTC: exact Pi CS01815ce0download, board cols9/type14,
+exit0/completion and no detected QC runtime errors; screenshot empty-state inspected.
+66squiet/min5212MiB preserved4096-MiB game gate; unique proof retained, own copied
+rig retired/lock released. Not rapid-save release/packet ordering/physics/PVS/feel
+acceptance; human check still pending. No source rebuild/redeploy/restart.
+Source/program provenance and limits: tools/p1342-save-release.md.
 No full packet/collision/PVS/feel/historical-cause claim; tools/p1342-save-release.md,
 lextest.md.
 
