@@ -41,10 +41,16 @@ Windows P1336 pair66/b639 invalidated C4/b7 candidate; guard refused downgrade.
 D911 retains exact own5modules and builds QW66 equal already-installed Windows
 server. BOTH Windows6Nov02:50UTC CSP117d627ace2d/symbols only,4targets/caches
 exact,41protected unchanged,2exact defaults hunks preserve all unrelated bytes.
-Lobbies still5e8/1ca; safe-empty prepare exit75,1client/no archive/stage/restart.
-No lobby delivery claimed; retarget only after fresh current-pair proof if it
-advances. Same-ramp grazing/flicker/bleed and seasonal off/on owner acceptance
-remain manual, no native timing/FPS claim. Tools/p1335-christmas-ramp-defaults.md.
+ALL12lobbies6Nov03:37:10UTC C4/CSPb7d67c223057; current Pi QW/native/backend/
+configs unchanged,12new actors/0skips and47680protected files unchanged. Warned
+all12ports,10-second grace before normal disconnect, current closed-writer
+parts/resume preimages all rehashed ON/OFF-box before staging/restart. Temporary
+runtime join capacities restored on all12; old captures/refusals retained. Local
+SSH180s timeout did not cancel the actual successful activation: read-only
+receipt/actors verified, no repeated swaps/restarts. Fresh isolated client
+served exact CSb7d67, board drew, no QC error, screenshot inspected. Same-ramp
+grazing/flicker/bleed and seasonal off/on owner acceptance remain manual, no
+native timing/FPS claim. Tools/p1335-christmas-ramp-defaults.md.
 
 ## Patch 1336 -- manual full-line TAS sections (QC only)
 
