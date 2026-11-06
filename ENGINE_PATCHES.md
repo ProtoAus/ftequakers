@@ -1,5 +1,27 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1342 -- short save chains and coherent hold release
+
+**Problem.** Only neighboring save rows were published. Unpublished steps left
+release using the previous row's speed; atomic cursor could also outrun HOLDVEL.
+
+**Change.** Optional stat207 publishes +2/-2/+3/-3 with the COMPLETE original C
+snapshot in one quoted token: D38tokens/inner C50,1400-byte cap, no mixed packets.
+Prefer whole D or legacy C/numeric fallback. Include far rows in refresh signature;
+update D even with C unchanged. Resolve release from coherent virtual row, or mark
+existing BLIND if unknown. Preserve refusals/queue/backstop/legacy/missing-ring.
+No native engine/wire type, server physics, evidence/save format, threshold/quiet
+period, raw capture, backend or Build change. Beyond+-3 and historical report
+causes are not claimed; no full999row dump.
+
+**Verified.** Actual dedicated QC VM executes exact server/client helpers:43checks,
+baseline18intended failures, subject0, compiler0warnings, exit0. Coherence,
+serialization, positive legacy/known/refusal/recovery and full release/apply arms
+act. Main standard THREE-VM NoDeploy0warnings. Test-only setup failures retained.
+Not full native packet/physics or human acceptance. Reviews/Pi build/paired
+deployment pending; tools/p1342-save-release.md, lextest.md.
+
+
 ## Patch 1341 -- clearing teleports clear the predicted carrier (CSQC only)
 
 **Problem.** Ordinary non-landmark VelocityMode1-3 teleports call SV_ClearCarrier
