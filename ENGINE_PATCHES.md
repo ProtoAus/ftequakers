@@ -11,8 +11,10 @@ world plane and hull endpoint, with explicit unavailable/unsupported states;
 normal-recovery and initial stuck searches abstain without changing movement.
 Bounded complete-source maps back Observed contacts beside Manual markers. Raw edits invalidate independently of
 intent; metadata-only retag and both fresh/cached binding require exact-source
-canonical retained readback. Failed ordinary reads invalidate its exact key;
-ordinary load reuses its first strict read instead of parsing the whole line twice.
+canonical retained readback. Ordinary/template/share read failures and canonical
+open failures in binding/share preflight invalidate the exact key; readable
+nonportable eligibility refusals do not. Ordinary load reuses its first strict
+read instead of parsing the whole line twice.
 Pages only queue one separate canonical-only Think read when proof is unknown.
 That proof is NOT live-body admission: native command-context/restore gates stay
 unchanged. Pending UI replies are empty and retry finitely. Decode signed normals
@@ -39,8 +41,11 @@ numeric checks include the same real recovery with/without its report witness an
 unchanged position. Clean current Windows FULL/threeVM builds add0own warning sites;
 ARM2f5c35c6b passes1608/0 numeric checks including those ten real stuck-search
 controls, with exact source/ELFs retained. This is not full native-tick/span or GUI
-acceptance: current Windows cache old/new checks remain blocked by unchanged4GiB
-headroom. Prior ARM1598 remains bound to a439. Historical test IDs retain1344/1347 labels.
+acceptance. Legacy6571 reader/UI cache defects now act47/47 checks with the exact
+current native, original bytes/counters unchanged. Whole review6 found two further
+canonical-open exits retaining proof; both now revoke, compile3VM0warnings, and
+remain unqualified at runtime while another active game blocks4GiB/quiet admission.
+Candidate runtime remains pending; source/compile checks do not replace it. Prior ARM1598 remains bound to a439. Historical test IDs retain1344/1347 labels.
 No live moving-world/ladder, universal ramp-ID, global optimum, owner comfort or
 public TAS-admission claim.
 
