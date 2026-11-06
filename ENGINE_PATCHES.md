@@ -1,5 +1,32 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1346 -- recover interrupted similarity source admissions (backend only)
+
+**Problem.** Source rotation was durable before comparison, but an interrupted
+comparison had no durable recovery slot. Later sweeps could rotate past that
+admitted source without first recovering its unfinished comparison.
+
+**Change.** Reuse a distinct source key in existing cursor storage. Atomically
+commit rotation plus reservation before file work; recover an eligible reserved
+source before ordinary bounded keyset/wrap selection; clear only the matching
+reservation after handled completion. Abrupt exits and failed completion retain
+it. Comparisons remain outside owned write transactions. No schema, recording,
+comparison threshold, historical observation, ranking, enforcement, native, VM,
+Build or release-version change; engine commit/tag pins are unchanged.
+
+**Verified.** Exact frozen product diff passed two independent fresh-context
+read-only reviews. Windows and Linux each pass all 28 simcheck test programs,
+including 11 new reservation cases; baseline and admission-removed controls each
+have seven intended failures. Real 80-opportunity comparisons, child interruption,
+reopen, transaction/contender ownership and old capture preservation act. A new
+Windows combined cap/wrap/budget falsifier stores both real 80-opportunity pairs;
+baseline SQL selects but fails recovery order. Its manually seeded reservation
+cannot discriminate the admission-removed control; that is not claimed as new
+mutation coverage. Reader 949 checks pass; primary RUNS corpus faults do not
+increase and protected input bytes are unchanged. Existing saves unreadability,
+legacy test import and baseline warning limits remain explicit, not waived.
+Source validation is not deployment or a fairness/hard-time/exactly-once claim.
+
 ## Patch 1343 -- relative teleport enable, lookahead and report parity (QC only)
 
 **Problem.** Enable before Disable changed a relative clip trigger to SOLID_BSP;
