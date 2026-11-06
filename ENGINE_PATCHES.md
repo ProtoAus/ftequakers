@@ -1,5 +1,30 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1343 -- relative teleport enable, lookahead and report parity (QC only)
+
+**Problem.** Enable before Disable changed a relative clip trigger to SOLID_BSP;
+relative destinations were missing from extra-PVS lookahead and server-only snap
+tracking. Merely adding tracking could quiet real same-point prediction errors.
+
+**Change.** Save original BSPTRIGGER solidity at spawn. Generic Enable keeps clip
+triggers invisible without Alpha owning that flag; ordinary brushes still unhide.
+Admission/banking branches unchanged. Reuse center+offset point
+in authoritative touch and PVS; include ordinary/relative callbacks, preserve
+all existing gates/fallback/floor lift. Share client point for touch/registry,
+and refuse quieting if ANY predicted ordinary/relative trigger lands there. No
+banking policy, threshold/quiet-window, evidence/save format, raw capture, native,
+backend, Build or release change. No historical cause or FPS/hitch claim.
+
+**Verified.** Exact production spawn/generic Enable/PVS/client registry/report
+helpers in actual dedicated QC VM:24checks, baseline7intended failures, subject0,
+compiler0warnings, exit0. Positive spawn/toggle/ordinary-eye and actual detach,
+registry/gating/bound/different-destination controls act; same-point guard has an
+acting counterfactual. Touch/zone/render/bank dependencies explicitly stubbed;
+NOT full collision/PVS network/feel evidence. Both profiles' three-VM builds0
+warnings; reader949pass, primary RUNS548/351fault baseline held as predeployment
+control, not fault-free. Reviews/native smoke/paired rollout pending; tools/p1343-relative-teleports.md, human check in lextest.md.
+
+
 ## Patch 1342 -- short save chains and coherent hold release
 
 **Problem.** Only neighboring save rows were published. Unpublished steps left
@@ -17,9 +42,10 @@ causes are not claimed; no full999row dump.
 **Verified.** Actual dedicated QC VM executes exact server/client helpers:43checks,
 baseline18intended failures, subject0, compiler0warnings, exit0. Coherence,
 serialization, positive legacy/known/refusal/recovery and full release/apply arms
-act. Main standard THREE-VM NoDeploy0warnings. Test-only setup failures retained.
-Not full native packet/physics or human acceptance. Reviews/Pi build/paired
-deployment pending; tools/p1342-save-release.md, lextest.md.
+act. Both source profiles' standard THREE-VM NoDeploy0warnings. Test-only setup
+failures retained. Reader949pass; primary RUNS548/351fault count is the real
+predeployment baseline, reader unchanged; not fault-free. Not full native packet/
+physics or human acceptance. Reviews/native smoke/paired deployment pending; tools/p1342-save-release.md, lextest.md.
 
 
 ## Patch 1341 -- clearing teleports clear the predicted carrier (CSQC only)
