@@ -36,8 +36,11 @@ qualification is separate. Follow-up review found first-validation completion co
 leave an exhausted pending view and initial unsticking could lack an unsupported
 witness. Completion now notifies and actual stuck searches abstain; ten added native
 numeric checks include the same real recovery with/without its report witness and
-unchanged body. These latest corrections await build/runtime qualification; prior
-ARM1598 applies to a439, not the new source. Historical test IDs retain1344/1347 labels.
+unchanged position. Clean current Windows FULL/threeVM builds add0own warning sites;
+ARM2f5c35c6b passes1608/0 numeric checks including those ten real stuck-search
+controls, with exact source/ELFs retained. This is not full native-tick/span or GUI
+acceptance: current Windows cache old/new checks remain blocked by unchanged4GiB
+headroom. Prior ARM1598 remains bound to a439. Historical test IDs retain1344/1347 labels.
 No live moving-world/ladder, universal ramp-ID, global optimum, owner comfort or
 public TAS-admission claim.
 
