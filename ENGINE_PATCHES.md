@@ -46,6 +46,63 @@ velocities are derived annotations, never portable poses or submission proof.
 Final tagged-source build, independent reviews and destination/live deployment
 verification are separate gates recorded with the delivery evidence.
 
+## Patch 1343 -- relative teleport enable, lookahead and report parity (QC only)
+
+**Problem.** Enable before Disable changed a relative clip trigger to SOLID_BSP;
+relative destinations were missing from extra-PVS lookahead and server-only snap
+tracking. Merely adding tracking could quiet real same-point prediction errors.
+
+**Change.** Save original BSPTRIGGER solidity at spawn. Generic Enable keeps clip
+triggers invisible without Alpha owning that flag; ordinary brushes still unhide.
+Admission/banking branches unchanged. Reuse center+offset point
+in authoritative touch and PVS; include ordinary/relative callbacks, preserve
+all existing gates/fallback/floor lift. Share client point for touch/registry,
+and refuse quieting if ANY predicted ordinary/relative trigger lands there. No
+banking policy, threshold/quiet-window, evidence/save format, raw capture, native,
+backend, Build or release change. No historical cause or FPS/hitch claim.
+
+**Verified.** Exact production spawn/generic Enable/PVS/client registry/report
+helpers in actual dedicated QC VM:24checks, baseline7intended failures, subject0,
+compiler0warnings, exit0. Positive spawn/toggle/ordinary-eye and actual detach,
+registry/gating/bound/different-destination controls act; same-point guard has an
+acting counterfactual. Touch/zone/render/bank dependencies explicitly stubbed;
+NOT full collision/PVS network/feel evidence. Both profiles' three-VM builds0
+warnings; reader949pass, primary RUNS548/351fault baseline held as predeployment
+control, not fault-free. Reviews/native smoke/paired rollout pending; tools/p1343-relative-teleports.md, human check in lextest.md.
+
+
+## Patch 1342 -- short save chains and coherent hold release
+
+**Problem.** Only neighboring save rows were published. Unpublished steps left
+release using the previous row's speed; atomic cursor could also outrun HOLDVEL.
+Independent review found that rejected validation leaves cursor and held row
+DIFFERENT, so even a coherent cursor cannot prove settled release speed.
+
+**Change.** Optional stat207 publishes +2/-2/+3/-3 with the COMPLETE original C
+snapshot PLUS actual-held validity/velocity: D42tokens/inner C50,1400-byte cap,
+no mixed packets. Whole D or legacy row fallback; every numeric token uses the
+existing strict finite decimal codec. Far/held-only changes refresh with C unchanged.
+Pending non-rate-refused loads may speculate via virtual row; settled release
+uses actual held speed, NOT a refused load's selected cursor. C-only/unproven
+settled hold is BLIND; numeric-only legacy remains. Refusal/queue/backstop/ring
+behavior retained.
+No native engine/wire type, server physics, evidence/save format, threshold/quiet
+period, raw capture, backend or Build change. Beyond+-3 and historical report
+causes are not claimed; no full999row dump.
+
+**Verified.** Actual dedicated QC VM metadata31/release29/relative24=84/0,
+compiler0warnings/exit0.17added review checks expose12failures in original candidate
+(metadata8/release4), now0. Production server step/release act with explicit accept/
+refuse validation stub (not full file IO); acknowledged refused-cursor release
+matches server600, not cursor700. Same-shape junk/nonfinite/overflow/invalid flag
+are refused; accepted/thaw/legacy/known/unknown controls act. Original43/18baseline
+and relative24/7baseline retained separately, not summed across baselines. Both
+post-fix standard three-VM builds0warnings; renewed reviews/paired/native smoke pending. Reader949pass; primary RUNS548/351
+fault count is true predeployment baseline, unchanged reader, NOT fault-free.
+No full packet/collision/PVS/feel/historical-cause claim; tools/p1342-save-release.md,
+lextest.md.
+
+
 ## Patch 1341 -- clearing teleports clear the predicted carrier (CSQC only)
 
 **Problem.** Ordinary non-landmark VelocityMode1-3 teleports call SV_ClearCarrier
@@ -110,6 +167,39 @@ stayed unchanged; eleven new files were retained. Configuration and backend
 launch/files stayed unchanged, and the short canonical sweep lock was released.
 No VM/config/backend shipment, data restore, owner-client kill, or whole-engine/
 parser security claim. Frozen images and rollback history remain retained.
+
+## Patch 1339 -- On-request ramp atlases and the Christmas snow model
+
+**Problem.** Two bundled ramp masks do not cover the Story/Event roster. Native
+remote-picture size limits cannot safely transport the larger baked atlases.
+Clipped imports and legacy source tokens can hide available cosmetic poses; snow's
+flake model should live alongside Christmas assets.
+
+**Change.** Read existing recordings, Momentum files and explicitly bound CSS66
+KSF originals for cosmetic baking only; preserve source bytes and count rejected
+inputs and uncovered maps. Full originals supersede their covered KSF clips,
+without collapsing distinct partial captures. Bake hashed PNG/base64 plus strict
+geometry metadata; expose only this public cosmetic namespace. Client request/
+consent, bounded decode, SHA256 verification and QC-sandbox cache reuse the online
+request counter; defaults remain marks0/dirt0. Move the identical flake IQM to
+models/christmas with old-install fallback and update the release allowlist. No
+native API/pin/tag, physics, recorder/verdict/evidence format or QC Build change.
+
+**Verified.** Offline cosmetic/contact and existing KSF tests23/23. Real owned
+loopback dedicated/client HTTPS test downloads the639KB PNG with native picture
+limit131072 unchanged: consent and invalid-geometry refusals act, exact binary
+hash/cache and actual custom-material2048x512 size pass, no QC error. Preserved
+wrong-cache-path and wrong-unflagged-texture-query failures drove the fixes; neither
+is relabeled a pass. Final100/114map bakes are real contacts, not full-coverage
+acceptance; authority reader949/0 and runs-only548/351oldfaults held. Largest-case
+qualification also passes on5MB/17833triangles. BOTHWindows main CSecb6d2c3,
+ALL12Pi compatible CS445abb4c installed; fresh live client downloaded445abb4c,
+board9/type14, screenshot/noQCerror. UTC2026-11-06T07:38:06Z all12epochs,
+47848protected originals0changes/loss;8parts/183resume archived offbox. Native,
+QW/menu/config/backend held, capacities restored; original localSSH180s failure
+retained, successful remote receipt observed READ-ONLY, no repeated restart.
+Full receipts/14coverage gaps: tools/p1339-ramp-atlas.md. No visual/FPS or
+complete upstream-corpus claim.
 
 ## Patch 1337 — Validate developer-tool command contexts and arguments
 
