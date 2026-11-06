@@ -1,5 +1,43 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1335 -- manual full-line TAS sections (QC only)
+
+**Problem:** Named checkpoints existed but there was no practical section browser
+or safe automatic marker-metadata save while paused earlier than the retained
+end. Reusing ordinary forced partial save would discard the future. The existing
+ordinary save correctly refused that operation and must keep doing so.
+
+**Change:** Add a four-row Sections page over manual endpoints and the complete
+retained tail. Input selection uses [body-start+1,body-end] without execution;
+start/end use existing bound seek/replay. Hash/body/request/endpoint-bound add,
+rename, remove and move-to-actual-body clone metadata and write all unchanged
+retained raw inputs/settings through the existing typed writer, with no supplied
+input. Preserve future snapshots, the real retained-head checkpoint and immutable
+original; restore the previous RAM marker map on writer failure. Share the
+existing eight-edit history append with input Keep, including a new branch after
+undo only over known retained editor history, not an unrelated named revision.
+Separate marker/recipe drafts use the existing scan owner, fresh/repeat rules
+and forwarded native key releases. Tab changes blur without clearing held keys.
+Canonical refusal gains its line number; strict format is unchanged. No native
+C, movement, recorder format, engine pin/tag, QC Build, API or admission change.
+
+**Verified:** Three actual QC VMs zero warnings. Acting old real-dedicated
+control14; new browser20; metadata58; actual widgets31. Covers exact/final-short
+pages, range selection/no tick, retained future at earlier bodies, full raw and
+authored settings unchanged, exact parent/no input supply, typed writer refusal
+and RAM/file rollback with fixture restored, retained-head name removal, stale
+revision refusal, explicit Undo/Redo and a branch after undo preserving the newer
+immutable node. Marker text/Add/Rename/Remove, independent recipe text/save and
+cross-tab native held-key releases act; screenshot inspected for bounded readable
+layout/no clipping. Every pair quits normally code0. Reader949/0; required primary
+runs/parts548 plus178views retain351existing faulty entries on unchanged bytes;
+10additional views actually parse clean, all726inventory members unchanged. Not
+a clean corpus. Broader legacy kept-save prefix remains separately blocked/unmodified.
+Initial missing internal name-list terminator was correctly rejected by canonical
+read-back; fix was in producer, not validation. Whole-feature review/publication/
+deployment pending. Actual-contact proposals, next-ramp best-FOUND solving,
+public TAS admission/board stages and owner feel are NOT complete.
+
 ## Patch 1334 — distinguish unmodelled similarity input from malformed input
 
 **Problem.** An existing unsupported clock-model refusal was reported as malformed
