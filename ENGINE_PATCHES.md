@@ -43,9 +43,14 @@ ARM2f5c35c6b passes1608/0 numeric checks including those ten real stuck-search
 controls, with exact source/ELFs retained. This is not full native-tick/span or GUI
 acceptance. Legacy6571 reader/UI cache defects now act47/47 checks with the exact
 current native, original bytes/counters unchanged. Whole review6 found two further
-canonical-open exits retaining proof; both now revoke, compile3VM0warnings, and
-remain unqualified at runtime while another active game blocks4GiB/quiet admission.
-Candidate runtime remains pending; source/compile checks do not replace it. Prior ARM1598 remains bound to a439. Historical test IDs retain1344/1347 labels.
+canonical-open exits retaining proof; both now revoke and compile3VM0warnings.
+After the resource blocker cleared, the old open-failure build acted37/37 checks;
+current production d035 passed65/65 real dedicated-socket checks, including failed
+Go/template reads, binder/share opens, exact-source invalidation, automatic UI
+recovery only after strict readback, no-op refusals and unchanged source/counters.
+Both arms stopped their own client/server with rc0. Two final independent
+whole-feature source reviews cleared all28 paths. Prior ARM1598 remains bound
+to a439. Historical test IDs retain1344/1347 labels. Delivery remains separate.
 No live moving-world/ladder, universal ramp-ID, global optimum, owner comfort or
 public TAS-admission claim.
 
