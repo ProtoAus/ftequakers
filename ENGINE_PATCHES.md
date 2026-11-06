@@ -1,5 +1,33 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1356 -- required-input numeric spelling (diagnostic readers only)
+
+**Problem.** Python-only number spellings in required input fields could become
+ordinary similarity moves or clean recording rows. Actual untreated synthetic
+controls measured15 malformed spellings as match1.0/80; the existing clean REC9
+builder retained zero faults/80inputs across33 payload mutations. This is not
+native replay/authenticity proof or a finding about real players.
+
+**Change.** Admit ASCII numeric tokens without Python digit separators before the
+existing required move-tick/move/button conversions and the full checker's
+ordinary in/fzin numeric payload conversions. Similarity retains whole-stream
+malformed/unavailable behavior and deliberate fractional truncation; the full
+checker keeps its existing integer/finite-float/precision rules. No global float
+or header change, capture/API/format/schema, history/retry, policy/threshold,
+ranking, backend runtime source, native pin/tag, VM or QC Build change.
+
+**Verified.** New9 methods pass against real readers and collector; untreated
+Windows98 assertions plus1 actual collector integration fail. Valid matching,
+unequal measured-zero, fractional/sign/exponent, bounded/unbounded, alias and
+supported13/15 controls ACT. Reader949/0; collector270 unittest cases pass with
+6 known Windows SQLite/POSIX skips. Standalone checks passed despite an initial
+unittest import-loader error caused by its successful SystemExit0. Identical
+548REC/178VIEW corpus retains351 existing faults, all726 source hashes preserved.
+Initial fixture/native-status assumptions remain recorded, not product passes.
+Two reviews, ARM and actual dual-Windows/Pi helper delivery PENDING; no live,
+full native grammar, authenticity, resource or enforcement claim. See the QC
+repository's tools/p1356-input-numbers.md for publication/delivery status.
+
 ## Patch 1355 -- bounded local full-line next-face search (QC only)
 
 **Problem.** Observed section navigation did not provide constrained candidate
