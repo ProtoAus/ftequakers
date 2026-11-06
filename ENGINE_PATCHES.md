@@ -22,8 +22,16 @@ Refresh first obtains project metadata so unsaved legacy CP changes cannot trap
 its count guard. After successful marker persistence, synchronize its emitted
 local parent name and recompute made/signed indicators for the child hash before
 publishing; failure rollback remains untouched. Canonical refusal gains its line
-number; strict format is unchanged. No native
-C, movement, recorder format, engine pin/tag, QC Build, API or admission change.
+number; strict format is unchanged. Marker transactions now preflight actual
+named/original sizes, reserve stage/child reads, and scope ALL nested strict
+reads to a conservative1440000cumulative opened bytes, including settings/token
+lengths. Optional branch/repair reads consume it, reserve is rechecked BEFORE
+CP RAM staging, zero remaining stays limited, and all exits clear the scope.
+Require unchanged saved input/settings before Freeze to avoid an implicit save.
+Large otherwise-readable projects may explicitly refuse synchronous marker edits;
+no truncation, raised VM limit or complete bulk-stage editing claim. Ordinary
+non-marker reader behavior remains unchanged. No native C, movement, recorder
+format, engine pin/tag, QC Build, API or admission change.
 
 **Verified:** Three actual QC VMs zero warnings. Acting old real-dedicated
 control14; new browser20; metadata58; actual widgets31. Covers exact/final-short
@@ -40,7 +48,17 @@ input/body/credit baseline. Synthetic literal success-tail VM: five old assertio
 fail and unchanged hash/head passes; all six corrected pass, including child
 made/signed flags both directions before event. No real signature is fabricated;
 minimal fixtures finish checks; only their own spawned processes are stopped
-after the quit deadline during later map setup (exit1), NOT normal world acceptance. Full dedicated pairs quit normally code0. Reader949/0; required primary
+after the quit deadline during later map setup (exit1), NOT normal world acceptance.
+Further whole-feature review found a cumulative-read P1: real old control18 first
+strictly reads/loads a real captured CP and browses a48000-row explicitly authored
+local plan, then marker hits a recorded VM runaway; ONLY owned old test server
+exits1. No fake future pose or signature. Corrected22 refuses BEFORE file/RAM/body/
+grant change, remains responsive and accepts a short marker on the SAME server;
+normal0cl+sv. Corrected metadata58 also passes rollback/undo-branch. Literal actual
+budget helpers16checks pass with SYNTHETIC sizes, exact/over/zero/negative/default/
+optional/different-file cases; own minimal process stopped after later map-setup
+quit deadline, not world/signature acceptance. Other full dedicated pairs normal0.
+Mandatory reader949/0 rerun after scoped-reader change; required primary
 runs/parts548 plus178views retain351existing faulty entries on unchanged bytes;
 10additional views actually parse clean, all726inventory members unchanged. Not
 a clean corpus. Broader legacy kept-save prefix remains separately blocked/unmodified.
