@@ -65,6 +65,39 @@ launch/files stayed unchanged, and the short canonical sweep lock was released.
 No VM/config/backend shipment, data restore, owner-client kill, or whole-engine/
 parser security claim. Frozen images and rollback history remain retained.
 
+## Patch 1339 -- On-request ramp atlases and the Christmas snow model
+
+**Problem.** Two bundled ramp masks do not cover the Story/Event roster. Native
+remote-picture size limits cannot safely transport the larger baked atlases.
+Clipped imports and legacy source tokens can hide available cosmetic poses; snow's
+flake model should live alongside Christmas assets.
+
+**Change.** Read existing recordings, Momentum files and explicitly bound CSS66
+KSF originals for cosmetic baking only; preserve source bytes and count rejected
+inputs and uncovered maps. Full originals supersede their covered KSF clips,
+without collapsing distinct partial captures. Bake hashed PNG/base64 plus strict
+geometry metadata; expose only this public cosmetic namespace. Client request/
+consent, bounded decode, SHA256 verification and QC-sandbox cache reuse the online
+request counter; defaults remain marks0/dirt0. Move the identical flake IQM to
+models/christmas with old-install fallback and update the release allowlist. No
+native API/pin/tag, physics, recorder/verdict/evidence format or QC Build change.
+
+**Verified.** Offline cosmetic/contact and existing KSF tests23/23. Real owned
+loopback dedicated/client HTTPS test downloads the639KB PNG with native picture
+limit131072 unchanged: consent and invalid-geometry refusals act, exact binary
+hash/cache and actual custom-material2048x512 size pass, no QC error. Preserved
+wrong-cache-path and wrong-unflagged-texture-query failures drove the fixes; neither
+is relabeled a pass. Final100/114map bakes are real contacts, not full-coverage
+acceptance; authority reader949/0 and runs-only548/351oldfaults held. Largest-case
+qualification also passes on5MB/17833triangles. BOTHWindows main CSecb6d2c3,
+ALL12Pi compatible CS445abb4c installed; fresh live client downloaded445abb4c,
+board9/type14, screenshot/noQCerror. UTC2026-11-06T07:38:06Z all12epochs,
+47848protected originals0changes/loss;8parts/183resume archived offbox. Native,
+QW/menu/config/backend held, capacities restored; original localSSH180s failure
+retained, successful remote receipt observed READ-ONLY, no repeated restart.
+Full receipts/14coverage gaps: tools/p1339-ramp-atlas.md. No visual/FPS or
+complete upstream-corpus claim.
+
 ## Patch 1337 — Validate developer-tool command contexts and arguments
 
 **Problem.** Developer-tool console callbacks did not consistently check the
