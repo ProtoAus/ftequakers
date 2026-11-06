@@ -1,5 +1,34 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1349 -- preserve compiler output errors and optional capabilities
+
+**Problem.** A failed primary output close only printed and returned from the
+writer, while its caller ignored that return; a requested debug-output close
+was unchecked. Synchronous compilation could therefore report success after a
+required output callback refused its buffer. The trusted decompile command also
+called an optional callback absent from the default VM table.
+
+**Change.** Route only failed required primary/debug closes through the existing
+compiler error/unwind path, retaining legitimate empty/no-output returns. After
+normal lazy VM setup, refuse unavailable decompilation with a diagnostic. Do not
+enable the old decompiler or change command provenance, recording, comparison
+policy, VM layouts, Build or release version. No header change.
+
+**Verified.** Exact real compiler/parser/writer plus actual host write callback
+against an in-memory filesystem spy: 16 original success/refusal/parse-control
+results discriminate both corrections and each branch-removal control. Actual
+program headers/functions/statements and requested debug bytes acted. Output
+failure now returns false through existing unwind without falsely incrementing
+parser-error counts; ordinary successful output is unchanged. Extracted real
+handlers with a safe dispatch spy discriminate four absent-capability paths,
+four valid paths and sixteen untrusted refusals per arm; no original NULL call
+or installed crash was executed. Existing argument/provenance controls remain.
+These are Windows synthetic controls, not full engine/ABI/ARM/filesystem,
+allocation-balance, asynchronous lifecycle or atomic multi-output acceptance.
+A debug-output failure may follow an already accepted primary file. Native
+build/review/deployment provenance is tracked separately; Windows build first
+refused the unchanged 4-GiB resource gate, without killing owner processes.
+
 ## Patch 1347: visible KSF fetch and gentler replay retries (6 Nov 2026)
 
 Problem: leaderboard request handlers existed without visible in-game/menu controls.

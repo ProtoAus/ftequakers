@@ -1500,6 +1500,11 @@ static void PR_Decompile_f(void)
 		PR_Configure(svprogfuncs, PR_ReadBytesString(pr_ssqc_memsize.string), MAX_PROGS, 0);
 	}
 
+	if (!svprogfuncs->Decompile)
+	{
+		Con_Printf("Decompilation is not available\n");
+		return;
+	}
 
 	if (Cmd_Argc() == 1)
 		svprogfuncs->Decompile(svprogfuncs, "qwprogs.dat");
