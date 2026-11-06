@@ -92,13 +92,25 @@ with qualified compiler c24ede65. Initial older-compiler baseline/candidate both
 had two cl_viewmodel property227 warnings; that compiler was replaced, not waived.
 Actual pointer clicks in CSQC and menu sent style-isolated POST202 requests and
 persisted the intended queues; FW/SW/HSW/BW reads acted. Ranked/segmented controls
-were absent; wide/narrow menu geometry remained on-screen. KSF top-up17/0;
-replay importer84/0, including missing files, repeated500 recovery,503/429 Retry-After,
-HTTP-date validation and byte-preservation of a pre-existing active park. Screenshots
-inspected; no owner manual acceptance claimed. Deployment and tier7/8 backfill are
-separate, still pending at this source checkpoint. Initial census:955/955 map metadata,
-43 tier7/8 maps,1348 course/style boards;236 complete,26613 held times,718 playable
-advertised replays. This is NOT a claim that all upstream times/replays are acquired.
+were absent; wide/narrow menu geometry remained on-screen. KSF top-up8/0
+(corrects the earlier17 count; retained unittest log runs8); replay importer84/0
+on Windows AND Linux, including missing files, repeated500 recovery,503/429
+Retry-After, HTTP-date validation and preservation of a pre-existing active park.
+Backend activated11:24:42UTC6Nov2026 with current-data rollback retained; both
+Windows installs verified8UI/symbol destinations plus paired previous files.
+Pi compatible CSQC-only component5cb18943 activated12:27:00UTC: all12warned10s
+and restarted,48122old protected entries unchanged,6new files preserved;
+8recorder parts/183resume files independently verified on/off box, capacities
+restored/no gate left. Native/SSQC/plugin/menu/config/backend unchanged by that
+Pi swap. Fresh installed-native/no-CSQC-cache client downloaded the exact served
+component, drew a board, exit0/no QC error/0smoke failures. Screenshot inspected:
+empty/no-zone kitsune, terms unaccepted; NOT populated KSF click, geometry,
+playback, owner consent/feel or performance evidence. Human check still pending.
+Fresh full provider metadata13:11:35UTC confirms955maps/same43tier7/8 scope.
+Acquisition remains ACTIVE:13:34:30UTC1167/1348boards,39759held times,
+1160ready replay entries; pending/binding/conversion gaps remain explicit.
+Public snapshot/limits: FTESurf tools/p1347-ksf-audit.md. This is NOT a claim that
+all upstream times/replays are acquired; no native pin/tag or Build change.
 
 ## Patch 1346 -- recover interrupted similarity source admissions (backend only)
 
