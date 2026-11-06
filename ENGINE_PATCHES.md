@@ -1,5 +1,40 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1355 -- bounded local full-line next-face search (QC only)
+
+**Problem.** Observed section navigation did not provide constrained candidate
+search. Endpoint speed alone would reward missing the requested ramp, and partial
+preview/cancellation must not commit or discard the captured future/settings.
+
+**Change.** Explicit selected1..1024 inputs and a later native static-world face
+bind the current whole immutable source/body. Nine small turn/posture candidates
+must match its plane,64unit baseline contact region, travel direction and8tick
+window before horizontal speed/earlier qualified-sample ranking. A bounded17sample
+baseline probe uses the SAME scoring predicate as every candidate; learning its
+goal at target must not discard earlier eligible baseline samples. Native authored
+work remains bounded80000, loader chunks remain existing128, and the best found
+must replay the complete retained future before Keep. Stable non-reused search ID
+protects own-seat Cancel; failed previews cannot become keepable, but explicit
+retained Discard can complete/clear. Reuses the native checked loader, literal
+input mutation, existing invalidation/history and source proof; no pose/world
+injection, new evidence format, public admission, native pin/tag or Build change.
+Published P1351-1353 source/native fixes remain intact.
+
+**Verified.** Final integrated real dedicated-socket34/34 controls ACT: baseline,
+all9 candidates, measured authored work, full-future replay, genuine GUI completion
+and Cancel, stale job1 cannot cancel job2, cancelled Keep disabled, exact Original
+input/settings/future recovery and preview/operation clearing. Baseline was best:
+no speed improvement, changed revision or input credit invented. Initial empty
+Preview recovery setup, invalid QC8/compact2 helper oracle, driver status regex
+and whole-file versus canonical-chain domain failures are preserved/diagnosed,
+not counted as passes. Actual old21helpers covered all72 masks against existing
+editor. Final fair-baseline22production helpers ACT with0failed, including the
+bounded first-qualified-window baseline control; same34native controls pass after
+that change, all own processes quit0. All3VMs compile0warnings. Native component
+profile2f5; no global zero-warning/native/performance claim. >128
+selected rows, changed-winner Keep/history, finish-specific context and owner
+familiar two-ramp acceptance remain unverified. See tools/p1355-tas-solve.md.
+
 ## Patch 1353 -- reported prediction, line labels, editor and texture fixes
 
 **Problem.** The NanoPi's Q1 snapshot converted negative float skins directly to
