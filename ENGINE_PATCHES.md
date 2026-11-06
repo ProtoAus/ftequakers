@@ -17,8 +17,19 @@ helpers, SV_ClearCarrier and server mode arm:42checks, baseline8failures, subjec
 zero, exit0; positive velocity/gate/push controls act. Public fixture entrypoint
 also42/0. Standard clean-source THREE-VM NoDeploy build zero warnings. Test-only
 missing/unused declarations repaired with originals retained, no product waiver.
-Native consumer contract inspected, NOT executed by this fixture; full network,
-measured correction distance, deployment and owner feel not yet claimed.
+Two independent product reviews found no movement defect; two fixture P2s fixed,
+21actual-function guard controls plus independent closure. Native consumer contract
+inspected, NOT executed by QC fixture. Delivered6Nov2026UTC: ALL12lobbies05:06:06
+CS7fda354387f3 only (Pi68597668/C4, QW5e8 unchanged); BOTH Windows05:09:58
+CS0a3a6b762b4b/symbols only (main305df2a5, QW66a6 unchanged). Warning/grace/normal
+disconnect, strict8parts/183resume preimages on/offbox before stage,47,752Pi and
+19,346Windows old protected entries preserved, capacities restored, .prev/exact
+predecessors retained. Wrapper timed out after Windows copies; receipts checked
+then post-preservation completed, no repeated swap/restart. Fresh public-lobby
+client downloaded exact CS, board drew, no QC error, screenshot inspected. No
+native/backend/config/data deployment or gate remains; full teleport network
+physics, measured correction distance, historical save causes and owner feel
+remain unclaimed. tools/p1341-teleport-carrier.md; human check in lextest.md.
 
 ## Patch 1340 — Finish the developer writer-command census
 
