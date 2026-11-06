@@ -18,7 +18,11 @@ existing eight-edit history append with input Keep, including a new branch after
 undo only over known retained editor history, not an unrelated named revision.
 Separate marker/recipe drafts use the existing scan owner, fresh/repeat rules
 and forwarded native key releases. Tab changes blur without clearing held keys.
-Canonical refusal gains its line number; strict format is unchanged. No native
+Refresh first obtains project metadata so unsaved legacy CP changes cannot trap
+its count guard. After successful marker persistence, synchronize its emitted
+local parent name and recompute made/signed indicators for the child hash before
+publishing; failure rollback remains untouched. Canonical refusal gains its line
+number; strict format is unchanged. No native
 C, movement, recorder format, engine pin/tag, QC Build, API or admission change.
 
 **Verified:** Three actual QC VMs zero warnings. Acting old real-dedicated
@@ -29,13 +33,20 @@ and RAM/file rollback with fixture restored, retained-head name removal, stale
 revision refusal, explicit Undo/Redo and a branch after undo preserving the newer
 immutable node. Marker text/Add/Rename/Remove, independent recipe text/save and
 cross-tab native held-key releases act; screenshot inspected for bounded readable
-layout/no clipping. Every pair quits normally code0. Reader949/0; required primary
+layout/no clipping. Independent whole-feature review found three P2 consistency
+issues; actual old-code control24 acts stuck unsaved-CP Refresh and subsequent
+ordinary-save parent loss, corrected subject24 fixes both without changing the
+input/body/credit baseline. Synthetic literal success-tail VM: five old assertions
+fail and unchanged hash/head passes; all six corrected pass, including child
+made/signed flags both directions before event. No real signature is fabricated;
+minimal fixtures finish checks; only their own spawned processes are stopped
+after the quit deadline during later map setup (exit1), NOT normal world acceptance. Full dedicated pairs quit normally code0. Reader949/0; required primary
 runs/parts548 plus178views retain351existing faulty entries on unchanged bytes;
 10additional views actually parse clean, all726inventory members unchanged. Not
 a clean corpus. Broader legacy kept-save prefix remains separately blocked/unmodified.
 Initial missing internal name-list terminator was correctly rejected by canonical
-read-back; fix was in producer, not validation. Whole-feature review/publication/
-deployment pending. Actual-contact proposals, next-ramp best-FOUND solving,
+read-back; fix was in producer, not validation. Final frozen whole-feature
+re-review/publication/deployment pending. Actual-contact proposals, next-ramp best-FOUND solving,
 public TAS admission/board stages and owner feel are NOT complete.
 
 ## Patch 1334 — distinguish unmodelled similarity input from malformed input
