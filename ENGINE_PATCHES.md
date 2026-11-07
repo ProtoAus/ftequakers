@@ -1,5 +1,26 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1389 -- own ordinary similarity map keywords (reader only)
+
+Problem: the similarity reader recognized an ordinary map header only with a literal
+trailing space. Bare or whitespace-only known headers could disappear into the intentional
+absent-header path fallback and produce an 80-row comparison. Valid tab/leading-whitespace
+headers lost their authoritative map identity. The existing `map ` blank case already
+abstained correctly; this is not a numeric exception fix.
+
+Change: dispatch the exact whitespace-separated map keyword to its existing required
+payload check. Keep absent headers and unknown map-like words as before. No other header,
+native held framing, input capture, metrics, threshold, schema, history, default enforcement,
+engine pin/tag or QC Build change. No stored observation is regraded.
+
+Verified: original ac915 reader fails exactly five subcases in two added tests after acting
+80-row/prefix/source-byte controls; fixed source passes all 31 targeted methods (13 numeric,
+6 opportunities, 12 parsing). Adjacent reader/native structural controls pass; reccheck
+949 checks, zero failures. Read-only local runs sweep: 554 recordings and 168 paired views,
+351 pre-existing faults before/after, identical entire CLI output and input bytes. The checker
+does not import recsim; the sweep proves no fault increase, not this dispatch correction.
+Python-only source verification; no native replay, deployment or fleet claim.
+
 ## Patch 1385 -- map text at native pixel sizes; P1378 follow-up (QC only)
 
 Problem: game_text and env_hudhint drew with the UI face's virtual slot at 13/9 x hud scale, so the baked
