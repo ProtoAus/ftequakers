@@ -1,5 +1,29 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1399 -- cached shifted-epoch positive controls in the offline census
+
+Problem: the pairs census acquired recordings, then reopened each pathname to
+construct its same-recording positive control. A disappearing file returned None
+and aborted at b.mt; changed bytes could also stop it being the same acquired
+stream. This was a control-construction issue, not a similarity metric failure.
+
+Change: shallow-copy the acquired Rec and replace only the copy's mt list with the
+shifted epoch. Comparison reads the other shared fields without mutating them.
+Keep acquisition, full-file deduplication, grouping, metrics, output and storage.
+Default malformed acquisition already returns None and is skipped; that suspected
+additional bug was falsified and no new exception/skip policy was introduced.
+
+Verified: valid two-file controls parse 80 rows and compare 79/80, then exercise
+one negative and two positive samples. Original EB51 reparses the first owned
+fixture after controlled removal and aborts with None.mt; subject performs one
+real parse per path, retains both positives and preserves original cached times,
+moves and fixture bytes. Existing malformed-input acquisition control passes on
+both versions. Subject parsing16 and reader families pass without new warnings;
+reccheck949/0, same554 recordings+168 views/722 buffers and351 existing faults.
+No recalibration, live collector, parser/capture, history, schema, enforcement,
+native pin/tag or QC Build change. Acquisition parse/hash/stat remain non-atomic;
+this does not promise an immutable whole pass or a time/RSS ceiling.
+
 ## Patch 1393 -- whole-file deduplication in the offline pairs census
 
 Problem: recsim.py pairs described and counted byte-identical duplicates, but its
