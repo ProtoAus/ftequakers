@@ -1,5 +1,31 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1377 — selected similarity reads observe the pass deadline
+
+**Problem.** The existing owner-opted SQLite progress handler limited selected VM
+work but did not observe the collector admission deadline during executing reads.
+The prior contract was cooperative, not a silently broken hard overall timeout.
+
+**Change.** Scope the earlier prior/pass deadline to the owned read budget; check
+before selected statements and at VM callbacks, distinguish time from instruction
+exhaustion, restore scope/cursors/handlers and propagate late time cancellation.
+Retain whole-query abstention, completed comparisons/atomic flush, callback opt-in,
+recovery and history. No metric/schema/parser/capture/threshold/rank/default-policy/
+retention/native pin/tag/VM/QC Build change; no new process/config/grant/controller.
+
+**Verified.** Two independent reviews CLEAR. All30Windows similarity programs rc0:
+276unit270pass6oldplatformskips plus68standalone. Real ordinaryREC9 controls store
+three80-opportunity comparisons; actual selectedSQL callback/time subject interrupts
+with ampleVM and no partial admission, preparedDB/history exact. Sameffed predecessor
+fails required interrupt only after acting controls. Nested/foreign/SQLerror/
+BaseException restore and stricter-owner-deadline completedflush controls pass.
+ActualARM3.11.2/aarch64 SQL8/time15 pass, samecounterfactual onefailure/zeroerrors.
+Original observer/transport failures retained, exact owned fixtures retired; small
+source overlays retained. See QC tools/p1377-simcheck-sql-deadline.md. No total elapsed/
+I/O/RSS/schema/write/UDF/wait/fleet/leaf closure, no newerreader qualification or
+installation implied. Actual delivery requires separate source-bound provenance;
+pending P1368 package stays immutable until its owner completion is proved.
+
 ## Patch 1371 -- a zone file's gamemode picks the ruleset; bhop_ maps are bhop (sv_phys.c + QC)
 
 Problem: the owner wants every bhop_ map to start its timer on the jump, and zone_edit to set a map's
