@@ -1,5 +1,62 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1375 -- centered save countdown and one lead-in editor (client UI)
+
+Problem: load travel gave no small time-to-ready cue; hud_edit exposed presets and
+numeric entry as two rows for the same cl_sl_leadin setting.
+Change: draw remaining minimum-hold/travel milliseconds below the crosshair,
+Loading save while an answer/start is unknown, and Release to play if still held
+when ready. Keep one 0..2000ms numeric editor; preserve the existing value. Read-only
+presentation: no hold/release, body, clock, recorder, native pin/tag or Build change.
+Verified: compiler/source checks and delivery in tools/p1375-save-countdown.md.
+Owner approved the PRIOR lead-in; new countdown readability/editor acceptance pending.
+
+## Patch 1374 — own ordinary input keywords before payload validation
+
+**Problem.** The existing similarity required-row projection recognized fzin by
+exact whitespace token but ordinary in by literal trailing space. Bare in/tabbad
+could vanish as unknown rows and yield a measured79/79 prefix instead of abstention.
+This ordinary-path gap is NOT a native REC13/15 witness-bypass claim.
+
+**Change.** Use the already computed exact in token alongside fzin before the same
+payload check. Preserve valid whitespace/all80 rows and unknown-word compatibility;
+no header/numeric/clock/budget/selection/support/minimum/capture/schema/history/
+threshold/default-enforcement/native pin/tag/VM/QC Build change. Later native
+validation remains; no new signal, cutoff, regrade or authenticity/tier credit.
+
+**Verified.** Independent source review CLEAR. Windows10parsing pass; exact15e
+predecessor only2targetverdict failures AFTERvalid80/malformedin0 andreal79/79/raw
+capture/buffer controls act. Actual ARM3.11/aarch64 same subject10/control2targetfails.
+Existing36Windowsprograms:27recsim+273similarity(267pass/6oldskips),68standalone,
+949reader/0. CheckerA221 source scope explicit, installed3eab not implied. Same554REC/
+178VIEW domain/rawbytes,351oldfaults344/7 andall732normalizedreportblocks unchanged;
+771sourceinventory exact, childrenreaped/tmpempty/cacheabsent. See QC tools/p1374-
+recsim-required-input-keyword.md. Source evidence is not actualdelivery/namespace,
+hardware/calibration/hard-bound/new-mode/fleet acceptance. Separately, final UTC
+2026-11-07T13:00:49Z BOTHWindows installedac915 fromcleanQCf1b9bc1d:29actual-path
+casesEACH(13numeric/6prefix/10parsing), original15ebackups/ACL/index andfour3eab/A3f7
+helperguards preserved; no failure/rollback/game/data/process change. Pi untouched,
+P1368actualownerproof stillpending; no live-namespace/generation credit.
+
+## Patch 1372 -- retain selected-row metadata for historical warm saves (QC only)
+
+Problem: current-format historical streamed saves omitted recorder metadata required
+by warm restoration. An acting baseline kept positive saved clocks but lost recording
+after load; the predicted zero saved clock was falsified, not relabelled as a pass.
+
+Change: capture the full recorder tuple with each rewind row and write it from that
+selected row, never today's live head. Grow the dynamic row layout and reject an
+unavailable modern tuple before file/queue mutation. No format/native/pin/tag/Build
+change, old-file migration, cold-cut duration recovery or general zero-clock fix.
+
+Verified: reviewed subject ordinary warm controls22/0, actual client helper26/0;
+standing/crouched body, clock, loaded stance, real GUI sampled position, hold/release
+and recording continuation. Frozen P1366 server counterfactual ACTS and loses recorder
+attachment. Latest public-base integration/build/readers and deployment recorded in
+tools/p1372-warm-stream.md. Full TAS, changing nonzero native counter tuples,
+unavailable-state runtime mutation counters and owner visual/original-case acceptance
+remain open, not implied by metadata presence or source review.
+
 ## Patch 1370 — start the existing prefix at the aligned overlap
 
 **Problem.** best_offset compares negative alignments after skipping their leading
@@ -20,8 +77,15 @@ control2targetfails; no-overlap±80/81 remains0. Existing Windows36programs:25re
 273similarity cases(267pass/6established skips),68standalone andreader949/0. Current
 checkerA221 scope explicit; same554REC/178VIEW rawbytes/domain,351oldfaults(344/7),
 all732reportblockmultiset unchanged. Source771-file inventory exact; tempchildren
-reaped/cacheabsent. See QC tools/p1370-recsim-aligned-prefix.md; no actual delivery,
+reaped/cacheabsent. Source validation alone establishes no actual delivery,
 hardware/calibration/fleet/resource/new-mode/source-authenticity credit.
+
+**Windows delivery (7Nov2026,12:11UTC).** Exact clean source6848f729 reader15e19bf4
+installed in BOTH Windows tools/census paths. Each actual installed path passed13
+numeric+6prefix cases; retainedBF99 originals/timestamps/ACL, destinationACL/index
+preserved; checker3eab/heldmetaA3f7 untouched. No game/data/native process change.
+NanoPi reader NOT shipped: serialize after P1368 actualowner cutover/current proof.
+See QC tools/p1370-recsim-aligned-prefix.md for separate scopes and limits.
 
 ## Patch 1369 -- lobbies read data/mapmeta.txt; five bhop_ maps keep bhop numbers (cfg/data only)
 
