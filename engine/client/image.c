@@ -14386,12 +14386,15 @@ qboolean Image_LoadTextureFromMemory(texid_t tex, int flags, const char *iname, 
 		filedata[5] == 0 && filedata[6] == 0 && filedata[7] == 0)
 	{
 		unsigned int vtfflags = filedata[20] | (filedata[21]<<8) | (filedata[22]<<16);
+		//FTESurf Patch 1380: NOMIP is not honoured on a point-sampled VTF. Mag stays nearest, but
+		//below native size Source's single level drops whole texel columns (surf_centipedes' title,
+		//1024 wide, drawn ~640 at spawn); the file's own mip chain blends them (GL_NEAREST_MIPMAP_LINEAR).
 		if (vtfflags & 0x1)
-		{
 			sampling = IF_NEAREST;
-			if (vtfflags & 0x100)
-				sampling |= IF_NOMIPMAP;
-		}
+		//CLAMPS and CLAMPT together: IF_CLAMP is both axes, so one alone keeps wrapping.  A wrapped
+		//face drew a sliver of the next tile's letters beside that title.
+		if ((vtfflags & 0xc) == 0xc)
+			sampling |= IF_CLAMP;
 	}
 	mips = Image_LoadMipsFromMemory(flags | sampling, iname, fname, filedata, filesize);
 	if (mips)
