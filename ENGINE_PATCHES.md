@@ -1,5 +1,16 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1375 -- centered save countdown and one lead-in editor (client UI)
+
+Problem: load travel gave no small time-to-ready cue; hud_edit exposed presets and
+numeric entry as two rows for the same cl_sl_leadin setting.
+Change: draw remaining minimum-hold/travel milliseconds below the crosshair,
+Loading save while an answer/start is unknown, and Release to play if still held
+when ready. Keep one 0..2000ms numeric editor; preserve the existing value. Read-only
+presentation: no hold/release, body, clock, recorder, native pin/tag or Build change.
+Verified: compiler/source checks and delivery in tools/p1375-save-countdown.md.
+Owner approved the PRIOR lead-in; new countdown readability/editor acceptance pending.
+
 ## Patch 1374 — own ordinary input keywords before payload validation
 
 **Problem.** The existing similarity required-row projection recognized fzin by
