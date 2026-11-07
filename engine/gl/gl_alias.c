@@ -1396,7 +1396,9 @@ static void R_DrawShadowVolume(mesh_t *mesh)
   is CORRECT (same point => same sample, by definition). Origin validation also gives
   move-invalidation for free: a prop that moves simply misses.
   Not cached for RF_WEAPONMODEL: it samples the eye position, so it moves constantly (and
-  its post-sample clamps live inside that branch).*/
+  its post-sample clamps live inside that branch).
+  FTESurf Patch 1398 is the one inexact hit: on a Source map a model that moved keeps the entry IT wrote
+  (same keynum and model, keynum not 0) for a moment while within 32 units -- see R_CalcModelLighting.*/
 #define MODELLIGHTCACHE_BUCKETS 4096	//power of 2. ~651 props on the stress map; direct-mapped
 typedef struct
 {
@@ -1406,6 +1408,8 @@ typedef struct
 	vec3_t shadelight;
 	vec3_t ambientlight;
 	vec3_t lightdir;
+	int keynum;				//FTESurf Patch 1398: the entity and model that wrote it (the moved rule's owner check)
+	model_t *model;
 } modellightcache_t;
 static modellightcache_t modellightcache[MODELLIGHTCACHE_BUCKETS];
 
@@ -1583,11 +1587,15 @@ qboolean R_CalcModelLighting(entity_t *e, model_t *clmodel)
 				exact = VectorEquals(cache->origin, e->origin) &&
 					(!R_ModelLightSettles() || (realtime >= cache->time &&
 					 realtime - cache->time < 1 + (e->keynum & 63) * (1/64.0)));	//Patch 1283; spread, not all in one frame
-				//FTESurf Patch 1398: a model that moved keeps its sample up to 1/rate s while within 32 units of where it
-				//was taken (P1280's rule for the view model), the interval spread by keynum so a swarm does not
-				//re-sample in one frame: surf_centipedes' 105 flying skulls traced world lights every frame
+				//FTESurf Patch 1398: on a Source map (where a sample traces world lights) a model that moved keeps the
+				//sample it wrote up to 1/rate s while within 32 units of where it was taken (P1280's rule for the view
+				//model), the interval spread by keynum so a swarm does not re-sample in one frame: surf_centipedes'
+				//105 flying skulls traced every frame. Another entity of the bucket (tag children, keynum 0 temp
+				//entities) never borrows it: two still ones would swap samples.
 				if (cache->seq == r_modellight_seq && (exact ||
-					(rate > 0 && realtime >= cache->time && DotProduct(moved, moved) < 32*32 &&
+					(rate > 0 && e->keynum && cache->keynum == e->keynum && cache->model == clmodel &&
+					 (cl.worldmodel->engineflags & MDLF_SOURCEBSP) &&
+					 realtime >= cache->time && DotProduct(moved, moved) < 32*32 &&
 					 realtime - cache->time < (0.75 + (e->keynum & 15) * (1/32.0)) / rate)))
 				{
 					VectorCopy(cache->shadelight, shadelight);
@@ -1615,7 +1623,7 @@ qboolean R_CalcModelLighting(entity_t *e, model_t *clmodel)
 				/*r_speeds "ModelLight Samples": props that actually re-walked the world
 				  lightmap this frame. ~0 in the good steady state; ~= visible-prop count
 				  with the cache off or when a flickering style defeats it globally; ticks
-				  up by the number of props currently in motion. Counted here (the genuine
+				  up by the props in motion (on Source maps, r_modellight_moverate of them a second). Counted here (the genuine
 				  resample), NOT inside R_SampleModelLight, so the r_modellight_cache 2
 				  self-check's parallel resample does not double-count.*/
 				RQuantAdd(RQUANT_MODELLIGHTSAMPLE, 1);
@@ -1628,6 +1636,8 @@ qboolean R_CalcModelLighting(entity_t *e, model_t *clmodel)
 					VectorCopy(shadelight, cache->shadelight);
 					VectorCopy(ambientlight, cache->ambientlight);
 					VectorCopy(lightdir, cache->lightdir);
+					cache->keynum = e->keynum;
+					cache->model = clmodel;
 					cache->time = realtime;
 					cache->seq = r_modellight_seq;	//publish last: the entry is only valid once filled
 				}
