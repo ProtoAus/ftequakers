@@ -1,5 +1,20 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1369 -- lobbies read data/mapmeta.txt; five bhop_ maps keep bhop numbers (cfg/data only)
+
+Problem: the Pi had no data/mapmeta.txt, so SV_ApplyGamemode took lobby modes from the map name while
+installs read Momentum's index: 27 of the Pi's 2256 maps resolved differently, 10 with a different
+ruleset. Owner: ship the file, and every bhop map runs 100 tick / airaccelerate 1000.
+
+Fix (no engine or QC change): the installs' mapmeta.txt (5e6c978d) copied to the Pi; cfg/maps/
+map_<map>.cfg with mode_bhop.cfg's lines for the five bhop_ maps the index files under ahop, climb-16
+or df-vq3 (5 of 522 bhop_ rows); map_ahop_coast.cfg removed. A map cfg cannot set the mode, so those
+five keep Momentum's gamemode and start the timer on leaving the box (BACKLOG).
+
+Verified on the live lobby 12 (empty) with rcon `map` + `movement`: agtricks "bhop, from mapmeta",
+bhop_badwater/bhop_canals per-map 100 Hz and airaccelerate 1000, ahop_coast "bhop, from mapmeta" with
+no per-map file. FTESurf a344f846, tools/p1369-mapmeta.md.
+
 ## Patch 1368 — execute selected similarity reader source bytes
 
 **Problem.** Ordinary direct callers could execute a previous reader revision on
