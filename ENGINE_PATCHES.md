@@ -1,5 +1,51 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1364 -- solve static-prop lighting before first sight
+
+Problem: each static prop's exact lighting solve (every worldlight traced) ran in the frame
+that first drew it. After P1358, bhop_ceaseless's first traversal still solved 103 props
+(321 ms) inside play: worst frames ~70 ms, 0.1% low 26 fps.
+
+Change: the solve moves verbatim into VBSP_PropSolveLight. Once per map load
+(vbspinfo_t lightwarm_done), in its first frame, VBSP_PropLightWarm requests every prop
+model, waits for them as VBSP_BuildVisualBIH does (at most 10 s), and solves each unlit prop
+within hl2_lt_prewarm ms of solving (default 3000). The solve does not read the view, so its values are the
+same whenever it runs. A later lighting-cvar change re-solves lazily, as before; 0 is the
+old lazy path. hl2_lt_prewarm_info prints the pass and how many props were still solved in
+the frame that first drew them.
+
+Verified: Ceaseless replay 77, fresh launch per arm (on/off/off/on), first traversal, full
+effects (1920x1200, scale 1, MSAA 4, hl2_water 2, hl2_refract 1): on 575/560 avg, 261/264
+1%, 240/231 0.1%, 0 props solved mid-route; off 548/547, 135/136, 26/26, 103 props (321 ms)
+mid-route. The pass: Ceaseless 151 props in 355 ms; Demise 2350 in 23 ms, Boreas 1587 in
+21, Garden 429 in 12, Jumble 819 in 3, surf_dragon_css 3133 in 15. Three review rounds.
+Not covered: the pass runs in the first world frame after the loading plaque (no hook during
+activation), so a map with many unbaked props under many lights freezes there up to the
+budget; over budget, props are taken in lump order.
+
+## Patch 1363 -- CSQC point traces visit only what the ray reaches
+
+Problem: a CSQC trace walked every area-grid cell of its bounding box (about 1,860 per
+Tensor2 sprite sky ray) and every overflow-list entity (362 on Tensor2), and traced brush
+entities whose box met the ray's box but not the ray. Sky rays cost 1.16 ms of a 2.82 ms
+Tensor2 frame (rays 0 vs 64, render scale 1).
+
+Change: csqc_linewalk 1 (default) takes MOVE_NOMONSTERS point traces with BODY in the mask
+and finite ends: it visits the footprint's cells row by row, files the overflow list in a
+grid rebuilt after links hold still, and skips entities the ray cannot reach. With more
+than one entity able to change the answer, the trace is redone the original way. It stands
+aside while any csqc entity's collision may not match its link (a SOLID_BSP linked without
+a natively traced model, or moved by network state without a relink). csqc_linewalk 2 runs
+both walks and counts differing fields; 0 is the original walk; csqc_linewalk_stats reports.
+
+Verified: Tensor2 replay 4729, full effects, 20 s ABBA in one binary, two runs: 386/384 ->
+496/486 avg, 239/231 -> 295/283 1%; 349/339 -> 438/442, 167/161 -> 208/198. csqc_linewalk 2:
+1.67 M traces compared over all builds (392 k on the final gate), 0 fields differed; 0
+stale entities in play. surf_jumble +4.5% avg (its cost is the world BIH trace). Three
+review rounds (box traces, BODY-less masks, off-grid rows and engine-side stale links found
+and handled). Exact for QC that moves SOLID_BSP/SOLID_PORTAL entities only through
+setorigin/setsize/setmodel, as every such FTESurf entity does.
+
 ## Patch 1362 -- positive serialized ramp chart bounds (asset writer only)
 
 **Problem.** Positive tiny chart radii rounded to `0.0` in the baker's one-decimal
