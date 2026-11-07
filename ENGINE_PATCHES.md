@@ -20,8 +20,15 @@ control2targetfails; no-overlap±80/81 remains0. Existing Windows36programs:25re
 273similarity cases(267pass/6established skips),68standalone andreader949/0. Current
 checkerA221 scope explicit; same554REC/178VIEW rawbytes/domain,351oldfaults(344/7),
 all732reportblockmultiset unchanged. Source771-file inventory exact; tempchildren
-reaped/cacheabsent. See QC tools/p1370-recsim-aligned-prefix.md; no actual delivery,
+reaped/cacheabsent. Source validation alone establishes no actual delivery,
 hardware/calibration/fleet/resource/new-mode/source-authenticity credit.
+
+**Windows delivery (7Nov2026,12:11UTC).** Exact clean source6848f729 reader15e19bf4
+installed in BOTH Windows tools/census paths. Each actual installed path passed13
+numeric+6prefix cases; retainedBF99 originals/timestamps/ACL, destinationACL/index
+preserved; checker3eab/heldmetaA3f7 untouched. No game/data/native process change.
+NanoPi reader NOT shipped: serialize after P1368 actualowner cutover/current proof.
+See QC tools/p1370-recsim-aligned-prefix.md for separate scopes and limits.
 
 ## Patch 1369 -- lobbies read data/mapmeta.txt; five bhop_ maps keep bhop numbers (cfg/data only)
 
