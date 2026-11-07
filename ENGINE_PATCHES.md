@@ -1,5 +1,18 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1385 -- map text at native pixel sizes; P1378 follow-up (QC only)
+
+Problem: game_text and env_hudhint drew with the UI face's virtual slot at 13/9 x hud scale, so the baked
+glyphs were resampled to the console-to-pixel ratio at fractional positions ("a weird font size that scales
+weirdly", Lex, surf_centipedes' spawn text). Separately, P1378's 105 riders each recomputed their train's
+pose every frame and 140 non-solid entities were relinked by setorigin.
+
+Change: the face's pixels=1 slot at a size snapped to its baked ladder, lines on whole pixels (as
+sui_native_text). Trk_Place caches a pose per time; the predraws write .origin.
+
+Verified: 1920x1080 centipedes text 653 px resampled -> 603 px at the 20 px rung, crisp at 3x. r_budget,
+spawn view: pre-P1378 1.77 ms, P1378 1.65 ms, follow-up 1.26 ms; sh_trk 0.49 -> 0.19 ms profiled.
+
 ## Patch 1383 -- a player's own noclip speed (sv_user.c + QC)
 
 Problem: csprogs' Shift+wheel wrote pm_noclipspeed, a server cvar only a game hosted in the same
