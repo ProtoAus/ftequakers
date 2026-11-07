@@ -10875,7 +10875,7 @@ static void FS_RemountAddons(unsigned int loadstuff)
 {
 	char *file, *line, *nl, *e;
 	int steamfails = 0;	//ftesurf (P276)
-	char missing[1024];	//FTESurf Patch 1382
+	char missing[1024], mombase[MAX_OSPATH];	//FTESurf Patch 1382
 
 	*missing = 0;
 
@@ -10903,9 +10903,15 @@ static void FS_RemountAddons(unsigned int loadstuff)
 		else if (!strncmp(line, "steam:", 6))
 		{
 			steamfails++;	//ftesurf (P276): a Steam game the resolver could not see
-			if (*missing)
-				Q_strncatz(missing, ", ", sizeof(missing));
-			Q_strncatz(missing, line+6, sizeof(missing));
+			//P1382 review 2: Momentum's hl2_dir.vpk stands in for HL2 (FS_Addon_AutoSourceBase), so a
+			//missing HL2 is not news there.
+			if (Q_strcasecmp(line, "steam:Half-Life 2/hl2") ||
+				!FS_Addon_ResolveEx(FS_MOMENTUM_BASE_SPEC, mombase, sizeof(mombase), true))
+			{
+				if (*missing)
+					Q_strncatz(missing, ", ", sizeof(missing));
+				Q_strncatz(missing, line+6, sizeof(missing));
+			}
 		}
 	}
 	BZ_Free(file);
