@@ -1,5 +1,28 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1370 — start the existing prefix at the aligned overlap
+
+**Problem.** best_offset compares negative alignments after skipping their leading
+non-overlap; prefix_len exited immediately at negative j. Thus79 actual matched/
+compared rows could report prefix0/cover0 solely in that direction.
+
+**Change.** Start prefix at max(0,-d),max(0,d), the first overlap of the same row
+alignment. Preserve first mismatch, longer-run cover denominator, offset selection/
+ties, match/support, parser/capture/budgets, no-opportunity/zero distinctions, stored
+history, thresholds/ranking/default enforcement, native pin/tag, VM and QC Build.
+No new statistic or calibrated cutoff. Unpublished draft1369 became1370 after the
+concurrent mapmeta publication; identical validated source/test, no evidence regrade.
+
+**Verified.** Independent source review CLEAR. Windows Opportunities6pass; exactBF99
+control only2negative-prefix subfailures after acting real79/support/rawSHA/bytes/
+positive controls (perfect79 andfirstmismatch40). ActualARM3.11/aarch64 same subject6/
+control2targetfails; no-overlap±80/81 remains0. Existing Windows36programs:25recsim+
+273similarity cases(267pass/6established skips),68standalone andreader949/0. Current
+checkerA221 scope explicit; same554REC/178VIEW rawbytes/domain,351oldfaults(344/7),
+all732reportblockmultiset unchanged. Source771-file inventory exact; tempchildren
+reaped/cacheabsent. See QC tools/p1370-recsim-aligned-prefix.md; no actual delivery,
+hardware/calibration/fleet/resource/new-mode/source-authenticity credit.
+
 ## Patch 1369 -- lobbies read data/mapmeta.txt; five bhop_ maps keep bhop numbers (cfg/data only)
 
 Problem: the Pi had no data/mapmeta.txt, so SV_ApplyGamemode took lobby modes from the map name while
