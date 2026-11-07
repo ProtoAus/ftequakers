@@ -1,5 +1,31 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1361 -- cooperative pending-source selection boundary (backend only)
+
+**Problem.** Reader/preparation or admitted retirement could consume the existing
+cooperative elapsed budget, yet the collector still entered pending-source SQL
+before its later row-admission check. No comparison or stored false measurement
+was demonstrated after expiry; this is unnecessary newly entered selection work,
+not a hard-time vulnerability claim.
+
+**Change.** Recheck the same budget after retirement and before selection. Empty
+selection flows through existing final diagnostics. Already admitted retirement
+commits/reports normally; preserve observation/replay bytes, source/peer positions,
+in-flight recovery, next fresh-pass work and standalone pending reads. No new
+schema, capture, clock model, threshold/default/ranking/enforcement policy, native
+pin/tag, VM or QC Build change. Whole hard resource bounds remain open.
+
+**Verified.** Pristine-source three-arm control: fresh real80-opportunity positive
+passes, two intended post-expiry delegate/eligible-SQL assertions fail with zero
+loader errors. Candidate128 Windows cases run/126pass/two existing POSIX-only
+skips; ARM128/128pass/no skips. Actual retirement deletion/checkpoint and unchanged
+old observation/replay/recovery state survive reopen; a following fresh pass
+compares80 and completes the retained source. All192 qualified source hashes and
+synthetic cleanup held on ARM. Fake monotonic time proves ordering, not latency,
+SQL/native preemption or global RSS/fleet coverage. Independent final review,
+publication and live installation are separately recorded in QC
+tools/p1361-simcheck-preselection.md; no live deployment inferred here.
+
 ## Patch 1360 -- optional priority ramp-mark library and R2 delivery
 
 **Problem.** The optional replay-baked ramp library covered only the original
