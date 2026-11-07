@@ -34,6 +34,7 @@ line of sight checks trace->crosscontent, but bullets don't
 #define SOLID_ISTRIGGER(solid) ((solid)==SOLID_TRIGGER||(solid)==SOLID_BSPTRIGGER||(solid)==SOLID_LADDER)
 
 size_t areagridsequence;	//used to avoid poking the same ent twice.
+static unsigned int world_linkgen;	//FTESurf Patch 1363: any link/unlink; invalidates the overflow-list snapshot
 
 extern cvar_t sv_compatiblehulls;
 extern cvar_t sv_gameplayfix_linknonsolid;
@@ -359,6 +360,7 @@ static void World_ClearWorld_AreaGrid (world_t *w, qboolean relink)
 	}
 
 	World_InitBoxHull ();
+	world_linkgen++;
 
 	if (w->gridareas)
 		memset (w->gridareas, 0, sizeof(*w->gridareas)*numareas);
@@ -722,7 +724,8 @@ void QDECL World_LinkEdict (world_t *w, wedict_t *ent, qboolean touch_triggers)
 
 	InsertLinkBefore (&ent->area, &node->edicts);
 #endif
-	
+	world_linkgen++;	//absmin/absmax are final here, before any touch function can trace
+
 // if touch_triggers, touch all entities at this node and decend for more
 	if (touch_triggers && ent->v->solid != SOLID_NOT)
 		World_TouchAllLinks (w, ent);
@@ -2063,6 +2066,7 @@ void World_TouchAllLinks (world_t *w, wedict_t *ent)
 void World_UnlinkEdict (wedict_t *ent)
 {
 	size_t i;
+	world_linkgen++;
 	for (i = 0; i < countof(ent->gridareas); i++)
 	{
 		if (!ent->gridareas[i].l.prev)
@@ -2205,11 +2209,403 @@ static void World_ClipToLinks (world_t *w, areagridlink_t *node, moveclip_t *cli
 }
 #if defined(HAVE_CLIENT) && defined(CSQC_DAT)
 cvar_t csqc_emptygrid = CVARD("csqc_emptygrid", "1", "Skip collision-routine calls for empty CSQC area-grid cells; occupied-cell order and trace behavior are unchanged.");
+cvar_t csqc_linewalk = CVARD("csqc_linewalk", "1", "FTESurf Patch 1363. CSQC traces visit only the area-grid cells the swept move can touch, instead of every cell in its bounding box; a trace where more than one entity could change the answer is redone the original way. 0: the original walk.");
+static struct {unsigned int traces, fallbacks, checked, differed; unsigned long long cells, boxcells, boxskips, traced, rebuilds, visits;} lw_stats;
+
+//The move's XY footprint is the segment start..end widened by the box World_MoveBounds used (mins2/maxs2, +-1).
+//For grid line gf on axis fa, the cells it reaches along the other axis, clamped to [lo, hi).
+static void World_LineSpan(world_t *w, moveclip_t *clip, int fa, int gf, int lo, int hi, int *r0, int *r1)
+{
+	int va = !fa;
+	double f0 = (double)gf * w->gridscale[fa] - w->gridbias[fa], f1 = f0 + w->gridscale[fa];
+	double sf = clip->start[fa], df = (double)clip->end[fa] - sf;
+	double sv = clip->start[va], dv = (double)clip->end[va] - sv;
+	double bflo = clip->mins2[fa] - 2, bfhi = clip->maxs2[fa] + 2, bvlo = clip->mins2[va] - 2, bvhi = clip->maxs2[va] + 2;
+	double t0 = 0, t1 = 1, vlo, vhi;
+	if (gf == 0)
+		f0 = -1e30;	//CALCAREAGRIDBOUNDS clamps outside points into the edge lines
+	if (gf == w->gridsize[fa]-1)
+		f1 = 1e30;
+	//the centre's fa coordinate must lie in [f0-bfhi, f1-bflo]
+	if (df > 1e-9 || df < -1e-9)
+	{
+		double ta = (f0 - bfhi - sf) / df, tb = (f1 - bflo - sf) / df;
+		if (ta > tb) { double t = ta; ta = tb; tb = t; }
+		if (ta > t0) t0 = ta;
+		if (tb < t1) t1 = tb;
+	}
+	else if (sf < f0 - bfhi || sf > f1 - bflo)
+		t1 = -1;
+	if (t0 > t1)
+	{
+		*r0 = 1; *r1 = 0;
+		return;
+	}
+	vlo = sv + dv*t0; vhi = sv + dv*t1;
+	if (vlo > vhi) { double t = vlo; vlo = vhi; vhi = t; }
+	vlo += bvlo; vhi += bvhi;
+	*r0 = floor((vlo + w->gridbias[va]) / w->gridscale[va]);
+	*r1 = floor((vhi + w->gridbias[va]) / w->gridscale[va]);
+	if (*r0 < lo) *r0 = lo;
+	if (*r1 > hi-1) *r1 = hi-1;
+}
+
+//Does the swept move (start..end widened by mins2/maxs2 and World_MoveBounds' 1 unit, plus slack) meet this box?
+//The bounding-box test passes every entity near a long diagonal ray; this one passes only what the ray reaches.
+static qboolean World_MoveMeetsBox(const moveclip_t *clip, const vec3_t absmin, const vec3_t absmax)
+{
+	double t0 = 0, t1 = 1;
+	int i;
+	for (i = 0; i < 3; i++)
+	{
+		double s = clip->start[i], d = (double)clip->end[i] - s;
+		double lo = (double)absmin[i] - clip->maxs2[i] - 2, hi = (double)absmax[i] - clip->mins2[i] + 2;
+		if (d < 1e-9 && d > -1e-9)
+		{
+			if (s < lo || s > hi)
+				return false;
+		}
+		else
+		{
+			double ta = (lo - s) / d, tb = (hi - s) / d;
+			if (ta > tb) { double t = ta; ta = tb; tb = t; }
+			if (ta > t0) t0 = ta;
+			if (tb < t1) t1 = tb;
+			if (t0 > t1)
+				return false;
+		}
+	}
+	return true;
+}
+
+//World_ClipToLinks' per-entity work, counting entities whose own trace could change the answer from
+//'base': shorter than it, or starting/staying in solid.  Others cannot touch clip->trace in any order.
+static void World_ClipToEdictCounted (world_t *w, wedict_t *touch, moveclip_t *clip, const trace_t *base, int *changers)
+{
+	trace_t		trace;
+
+	if (touch->v->solid == SOLID_NOT)
+		return;
+	if (touch == clip->passedict)
+		return;
+	if (SOLID_ISTRIGGER(touch->v->solid))
+	{
+		if (!(clip->type & MOVE_TRIGGERS))
+			return;
+		if (!((int)touch->v->flags & FL_FINDABLE_NONSOLID))
+			return;
+	}
+	if (clip->type & MOVE_LAGGED)
+	{
+		if (touch->entnum-1 < w->maxlagents)
+			if (w->lagents[touch->entnum-1].present)
+				return;
+	}
+	if ((clip->type & MOVE_NOMONSTERS) && (touch->v->solid != SOLID_BSP && touch->v->solid != SOLID_PORTAL)
+		&& !((clip->type & MOVE_HITPROPS) && SOLID_ISPHYSPROP(touch->v->solid)))
+		return;
+	if (clip->passedict)
+	{
+		if (!((int)clip->passedict->xv->dimension_hit & (int)touch->xv->dimension_solid))
+			return;
+	}
+	if (clip->boxmins[0] > touch->v->absmax[0]
+	|| clip->boxmins[1] > touch->v->absmax[1]
+	|| clip->boxmins[2] > touch->v->absmax[2]
+	|| clip->boxmaxs[0] < touch->v->absmin[0]
+	|| clip->boxmaxs[1] < touch->v->absmin[1]
+	|| clip->boxmaxs[2] < touch->v->absmin[2] )
+		return;
+	if (clip->passedict && clip->passedict->v->size[0] && !touch->v->size[0])
+		return;
+	if (clip->passedict)
+	{
+	 	if ((wedict_t*)PROG_TO_EDICT(w->progs, touch->v->owner) == clip->passedict)
+			return;
+		if ((wedict_t*)PROG_TO_EDICT(w->progs, clip->passedict->v->owner) == touch)
+			return;
+	}
+	if (touch->v->solid != SOLID_PORTAL && !World_MoveMeetsBox(clip, touch->v->absmin, touch->v->absmax))
+	{
+		lw_stats.boxskips++;
+		return;
+	}
+	if (touch->v->solid == SOLID_PORTAL)
+	{	//its CSG can lengthen the trace, so 'base' stops bounding the rest: always redo
+		World_PortalCSG(touch, clip->mins, clip->maxs, clip->start, clip->end, &clip->trace);
+		*changers += 2;
+	}
+
+	if ((int)touch->v->flags & FL_MONSTER)
+		trace = World_ClipMoveToEntity (w, touch, touch->v->origin, touch->v->angles, clip->start, clip->mins2, clip->maxs2, clip->end, clip->hullnum, clip->type & MOVE_HITMODEL, clip->capsule, clip->hitcontentsmask);
+	else
+		trace = World_ClipMoveToEntity (w, touch, touch->v->origin, touch->v->angles, clip->start, clip->mins, clip->maxs, clip->end, clip->hullnum, clip->type & MOVE_HITMODEL, clip->capsule, clip->hitcontentsmask);
+
+	lw_stats.traced++;
+	if (trace.fraction < base->fraction || trace.startsolid || trace.allsolid)
+		(*changers)++;
+
+	if (trace.fraction < clip->trace.fraction)
+	{
+		trace.startsolid |= clip->trace.startsolid;
+		trace.allsolid |= clip->trace.allsolid;
+		if (clip->trace.startsolid && !trace.startsolid)
+			trace.ent = clip->trace.ent;
+		else
+			trace.ent = touch;
+		clip->trace = trace;
+	}
+	else if (trace.startsolid || trace.allsolid)
+	{
+		clip->trace.startsolid |= trace.startsolid;
+		clip->trace.allsolid |= trace.allsolid;
+		clip->trace.contents |= trace.contents;
+		if (!clip->trace.ent || trace.fraction == clip->trace.fraction)
+			clip->trace.ent = touch;
+	}
+}
+
+static void World_ClipToLinksCounted (world_t *w, areagridlink_t *node, moveclip_t *clip, const trace_t *base, int *changers)
+{
+	link_t		*l, *next;
+	wedict_t		*touch;
+
+	for (l = node->l.next ; l != &node->l ; l = next)
+	{
+		next = l->next;
+		touch = ((areagridlink_t*)l)->ed;
+		lw_stats.visits++;
+		if (touch->gridareasequence == areagridsequence)
+			continue;
+		touch->gridareasequence = areagridsequence;
+		World_ClipToEdictCounted(w, touch, clip, base, changers);
+	}
+}
+
+//The overflow list (entities over countof(gridareas) cells), filed in the same grid by every cell of
+//its box, so a trace reads only the overflow entities its footprint reaches.  Rebuilt when anything
+//links or unlinks (world_linkgen): absmin/absmax change only in World_LinkEdict.  Boxes over
+//OVF_WIDE cells stay on a short list every trace tests.  Assumes no overflow entity is SOLID_PORTAL
+//(World_LinkEdict files those on the portal list, and a portal's CSG is not bounded by its box):
+//cl_portal.qc sets SOLID_PORTAL and relinks in the same call.
+#define OVF_WIDE 2048
+static struct {
+	world_t *world;
+	unsigned int gen, stamp;
+	int n, nwide, ncells;
+	struct ovf_s {wedict_t *ed; vec3_t mn, mx; unsigned int stamp;} *ents;
+	int *wide;			//indices into ents
+	int *start;			//ncells+1 offsets into idx
+	int *idx;
+	size_t entscap, widecap, idxcap;
+	int startcap;
+} ovf;
+static void World_OverflowRebuild (world_t *w)
+{
+	link_t *l;
+	int i, c, total = 0, ming[2], maxg[2], g[2];
+	int ncells = w->gridsize[0] * w->gridsize[1];
+	ovf.n = ovf.nwide = 0;
+	for (l = w->jumboarea.l.next; l != &w->jumboarea.l; l = l->next)
+	{
+		wedict_t *e = ((areagridlink_t*)l)->ed;
+		if (ovf.n == ovf.entscap)
+		{
+			ovf.entscap = ovf.entscap ? ovf.entscap * 2 : 256;
+			ovf.ents = BZ_Realloc(ovf.ents, sizeof(*ovf.ents) * ovf.entscap);
+		}
+		ovf.ents[ovf.n].ed = e;
+		VectorCopy(e->v->absmin, ovf.ents[ovf.n].mn);
+		VectorCopy(e->v->absmax, ovf.ents[ovf.n].mx);
+		ovf.ents[ovf.n].stamp = 0;
+		ovf.n++;
+	}
+	if (ovf.startcap < ncells + 1)
+	{
+		ovf.startcap = ncells + 1;
+		ovf.start = BZ_Realloc(ovf.start, sizeof(*ovf.start) * ovf.startcap);
+	}
+	memset(ovf.start, 0, sizeof(*ovf.start) * (ncells + 1));
+	for (i = 0; i < ovf.n; i++)
+	{
+		CALCAREAGRIDBOUNDS(w, ovf.ents[i].mn, ovf.ents[i].mx);
+		if ((maxg[0]-ming[0]) * (maxg[1]-ming[1]) > OVF_WIDE)
+		{
+			if (ovf.nwide == ovf.widecap)
+			{
+				ovf.widecap = ovf.widecap ? ovf.widecap * 2 : 64;
+				ovf.wide = BZ_Realloc(ovf.wide, sizeof(*ovf.wide) * ovf.widecap);
+			}
+			ovf.wide[ovf.nwide++] = i;
+			continue;
+		}
+		for (g[0] = ming[0]; g[0] < maxg[0]; g[0]++)
+			for (g[1] = ming[1]; g[1] < maxg[1]; g[1]++)
+				ovf.start[g[0] + g[1]*w->gridsize[0] + 1]++;
+	}
+	for (c = 0; c < ncells; c++)
+		ovf.start[c+1] += ovf.start[c];
+	total = ovf.start[ncells];
+	if (ovf.idxcap < (size_t)total)
+	{
+		ovf.idxcap = total;
+		ovf.idx = BZ_Realloc(ovf.idx, sizeof(*ovf.idx) * ovf.idxcap);
+	}
+	{	//fill: a cursor per cell, reusing start[c] shifted down one
+		int *cur = BZ_Malloc(sizeof(int) * ncells);
+		memcpy(cur, ovf.start, sizeof(int) * ncells);
+		for (i = 0; i < ovf.n; i++)
+		{
+			CALCAREAGRIDBOUNDS(w, ovf.ents[i].mn, ovf.ents[i].mx);
+			if ((maxg[0]-ming[0]) * (maxg[1]-ming[1]) > OVF_WIDE)
+				continue;
+			for (g[0] = ming[0]; g[0] < maxg[0]; g[0]++)
+				for (g[1] = ming[1]; g[1] < maxg[1]; g[1]++)
+					ovf.idx[cur[g[0] + g[1]*w->gridsize[0]]++] = i;
+		}
+		BZ_Free(cur);
+	}
+	ovf.ncells = ncells;
+	ovf.world = w;
+	ovf.gen = world_linkgen;
+	lw_stats.rebuilds++;
+}
+static void World_OverflowVisit (world_t *w, int i, moveclip_t *clip, const trace_t *base, int *changers)
+{
+	struct ovf_s *o = &ovf.ents[i];
+	if (o->stamp == ovf.stamp)
+		return;
+	o->stamp = ovf.stamp;
+	if (!World_MoveMeetsBox(clip, o->mn, o->mx))
+	{
+		lw_stats.boxskips++;
+		return;
+	}
+	o->ed->gridareasequence = areagridsequence;
+	World_ClipToEdictCounted(w, o->ed, clip, base, changers);
+}
+
+static void CSQC_LineWalkStats_f(void)
+{
+	extern world_t csqc_world;
+	link_t *l;
+	int n = 0, notsolid = 0, bsp = 0, trig = 0;
+	for (l = csqc_world.jumboarea.l.next; csqc_world.gridareas && l && l != &csqc_world.jumboarea.l; l = l->next)
+	{
+		wedict_t *e = ((areagridlink_t*)l)->ed;
+		n++;
+		if (e->v->solid == SOLID_NOT) notsolid++;
+		else if (e->v->solid == SOLID_BSP) bsp++;
+		else if (SOLID_ISTRIGGER(e->v->solid)) trig++;
+	}
+	Con_Printf("csqc overflow list: %i entities (%i SOLID_NOT, %i SOLID_BSP, %i triggers)\n", n, notsolid, bsp, trig);
+	{	//which classes, for the record (diagnostic)
+		const char *names[8]; int counts[8], nn = 0, i;
+		for (l = csqc_world.jumboarea.l.next; csqc_world.gridareas && csqc_world.progs && l && l != &csqc_world.jumboarea.l; l = l->next)
+		{
+			wedict_t *e = ((areagridlink_t*)l)->ed;
+			const char *cn = csqc_world.progs->StringToNative(csqc_world.progs, e->v->classname);
+			for (i = 0; i < nn && strcmp(names[i], cn); i++)
+				;
+			if (i < nn) counts[i]++;
+			else if (nn < 8) { names[nn] = cn; counts[nn++] = 1; }
+		}
+		for (i = 0; i < nn; i++)
+			Con_Printf("  %i x '%s'\n", counts[i], names[i]);
+	}
+	Con_Printf("csqc_linewalk %i: %u traces, %u redone the original way, %llu cells visited of %llu in their boxes; %u checked against the original walk, %u differed; %llu entity traces, %llu passed over by the move test, %llu overflow-grid rebuilds, %llu grid-list visits\n",
+		csqc_linewalk.ival, lw_stats.traces, lw_stats.fallbacks, lw_stats.cells, lw_stats.boxcells, lw_stats.checked, lw_stats.differed, lw_stats.traced, lw_stats.boxskips, lw_stats.rebuilds, lw_stats.visits);
+	memset(&lw_stats, 0, sizeof(lw_stats));
+}
+void CSQC_LineWalk_Register(const char *group)
+{
+	Cvar_Register(&csqc_linewalk, group);
+	Cmd_AddCommandD("csqc_linewalk_stats", CSQC_LineWalkStats_f, "FTESurf Patch 1363: prints and resets csqc_linewalk's counters.");
+}
+#endif
+
+#if defined(HAVE_CLIENT) && defined(CSQC_DAT)
+//Patch 1363: the overflow list and the footprint's cells, every entity tested against the swept move
+//first.  An entity the move cannot reach cannot hit it or contain its start, so it never changes the
+//answer; with at most one entity that can, visiting order is irrelevant.  False: redo the original way.
+static qboolean World_ClipToAllLinksFast (world_t *w, moveclip_t *clip)
+{
+	int ming[2], maxg[2], g[2], r0, r1, changers = 0;
+	trace_t base = clip->trace;
+	areagridlink_t *node;
+
+	areagridsequence++;
+	if (ovf.world != w || ovf.gen != world_linkgen || ovf.ncells != w->gridsize[0] * w->gridsize[1])
+		World_OverflowRebuild(w);
+	if (++ovf.stamp == 0)
+	{	//wrapped: no entry may look visited
+		int i;
+		for (i = 0; i < ovf.n; i++)
+			ovf.ents[i].stamp = 0;
+		ovf.stamp = 1;
+	}
+	{
+		int i;
+		for (i = 0; i < ovf.nwide; i++)
+			World_OverflowVisit(w, ovf.wide[i], clip, &base, &changers);
+	}
+	CALCAREAGRIDBOUNDS(w, clip->boxmins, clip->boxmaxs);
+	lw_stats.traces++;
+	lw_stats.boxcells += (unsigned long long)(maxg[0]-ming[0]) * (maxg[1]-ming[1]);
+	//row by row: cells of a row are adjacent in memory (order is irrelevant here, see above)
+	for (g[1] = ming[1]; g[1] < maxg[1]; g[1]++)
+	{
+		World_LineSpan(w, clip, 1, g[1], ming[0], maxg[0], &r0, &r1);
+		for (g[0] = r0; g[0] <= r1; g[0]++)
+		{
+			int c = g[0] + g[1]*w->gridsize[0], k;
+			node = &w->gridareas[c];
+			lw_stats.cells++;
+			for (k = ovf.start[c]; k < ovf.start[c+1]; k++)
+				World_OverflowVisit(w, ovf.idx[k], clip, &base, &changers);
+			if (node->l.next == &node->l)
+				continue;
+			World_ClipToLinksCounted(w, node, clip, &base, &changers);
+		}
+	}
+	if (changers > 1)
+	{
+		lw_stats.fallbacks++;
+		clip->trace = base;
+		return false;
+	}
+	if (csqc_linewalk.ival == 2)
+	{	//also walk the original way and compare every field the caller reads
+		trace_t fast = clip->trace;
+		clip->trace = base;
+		areagridsequence++;
+		World_ClipToLinks(w, &w->jumboarea, clip);
+		for (g[0] = ming[0]; g[0] < maxg[0]; g[0]++)
+			for (g[1] = ming[1]; g[1] < maxg[1]; g[1]++)
+				World_ClipToLinks(w, &w->gridareas[g[0] + g[1]*w->gridsize[0]], clip);
+		lw_stats.checked++;
+		if (fast.fraction != clip->trace.fraction || fast.truefraction != clip->trace.truefraction
+			|| fast.allsolid != clip->trace.allsolid || fast.startsolid != clip->trace.startsolid
+			|| fast.inopen != clip->trace.inopen || fast.inwater != clip->trace.inwater || fast.ent != clip->trace.ent
+			|| fast.entnum != clip->trace.entnum || fast.contents != clip->trace.contents || fast.surface != clip->trace.surface
+			|| fast.brush_id != clip->trace.brush_id || fast.brush_face != clip->trace.brush_face || fast.surface_id != clip->trace.surface_id
+			|| fast.triangle_id != clip->trace.triangle_id || fast.bone_id != clip->trace.bone_id
+			|| !VectorCompare(fast.endpos, clip->trace.endpos) || !VectorCompare(fast.plane.normal, clip->trace.plane.normal)
+			|| fast.plane.dist != clip->trace.plane.dist)
+			lw_stats.differed++;
+	}
+	return true;
+}
 #endif
 
 static void World_ClipToAllLinks (world_t *w, moveclip_t *clip)
 {
 	int ming[2], maxg[2], g[2];
+#if defined(HAVE_CLIENT) && defined(CSQC_DAT)
+	extern world_t csqc_world;
+	if (csqc_linewalk.ival && w == &csqc_world && !(clip->type & MOVE_ENTCHAIN) && World_ClipToAllLinksFast(w, clip))
+		return;
+#endif
 	areagridsequence++;
 	World_ClipToLinks(w, &w->jumboarea, clip);
 
@@ -2217,7 +2613,6 @@ static void World_ClipToAllLinks (world_t *w, moveclip_t *clip)
 
 #if defined(HAVE_CLIENT) && defined(CSQC_DAT)
 	{
-		extern world_t csqc_world;
 		if (csqc_emptygrid.ival && w == &csqc_world)
 		{
 			areagridlink_t *node;

@@ -9251,7 +9251,9 @@ void CSQC_RegisterCvarsAndThings(void)
 #ifdef USEAREAGRID
 	{
 		extern cvar_t csqc_emptygrid;
+		extern void CSQC_LineWalk_Register(const char *group);
 		Cvar_Register(&csqc_emptygrid, CSQCPROGSGROUP);
+		CSQC_LineWalk_Register(CSQCPROGSGROUP);
 	}
 #endif
 	Cvar_Register(&pr_csqc_formenus, CSQCPROGSGROUP);
