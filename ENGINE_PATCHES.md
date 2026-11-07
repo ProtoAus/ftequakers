@@ -88,7 +88,15 @@ compares80 and completes the retained source. All192 qualified source hashes and
 synthetic cleanup held on ARM. Fake monotonic time proves ordering, not latency,
 SQL/native preemption or global RSS/fleet coverage. Independent final review,
 publication and live installation are separately recorded in QC
-tools/p1361-simcheck-preselection.md; no live deployment inferred here.
+tools/p1361-simcheck-preselection.md. Both exact CLOSED synthetic profiles also
+passed13 explicit-reader cases and actual startup/receipt/reopen controls. Owner
+then authenticated the reviewed primary cutover; fresh7Nov09:25:46UTC readback
+binds actual namespace/default-reader acceptance to the current PID/birth/CWD and
+invocation, verifies runtime84/full158/actual mounts, OPEN health, normal launcher,
+four cron routes and importer. SAME CURRENT DB schema26/all44 tables/eight identity
+digests preserved at cutover; P1359 reader pair unchanged. Ingress/resources clean,
+no old DB restore or repeated healthy activation. This verifies primary delivery,
+not production fallback, hard bounds, numerical performance or whole-fleet coverage.
 
 ## Patch 1360 -- optional priority ramp-mark library and R2 delivery
 
