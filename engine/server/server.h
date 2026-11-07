@@ -803,6 +803,10 @@ typedef struct client_s
 	vec3_t			portalorg, portalvel;	//post-move state of the last crossing move
 	int				momlimit, momslide;	//FTESurf Patch 882: the last move's, sent as stats for prediction
 	float			momcool;
+	//FTESurf Patch 1383: the pm_noclipspeed this client was last told (SV_ClientNoclipSpeed), for
+	//which server spawn and serverinfo value; 0 = it believes the serverinfo one.
+	float			ncspeed_told, ncspeed_global;
+	int				ncspeed_spawn;
 } client_t;
 
 #if defined(NQPROT) || defined(Q2SERVER) || defined(Q3SERVER)
