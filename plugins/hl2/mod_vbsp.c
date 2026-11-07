@@ -7981,6 +7981,10 @@ static cvar_t *hl2_lt_baked_dir;	//FTESurf Patch 296
 //for models that have no VRAD bake.  Read in VBSP_LightPointValues and by the
 //static-prop light cache invalidation; registered in VBSP_Init.
 static cvar_t *hl2_lt_worldlight;
+static cvar_t *hl2_lt_reusecube;
+#ifdef HAVE_CLIENT
+static void VBSP_LightPointValuesCube(struct model_s *model, const vec3_t point, vec3_t res_diffuse, vec3_t res_ambient, vec3_t res_dir, vec3_t res_cube[6]);
+#endif
 //FTESurf Patch 308: the falsifier for the derived v21/Strata worldlight layout.
 //Read at LOAD, inside VBSP_LoadWorldLights, so an A/B needs a map change or a
 //second process -- there is no live arm and the description says so.
@@ -9704,9 +9708,16 @@ qboolean HL2_CalcModelLighting(entity_t *e, model_t *clmodel, refdef_t *r_refdef
 {
 	vec3_t lightdir;
 	vec3_t shadelight, ambientlight;
+	vbspinfo_t *prv = mod->meshinfo;
+	//Only the exact, unsuppressed static-prop solve gives both consumers one cube.
+	qboolean combined = (mod->funcs.LightPointValues == VBSP_LightPointValues && prv &&
+		prv->wl_exact && !prv->wl_suppress && hl2_lt_reusecube && hl2_lt_reusecube->ival);
 
 	e->light_dir[0] = 0; e->light_dir[1] = 1; e->light_dir[2] = 0;
-	mod->funcs.LightPointValues(mod, e->origin, shadelight, ambientlight, lightdir);
+	if (combined)
+		VBSP_LightPointValuesCube(mod, e->origin, shadelight, ambientlight, lightdir, e->light_cube);
+	else
+		mod->funcs.LightPointValues(mod, e->origin, shadelight, ambientlight, lightdir);
 
 	e->light_dir[0] = DotProduct(lightdir, e->axis[0]);
 	e->light_dir[1] = DotProduct(lightdir, e->axis[1]);
@@ -9730,10 +9741,13 @@ qboolean HL2_CalcModelLighting(entity_t *e, model_t *clmodel, refdef_t *r_refdef
 	//for the life of the map inside the light_known cache, so skipping it saves nothing.
 	//Sampled at the same point as the lines above, which for a static prop is its lighting
 	//origin (the caller swaps it into e->origin for exactly this call).
-	if (mod->funcs.LightPointValues == VBSP_LightPointValues)
-		VBSP_LightPointCube(mod, e->origin, e->light_cube);
-	else
-		memset(e->light_cube, 0, sizeof(e->light_cube));
+	if (!combined)
+	{
+		if (mod->funcs.LightPointValues == VBSP_LightPointValues)
+			VBSP_LightPointCube(mod, e->origin, e->light_cube);
+		else
+			memset(e->light_cube, 0, sizeof(e->light_cube));
+	}
 
 	e->light_known = 1;
 	return e->light_known-1;
@@ -10656,7 +10670,8 @@ static void VBSP_PrepareFrame(model_t *mod, refdef_t *r_refdef, int area, int cl
 			//Without this the cvar would appear to do nothing until a map change,
 			//and the A/B would have to be two processes -- which is precisely the
 			//shape of test that cannot separate a real change from run-to-run drift.
-			static int worldlight_live = -1;
+			static int worldlight_live = -1, reusecube_live = -1;
+			int wantreusecube = (hl2_lt_reusecube && hl2_lt_reusecube->ival) ? 1 : 0;
 			int wantwl = (hl2_lt_worldlight && hl2_lt_worldlight->ival) ? 1 : 0;
 			//FTESurf Patch 304: same cache, same treatment.  The shader half of
 			//this cvar reloads itself (CVAR_SHADERSYSTEM, added by gl_shader.c
@@ -10690,7 +10705,7 @@ static void VBSP_PrepareFrame(model_t *mod, refdef_t *r_refdef, int area, int cl
 			float wantscale, wantsrgb;
 			wantscale = ltscale ? ltscale->value : 255;
 			wantsrgb = ltsrgb ? ltsrgb->value : 1;
-			if (want != vbsp_vc_live || vbsp_vc_mod != mod || wantsign != dirsign_live || wantdir != bakeddir_live || wantwl != worldlight_live || wantfold != fold_live || wantcube != cubelight_live || wantmin != min_live || wantocclusion != occlusion_live || wantblend != blend_live || wantillumpos != illumpos_live || wantscale != scale_live || wantsrgb != srgb_live)
+			if (want != vbsp_vc_live || vbsp_vc_mod != mod || wantsign != dirsign_live || wantdir != bakeddir_live || wantwl != worldlight_live || wantreusecube != reusecube_live || wantfold != fold_live || wantcube != cubelight_live || wantmin != min_live || wantocclusion != occlusion_live || wantblend != blend_live || wantillumpos != illumpos_live || wantscale != scale_live || wantsrgb != srgb_live)
 			{
 				scale_live = wantscale;
 				srgb_live = wantsrgb;
@@ -10701,6 +10716,7 @@ static void VBSP_PrepareFrame(model_t *mod, refdef_t *r_refdef, int area, int cl
 				cubelight_live = wantcube;
 				fold_live = wantfold;
 				worldlight_live = wantwl;
+				reusecube_live = wantreusecube;
 				bakeddir_live = wantdir;
 				dirsign_live = wantsign;
 				vbsp_vc_live = want;
@@ -12525,7 +12541,7 @@ static void VBSP_FloorModelAmbient(vec3_t base, float minimum)
 			base[c] += minimum - lum;
 }
 
-static void VBSP_LightPointValues	(struct model_s *model, const vec3_t point, vec3_t res_diffuse, vec3_t res_ambient, vec3_t res_dir)
+static void VBSP_LightPointValuesCube(struct model_s *model, const vec3_t point, vec3_t res_diffuse, vec3_t res_ambient, vec3_t res_dir, vec3_t res_cube[6])
 {
 	vbspinfo_t	*prv = (vbspinfo_t*)model->meshinfo;
 	int leafnum = VBSP_PointLeafnum(model,point);
@@ -12536,6 +12552,9 @@ static void VBSP_LightPointValues	(struct model_s *model, const vec3_t point, ve
 	size_t j;
 	vec3_t diff[6];
 	float sig[6];
+
+	if (res_cube)
+		memset(res_cube, 0, sizeof(vec3_t)*6);
 
 	/*
 	FTESurf Patch 152 -- the gamma, which is why props needed a floor at all.
@@ -12595,6 +12614,9 @@ static void VBSP_LightPointValues	(struct model_s *model, const vec3_t point, ve
 		vec3_t *rgb = leafcube;
 		if (prv->numworldlights && hl2_lt_worldlight && hl2_lt_worldlight->ival && !prv->wl_suppress)
 			VBSP_AddWorldLightCube(model, point, leafcube, false, false);	//the LEVEL: suppression stands
+		//Share the raw cube, never its encoded/folded/floored output.
+		if (res_cube)
+			memcpy(res_cube, leafcube, sizeof(leafcube));
 
 		VectorClear(res_ambient);
 		for (j = 0; j < 6; j++)
@@ -12855,6 +12877,10 @@ static void VBSP_LightPointValues	(struct model_s *model, const vec3_t point, ve
 	*/
 	//Patch 508: floor only the shader base, in both folds. Never scale the range.
 	VBSP_FloorModelAmbient(res_diffuse, hl2_lt_min ? hl2_lt_min->value : 16.0f);
+}
+static void VBSP_LightPointValues(struct model_s *model, const vec3_t point, vec3_t res_diffuse, vec3_t res_ambient, vec3_t res_dir)
+{
+	VBSP_LightPointValuesCube(model, point, res_diffuse, res_ambient, res_dir, NULL);
 }
 #else
 static void VBSP_LightPointValues	(struct model_s *model, const vec3_t point, vec3_t res_diffuse, vec3_t res_ambient, vec3_t res_dir)
@@ -14464,6 +14490,7 @@ qboolean VBSP_Init(void)
 		//"=1" on the cvardf line is only the fallback for a build where this
 		//plugin never loaded, which is a build with no vertexlit.glsl either.
 		hl2_lt_fold = cvarfuncs->GetNVFDG("hl2_lt_fold", "1", 0, "How the leaf ambient cube is folded into the shader's two lighting slots, for static props with no .vhv bake.\n0: the legacy fold -- the flat base is the mean PLUS the deviation toward the light, so a face turned away from every light still receives the bright-side level. Measured 13.6x too bright on tensor2's worst face. This is the falsifier and is bit-for-bit the pre-304 behaviour.\n1: default. The flat base is the level on the face turned AWAY from the dominant direction, the directional half is the difference to the face turned toward it, and vertexlit.glsl ramps between them with a HALF-lambert, as Source does on models. Mean error over a uniform sphere of normals falls from 1.037 to 0.283 stops on tensor2, and from 0.463 to 0.230 over 200 real leaf cubes.\n0/1 ONLY -- the value is compiled into the shader as a preprocessor constant, and a fraction would emit a float literal into an #if.", MAPOPTIONS);
+		hl2_lt_reusecube = cvarfuncs->GetNVFDG("hl2_lt_reusecube", "1", 0, "Reuse the exact unbaked static-prop lighting cube instead of tracing it twice. 0 keeps the original two queries. Dynamic/approximate, baked and other lighting functions retain their original paths.", "");
 		hl2_lt_worldlight = cvarfuncs->GetNVFDG("hl2_lt_worldlight", "1", 0, "Light models with no VRAD bake from the map's worldlights as well as the leaf ambient cube, as Source's light cache does.\n0: the leaf ambient cube alone, which VRAD fills with BOUNCE ONLY, so a prop with no .vhv draws at roughly a fifth of its Source brightness. This is the falsifier -- it is bit-for-bit the pre-302 behaviour.\n1: default. Add the direct contribution of every emit_surface/point/spotlight whose cluster is in the sample point's PVS. Sky lights are deliberately excluded until a sky-visibility trace exists -- they have no distance falloff, so without one they would light sealed indoor rooms at full sun. Does nothing to props that DO have a .vhv bake; their direct light is already in it.", MAPOPTIONS);
 		//FTESurf Patch 308.  Registered here, beside the term it feeds, and NOT
 		//latched: VBSP_LoadWorldLights reads it once per map load, so changing it

@@ -1,5 +1,34 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1358 -- reuse exact static-prop lighting cubes
+
+Problem: Ceaseless first-traversal stalls came from uncached static-prop lighting,
+not world drawing or shader startup:231.307ms of a231.444ms PrepareFrame call was
+22 new prop solves. The model-lighting caller solved the same raw ambient cube
+once for the level/direction and again for light_cube.
+
+Change: optionally return the raw cube from the unchanged Values producer,
+before encoding/folding/flooring. Reuse only for the native VBSP callback with
+exact visibility and no baked-light suppression. Dynamic/approximate, baked,
+other callbacks and missing state keep their original paths. No cross-call memo,
+ray/quality reduction, lighting formula, renderer interface or physics change.
+Default hl2_lt_reusecube1;0 is the original two-query control. A toggle invalidates
+the existing prop-light cache, allowing genuinely cold on/on comparison arms.
+The ordinary Values callback remains a wrapper with no cube output.
+
+Verified: prototype native72 raw cubes match the original independent Cube query
+bit-for-bit. Actual caller C tests cover64 eligibility/output combinations; all4
+mutants (dynamic/baked/foreign gate removal and never-act) fail at runtime.
+Matched14s cold-lighting ABBA: off697/706avg,124/125 1%,17/17 0.1%,
+worst249.46/248.55ms; on718/712avg,195/182 1%,37/32 0.1%,
+worst67.22/66.91ms. Probes/profiling/in-window logging OFF, same normal64rays,
+render scale2 and moving replay; assets/world prewarmed, lighting reset each arm.
+These are short prototype windows, NOT whole-map or installed performance, and
+remaining67ms stalls are NOT eliminated. Clean committed source/build/comparison
+and dual-Windows activation are separately recorded in the QC delivery report.
+Temporary phase/comparison probes and the unselected GPU shader candidate are
+excluded from this product patch.
+
 ## Patch 1357 -- skip empty CSQC grid-call overhead
 
 **Problem.** Source light-visibility point traces walked large client area-grid
