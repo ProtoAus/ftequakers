@@ -10578,13 +10578,15 @@ static const struct {const char *pak, *game, *probe;} fs_standin[] =
 	{"csgo_placeholder.vpk",	"Counter-Strike Global Offensive/csgo",	""},
 	{"portal2_placeholder.vpk",	"Portal 2/portal2",						"pak01_dir.vpk"},
 };
-static void FS_Addon_AutoSourceBase(void)
+//FTESurf Patch 1382: true when Momentum's hl2_dir.vpk is mounted (FS_RemountAddons' HL2 test).
+static qboolean FS_Addon_AutoSourceBase(void)
 {
 	char syspath[MAX_OSPATH], gamepath[MAX_OSPATH], game[MAX_OSPATH], probe[MAX_QPATH];
 	int i;
+	qboolean base;
 	if (!FS_Addon_ResolveEx(FS_MOMENTUM_BASE_SPEC, syspath, sizeof(syspath), true))
-		return;
-	FS_Addon_MountSourceBase(syspath);
+		return false;
+	base = FS_Addon_MountSourceBase(syspath);
 	for (i = 0; i < countof(fs_standin) && fs_standins.ival; i++)
 	{
 		Q_strncpyz(game, fs_standin[i].game, sizeof(game));
@@ -10592,6 +10594,7 @@ static void FS_Addon_AutoSourceBase(void)
 		if (fs_standins.ival == 2 || !Sys_SteamHasFile(gamepath, sizeof(gamepath), game, probe))
 			FS_Addon_MountMomentumPack(syspath, fs_standin[i].pak);
 	}
+	return base;
 }
 
 static qboolean FS_Addon_Mount(const char *arg, unsigned int loadstuff)
@@ -10875,7 +10878,8 @@ static void FS_RemountAddons(unsigned int loadstuff)
 {
 	char *file, *line, *nl, *e;
 	int steamfails = 0;	//ftesurf (P276)
-	char missing[1024], mombase[MAX_OSPATH];	//FTESurf Patch 1382
+	char missing[1024];	//FTESurf Patch 1382
+	qboolean hl2missing = false;
 
 	*missing = 0;
 
@@ -10903,10 +10907,9 @@ static void FS_RemountAddons(unsigned int loadstuff)
 		else if (!strncmp(line, "steam:", 6))
 		{
 			steamfails++;	//ftesurf (P276): a Steam game the resolver could not see
-			//P1382 review 2: Momentum's hl2_dir.vpk stands in for HL2 (FS_Addon_AutoSourceBase), so a
-			//missing HL2 is not news there.
-			if (Q_strcasecmp(line, "steam:Half-Life 2/hl2") ||
-				!FS_Addon_ResolveEx(FS_MOMENTUM_BASE_SPEC, mombase, sizeof(mombase), true))
+			if (!Q_strcasecmp(line, "steam:Half-Life 2/hl2"))
+				hl2missing = true;	//said below, unless Momentum's hl2_dir.vpk stands in
+			else
 			{
 				if (*missing)
 					Q_strncatz(missing, ", ", sizeof(missing));
@@ -10915,10 +10918,17 @@ static void FS_RemountAddons(unsigned int loadstuff)
 		}
 	}
 	BZ_Free(file);
-	Cvar_ForceSet(&fs_addons_missing, missing);
 	if (steamfails)
 		FS_SteamHint();
-	FS_Addon_AutoSourceBase();	//below user-ordered games, before any map asset loads
+	//below user-ordered games, before any map asset loads.  P1382 reviews 2-3: when its hl2_dir.vpk
+	//mounts, a missing HL2 is not news.
+	if (!FS_Addon_AutoSourceBase() && hl2missing)
+	{
+		if (*missing)
+			Q_strncatz(missing, ", ", sizeof(missing));
+		Q_strncatz(missing, "Half-Life 2/hl2", sizeof(missing));
+	}
+	Cvar_ForceSet(&fs_addons_missing, missing);
 	FS_Addon_SinkSourceLoose();	//FTESurf Patch 875
 	FS_Addon_SinkStandIns();	//FTESurf Patch 889
 }
