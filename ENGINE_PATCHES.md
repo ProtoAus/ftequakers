@@ -21,7 +21,11 @@ Existing36Windowsprograms:27recsim+273similarity(267pass/6oldskips),68standalone
 178VIEW domain/rawbytes,351oldfaults344/7 andall732normalizedreportblocks unchanged;
 771sourceinventory exact, childrenreaped/tmpempty/cacheabsent. See QC tools/p1374-
 recsim-required-input-keyword.md. Source evidence is not actualdelivery/namespace,
-hardware/calibration/hard-bound/new-mode/fleet acceptance.
+hardware/calibration/hard-bound/new-mode/fleet acceptance. Separately, final UTC
+2026-11-07T13:00:49Z BOTHWindows installedac915 fromcleanQCf1b9bc1d:29actual-path
+casesEACH(13numeric/6prefix/10parsing), original15ebackups/ACL/index andfour3eab/A3f7
+helperguards preserved; no failure/rollback/game/data/process change. Pi untouched,
+P1368actualownerproof stillpending; no live-namespace/generation credit.
 
 ## Patch 1372 -- retain selected-row metadata for historical warm saves (QC only)
 
