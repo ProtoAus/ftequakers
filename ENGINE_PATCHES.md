@@ -1,5 +1,23 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1362 -- positive serialized ramp chart bounds (asset writer only)
+
+**Problem.** Positive tiny chart radii rounded to `0.0` in the baker's one-decimal
+output. The unchanged client correctly refuses the entire geometry file. Full
+source Sinsane2 had43 such charts; the retained predecessor already had40.
+
+**Change.** Floor only exported chart radii at0.1 before decimal formatting.
+Keep client bounds, geometry/UV/normal/image data and rendering code unchanged.
+The delivery qualifier now mirrors the actual client counts/radius/UV/normals;
+its earlier weaker check and refused payload are retained, not regraded.
+
+**Verified.** Same frozen full-input Sinsane2 bake changes exactly43 radius tokens
+from0.0 to0.1, with identical header and every other chart/triangle token. Four
+raster/ABI tests and all249 final generated sets pass the actual client-format bounds,
+content hashes and decoded-image checks. Native appearance/FPS acceptance is not
+claimed. Data-delivery provenance: QC tools/p1360-ramp-library.md. No native, VM,
+physics, evidence, threshold/default or QC Build change; native pins stay fixed.
+
 ## Patch 1361 -- cooperative pending-source selection boundary (backend only)
 
 **Problem.** Reader/preparation or admitted retirement could consume the existing
@@ -35,22 +53,24 @@ without adding a large set of atlases to game packages.
 
 **Change.** Freeze the owner's public sheet, preserving all280mentions across
 278distinct bonuses and explicit installed-revision aliases. Extend the existing
-batch baker with a frozen exact-map scope. Reuse the unchanged whole-map baker,
-shader and on-request SHA256-checked client cache. Allowlist only public ramp
+batch baker with a frozen exact-map scope. Reuse the whole-map baker (P1362 later
+corrects tiny-radius serialization), shader and on-request SHA256-checked cache. Allowlist only public ramp
 geometry, map/hash PNG and its bounded base64 transport in the existing R2
 mirror/gateway; compress text with verified gzip companions. Separate ramp
 readiness ledgers preserve existing map/zone state and current-source fallback.
 No native code, pin/tag, VM, movement, recording/evidence or QC Build change.
 
 **Verified.**307target maps from the resolved sheet, original Story/Event roster
-and100most-contested held main boards (NOT measured play telemetry).241bakes
-pass geometry/count/finite-value/client-size and raw/encoded atlas digest checks;
-92of100popular mains and124of173priority maps are ready.195of278sheet bonuses
-have a held exact-course recording;186also have a ready map atlas. These are
-input/map conjunctions, NOT proof every course surface was painted.66other
-requested maps remain explicit missing-input/no-contact gaps; no synthetic wear.
-Windows23mirror/22gateway/9gzip tests pass (one POSIX-only link skip);
-ARM23/22/9pass without skips.3priority,
+and100most-contested held main boards (NOT measured play telemetry). Final full
+source snapshot supplies30,800held files, including10,240KSF/16,147Mom originals;
+converted fallbacks have no per-course/rank/style cap. After P1362,249bakes pass
+the actual client-format/image/digest bounds:94of100popular mains and129of173
+priority maps.196of278sheet bonuses have an indexed held exact-course input;
+192also have a ready atlas, NOT proof every course surface was painted.58map
+gaps remain explicit (43no-input/15no-contact);938reader rejects are not used
+recordings. Our154missing sidecars were recovered and14affected maps rebaked,
+not mislabelled upstream absence. Windows25mirror/22gateway/11gzip tests pass
+(one POSIX-only link skip); ARM25/22/11pass without skips.3priority,
 4raster and3replay-reader controls pass. Actual unprivileged ARM nginx/gunicorn
 and real R2 GET/gzip/hash/HEAD/range/stale-source/dead-gateway controls pass.
 Three QC VMs build with0warnings using qualified c24ede65. Deployment, root-side
