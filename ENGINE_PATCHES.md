@@ -1,5 +1,27 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1393 -- whole-file deduplication in the offline pairs census
+
+Problem: recsim.py pairs described and counted byte-identical duplicates, but its
+key hashed only the first MiB plus the pathname size. Different equal-size files
+sharing that prefix were discarded before negative-pair acquisition. The local
+parser still read their different later moves; this was not a SHA-256 collision.
+
+Change: hash successive fixed-size chunks through EOF inside a context manager.
+Keep the existing size key, OSError skip, eligibility, grouping, sampling, metrics
+and output categories. No live collector compare_paths, parser, captured bytes,
+recording format, stored history, threshold, enforcement, native pin/tag or QC Build
+change. Parse/hash/stat are still separate reads, not an immutable snapshot. Whole-
+file I/O is necessary here; chunking is not a total-pass/time/RSS bound.
+
+Verified: two synthetic REC9 controls each contain 80 moves beyond the first MiB.
+Identical copies compare 80/80 and remain deduplicated. One changed move in a same-
+size shared-prefix tail compares 79/80: original retains one file/no negative pair,
+subject retains two/one negative pair. Original fails exactly the distinct-tail
+method; subject parsing14 and adjacent reader suites pass with no new warnings.
+Reccheck949/0; identical read-only554 recordings+168 views retain351 existing faults.
+Python-only source verification; no independent-performance/calibration/fleet claim.
+
 ## Patch 1389 -- own ordinary similarity map keywords (reader only)
 
 Problem: the similarity reader recognized an ordinary map header only with a literal
