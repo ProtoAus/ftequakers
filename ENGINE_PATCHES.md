@@ -1,5 +1,37 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1359 -- recording-version numeral spelling (diagnostic readers only)
+
+**Problem.** Python-only numeral syntax in an ordinary REC version token could
+become accepted version metadata or a measured similarity stream. Merely raising
+ValueError in similarity's conversion try would still fall through to version
+zero and compare moves. This is malformed diagnostic input, not proof of cheating.
+
+**Change.** The two existing ordinary consumers reject underscore/non-ASCII
+version tokens before int conversion. Similarity raises its existing malformed
+refusal outside the version-zero fallback, including repeated pre-body header
+branches. Recording checks use their existing version fault before publishing a
+version or dispatching held metadata. Preserve ASCII signs/zero padding, other
+malformed-ASCII fallback, unsupported-version dispatch and exact native held
+framing. No magic/tokenization/whole-header parser, raw capture/evidence format,
+clock model, stored-history, policy/threshold/ranking, native pin/tag/VM or QC
+Build change. Special view/ramp paths are outside this patch.
+
+**Verified.** Published-source control ran13 methods with24 failing subcases and
+no loader errors; candidate13 pass, including real collector/CLI abstention,
+both pair orientations, bounded/standalone paths, repeated header and metadata
+withholding. Legacy23 pass; held39 run/38pass/one unset paired-source skip. The
+separate paired-source case fails the same pre-existing version12-versus10
+assertion on the published control and candidate; no native-pin qualification or
+unrelated test repair is claimed. Recording reader949 checks/0 failures.
+Actual subprocess CLI normal80-input
+control compares, malformed header exits1 without metrics, bytes unchanged.
+Current corpus554REC/178VIEW has unchanged raw bytes, identical control/candidate
+output and351 existing faults. This is structural diagnostic admission, not
+full native grammar/authenticity or new calibrated anti-cheat capability. Final
+independent review, ARM qualification and installation are separately recorded in
+QC tools/p1359-rec-version-numbers.md; not claimed by these source checks.
+
 ## Patch 1358 -- reuse exact static-prop lighting cubes
 
 Problem: Ceaseless first-traversal stalls came from uncached static-prop lighting,
