@@ -3355,8 +3355,8 @@ this file rather than in the gamecode.
 HOW THE MODE IS DECIDED, best evidence first:
 
   1. sv_gamemode, if it names one.  An explicit answer beats a derived one.
-  1b. P1371: the map's zone file "gamemode" (zone_edit's Surf/Bhop, published with the
-     zones), the first loose zone file in SV_ZoneLoad's order.
+  1b. P1371: the map's zone file "gamemode", 1 surf or 2 bhop (zone_edit's Surf/Bhop,
+     published with the zones), the first loose zone file in SV_ZoneLoad's order.
   2. data/mapmeta.txt column 9 -- Momentum's own gamemode id for this map,
      already shipped for 2271 maps and already read by the map browser
      (src/menu/m_main.qc).  This is a LOOKUP and it is right about maps whose
@@ -3884,7 +3884,7 @@ static qboolean SV_ZoneAnyRegion(json_t *t, int depth)
 	return false;
 }
 
-//The file's maxVelocity, 0 if none, and P1371 gamemode: 0 none, -1 not a mode id.
+//The file's maxVelocity, 0 if none, and P1371 gamemode: 0 none, 1/2, or -1 for anything else.
 //FALSE when this path is not a zone file at all.
 static qboolean SV_ZoneRulesetFile(const char *path, char *found, size_t foundsz, double *maxvel, int *mode)
 {
@@ -3916,13 +3916,14 @@ static qboolean SV_ZoneRulesetFile(const char *path, char *found, size_t foundsz
 	}
 	mv = zones ? SV_JsonChild(root, "maxVelocity") : NULL;
 	*maxvel = (mv && mv->type == json_type_number) ? JSON_ReadFloat(mv, 0) : 0;
-	//A Momentum gamemode id; sh_zones.qc Zone_LoadJsonText reads it the same way.
+	//zone_edit offers Surf and Bhop only (Momentum ids 1, 2), so a published file may name
+	//nothing else (review: a hand-made upload could reach rj/defrag). sh_zones.qc agrees.
 	gm = zones ? SV_JsonChild(root, "gamemode") : NULL;
 	*mode = 0;
 	if (gm)
 	{
 		g = (gm->type == json_type_number) ? JSON_ReadFloat(gm, 0) : 0;
-		*mode = (g >= 1 && g < PMS_NUMMODES && g == (int)g) ? (int)g : -1;
+		*mode = (g == 1 || g == 2) ? (int)g : -1;
 	}
 	JSON_Destroy(root);
 	FS_FreeFile(file);
@@ -4137,7 +4138,7 @@ static void SV_ApplyGamemodeModes(const char *mapname)
 		int zmode = 0;
 
 		if (SV_FindZoneFile(mapname, zfile, sizeof(zfile), &zmv, &zmode) && zmode < 0)
-			Con_Printf(CON_WARNING"movement: %s \"gamemode\" is not a mode id - ignored\n", zfile);
+			Con_Printf(CON_WARNING"movement: %s \"gamemode\" is not 1 (surf) or 2 (bhop) - ignored\n", zfile);
 		else if (zmode > 0)
 		{
 			mode = zmode;
