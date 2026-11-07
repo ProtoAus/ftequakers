@@ -1,5 +1,28 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1374 — own ordinary input keywords before payload validation
+
+**Problem.** The existing similarity required-row projection recognized fzin by
+exact whitespace token but ordinary in by literal trailing space. Bare in/tabbad
+could vanish as unknown rows and yield a measured79/79 prefix instead of abstention.
+This ordinary-path gap is NOT a native REC13/15 witness-bypass claim.
+
+**Change.** Use the already computed exact in token alongside fzin before the same
+payload check. Preserve valid whitespace/all80 rows and unknown-word compatibility;
+no header/numeric/clock/budget/selection/support/minimum/capture/schema/history/
+threshold/default-enforcement/native pin/tag/VM/QC Build change. Later native
+validation remains; no new signal, cutoff, regrade or authenticity/tier credit.
+
+**Verified.** Independent source review CLEAR. Windows10parsing pass; exact15e
+predecessor only2targetverdict failures AFTERvalid80/malformedin0 andreal79/79/raw
+capture/buffer controls act. Actual ARM3.11/aarch64 same subject10/control2targetfails.
+Existing36Windowsprograms:27recsim+273similarity(267pass/6oldskips),68standalone,
+949reader/0. CheckerA221 source scope explicit, installed3eab not implied. Same554REC/
+178VIEW domain/rawbytes,351oldfaults344/7 andall732normalizedreportblocks unchanged;
+771sourceinventory exact, childrenreaped/tmpempty/cacheabsent. See QC tools/p1374-
+recsim-required-input-keyword.md. Source evidence is not actualdelivery/namespace,
+hardware/calibration/hard-bound/new-mode/fleet acceptance.
+
 ## Patch 1372 -- retain selected-row metadata for historical warm saves (QC only)
 
 Problem: current-format historical streamed saves omitted recorder metadata required
