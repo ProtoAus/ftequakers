@@ -1,5 +1,33 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1357 -- skip empty CSQC grid-call overhead
+
+**Problem.** Source light-visibility point traces walked large client area-grid
+rectangles, entering the collision routine even for empty cells. A selected
+Tensor2 native probe attributed about81% of collision-query time to this client
+broadphase, not the world BSP or result publication.
+
+**Change.** Default-on `csqc_emptygrid` checks the live forward-list sentinel
+before entering the unchanged routine, for the exact CSQC world only. It retains
+x-major/y-minor occupied-cell and node order, sequence increment, jumbo-first
+handling, portal/network stages and the disabled/other-world fallback. No cached
+occupancy, ray budget, visibility policy, collision filter, trace-field handling,
+header/ABI, movement formula, evidence or QC Build change. An empty callee has
+only local declarations before its loop and performs no state writes/callbacks.
+
+**Verified.** Extracted actual C traversal/insertion/unlink controls plus8 runtime
+mutants cover activation, shared-cell order, first/last heads, upper-boundary
+jumbo behavior, portals, exact next-vs-prev predicate and sequence/fallbacks.
+Independent source review confirms empty-call equivalence. Instrumented native
+normal64-ray12s Tensor2 ABBA, with profiling OFF during timings: original394/395
+average and249/258 1% low versus433/433 and284/286; separate acted witness skips
+54,319,301 of60,271,690 cells. This is a selected-section result, not a whole-map
+or GPU/first-use fix. Boreas/Garden timing controls are largely neutral;
+Demise/Ceaseless selected-query witnesses have zero calls and are not acting
+optimization passes. Earlier all-edict proof shortcuts failed to act and were
+rejected. Clean-source build, final comparisons and actual deployment provenance
+are recorded separately in the QC repository's tools/p1357-csqc-emptygrid.md.
+
 ## Patch 1356 -- required-input numeric spelling (diagnostic readers only)
 
 **Problem.** Python-only number spellings in required input fields could become

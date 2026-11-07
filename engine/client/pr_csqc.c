@@ -9248,6 +9248,12 @@ void CSQC_RegisterCvarsAndThings(void)
 	Cmd_AddCommandD("poke_csqc", CSQC_Poke_f, "Allows you to inspect/debug ");
 	Cmd_AddCommand ("profile_csqc", PR_CSProfile_f);
 
+#ifdef USEAREAGRID
+	{
+		extern cvar_t csqc_emptygrid;
+		Cvar_Register(&csqc_emptygrid, CSQCPROGSGROUP);
+	}
+#endif
 	Cvar_Register(&pr_csqc_formenus, CSQCPROGSGROUP);
 	Cvar_Register(&pr_csqc_memsize, CSQCPROGSGROUP);
 	Cvar_Register(&pr_csqc_maxedicts, CSQCPROGSGROUP);

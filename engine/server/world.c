@@ -2203,6 +2203,10 @@ static void World_ClipToLinks (world_t *w, areagridlink_t *node, moveclip_t *cli
 		}
 	}
 }
+#if defined(HAVE_CLIENT) && defined(CSQC_DAT)
+cvar_t csqc_emptygrid = CVARD("csqc_emptygrid", "1", "Skip collision-routine calls for empty CSQC area-grid cells; occupied-cell order and trace behavior are unchanged.");
+#endif
+
 static void World_ClipToAllLinks (world_t *w, moveclip_t *clip)
 {
 	int ming[2], maxg[2], g[2];
@@ -2210,6 +2214,26 @@ static void World_ClipToAllLinks (world_t *w, moveclip_t *clip)
 	World_ClipToLinks(w, &w->jumboarea, clip);
 
 	CALCAREAGRIDBOUNDS(w, clip->boxmins, clip->boxmaxs);
+
+#if defined(HAVE_CLIENT) && defined(CSQC_DAT)
+	{
+		extern world_t csqc_world;
+		if (csqc_emptygrid.ival && w == &csqc_world)
+		{
+			areagridlink_t *node;
+			// Empty calls have no side effects. Keep every occupied head in order.
+			for (g[0] = ming[0]; g[0] < maxg[0]; g[0]++)
+				for (g[1] = ming[1]; g[1] < maxg[1]; g[1]++)
+				{
+					node = &w->gridareas[g[0] + g[1]*w->gridsize[0]];
+					if (node->l.next == &node->l)
+						continue;
+					World_ClipToLinks(w, node, clip);
+				}
+			return;
+		}
+	}
+#endif
 
 	for (    g[0] = ming[0]; g[0] < maxg[0]; g[0]++)
 		for (g[1] = ming[1]; g[1] < maxg[1]; g[1]++)
