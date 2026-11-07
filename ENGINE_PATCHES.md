@@ -1,5 +1,31 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1366 -- comparison bars and held-save visual travel (QC only)
+
+Problem: comparison deltas were difficult to read and answered only the nearest-route
+question; the held-save camera snapped directly to the saved position; local best
+receipts could hide segmented improvements behind clean-run metadata.
+
+Change: add independent same-elapsed and closest-route bars with numeric deltas,
+center-zero scales and unavailable/break guards. Copy at most512 consecutive rows
+from the loaded slot's own picture for render-only travel during an actual save hold.
+A bounded pending state waits for HOLD and one sequence/slot-bound endpoint string;
+queued saved posture, HUD body capture and a bounded hold-owned visibility eye keep
+presentation separate from body/clock/evidence. Preserve cancellation, failed-line
+retention and queued prediction guards. Keep segmented local-best receipts separate
+from clean PBs and certification, including pruning and result ranks.
+
+Verified: all three QC VMs zero warnings on the reviewed subject. Real dedicated-socket
+controls:26 checks/zero failures, plus actual server endpoint publication; graph PNG
+inspected. Controls cover distinct time/spatial sampling, breaks, independent class/
+certification/rank,512consecutive rows, late discontinuity, saved posture, delayed and
+mismatched endpoints, copied-source ownership and unpredicted HUD body source. Reader
+949/0;554 REC/178 VIEW corpus retains351 existing faulty files. No native code/pin/tag,
+QC Build, evidence grammar, historical-recorder repair or old cold-cut support change.
+The streamed historical-save repair remains unqualified and is deliberately excluded.
+Exact reported UI-cursor placement, natural travel feel and owner visual acceptance
+remain open; see tools/p1366-compare-save.md and lextest.md. Deployment recorded separately.
+
 ## Patch 1364 -- solve static-prop lighting before first sight
 
 Problem: each static prop's exact lighting solve (every worldlight traced) ran in the frame
