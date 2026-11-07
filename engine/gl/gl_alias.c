@@ -38,7 +38,7 @@ typedef struct
 
 
 extern cvar_t gl_part_flame, r_fullbrightSkins, r_fb_models, ruleset_allow_fbmodels, gl_overbright_models, r_viewmodel_maxlight, r_modellight_fallback, r_modellight_cache;
-extern cvar_t r_viewmodel_lightrate;
+extern cvar_t r_viewmodel_lightrate, r_modellight_moverate;
 extern cvar_t r_propvertexlight, r_propvertexlight_minlight, r_prop_minlight;	//nettest: baked static-prop per-vertex lighting + world-model minlight floor
 extern cvar_t r_showhitboxes;	//nettest: per-bone hitbox overlay for GoldSrc studio models
 extern cvar_t r_noaliasshadows;
@@ -1575,17 +1575,27 @@ qboolean R_CalcModelLighting(entity_t *e, model_t *clmodel)
 			  the sampler has changed. Bucket by keynum; VALIDATE on origin + seq.*/
 			if (r_modellight_cache.ival)
 			{
+				vec3_t moved;
+				float rate = r_modellight_moverate.value;
+				qboolean exact;
 				cache = &modellightcache[(unsigned int)e->keynum & (MODELLIGHTCACHE_BUCKETS-1)];
-				if (cache->seq == r_modellight_seq && VectorEquals(cache->origin, e->origin) &&
+				VectorSubtract(e->origin, cache->origin, moved);
+				exact = VectorEquals(cache->origin, e->origin) &&
 					(!R_ModelLightSettles() || (realtime >= cache->time &&
-					 realtime - cache->time < 1 + (e->keynum & 63) * (1/64.0))))	//Patch 1283; spread, not all in one frame
+					 realtime - cache->time < 1 + (e->keynum & 63) * (1/64.0)));	//Patch 1283; spread, not all in one frame
+				//FTESurf Patch 1398: a model that moved keeps its sample up to 1/rate s while within 32 units of where it
+				//was taken (P1280's rule for the view model), the interval spread by keynum so a swarm does not
+				//re-sample in one frame: surf_centipedes' 105 flying skulls traced world lights every frame
+				if (cache->seq == r_modellight_seq && (exact ||
+					(rate > 0 && realtime >= cache->time && DotProduct(moved, moved) < 32*32 &&
+					 realtime - cache->time < (0.75 + (e->keynum & 15) * (1/32.0)) / rate)))
 				{
 					VectorCopy(cache->shadelight, shadelight);
 					VectorCopy(cache->ambientlight, ambientlight);
 					VectorCopy(cache->lightdir, lightdir);
 					cachehit = true;	//fall through to the per-frame dlight/clamp tail
 
-					if (r_modellight_cache.ival == 2 && !R_ModelLightSettles())
+					if (r_modellight_cache.ival == 2 && exact && !R_ModelLightSettles())
 					{	/*self-check: re-sample and prove the cached value is EXACT. Any
 						  hit here is a real cache bug (a missed invalidation), not a
 						  rounding difference -- both sides run the same code on the same
