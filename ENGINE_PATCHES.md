@@ -1,5 +1,26 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1371 -- a zone file's gamemode picks the ruleset; bhop_ maps are bhop (sv_phys.c + QC)
+
+Problem: the owner wants every bhop_ map to start its timer on the jump, and zone_edit to set a map's
+mode and its Momentum/KSF tiers. The timer rule follows serverinfo gamemode (sv_timer.qc), which came
+from sv_gamemode, data/mapmeta.txt or the name: five bhop_ maps the index files under ahop/climb-16/
+df-vq3 ran Momentum's mode, and zone_edit's Surf/Bhop was local-only (SV_ReadEditorRuleset refuses
+lobbies).
+
+Fix: SV_ApplyGamemodeModes reads the first loose zone file with a region (SV_FindZoneFile, the speed
+cap's lookup order) for `"gamemode"` 1 or 2, after hosted map settings and sv_gamemode and before
+mapmeta; other values warn and are ignored, compared as a 32-bit float so QC (sh_zones.qc) agrees.
+A bhop_ map whose mapmeta mode is outside the bhop category is bhop (src "bhop_ name"). QC: zone file
+keys gamemode/momentumTier/ksfTier, zone_edit Map properties, tier row from the zone file, `.rec`
+`startrule` and `gamemode` header lines (FTESurf tools/p1371-modetier.md).
+
+Verified: Windows server arms against the installed build (bhop_badwater ahop -> bhop; a zone file's
+2 on surf_ace and 1 on bhop_eazy win; 2.5 and 3 refused). Pi: branch p1371-arm = patch-1353 (the live
+lobby build) + this sv_phys.c, pm_dettest identical to the live binary on bhop_eazy and surf_ace,
+sweeper-form pm_verify PASS 22396/22396 on both. Windows binaries are stamped eb36ba811 (tag patch-1371).
+Three review rounds; the last found only low UI quirks.
+
 ## Patch 1375 -- centered save countdown and one lead-in editor (client UI)
 
 Problem: load travel gave no small time-to-ready cue; hud_edit exposed presets and
