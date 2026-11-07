@@ -8403,6 +8403,40 @@ size_t playertouchmax;
 
 /* Apply the actual QW per-client overrides to an already prepared base.
  * Shared with pre-input capture so no later mover state is copied backward. */
+/*FTESurf Patch 1383: a player's own noclip speed.  Userinfo "ncspeed" (0.25..16, csprogs' Shift+wheel)
+  overrides pm_noclipspeed for that player's moves; noclip already voids a run, and the pin records the
+  value used.  Released clients predict from serverinfo pm_noclipspeed, so this client alone is sent its
+  own value when it changes, and again after a map's serverdata or a change of the shared value told it
+  the shared one.  %.9g so the client's atof gets the server's float exactly.*/
+static void SV_ClientNoclipSpeed(client_t *client)
+{
+	const char *s = InfoBuf_ValueForKey(&client->userinfo, "ncspeed");
+	float v = *s ? atof(s) : 0;
+	float shared = movevars.noclipspeed;
+	float told;
+	char val[32];
+	sizebuf_t *buf;
+
+	if (v >= 0.25 && v <= 16)	//NaN fails it
+		movevars.noclipspeed = v;
+	if (client->ncspeed_spawn != svs.spawncount || client->ncspeed_global != shared)
+	{
+		client->ncspeed_spawn = svs.spawncount;
+		client->ncspeed_global = shared;
+		client->ncspeed_told = 0;
+	}
+	told = client->ncspeed_told ? client->ncspeed_told : shared;
+	if (movevars.noclipspeed == told || !ISQWCLIENT(client) || client->num_backbuf)
+		return;	//a backed-up reliable stream: next move
+	Q_snprintfz(val, sizeof(val), "%.9g", movevars.noclipspeed);
+	buf = ClientReliable_StartWrite(client, 2+strlen("pm_noclipspeed")+1+strlen(val)+1);
+	MSG_WriteByte(buf, svc_serverinfo);
+	MSG_WriteString(buf, "pm_noclipspeed");
+	MSG_WriteString(buf, val);
+	ClientReliable_FinishWrite(client);
+	client->ncspeed_told = (movevars.noclipspeed == shared) ? 0 : movevars.noclipspeed;
+}
+
 void SV_SetQWClientMoveVars(client_t *client)
 {
 	//FTESurf Patch 977: these six were latched at spawn (SV_SetMoveVars), so one
@@ -8432,6 +8466,7 @@ void SV_SetQWClientMoveVars(client_t *client)
 	movevars.coordtype = client->netchan.netprim.coordtype;
 	movevars.flags = MOVEFLAG_VALID|MOVEFLAG_NOGRAVITYONGROUND|(*pm_edgefriction.string?0:MOVEFLAG_QWEDGEBOX);
 	SV_SetSourceMoveVars();
+	SV_ClientNoclipSpeed(client);	//FTESurf Patch 1383
 }
 
 void SV_PreRunCmd(void)
