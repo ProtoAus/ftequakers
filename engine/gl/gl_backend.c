@@ -7241,13 +7241,14 @@ void GLBE_WaterViewsNewMap(void)
 	be_occluderasked = false;
 	if (!r_waterviews.ival || !cl.worldmodel || cl.worldmodel->loadstate != MLS_LOADED)
 		return;
-	//only what the choice ever weighs: faces of a capture material, level ones (GLBE_WaterFacesEye) and, under
-	//r_waterwalls, the rest (Patch 1386), so a map whose only capture surfaces are windows builds nothing
+	//only what the choice ever weighs: level faces of a capture material (GLBE_WaterFacesEye) and, under
+	//r_waterwalls, other Water faces (Patch 1386), so a map whose only capture surfaces are windows builds nothing
 	for (i = 0; i < cl.worldmodel->nummodelsurfaces; i++)
 	{
 		msurface_t *s = &cl.worldmodel->surfaces[cl.worldmodel->firstmodelsurface + i];
 		shader_t *sh = (s->texinfo && s->texinfo->texture) ? s->texinfo->texture->shader : NULL;
-		if (sh && s->plane && (fabs(s->plane->normal[2]) > 0.99f || (r_waterwalls.ival && r_waterviews.ival == 1)) &&
+		if (sh && s->plane && (fabs(s->plane->normal[2]) > 0.99f ||
+			(r_waterwalls.ival && r_waterviews.ival == 1 && (sh->flags & SHADER_HASREFRACTDEPTH))) &&
 			!(sh->flags & (SHADER_NODRAW|SHADER_HASPORTAL|SHADER_HASRIPPLEMAP)) && (sh->flags & (SHADER_HASREFLECT|SHADER_HASREFRACT)))
 			n++;
 	}
@@ -7577,7 +7578,11 @@ static void GLBE_WaterViewsBegin(batch_t **worldbatches)
 		for (i = 0; i < SHADER_SORT_COUNT; i++)
 			for (b = worldbatches[i]; b; b = b->next)
 			{
-				if (!GLBE_WaterCandidate(b) || !GLR_BatchPlane(b, &p) || !(pass ? GLBE_WaterOtherShares(b->shader, &p) : GLBE_WaterFacesEye(&p, wv->under)))
+				qboolean facing;
+				if (!GLBE_WaterCandidate(b) || !GLR_BatchPlane(b, &p))
+					continue;
+				facing = GLBE_WaterFacesEye(&p, wv->under);
+				if (pass ? (facing || !GLBE_WaterOtherShares(b->shader, &p)) : !facing)
 					continue;
 				for (s = first; s < n; s++)
 					if (GLBE_WaterSamePlane(&planes[s].p, &p))
@@ -7855,9 +7860,9 @@ static qboolean GLBE_GenerateBatchTextures(batch_t *batch, shader_t *bs)
 				cb = &wv->other;
 			}
 			//P1386: beside kinds kept this frame (be_capfix) a fresh one would come from another camera, and the
-			//keep's record would be stamped fresh: render every kind the targets hold
+			//keep's record would be stamped fresh: render every kind the targets hold and the record lists
 			if (chosenplane && !r_refdef.recurse && be_capfixframe == host_framecount)
-				need |= wv->helddone;
+				need |= wv->helddone | be_capkeep.kinds;
 			else
 				need &= ~wv->helddone;
 			wv->helddone |= need;
