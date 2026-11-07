@@ -6142,6 +6142,11 @@ qboolean CSQC_DeltaUpdate(entity_state_t *src)
 		pr_globals = PR_globals(csqcprogs, PR_CURRENT);
 		G_FLOAT(OFS_PARM0) = !oldent;
 		PR_ExecuteProgram(csqcprogs, func);
+		if (ent->v->solid != SOLID_BSP && ent->v->solid != SOLID_PORTAL)
+		{	//FTESurf Patch 1363: the listener left it non-solid (cl_proximity.qc), so no eligible trace can reach it
+			extern void CSQC_LineWalkStale(unsigned int entnum, qboolean stale);
+			CSQC_LineWalkStale(((wedict_t*)ent)->entnum, false);
+		}
 
 
 		if (csqcdelta_pack_new.maxents <= csqcdelta_pack_new.numents)
@@ -8004,6 +8009,8 @@ static void PDECL CSQC_EntSpawn (struct edict_s *e, int loading)
 static pbool QDECL CSQC_EntFree (struct edict_s *e)
 {
 	struct csqcedict_s *ent = (csqcedict_t*)e;
+	extern void CSQC_LineWalkStale(unsigned int entnum, qboolean stale);
+	CSQC_LineWalkStale(((wedict_t*)ent)->entnum, false);	//FTESurf Patch 1363: freed, so nothing of it is linked
 	ent->v->solid = SOLID_NOT;
 	ent->v->movetype = 0;
 	ent->v->modelindex = 0;
