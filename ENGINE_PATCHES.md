@@ -169,7 +169,13 @@ Windows3.10 and ARM3.11; existing rows stay exact. Windows all30 similarity prog
 178VIEW inputs and all732 diagnostic report blocks, unchanged344REC/7VIEW faults.
 Independent source review CLEAR. See QC tools/p1368-simcheck-source-reader.md for
 separate publication/delivery and limits; not helper-cache/global freshness,
-code authenticity, hard resource bounds, live cutover or whole-fleet coverage.
+code authenticity, hard resource bounds or whole-fleet coverage. Separate actual
+P1368primary delivery auditedREADONLY2026-11-07T14:29:19Z: OPENgen16fb0b54/coreffed,
+84runtime/158inputs, actualactor+namespace+mounts/canonical/fourcron/importer/routes
+match; currentDBschema26/44tables/8identitydigests preserved, no failure/recovery,
+leasesreleased. Fallbackfb7ed790 retained onCURRENTdata; no healthyretry. Prior
+BF99/3eab/A3f7 readers unchanged; P1370/P1374reader andP1377core NOT included. Next
+feature requiresfreshsource-boundgeneration, noteditingliveimmutableP1368.
 
 ## Patch 1367 -- own replay views by their measured lead, lobby ghost rows, "!player" filters, goto (QC only)
 
