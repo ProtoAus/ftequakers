@@ -3355,10 +3355,13 @@ this file rather than in the gamecode.
 HOW THE MODE IS DECIDED, best evidence first:
 
   1. sv_gamemode, if it names one.  An explicit answer beats a derived one.
+  1b. P1371: the map's zone file "gamemode" (zone_edit's Surf/Bhop, published with the
+     zones), the first loose zone file in SV_ZoneLoad's order.
   2. data/mapmeta.txt column 9 -- Momentum's own gamemode id for this map,
      already shipped for 2271 maps and already read by the map browser
      (src/menu/m_main.qc).  This is a LOOKUP and it is right about maps whose
-     name lies.
+     name lies.  P1371, owner: except that a bhop_ map is bhop when the index files it
+     under a mode outside the bhop category (5 of 522 bhop_ rows, 7 Nov 2026).
   3. the map name's prefix, for the ~700 maps Momentum has never indexed.
      A guess, but a good one, and it is the same prefix table the browser
      censused (surf 2025, bhop 240, kz 18, ...).
@@ -3384,7 +3387,7 @@ ruleset that could turn the lock off would not be a ruleset.
 */
 cvar_t	sv_gamemode = CVARFD("sv_gamemode", "", CVAR_NOTFROMSERVER,
 	"Which movement ruleset a map loads. Empty (or \"auto\") detects it from "
-	"data/mapmeta.txt and then from the map name. A mode name -- surf, bhop, "
+	"the map's zone file, data/mapmeta.txt and then the map name. A mode name -- surf, bhop, "
 	"kz, climb, ahop, rj, sj, conc, defrag -- pins it for every map. \"none\" "
 	"runs the base cfg/default.cfg ruleset everywhere, which is what this "
 	"engine did before Patch 224.");
@@ -3881,13 +3884,15 @@ static qboolean SV_ZoneAnyRegion(json_t *t, int depth)
 	return false;
 }
 
-//The file's maxVelocity, 0 if none; FALSE when this path is not a zone file at all.
-static qboolean SV_ZoneRulesetFile(const char *path, char *found, size_t foundsz, double *maxvel)
+//The file's maxVelocity, 0 if none, and P1371 gamemode: 0 none, -1 not a mode id.
+//FALSE when this path is not a zone file at all.
+static qboolean SV_ZoneRulesetFile(const char *path, char *found, size_t foundsz, double *maxvel, int *mode)
 {
 	const char *name, *fallback;
 	char *file;
-	json_t *root, *mv, *gr;
+	json_t *root, *mv, *gr, *gm;
 	qboolean zones;
+	double g;
 
 	if (!QC_FixFileName(path, &name, &fallback))
 		return false;
@@ -3911,6 +3916,14 @@ static qboolean SV_ZoneRulesetFile(const char *path, char *found, size_t foundsz
 	}
 	mv = zones ? SV_JsonChild(root, "maxVelocity") : NULL;
 	*maxvel = (mv && mv->type == json_type_number) ? JSON_ReadFloat(mv, 0) : 0;
+	//A Momentum gamemode id; sh_zones.qc Zone_LoadJsonText reads it the same way.
+	gm = zones ? SV_JsonChild(root, "gamemode") : NULL;
+	*mode = 0;
+	if (gm)
+	{
+		g = (gm->type == json_type_number) ? JSON_ReadFloat(gm, 0) : 0;
+		*mode = (g >= 1 && g < PMS_NUMMODES && g == (int)g) ? (int)g : -1;
+	}
 	JSON_Destroy(root);
 	FS_FreeFile(file);
 	if (!zones)
@@ -3918,21 +3931,32 @@ static qboolean SV_ZoneRulesetFile(const char *path, char *found, size_t foundsz
 	return zones;
 }
 
-static void SV_LoadZoneRuleset(const char *mapname)
+//The first loose zone file with a region, in SV_ZoneLoad's order (sv_zones.qc).
+static qboolean SV_FindZoneFile(const char *mapname, char *found, size_t foundsz, double *maxvel, int *mode)
 {
 	static const char *const dirs[] = {"data/maps/zones/local", "maps/zones/curated",
 		"maps/zones/local", "maps/zones/online"};
-	char path[MAX_OSPATH], found[MAX_OSPATH], val[32];
-	qboolean have = false;
-	cvar_t *var;
-	double v = 0;
-	int i, j;
+	char path[MAX_OSPATH];
+	int i;
 
-	for (i = Cvar_VariableValue("sv_zones_curated") ? 0 : 2; i < 4 && !have; i++)
+	for (i = Cvar_VariableValue("sv_zones_curated") ? 0 : 2; i < 4; i++)
 	{
 		Q_snprintfz(path, sizeof(path), "%s/%s.json", dirs[i], mapname);
-		have = SV_ZoneRulesetFile(path, found, sizeof(found), &v);
+		if (SV_ZoneRulesetFile(path, found, foundsz, maxvel, mode))
+			return true;
 	}
+	return false;
+}
+
+static void SV_LoadZoneRuleset(const char *mapname)
+{
+	char found[MAX_OSPATH], val[32];
+	qboolean have;
+	cvar_t *var;
+	double v = 0;
+	int j, zmode;
+
+	have = SV_FindZoneFile(mapname, found, sizeof(found), &v, &zmode);
 	if (!have || v == 0)
 		return;
 	if (!(v >= 1 && v <= 100000))
@@ -4107,10 +4131,33 @@ static void SV_ApplyGamemodeModes(const char *mapname)
 	}
 
 	if (!mode)
+	{	//P1371: zone_edit's mode, published with the zones, beats the index and the name.
+		char zfile[MAX_OSPATH];
+		double zmv;
+		int zmode = 0;
+
+		if (SV_FindZoneFile(mapname, zfile, sizeof(zfile), &zmv, &zmode) && zmode < 0)
+			Con_Printf(CON_WARNING"movement: %s \"gamemode\" is not a mode id - ignored\n", zfile);
+		else if (zmode > 0)
+		{
+			mode = zmode;
+			src = "zone file";
+		}
+	}
+	if (!mode)
 	{	//Patch 227: from the row read above rather than from a second scan of the file
 		mode = havemeta ? meta.mode : 0;
 		if (mode)
+		{
 			src = "mapmeta";
+			//P1371, owner: a bhop_ map is bhop whatever other mode the index files it under.
+			cat = SV_GamemodeCategory(mode);
+			if (SV_GamemodeFromName(mapname) == 2 && (!cat || strcmp(cat, "bhop")))
+			{
+				mode = 2;
+				src = "bhop_ name";
+			}
+		}
 	}
 	if (!mode)
 	{
