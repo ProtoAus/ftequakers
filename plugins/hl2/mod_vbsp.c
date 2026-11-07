@@ -10299,6 +10299,289 @@ static qboolean VBSP_PVSMemoTest(qbyte *memo, size_t idx, model_t *mod, const st
 	return vis;
 }
 
+//FTESurf Patch 1364: one static prop's exact lighting solve (was inline in VBSP_PrepareFrame's prop loop).
+static void VBSP_PropSolveLight(model_t *mod, vbspinfo_t *prv, struct staticprop_s *sent, entity_t *src, refdef_t *r_refdef)
+{
+	/*
+	FTESurf Patch 152: choose the sample point BEFORE sampling, on
+	whether it has anything to sample.
+
+	This used to sample the lighting origin and then re-sample at
+	the prop's own origin "if it's dark":
+
+	    if (VectorLength(src->light_range) < 0.25)
+	        HL2_CalcModelLighting(...);
+
+	-- the right idea, which could never fire.  A miss does not come
+	back dark: VBSP_LightPointValues answers a flat 192 when the leaf
+	carries no ambient cube, and 192/255 = 0.75 is three times that
+	threshold.  So the fallback was dead code and every prop whose
+	lighting origin landed in solid stayed grey.
+
+	Asking the leaf directly is both correct and cheaper -- one tree
+	walk instead of a second full lighting solve -- and it separates
+	"no data here" from "genuinely dark", which a brightness test
+	cannot do.  A prop deep inside geometry can still miss both
+	points; that is a real property of the map's leaf partition and
+	it falls back to hl2_lt_min, which is what that is for.
+	*/
+	vec3_t tmp, sample;
+
+	/*
+	FTESurf Patch 1096: a bake VRAD made for ANOTHER model is not this
+	prop's lighting.  VRAD stamps each sp_N.vhv with its model's
+	studiohdr checksum; a map whose prop list or models changed after
+	VRAD ran keeps the old files.  surf_pantheon: 791 of its 820 bakes
+	carry another checksum, and painting them gave identical pillars
+	different colours and stripes.  Dropped here, once, the first frame
+	the model is loaded -- the prop then lights like an unbaked one.
+	*/
+	if (sent->hasbaked && !sent->vhvchecked && src->model &&
+		src->model->loadstate == MLS_LOADED && src->model->meshinfo &&
+		(src->model->engineflags & MDLF_SOURCEPITCH))	//Mod_LoadHL2Model's: its galiasinfo_t has the fields
+	{
+		const galiasinfo_t *g = (const galiasinfo_t*)src->model->meshinfo;
+		sent->vhvchecked = true;
+		if (g->haschecksum && g->mdlchecksum != sent->vhvchecksum)
+		{
+			sent->hasbaked = false;
+			sent->vhvforeign = true;
+			if (sent->vcraw)
+				plugfuncs->Free(sent->vcraw);
+			sent->vcraw = NULL;
+			sent->vcrawverts = 0;
+			sent->vcgain = 1;
+			prv->lit_foreign++;
+		}
+	}
+
+	VBSP_PropSamplePoint(mod, sent, sample);
+
+	VectorCopy(src->origin, tmp);
+	VectorCopy(sample, src->origin);
+	/*
+	FTESurf Patch 302 -- THE CONTROL ARM, ENFORCED BY CONSTRUCTION.
+
+	A prop with a .vhv already carries VRAD's direct light inside the
+	bake, so adding the worldlight term to it would count the same
+	lights twice.  It is tempting to argue the point is moot --
+	HL2_RetintFromBaked OVERWRITES light_avg and light_range rather
+	than accumulating (:8026-8027), so the inflated values would be
+	discarded a few lines below -- but two things survive that
+	overwrite: light_dir, which the bake path deliberately keeps from
+	the cube solve, and light_cube[6], which #AMBIENTCUBE and
+	#BUMPCUBE read.  On surf_boreas that is 1587 of 1587 props whose
+	lighting is already correct.
+
+	So the suppression is real and it is set here rather than tested
+	downstream, because here is the only place that knows which
+	population this call belongs to.  Cleared immediately after: every
+	OTHER caller of LightPointValues -- players, viewmodels, any
+	non-prop model -- SHOULD get the direct term, exactly as Source's
+	light cache gives it to them.
+	*/
+	prv->wl_suppress = sent->hasbaked;
+	//FTESurf Patch 304: and the split fold, on the same two conditions
+	//and for the same two reasons.  A static prop is the only model
+	//guaranteed to render through vertexlit.glsl, which is the only
+	//shader carrying the matching half-lambert ramp; and a prop with a
+	//.vhv already has VRAD's own shading per vertex, so re-splitting
+	//the cube under it would shade it twice.
+	prv->fold_prop = !sent->hasbaked;
+	prv->wl_exact = true;	//FTESurf Patch 1283: solved once for the map, so every light is traced
+	HL2_CalcModelLighting(src, src->model, r_refdef, mod);
+	prv->wl_exact = false;
+	prv->wl_suppress = false;
+	prv->fold_prop = false;
+	VectorCopy(tmp, src->origin);
+
+	//FTESurf Patch 163: VRAD already answered this question for this
+	//exact prop.  Applied after, because it replaces the cube's
+	//colour and level while keeping its direction and its split.
+	if (sent->hasbaked)
+	{
+		/*
+		FTESurf Patch 259.  Both halves of the per-vertex mode are
+		decided here, in the block light_known already caches, so the
+		per-frame cost of the whole feature is the two pointer stores
+		below and nothing else.
+
+		vc_live is the live switch: hl2_lt_baked chooses what gets
+		LOADED and is latched to the map, but once the array is in
+		memory turning the multiply off is free, and being able to
+		A/B it against mode 1 without reloading the map is the point.
+		The lighting solve is cached, so flipping it has to invalidate
+		that -- see the vc_lastlive block above the prop loop.
+
+		The directional fraction goes to 0 when the per-vertex data is
+		actually bound, because VRAD's bake already contains the
+		shading; see the essay on HL2_RetintFromBaked.  When it is not
+		bound we are back to a single mean and the 0.30 split is what
+		keeps the geometry legible.
+		*/
+		/*
+		THE SCATTER, which happens here because here is the first
+		point at which both halves exist.
+
+		The .vhv is read at map load, when the model is still a name;
+		models load on worker threads and are only guaranteed up at
+		MLS_LOADED, which the loop has already checked above.  So the
+		colours sit in VRAD's order until the first frame that lights
+		the prop, and this moves them into ours -- once per prop for
+		the life of the map, inside the same light_known cache that
+		makes the rest of this free.
+
+		Every vertex the strip groups never name is prefilled with the
+		byte that reproduces the plain mean, 255/gain, so an
+		unreferenced vertex draws at exactly what hl2_lt_baked 1 would
+		give it rather than at the peak-normalised level.  Without
+		that prefill an uncovered vertex would come out about 1/gain
+		too bright, which on these models is most of a stop.
+		*/
+		if (sent->vcraw && !sent->vc && src->model->meshinfo)
+		{
+			const galiasinfo_t *first = (const galiasinfo_t*)src->model->meshinfo;
+			if (first->vhvmap && first->vhvmodelverts > 0 && first->firstvert >= 0)
+			{
+				unsigned int nv = (unsigned int)first->vhvmodelverts;
+				unsigned int nm = (unsigned int)first->vhvmapcount;
+				int meanb = (int)(255.0f/sent->vcgain + 0.5f);
+				qbyte *out;
+				unsigned int k;
+				if (meanb < 0) meanb = 0;
+				if (meanb > 255) meanb = 255;
+				out = plugfuncs->GMalloc(&mod->memgroup, nv*4);
+				for (k = 0; k < nv; k++)
+				{
+					out[k*4+0] = out[k*4+1] = out[k*4+2] = (qbyte)meanb;
+					out[k*4+3] = 255;
+				}
+				if (nm > sent->vcrawverts)
+					nm = sent->vcrawverts;	//a shorter file colours what it can
+				for (k = 0; k < nm; k++)
+				{
+					unsigned int d = (unsigned int)first->vhvmap[k];
+					if (d >= nv)
+						continue;			//already rejected at build time; belt
+					out[d*4+0] = sent->vcraw[k*4+0];
+					out[d*4+1] = sent->vcraw[k*4+1];
+					out[d*4+2] = sent->vcraw[k*4+2];
+				}
+				sent->vc = out;
+				sent->vcverts = nv;
+			}
+			plugfuncs->Free(sent->vcraw);	//either scattered, or this model will never take it
+			sent->vcraw = NULL;
+		}
+
+		if (sent->vc && vbsp_vc_live)
+		{
+			//FTESurf Patch 296: the 0.0f is now a cvar, still
+			//defaulting to 0.0f.  It is here rather than hard-coded
+			//because this is the one arm the bumped-rock report
+			//lands on, and being able to move it live at a fixed
+			//vantage is worth more than the literal.  It cannot fix
+			//that report -- the term is per-VERTEX against the
+			//geometric normal (vertexlit.glsl:109-123), so no value
+			//of it reaches a normal map -- but it does decide
+			//whether a baked prop has any silhouette at all.
+			float bd = hl2_lt_baked_dir ? hl2_lt_baked_dir->value : 0.0f;
+			if (bd < 0) bd = 0;
+			if (bd > 1) bd = 1;	//above 1 makes light_avg negative
+			src->vertlightbytes = sent->vc;
+			src->vertlightverts = (int)sent->vcverts;
+			HL2_RetintFromBaked(src, sent->baked, bd);
+		}
+		else
+		{
+			/*
+			Falling back to the mean, which means undoing the peak gain:
+			sent->baked has carried it since the .vhv loaded, whether or
+			not the scatter ever succeeded.  Keyed on the gain and not on
+			sent->vc, because a prop whose model turned out to have no
+			scatter table has the gain and no array -- and reading that as
+			mode 1 without dividing would draw it most of a stop too
+			bright, which is the one thing the fallback must not do.
+			vcgain is 1 whenever no gain was applied, so this is safe to
+			do unconditionally.
+			*/
+			vec3_t mean;
+			src->vertlightbytes = NULL;
+			src->vertlightverts = 0;
+			VectorScale(sent->baked, 1.0f/sent->vcgain, mean);
+			HL2_RetintFromBaked(src, mean, FS_BAKED_DIR);
+		}
+	}
+}
+
+/*
+FTESurf Patch 1364: solve every static prop's lighting before it is first seen.  The lazy solve in the
+prop loop traced every worldlight for each newly visible prop inside the frame that saw it: bhop_ceaseless
+spent 231 ms of one frame on 22 of them (P1358 halved the work, ~67 ms stayed).  The solve does not read the
+view, so its answer is the same whenever it runs.  Up to hl2_lt_prewarm ms of it in all from the first
+frame after a map load or any invalidation, coming back each frame for models still loading.
+*/
+static cvar_t *hl2_lt_prewarm;
+static struct {model_t *mod; int pending; int solved, left, skipped; double ms, spent; unsigned int lazy; double lazyms;} vbsp_lightwarm;
+static void VBSP_PropLightWarm(model_t *mod, vbspinfo_t *prv, refdef_t *r_refdef)
+{
+	double t0 = plugfuncs->GetSeconds(), limit = hl2_lt_prewarm->value / 1000.0 - vbsp_lightwarm.spent;	//one budget per load/invalidation, across passes
+	int i;
+	vbsp_lightwarm.solved = vbsp_lightwarm.left = vbsp_lightwarm.skipped = 0;
+	for (i = 0; i < prv->numstaticprops; i++)
+	{
+		struct staticprop_s *sent = &prv->staticprops[i];
+		entity_t *src = &sent->ent;
+		if (src->light_known)
+			continue;
+		if (!src->model || src->model->loadstate == MLS_FAILED)
+			continue;	//the lazy path never lights it either
+		if (src->model->loadstate != MLS_LOADED)
+		{
+			vbsp_lightwarm.skipped++;
+			continue;
+		}
+		if (plugfuncs->GetSeconds() - t0 >= limit)
+		{
+			vbsp_lightwarm.left++;
+			continue;
+		}
+		VBSP_PropSolveLight(mod, prv, sent, src, r_refdef);
+		vbsp_lightwarm.solved++;
+	}
+	vbsp_lightwarm.ms = (plugfuncs->GetSeconds() - t0) * 1000;
+	vbsp_lightwarm.spent += vbsp_lightwarm.ms / 1000;
+	vbsp_lightwarm.mod = mod;
+	vbsp_lightwarm.pending = vbsp_lightwarm.skipped > 0 && !vbsp_lightwarm.left;	//come back for models still loading, while budget lasts
+	if (vbsp_lightwarm.solved)
+		Con_Printf("hl2_lt_prewarm: %i props solved in %.1f ms, %i over budget, %i models still loading\n",
+		vbsp_lightwarm.solved, vbsp_lightwarm.ms, vbsp_lightwarm.left, vbsp_lightwarm.skipped);
+}
+static void VBSP_PropLightWarmInfo_f(void)
+{
+	Con_Printf("hl2_lt_prewarm %g: %i props solved in %.1f ms, %i over budget, %i models still loading\n",
+		hl2_lt_prewarm ? hl2_lt_prewarm->value : 0, vbsp_lightwarm.solved, vbsp_lightwarm.ms, vbsp_lightwarm.left, vbsp_lightwarm.skipped);
+	if (vbsp_lightwarm.mod && vbsp_lightwarm.mod->loadstate == MLS_LOADED && vbsp_lightwarm.mod->meshinfo)
+	{	//now: how many are lit, and why the rest are not (a purged map's meshinfo is gone)
+		vbspinfo_t *prv = vbsp_lightwarm.mod->meshinfo;
+		int i, lit = 0, nomodel = 0, failed = 0, loading = 0, unlit = 0;
+		for (i = 0; i < prv->numstaticprops; i++)
+		{
+			entity_t *e = &prv->staticprops[i].ent;
+			if (e->light_known) lit++;
+			else if (!e->model) nomodel++;
+			else if (e->model->loadstate == MLS_FAILED) failed++;
+			else if (e->model->loadstate != MLS_LOADED) loading++;
+			else unlit++;
+		}
+		Con_Printf("  now: %i props, %i lit, %i loaded but unlit, %i loading, %i failed, %i without a model\n",
+			(int)prv->numstaticprops, lit, unlit, loading, failed, nomodel);
+		Con_Printf("  solved in the frame that first drew them, since the last info: %u props, %.1f ms\n", vbsp_lightwarm.lazy, vbsp_lightwarm.lazyms);
+		vbsp_lightwarm.lazy = 0;
+		vbsp_lightwarm.lazyms = 0;
+	}
+}
+
 static void VBSP_PrepareFrame(model_t *mod, refdef_t *r_refdef, int area, int clusters[2], pvsbuffer_t *vis, qbyte **entvis_out, qbyte **surfvis_out)
 {
 	qbyte *memo;	//FTESurf Patch 1261
@@ -10723,8 +11006,13 @@ static void VBSP_PrepareFrame(model_t *mod, refdef_t *r_refdef, int area, int cl
 				vbsp_vc_mod = mod;
 				for (i = 0; i < prv->numstaticprops; i++)
 					prv->staticprops[i].ent.light_known = 0;
+				vbsp_lightwarm.pending = 1;	//Patch 1364
+				vbsp_lightwarm.spent = 0;
 			}
 		}
+		//Patch 1364: before the prop loop, so no prop is first solved in the frame that sees it
+		if (vbsp_lightwarm.pending && hl2_lt_prewarm && hl2_lt_prewarm->value > 0)
+			VBSP_PropLightWarm(mod, prv, r_refdef);
 
 		//FTESurf Patch 257: reset the per-frame accounting.  Every prop starts
 		//"not visited" so that an early return out of this loop is visible as
@@ -10876,221 +11164,13 @@ static void VBSP_PrepareFrame(model_t *mod, refdef_t *r_refdef, int area, int cl
 				}
 			}
 
-#if 1
 			if (!src->light_known)
-			{
-				/*
-				FTESurf Patch 152: choose the sample point BEFORE sampling, on
-				whether it has anything to sample.
-
-				This used to sample the lighting origin and then re-sample at
-				the prop's own origin "if it's dark":
-
-				    if (VectorLength(src->light_range) < 0.25)
-				        HL2_CalcModelLighting(...);
-
-				-- the right idea, which could never fire.  A miss does not come
-				back dark: VBSP_LightPointValues answers a flat 192 when the leaf
-				carries no ambient cube, and 192/255 = 0.75 is three times that
-				threshold.  So the fallback was dead code and every prop whose
-				lighting origin landed in solid stayed grey.
-
-				Asking the leaf directly is both correct and cheaper -- one tree
-				walk instead of a second full lighting solve -- and it separates
-				"no data here" from "genuinely dark", which a brightness test
-				cannot do.  A prop deep inside geometry can still miss both
-				points; that is a real property of the map's leaf partition and
-				it falls back to hl2_lt_min, which is what that is for.
-				*/
-				vec3_t tmp, sample;
-
-				/*
-				FTESurf Patch 1096: a bake VRAD made for ANOTHER model is not this
-				prop's lighting.  VRAD stamps each sp_N.vhv with its model's
-				studiohdr checksum; a map whose prop list or models changed after
-				VRAD ran keeps the old files.  surf_pantheon: 791 of its 820 bakes
-				carry another checksum, and painting them gave identical pillars
-				different colours and stripes.  Dropped here, once, the first frame
-				the model is loaded -- the prop then lights like an unbaked one.
-				*/
-				if (sent->hasbaked && !sent->vhvchecked && src->model &&
-					src->model->loadstate == MLS_LOADED && src->model->meshinfo &&
-					(src->model->engineflags & MDLF_SOURCEPITCH))	//Mod_LoadHL2Model's: its galiasinfo_t has the fields
-				{
-					const galiasinfo_t *g = (const galiasinfo_t*)src->model->meshinfo;
-					sent->vhvchecked = true;
-					if (g->haschecksum && g->mdlchecksum != sent->vhvchecksum)
-					{
-						sent->hasbaked = false;
-						sent->vhvforeign = true;
-						if (sent->vcraw)
-							plugfuncs->Free(sent->vcraw);
-						sent->vcraw = NULL;
-						sent->vcrawverts = 0;
-						sent->vcgain = 1;
-						prv->lit_foreign++;
-					}
-				}
-
-				VBSP_PropSamplePoint(mod, sent, sample);
-
-				VectorCopy(src->origin, tmp);
-				VectorCopy(sample, src->origin);
-				/*
-				FTESurf Patch 302 -- THE CONTROL ARM, ENFORCED BY CONSTRUCTION.
-
-				A prop with a .vhv already carries VRAD's direct light inside the
-				bake, so adding the worldlight term to it would count the same
-				lights twice.  It is tempting to argue the point is moot --
-				HL2_RetintFromBaked OVERWRITES light_avg and light_range rather
-				than accumulating (:8026-8027), so the inflated values would be
-				discarded a few lines below -- but two things survive that
-				overwrite: light_dir, which the bake path deliberately keeps from
-				the cube solve, and light_cube[6], which #AMBIENTCUBE and
-				#BUMPCUBE read.  On surf_boreas that is 1587 of 1587 props whose
-				lighting is already correct.
-
-				So the suppression is real and it is set here rather than tested
-				downstream, because here is the only place that knows which
-				population this call belongs to.  Cleared immediately after: every
-				OTHER caller of LightPointValues -- players, viewmodels, any
-				non-prop model -- SHOULD get the direct term, exactly as Source's
-				light cache gives it to them.
-				*/
-				prv->wl_suppress = sent->hasbaked;
-				//FTESurf Patch 304: and the split fold, on the same two conditions
-				//and for the same two reasons.  A static prop is the only model
-				//guaranteed to render through vertexlit.glsl, which is the only
-				//shader carrying the matching half-lambert ramp; and a prop with a
-				//.vhv already has VRAD's own shading per vertex, so re-splitting
-				//the cube under it would shade it twice.
-				prv->fold_prop = !sent->hasbaked;
-				prv->wl_exact = true;	//FTESurf Patch 1283: solved once for the map, so every light is traced
-				HL2_CalcModelLighting(src, src->model, r_refdef, mod);
-				prv->wl_exact = false;
-				prv->wl_suppress = false;
-				prv->fold_prop = false;
-				VectorCopy(tmp, src->origin);
-
-				//FTESurf Patch 163: VRAD already answered this question for this
-				//exact prop.  Applied after, because it replaces the cube's
-				//colour and level while keeping its direction and its split.
-				if (sent->hasbaked)
-				{
-					/*
-					FTESurf Patch 259.  Both halves of the per-vertex mode are
-					decided here, in the block light_known already caches, so the
-					per-frame cost of the whole feature is the two pointer stores
-					below and nothing else.
-
-					vc_live is the live switch: hl2_lt_baked chooses what gets
-					LOADED and is latched to the map, but once the array is in
-					memory turning the multiply off is free, and being able to
-					A/B it against mode 1 without reloading the map is the point.
-					The lighting solve is cached, so flipping it has to invalidate
-					that -- see the vc_lastlive block above the prop loop.
-
-					The directional fraction goes to 0 when the per-vertex data is
-					actually bound, because VRAD's bake already contains the
-					shading; see the essay on HL2_RetintFromBaked.  When it is not
-					bound we are back to a single mean and the 0.30 split is what
-					keeps the geometry legible.
-					*/
-					/*
-					THE SCATTER, which happens here because here is the first
-					point at which both halves exist.
-
-					The .vhv is read at map load, when the model is still a name;
-					models load on worker threads and are only guaranteed up at
-					MLS_LOADED, which the loop has already checked above.  So the
-					colours sit in VRAD's order until the first frame that lights
-					the prop, and this moves them into ours -- once per prop for
-					the life of the map, inside the same light_known cache that
-					makes the rest of this free.
-
-					Every vertex the strip groups never name is prefilled with the
-					byte that reproduces the plain mean, 255/gain, so an
-					unreferenced vertex draws at exactly what hl2_lt_baked 1 would
-					give it rather than at the peak-normalised level.  Without
-					that prefill an uncovered vertex would come out about 1/gain
-					too bright, which on these models is most of a stop.
-					*/
-					if (sent->vcraw && !sent->vc && src->model->meshinfo)
-					{
-						const galiasinfo_t *first = (const galiasinfo_t*)src->model->meshinfo;
-						if (first->vhvmap && first->vhvmodelverts > 0 && first->firstvert >= 0)
-						{
-							unsigned int nv = (unsigned int)first->vhvmodelverts;
-							unsigned int nm = (unsigned int)first->vhvmapcount;
-							int meanb = (int)(255.0f/sent->vcgain + 0.5f);
-							qbyte *out;
-							unsigned int k;
-							if (meanb < 0) meanb = 0;
-							if (meanb > 255) meanb = 255;
-							out = plugfuncs->GMalloc(&mod->memgroup, nv*4);
-							for (k = 0; k < nv; k++)
-							{
-								out[k*4+0] = out[k*4+1] = out[k*4+2] = (qbyte)meanb;
-								out[k*4+3] = 255;
-							}
-							if (nm > sent->vcrawverts)
-								nm = sent->vcrawverts;	//a shorter file colours what it can
-							for (k = 0; k < nm; k++)
-							{
-								unsigned int d = (unsigned int)first->vhvmap[k];
-								if (d >= nv)
-									continue;			//already rejected at build time; belt
-								out[d*4+0] = sent->vcraw[k*4+0];
-								out[d*4+1] = sent->vcraw[k*4+1];
-								out[d*4+2] = sent->vcraw[k*4+2];
-							}
-							sent->vc = out;
-							sent->vcverts = nv;
-						}
-						plugfuncs->Free(sent->vcraw);	//either scattered, or this model will never take it
-						sent->vcraw = NULL;
-					}
-
-					if (sent->vc && vbsp_vc_live)
-					{
-						//FTESurf Patch 296: the 0.0f is now a cvar, still
-						//defaulting to 0.0f.  It is here rather than hard-coded
-						//because this is the one arm the bumped-rock report
-						//lands on, and being able to move it live at a fixed
-						//vantage is worth more than the literal.  It cannot fix
-						//that report -- the term is per-VERTEX against the
-						//geometric normal (vertexlit.glsl:109-123), so no value
-						//of it reaches a normal map -- but it does decide
-						//whether a baked prop has any silhouette at all.
-						float bd = hl2_lt_baked_dir ? hl2_lt_baked_dir->value : 0.0f;
-						if (bd < 0) bd = 0;
-						if (bd > 1) bd = 1;	//above 1 makes light_avg negative
-						src->vertlightbytes = sent->vc;
-						src->vertlightverts = (int)sent->vcverts;
-						HL2_RetintFromBaked(src, sent->baked, bd);
-					}
-					else
-					{
-						/*
-						Falling back to the mean, which means undoing the peak gain:
-						sent->baked has carried it since the .vhv loaded, whether or
-						not the scatter ever succeeded.  Keyed on the gain and not on
-						sent->vc, because a prop whose model turned out to have no
-						scatter table has the gain and no array -- and reading that as
-						mode 1 without dividing would draw it most of a stop too
-						bright, which is the one thing the fallback must not do.
-						vcgain is 1 whenever no gain was applied, so this is safe to
-						do unconditionally.
-						*/
-						vec3_t mean;
-						src->vertlightbytes = NULL;
-						src->vertlightverts = 0;
-						VectorScale(sent->baked, 1.0f/sent->vcgain, mean);
-						HL2_RetintFromBaked(src, mean, FS_BAKED_DIR);
-					}
-				}
+			{	//solved in the frame that sees it: what hl2_lt_prewarm exists to prevent
+				double t0 = plugfuncs->GetSeconds();
+				VBSP_PropSolveLight(mod, prv, sent, src, r_refdef);
+				vbsp_lightwarm.lazy++;
+				vbsp_lightwarm.lazyms += (plugfuncs->GetSeconds() - t0) * 1000;
 			}
-#endif
 
 			ent = modfuncs->NewSceneEntity();
 			if (!ent)
@@ -14490,6 +14570,8 @@ qboolean VBSP_Init(void)
 		//"=1" on the cvardf line is only the fallback for a build where this
 		//plugin never loaded, which is a build with no vertexlit.glsl either.
 		hl2_lt_fold = cvarfuncs->GetNVFDG("hl2_lt_fold", "1", 0, "How the leaf ambient cube is folded into the shader's two lighting slots, for static props with no .vhv bake.\n0: the legacy fold -- the flat base is the mean PLUS the deviation toward the light, so a face turned away from every light still receives the bright-side level. Measured 13.6x too bright on tensor2's worst face. This is the falsifier and is bit-for-bit the pre-304 behaviour.\n1: default. The flat base is the level on the face turned AWAY from the dominant direction, the directional half is the difference to the face turned toward it, and vertexlit.glsl ramps between them with a HALF-lambert, as Source does on models. Mean error over a uniform sphere of normals falls from 1.037 to 0.283 stops on tensor2, and from 0.463 to 0.230 over 200 real leaf cubes.\n0/1 ONLY -- the value is compiled into the shader as a preprocessor constant, and a fraction would emit a float literal into an #if.", MAPOPTIONS);
+		hl2_lt_prewarm = cvarfuncs->GetNVFDG("hl2_lt_prewarm", "3000", 0, "FTESurf Patch 1364: milliseconds of static-prop lighting solved in the first frame after a map load (or a lighting change), so no prop is solved in the frame that first sees it. 0: solve each prop when it is first seen, as before. hl2_lt_prewarm_info reports the last pass.", "");
+		cmdfuncs->AddCommand("hl2_lt_prewarm_info", VBSP_PropLightWarmInfo_f, "FTESurf Patch 1364: what the last hl2_lt_prewarm pass solved.");
 		hl2_lt_reusecube = cvarfuncs->GetNVFDG("hl2_lt_reusecube", "1", 0, "Reuse the exact unbaked static-prop lighting cube instead of tracing it twice. 0 keeps the original two queries. Dynamic/approximate, baked and other lighting functions retain their original paths.", "");
 		hl2_lt_worldlight = cvarfuncs->GetNVFDG("hl2_lt_worldlight", "1", 0, "Light models with no VRAD bake from the map's worldlights as well as the leaf ambient cube, as Source's light cache does.\n0: the leaf ambient cube alone, which VRAD fills with BOUNCE ONLY, so a prop with no .vhv draws at roughly a fifth of its Source brightness. This is the falsifier -- it is bit-for-bit the pre-302 behaviour.\n1: default. Add the direct contribution of every emit_surface/point/spotlight whose cluster is in the sample point's PVS. Sky lights are deliberately excluded until a sky-visibility trace exists -- they have no distance falloff, so without one they would light sealed indoor rooms at full sun. Does nothing to props that DO have a .vhv bake; their direct light is already in it.", MAPOPTIONS);
 		//FTESurf Patch 308.  Registered here, beside the term it feeds, and NOT
