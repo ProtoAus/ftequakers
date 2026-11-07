@@ -24,6 +24,54 @@ No recalibration, live collector, parser/capture, history, schema, enforcement,
 native pin/tag or QC Build change. Acquisition parse/hash/stat remain non-atomic;
 this does not promise an immutable whole pass or a time/RSS ceiling.
 
+## Patch 1398 -- a moving model keeps its light sample briefly (gl_alias.c)
+
+Problem: Patch 105's model light cache matched only an unmoved origin, so a moving model re-sampled the
+world's light every frame, which on a Source map runs the hl2 plugin's sample with world-light traces.
+surf_centipedes' 105 skulls flying through the 3D sky (P1378): a CPU sample at stage 3 put ~40% of the
+main thread in VBSP_LightCacheCube / VBSP_WorldLightRatio / BIH traces; the stage starts ran 151-455 fps
+at the owner's settings (r_drawentities 0: 655-933).
+
+Change: r_modellight_moverate (30, not archived): on a Source map, a model within 32 units of where it
+took the sample it wrote (the entry records keynum and model; keynum 0 never) keeps it for
+(0.75 + (keynum & 15)/32) / rate seconds, the spread so a swarm does not re-sample in one frame -- Patch
+1280's rule for the view model. Another entity of the bucket never borrows it (review: two still ones would
+swap samples). Quake maps (a sample is ~10 us) and exact hits keep Patch 105/1283's rules; r_modellight_cache
+2 checks only exact hits. 0 = every frame it moves. A teleport under 32 units keeps the old light up to 1/rate s.
+
+Verified: surf_centipedes stage starts, rate 0 against 30 (ABBA, 5 s each): st1 151/168 -> 340/342 fps,
+st3 284/271 -> 510/514, st4 372/455 -> 780/787, st5 273/255 -> 474/484. bhop_lost_world_v2 and surf_voyager
+spawn views (P1387's spinners): no consistent change.
+
+## Patch 1386 -- water walls, slopes, undersides and entity Water share the view's capture (gl_backend.c)
+
+Problem: at r_waterviews 1 only level water facing the eye shared the view's one reflection/refraction
+pair (P879). Every other plane of water -- walls, slopes, an underside seen from below, Water on brush
+entities -- rendered its own pair every frame, and a second captured plane stopped r_capturerate's keep
+(P1245/P1281) for all of them. bhop_ceaseless save 35: two water walls hidden under the ocean and behind
+the start building, 6 scene renders a frame, 214 fps. surf_affliction's lava channel: 184 renders, 8 fps.
+
+Change: r_waterwalls 1 (new, default; 0 = before). Water the eye sees from its front that GLBE_WaterFacesEye
+turns down, and Water on brush entities, samples the pair the view captured for its chosen water, as
+every Source water material samples the one _rt_WaterReflection/_rt_WaterRefraction. Water means the
+material samples $refractiondepth, so LightmappedReflective (func_reflective_glass, world mirrors) keeps
+its own capture. When no level water on screen is seen past the world, GLBE_WaterViewsBegin weighs that
+other Water and takes the heaviest seen plane. A share that must add a kind beside a capture kept this
+frame renders every held and listed kind, so be_capfix and be_capkeep never describe two cameras. The
+sharers are not added to the capture's merged PVS (what they sample is the chosen plane's view).
+
+Verified (owner's settings, r_capturerate 144, paused or static views, w0 = r_waterwalls 0):
+- fps w0 -> w1: ceaseless s35 214 -> 441 (1% 104 -> 232), affliction 8 -> 598, quarantine 33 -> 552,
+  brodderlands 78 -> 535, abandoned 109 -> 541, froots_ksf 120 -> 686, desolate 87 -> 775, fortum 56 -> 263,
+  4matan 236 -> 1081, christmas 221 -> 554, dynasty 89 -> 319, ahop_coast 24 -> 156.
+- Pixels: the same paused frame at w0 / w1 / w0 on 20 views chosen to face each census map's biggest
+  non-level Water plane: 16 identical, desolate at its noise floor, dynasty 3 px, christmas a thin far
+  strip, affliction's lava channel (its red fog blocks' edges).
+- Census: 248 of 2,224 library maps have non-level Water faces (artifacts/watercensus2.py).
+- Three review rounds: a keep half-refreshed, a hidden level plane holding pass 1, mirrors sharing, pass 1
+  re-weighing level water -- all fixed. Left: a glass or portal capture after a water keep in the same
+  frame still mixes two cameras (pre-existing, BACKLOG).
+
 ## Patch 1393 -- whole-file deduplication in the offline pairs census
 
 Problem: recsim.py pairs described and counted byte-identical duplicates, but its
