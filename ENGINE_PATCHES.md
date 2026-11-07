@@ -1,5 +1,36 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1360 -- optional priority ramp-mark library and R2 delivery
+
+**Problem.** The optional replay-baked ramp library covered only the original
+Story/Event selection and was served from the origin. Important bonus courses
+and popular main boards needed a broader, explicitly measured asset inventory,
+without adding a large set of atlases to game packages.
+
+**Change.** Freeze the owner's public sheet, preserving all280mentions across
+278distinct bonuses and explicit installed-revision aliases. Extend the existing
+batch baker with a frozen exact-map scope. Reuse the unchanged whole-map baker,
+shader and on-request SHA256-checked client cache. Allowlist only public ramp
+geometry, map/hash PNG and its bounded base64 transport in the existing R2
+mirror/gateway; compress text with verified gzip companions. Separate ramp
+readiness ledgers preserve existing map/zone state and current-source fallback.
+No native code, pin/tag, VM, movement, recording/evidence or QC Build change.
+
+**Verified.**307target maps from the resolved sheet, original Story/Event roster
+and100most-contested held main boards (NOT measured play telemetry).241bakes
+pass geometry/count/finite-value/client-size and raw/encoded atlas digest checks;
+92of100popular mains and124of173priority maps are ready.195of278sheet bonuses
+have a held exact-course recording;186also have a ready map atlas. These are
+input/map conjunctions, NOT proof every course surface was painted.66other
+requested maps remain explicit missing-input/no-contact gaps; no synthetic wear.
+Windows23mirror/22gateway/9gzip tests pass (one POSIX-only link skip);
+ARM23/22/9pass without skips.3priority,
+4raster and3replay-reader controls pass. Actual unprivileged ARM nginx/gunicorn
+and real R2 GET/gzip/hash/HEAD/range/stale-source/dead-gateway controls pass.
+Three QC VMs build with0warnings using qualified c24ede65. Deployment, root-side
+nginx cutover and owner appearance acceptance are separately recorded in
+QC tools/p1360-ramp-library.md; not claimed by these source/transport checks.
+
 ## Patch 1359 -- recording-version numeral spelling (diagnostic readers only)
 
 **Problem.** Python-only numeral syntax in an ordinary REC version token could
