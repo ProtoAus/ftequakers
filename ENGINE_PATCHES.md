@@ -1,5 +1,36 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1367 -- own replay views by their measured lead, lobby ghost rows, "!player" filters, goto (QC only)
+
+Problem: (1) an own online replay (P814's staged .view beside the board .rec) put every frame one
+round trip early: the .view's tick column is STAT_FS_TIMERTICKS as it arrived, and Watch_ViewMap
+maps frames by it. Remote players saw the camera turn before the body from t = 0 (measured on the
+lobby's uploads: 225-435 ms, 6-53 deg mean error; 0 on the Pi's LAN). (2) Lobby_Frame's colour pass
+wrote forceinfokey to departed clients' edicts; in the 2 s zombie window the engine re-sent their
+emptied name as "unnamed" to everyone and nothing cleared the row. (3) filter_activator_name
+compared the activator's targetname literally: ahop_coast's "!player" filter (23 teleports, 19
+water resets, its doors) never passed, nor did `*` filters (29 maps) or case-only names (14).
+(4) The lobbies have no data/mapmeta.txt, so ahop_coast ran the base ruleset where Momentum and the
+installs run bhop. (5) Owner request: one goto command.
+
+Change: Watch_ViewLag (cl_watch.qc), own online views only: 64 probe knots, shifts -2 ticks ..
+1.2 s scored by yaw+pitch error against the .rec's samples; a shift beating none by 0.5 deg comes
+out of every knot offset, printed and shown by `replay status`. sv_lobby.qc skips slots clienttype()
+does not call REAL/BOT. SV_FilterPassesD: "!player" = any player, else SV_NamesMatch (Source's
+CFilterName/NamesMatch); cl_triggers predicts "!player" statically. cfg/maps/map_ahop_coast.cfg =
+mode_bhop.cfg's lines. `goto [spawn|start|main|sN|bN]` in cl_warpop.qc; goto_spawn kept.
+New recordings carry the additive header key `filtermatch 1` (grammar in sv_timer.qc, reccheck).
+
+Verified: isolated rig, subject vs control at the same base (FTESurf tools/p1367-lexlist.md).
+Akatosh surf_ace own replay: subject 375 ms taken out, trace vs .rec mean 0.08 deg; control 28.75
+(p95 89). LAN control: 0 ms taken out. Two clients, one disconnects: control shows
+"name=unnamed" and 120 refused writes in 8 s, subject neither. ahop_coast C0103_teleport: subject
+lands landmark-relative (-895 -15319 -12655.09), control does not move. Rig without mapmeta:
+100 Hz, airaccelerate 1000. goto: every form answered by the server's own warp line. 0 warnings.
+Not covered: the slope-fix half of Momentum's ClipVelocity and the other nine lobby/install
+ruleset splits (BACKLOG); the lobby still publishes gamemode ahop, so ahop_coast's timer starts
+on leaving the box there (on the jump on installs); a view shift is one constant per file.
+
 ## Patch 1366 -- comparison bars and held-save visual travel (QC only)
 
 Problem: comparison deltas were difficult to read and answered only the nearest-route
