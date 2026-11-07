@@ -1419,8 +1419,13 @@ static void R_ModelLightShown(const modellightcache_t *c, vec3_t s, vec3_t a, ve
 {
 	float f = (c->blend > 0 && realtime >= c->time) ? (realtime - c->time) / c->blend : 1;
 	int i;
-	if (f > 1)
-		f = 1;
+	if (f >= 1)
+	{	//the sample itself, bit for bit (a + (b-a)*1 need not be b): r_modellight_cache 2 compares it
+		VectorCopy(c->shadelight, s);
+		VectorCopy(c->ambientlight, a);
+		VectorCopy(c->lightdir, d);
+		return;
+	}
 	for (i = 0; i < 3; i++)
 	{
 		s[i] = c->shade0[i] + (c->shadelight[i] - c->shade0[i]) * f;
@@ -1607,8 +1612,9 @@ qboolean R_CalcModelLighting(entity_t *e, model_t *clmodel)
 				//FTESurf Patch 1398: on a Source map (where a sample traces world lights) a model that moved keeps the
 				//sample it wrote up to 1/rate s while within 64 units of where it was taken (P1280's rule for the view
 				//model), the interval spread by keynum so a swarm does not re-sample in one frame: surf_centipedes'
-				//105 flying skulls traced every frame. Another entity of the bucket (tag children, keynum 0 temp
-				//entities) never borrows it: two still ones would swap samples.
+				//105 flying skulls traced every frame. Another entity of the bucket with another keynum or model never
+				//borrows it (two still ones would swap samples); keynum 0 temp entities never use it. Entities sharing
+				//keynum and model (same-model tag children of one parent; FTESurf's QC attaches none) still can.
 				own = rate > 0 && e->keynum && cache->seq == r_modellight_seq && cache->keynum == e->keynum &&
 					cache->model == clmodel && (cl.worldmodel->engineflags & MDLF_SOURCEBSP) && realtime >= cache->time;
 				if (cache->seq == r_modellight_seq && (exact ||

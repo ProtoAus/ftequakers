@@ -43,6 +43,13 @@ Verified: surf_centipedes stage starts, rate 0 against 30 (ABBA, 5 s each): st1 
 st3 284/271 -> 510/514, st4 372/455 -> 780/787, st5 273/255 -> 474/484. bhop_lost_world_v2 and surf_voyager
 spawn views (P1387's spinners): no consistent change.
 
+Follow-up (Lex: about once a second, blended; Momentum does not re-light moving props at all): rate
+defaults to 1 and the radius is 64 units; a re-sample by the entry's own model blends in from the light it
+showed over as long as its last sample was kept (1/rate at most), and a jump of 256 units shows the new
+light at once. One skull traced 3.6 s at rate 1: largest frame-to-frame step 0.25/255. Stage starts at
+rate 1 / 30 / 0: st1 464-549 / 376 / 164, st3 673-688 / 557 / 278, st4 910-922 / 874 / 414, st5
+616-627 / 564 / 277 (1% lows also highest at 1: the keynum spread keeps a swarm's samples apart).
+
 ## Patch 1386 -- water walls, slopes, undersides and entity Water share the view's capture (gl_backend.c)
 
 Problem: at r_waterviews 1 only level water facing the eye shared the view's one reflection/refraction
