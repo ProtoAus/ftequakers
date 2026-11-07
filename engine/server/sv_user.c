@@ -1713,6 +1713,7 @@ void SV_SendClientPrespawnInfo(client_t *client)
 					Info_SetValueForStarKey(buffer, "*z_ext", va("%i", client->zquake_extensions), sizeof(buffer)); //should already be in there, so this should only ever make it shorter.
 					ClientReliableWrite_Begin(client, svc_stufftext, 20 + i);
 					ClientReliableWrite_String (client, va("fullserverinfo \"%s\"\n", buffer) );
+					client->ncspeed_spawn = -1;	//FTESurf Patch 1383: a reconnect on this map hears the shared one
 				}
 			}
 			else if (client->prespawn_idx == 3)
@@ -8422,8 +8423,10 @@ static void SV_ClientNoclipSpeed(client_t *client)
 
 	if (v >= 0.25 && v <= 16)	//NaN fails it
 	{
+		int pmt = client->edict ? SV_PMTypeForClient(client, client->edict) : PM_NORMAL;
 		want = v;
-		if (client->spectator || (client->edict && (int)client->edict->v->movetype == MOVETYPE_NOCLIP))
+		//review 3: the mover's own set (PMSrc_NoClipMove), not the movetype
+		if (pmt == PM_SPECTATOR || pmt == PM_OLD_SPECTATOR || pmt == PM_FLY || pmt == PM_6DOF)
 			movevars.noclipspeed = v;
 	}
 	if (client->ncspeed_spawn != svs.spawncount || client->ncspeed_global != shared)
