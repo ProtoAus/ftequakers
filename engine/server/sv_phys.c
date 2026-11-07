@@ -3923,6 +3923,7 @@ static qboolean SV_ZoneRulesetFile(const char *path, char *found, size_t foundsz
 	if (gm)
 	{
 		g = (gm->type == json_type_number) ? JSON_ReadFloat(gm, 0) : 0;
+		g = (float)g;	//as QC's json_get_float sees it, so 2.0000001 is 2 on both sides
 		*mode = (g == 1 || g == 2) ? (int)g : -1;
 	}
 	JSON_Destroy(root);
