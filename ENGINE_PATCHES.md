@@ -1,5 +1,27 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1368 — execute selected similarity reader source bytes
+
+**Problem.** Ordinary direct callers could execute a previous reader revision on
+its next pass: an equal-size/same-integer-mtime source replacement still matched
+Python's timestamp bytecode. -B disables cache writes, not reads. Guarded live
+routes already isolate caches; no production stale-reader incident is claimed.
+
+**Change.** Keep caller-only paths/spec metadata and one reader per enabled pass;
+compile the selected binary source with dont_inherit=True and execute in that
+module's globals. Preserve encoding/BOM/source-future semantics, capability checks
+and typed unavailability. No cache deletion, helper, capture, schema, history,
+threshold, ranking, native pin/tag or QC Build change.
+
+**Verified.** Exact legacy Windows/ARM control fails only its final stale-reader
+marker after six real80 comparisons. Fixed four-case pass-reader banks pass on
+Windows3.10 and ARM3.11; existing rows stay exact. Windows all30 similarity programs:
+273unit cases/267pass/6existing skips plus68legacy assertions; reader949/0. Same554REC/
+178VIEW inputs and all732 diagnostic report blocks, unchanged344REC/7VIEW faults.
+Independent source review CLEAR. See QC tools/p1368-simcheck-source-reader.md for
+separate publication/delivery and limits; not helper-cache/global freshness,
+code authenticity, hard resource bounds, live cutover or whole-fleet coverage.
+
 ## Patch 1367 -- own replay views by their measured lead, lobby ghost rows, "!player" filters, goto (QC only)
 
 Problem: (1) an own online replay (P814's staged .view beside the board .rec) put every frame one
