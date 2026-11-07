@@ -1,5 +1,65 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1383 -- a player's own noclip speed (sv_user.c + QC)
+
+Problem: csprogs' Shift+wheel wrote pm_noclipspeed, a server cvar only a game hosted in the same
+process shares, so on a lobby it printed the new speed and changed nothing (BACKLOG "Lobby wheel").
+
+Change: userinfo `ncspeed` (0.25..16) is that player's speed on the moves that fly by it -- noclip
+or a spectator -- and only those (SV_ClientNoclipSpeed from SV_SetQWClientMoveVars): the pin records
+movevars and TAS project identity compares it, so walking keeps the shared value (review 2). The
+server tells only that client svc_serverinfo pm_noclipspeed (%.9g) when its value changes, and again
+after a map's serverdata or the engine's own sync of the shared key (sv_send.c marks the client), so
+released clients predict it. client_t gains three appended fields. Pi: branch p1383-arm =
+p1371-arm + the two P1383 commits.
+
+Verified: Source physics rig, installed client engine: noclip legs 265.2 / 795.6 units at ncspeed
+1 / 3, control (old server) 1060.8 / 1060.8 at the shared 4; client serverinfo follows; no prederr
+lines while flying. Pi pigate identical to the live binary (93 lines) and wasteland2 0022396 PASS on
+every Pi build. Three review rounds (pin/TAS identity, the sync race, pm type, reconnect fixed).
+Delivery: FTESurf tools/p1378-p1383.md.
+
+## Patch 1382 -- name the fs_addons games that did not mount (fs.c, hl2 plugin + QC)
+
+Problem: with no data/mapdeps.txt line the plugin said a map "references content that was never
+shipped with it", but mapdeps is resolved with every fs_addons.txt game mounted, so a player whose
+HL2/CS:S were not found (another drive) was told the map was broken.
+
+Change: FS_RemountAddons publishes the steam: lines it could not mount as fs_addons_missing (not
+"Half-Life 2/hl2" when Momentum's base resolves: its hl2_dir.vpk stands in, review 2); the material
+census names them first with the fs_steamlibs fix and drops states 0/1's claim. csprogs' banner and
+its new lobby report read the same cvar.
+
+Verified: CS:S listed under a misspelled folder: "Not found on this PC: Counter-Strike Sourcee/cstrike",
+no "never shipped", banner line and lobby report carry it; all games mounted: nothing missing. The
+HL2-under-Momentum exemption is checked by reading only (HL2 is installed on the test PC).
+
+## Patch 1380 -- point-sampled VTFs keep their mips; both clamp flags clamp (image.c)
+
+Problem: surf_centipedes' spawn title (VTF POINTSAMPLE|NOMIP|CLAMPS|CLAMPT, 1024 wide, ~640 px on
+screen) wrapped at the brush edges -- slivers of the next tile's letters beside it -- and point
+sampling of one level dropped texel columns.
+
+Change: CLAMPS and CLAMPT together set IF_CLAMP (one flag for both axes, so one alone keeps
+wrapping); NOMIP is not honoured on a POINTSAMPLE VTF (its own mips, GL_NEAREST_MIPMAP_LINEAR, nearest
+magnification as P728).
+
+Verified: spawn screenshot beside the owner's: slivers gone, strokes even. Owner check pending.
+
+## Patch 1378 -- passable tracktrains ride their path_tracks, in csprogs (QC only)
+
+Problem: func_tracktrain spawned frozen, so surf_centipedes' 3D-sky swarms (105 props on 35 passable
+trains) and 369 more passable trains Source starts at spawn never moved.
+
+Change: the server keeps each passable train's clock (path_track walk, Find/Next semantics, inputs)
+and sends it once as a CSQC entity; riders (non-solid props) once with their pose in the train's spawn
+frame; csprogs draws both every frame. A train with anything parented under it that cannot ride --
+including what spawned away (CheckSpawn records it) -- stays frozen. No native change.
+
+Verified: centipedes 35 trains / 105 riders, skulls cross the sky room; server->client bytes equal the
+control (441-446 vs 437-442 B/s; a server-side version cost 9-12 KB/s). Three review rounds.
+FTESurf tools/p1378-p1383.md.
+
 ## Patch 1377 — selected similarity reads observe the pass deadline
 
 **Problem.** The existing owner-opted SQLite progress handler limited selected VM
