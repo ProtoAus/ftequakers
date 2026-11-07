@@ -5868,7 +5868,13 @@ void CSQC_EntStateToCSQC(unsigned int flags, float lerptime, entity_state_t *src
 {
 	model_t *model;
 	lerpents_t		*le;
+	vec3_t oorg, oang, omin, omax;	//FTESurf Patch 1363: collision fields before the update
+	float omodel = ent->v->modelindex, osolid = ent->v->solid;
 
+	VectorCopy(ent->v->origin, oorg);
+	VectorCopy(ent->v->angles, oang);
+	VectorCopy(ent->v->mins, omin);
+	VectorCopy(ent->v->maxs, omax);
 	le = &cl.lerpents[src->number];
 
 	CSQC_LerpStateToCSQC(le, ent, flags & RSES_NOLERP);
@@ -5938,6 +5944,13 @@ void CSQC_EntStateToCSQC(unsigned int flags, float lerptime, entity_state_t *src
 	}
 	else
 		ent->v->solid = SOLID_NOT;
+	if (((wedict_t*)ent)->gridareas[0].l.prev && (ent->v->solid == SOLID_BSP || ent->v->solid == SOLID_PORTAL) &&
+		(osolid != ent->v->solid || omodel != ent->v->modelindex || !VectorCompare(oorg, ent->v->origin) ||
+		 !VectorCompare(oang, ent->v->angles) || !VectorCompare(omin, ent->v->mins) || !VectorCompare(omax, ent->v->maxs)))
+	{	//linked, solid, and moved without a relink: csqc_linewalk stands aside until it is relinked
+		extern void CSQC_LineWalkStale(unsigned int entnum, qboolean stale);
+		CSQC_LineWalkStale(((wedict_t*)ent)->entnum, true);
+	}
 
 	ent->v->movetype = src->u.q1.pmovetype;
 	ent->v->velocity[0] = src->u.q1.velocity[0] * (1/8.0);

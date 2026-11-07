@@ -35,6 +35,35 @@ line of sight checks trace->crosscontent, but bullets don't
 
 size_t areagridsequence;	//used to avoid poking the same ent twice.
 static unsigned int world_linkgen;	//FTESurf Patch 1363: any link/unlink; invalidates the overflow-list snapshot
+#if defined(HAVE_CLIENT) && defined(CSQC_DAT)
+//FTESurf Patch 1363: CSQC entities whose collision may not match their link (csqc_linewalk stands aside
+//while any exist): a SOLID_BSP linked without a natively traced model (it collides as an unrotated box
+//hull), or one the network state moved without a relink (CSQC_EntStateToCSQC).  Cleared by a relink.
+static qbyte *lw_stale;
+static unsigned int lw_stalemax, lw_stalecount;
+void CSQC_LineWalkStale(unsigned int entnum, qboolean stale)
+{
+	if (entnum >= lw_stalemax)
+	{
+		unsigned int n = entnum + 1024;
+		if (!stale)
+			return;
+		lw_stale = BZ_Realloc(lw_stale, n);
+		memset(lw_stale + lw_stalemax, 0, n - lw_stalemax);
+		lw_stalemax = n;
+	}
+	if (stale && !lw_stale[entnum])
+	{
+		lw_stale[entnum] = 1;
+		lw_stalecount++;
+	}
+	else if (!stale && lw_stale[entnum])
+	{
+		lw_stale[entnum] = 0;
+		lw_stalecount--;
+	}
+}
+#endif
 
 extern cvar_t sv_compatiblehulls;
 extern cvar_t sv_gameplayfix_linknonsolid;
@@ -361,6 +390,16 @@ static void World_ClearWorld_AreaGrid (world_t *w, qboolean relink)
 
 	World_InitBoxHull ();
 	world_linkgen++;
+#if defined(HAVE_CLIENT) && defined(CSQC_DAT)
+	{
+		extern world_t csqc_world;
+		if (w == &csqc_world && lw_stale)
+		{
+			memset(lw_stale, 0, lw_stalemax);
+			lw_stalecount = 0;
+		}
+	}
+#endif
 
 	if (w->gridareas)
 		memset (w->gridareas, 0, sizeof(*w->gridareas)*numareas);
@@ -520,6 +559,13 @@ void QDECL World_LinkEdict (world_t *w, wedict_t *ent, qboolean touch_triggers)
 
 #ifdef USEAREAGRID
 	World_UnlinkEdict (ent);	// unlink from old position
+#if defined(HAVE_CLIENT) && defined(CSQC_DAT)
+	{
+		extern world_t csqc_world;
+		if (w == &csqc_world)
+			CSQC_LineWalkStale(ent->entnum, false);
+	}
+#endif
 #else
 	areanode_t	*node;
 	
@@ -725,6 +771,17 @@ void QDECL World_LinkEdict (world_t *w, wedict_t *ent, qboolean touch_triggers)
 	InsertLinkBefore (&ent->area, &node->edicts);
 #endif
 	world_linkgen++;	//absmin/absmax are final here, before any touch function can trace
+#if defined(HAVE_CLIENT) && defined(CSQC_DAT)
+	{
+		extern world_t csqc_world;
+		if (w == &csqc_world && ent->v->solid == SOLID_BSP)
+		{
+			model_t *m = w->Get_CModel(w, ent->v->modelindex);
+			if (!m || m->loadstate != MLS_LOADED || !m->funcs.NativeTrace)
+				CSQC_LineWalkStale(ent->entnum, true);
+		}
+	}
+#endif
 
 // if touch_triggers, touch all entities at this node and decend for more
 	if (touch_triggers && ent->v->solid != SOLID_NOT)
@@ -2516,8 +2573,8 @@ static void CSQC_LineWalkStats_f(void)
 		for (i = 0; i < nn; i++)
 			Con_Printf("  %i x '%s'\n", counts[i], names[i]);
 	}
-	Con_Printf("csqc_linewalk %i: %u traces, %u redone the original way, %llu cells visited of %llu in their boxes; %u checked against the original walk, %u differed; %llu entity traces, %llu passed over by the move test, %llu overflow-grid rebuilds, %llu grid-list visits\n",
-		csqc_linewalk.ival, lw_stats.traces, lw_stats.fallbacks, lw_stats.cells, lw_stats.boxcells, lw_stats.checked, lw_stats.differed, lw_stats.traced, lw_stats.boxskips, lw_stats.rebuilds, lw_stats.visits);
+	Con_Printf("csqc_linewalk %i: %u traces, %u redone the original way, %llu cells visited of %llu in their boxes; %u checked against the original walk, %u differed; %llu entity traces, %llu passed over by the move test, %llu overflow-grid rebuilds, %llu grid-list visits; %u entities with stale links now\n",
+		csqc_linewalk.ival, lw_stats.traces, lw_stats.fallbacks, lw_stats.cells, lw_stats.boxcells, lw_stats.checked, lw_stats.differed, lw_stats.traced, lw_stats.boxskips, lw_stats.rebuilds, lw_stats.visits, lw_stalecount);
 	memset(&lw_stats, 0, sizeof(lw_stats));
 }
 void CSQC_LineWalk_Register(const char *group)
@@ -2533,7 +2590,8 @@ void CSQC_LineWalk_Register(const char *group)
 //the mask (without it World_TransformedTrace reports allsolid for an unloaded model it never traced).
 //Their collision geometry lies inside the absbox World_LinkEdict computed, so the move test and the
 //footprint are exact for entities whose origin/angles/size/model last changed through a link
-//(setorigin/setsize/setmodel).  This game's CSQC SOLID_BSP and SOLID_PORTAL entities all do:
+//(setorigin/setsize/setmodel).  Engine-side exceptions mark the entity stale (lw_stale); QC field writes
+//cannot be seen, and this game's CSQC SOLID_BSP and SOLID_PORTAL entities all relink:
 //cl_sprites.qc Sprite_AddOccluder, cl_emit.qc drop solids, cl_portal.qc Portal_Refresh.
 static qboolean World_LineWalkEligible(const moveclip_t *clip)
 {
@@ -2639,7 +2697,7 @@ static void World_ClipToAllLinks (world_t *w, moveclip_t *clip)
 	int ming[2], maxg[2], g[2];
 #if defined(HAVE_CLIENT) && defined(CSQC_DAT)
 	extern world_t csqc_world;
-	if (csqc_linewalk.ival && w == &csqc_world && World_LineWalkEligible(clip) && World_ClipToAllLinksFast(w, clip))
+	if (csqc_linewalk.ival && w == &csqc_world && !lw_stalecount && World_LineWalkEligible(clip) && World_ClipToAllLinksFast(w, clip))
 		return;
 #endif
 	areagridsequence++;
