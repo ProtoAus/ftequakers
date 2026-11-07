@@ -8915,12 +8915,9 @@ static void VBSP_BuildBIHMain(void *ctx, void *unusedp, size_t unuseda, size_t u
 		if (*nogame)
 		{
 			Con_Printf(CON_WARNING
-				"  Not found on this PC: %s.  Maps take textures from these games, so that is
-"
-				"  the likely cause.  If they are installed (on another drive?), type fs_steamlibs to
-"
-				"  see where it looked, then fs_steamlibs add <that SteamLibrary folder>.
-", nogame);
+				"  Not found on this PC: %s.  Maps take textures from these games, so that is\n"
+				"  the likely cause.  If they are installed (on another drive?), type fs_steamlibs to\n"
+				"  see where it looked, then fs_steamlibs add <that SteamLibrary folder>.\n", nogame);
 			if (state == 0 || state == 1)
 				state = -1;
 		}
