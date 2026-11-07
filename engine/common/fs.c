@@ -342,6 +342,9 @@ Published on EVERY path out of FS_AutoMountForMap, early returns included.  Stat
 initial value for exactly that reason: leave it unset on a path and the previous map's answer
 is what the next map's warning quotes, which is the failure this cvar exists to end. */
 static cvar_t fs_automount_state	= CVARFD	("fs_automount_state", "4", CVAR_NOSAVE, "ftesurf (P231): what fs_automount did for the loaded map. 0=it needs no pack, 1=its pack is mounted, 2=its pack is served from the asset cache, 3=it names a pack that is not installed, 4=unknown (fs_automount off, or no data/mapdeps.txt). Read by the missing-material warning to pick its advice; setting it by hand only lies to that warning.");
+//FTESurf Patch 1382: the fs_addons.txt games FS_RemountAddons could not mount, so the material
+//census stops saying "never shipped" when the game the map was checked against is just not found.
+static cvar_t fs_addons_missing		= CVARFD	("fs_addons_missing", "", CVAR_NOSAVE, "ftesurf (P1382): the steam: lines of fs_addons.txt that did not mount at the last filesystem build, comma-separated (Steam folder/game dir). Read by the missing-material warning; setting it by hand only lies to that warning.");
 static cvar_t fs_automount_spec		= CVARFD	("fs_automount_spec", "", CVAR_NOSAVE, "ftesurf (P231): the data/mapdeps.txt spec behind fs_automount_state -- the pack the loaded map asks for, or empty when it asks for none. In state 3 this is the one an fs_load would name.");
 //nettest: Half-Life ships its high-definition model pack as a SEPARATE gamedir sibling
 //("valve" -> "valve_hd", "bshift" -> "bshift_hd", "anticlimax" -> "anticlimax_hd", ...),
@@ -10872,10 +10875,14 @@ static void FS_RemountAddons(unsigned int loadstuff)
 {
 	char *file, *line, *nl, *e;
 	int steamfails = 0;	//ftesurf (P276)
+	char missing[1024];	//FTESurf Patch 1382
+
+	*missing = 0;
 
 	file = FS_LoadMallocFile(FS_ADDONS_FILE, NULL);
 	if (!file)
 	{
+		Cvar_ForceSet(&fs_addons_missing, "");
 		FS_Addon_AutoSourceBase();
 		return;
 	}
@@ -10894,9 +10901,15 @@ static void FS_RemountAddons(unsigned int loadstuff)
 		if (FS_Addon_Mount(line, loadstuff))
 			Con_DPrintf("fs_load: re-mounted addon \"%s\"\n", line);
 		else if (!strncmp(line, "steam:", 6))
+		{
 			steamfails++;	//ftesurf (P276): a Steam game the resolver could not see
+			if (*missing)
+				Q_strncatz(missing, ", ", sizeof(missing));
+			Q_strncatz(missing, line+6, sizeof(missing));
+		}
 	}
 	BZ_Free(file);
+	Cvar_ForceSet(&fs_addons_missing, missing);
 	if (steamfails)
 		FS_SteamHint();
 	FS_Addon_AutoSourceBase();	//below user-ordered games, before any map asset loads
@@ -13059,6 +13072,7 @@ void COM_InitFilesystem (void)
 	Cvar_Register(&fs_assetcache, "Filesystem");	//ftesurf (P186)
 	Cvar_Register(&fs_automount_state, "Filesystem");	//ftesurf (P231)
 	Cvar_Register(&fs_automount_spec, "Filesystem");	//ftesurf (P231)
+	Cvar_Register(&fs_addons_missing, "Filesystem");	//FTESurf Patch 1382
 	Cvar_Register(&fs_loadstats, "Filesystem");		//ftesurf (P180)
 	Cvar_Register(&fs_maploadhash, "Filesystem");	//ftesurf (P180)
 	Cvar_Register(&fs_mapmaterials, "Filesystem");	//ftesurf (P765)

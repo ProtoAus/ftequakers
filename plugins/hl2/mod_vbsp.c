@@ -8871,6 +8871,7 @@ static void VBSP_BuildBIHMain(void *ctx, void *unusedp, size_t unuseda, size_t u
 		int i, shown = vmt_stat_missing;
 		int state;
 		char spec[MAX_QPATH*4], mapshort[MAX_QPATH], *dot;
+		char nogame[1024];	//FTESurf Patch 1382
 		const char *sl;
 
 		//FTESurf Patch 233: classify every name we RECORDED, not just the ones about to be
@@ -8906,8 +8907,28 @@ static void VBSP_BuildBIHMain(void *ctx, void *unusedp, size_t unuseda, size_t u
 		if (!cvarfuncs->GetString("fs_automount_spec", spec, sizeof(spec)))
 			*spec = 0;
 
+		//FTESurf Patch 1382: mapdeps.txt was resolved with every fs_addons.txt game mounted. One that did
+		//not mount here (Markbeaton54: HL2 and CS:S on another drive) is the likelier cause, so name it and
+		//drop the "never shipped" claims of states 0 and 1.
+		if (!cvarfuncs->GetString("fs_addons_missing", nogame, sizeof(nogame)))
+			*nogame = 0;
+		if (*nogame)
+		{
+			Con_Printf(CON_WARNING
+				"  Not found on this PC: %s.  Maps take textures from these games, so that is
+"
+				"  the likely cause.  If they are installed (on another drive?), type fs_steamlibs to
+"
+				"  see where it looked, then fs_steamlibs add <that SteamLibrary folder>.
+", nogame);
+			if (state == 0 || state == 1)
+				state = -1;
+		}
+
 		switch (state)
 		{
+		case -1:	//P1382: said above
+			break;
 		case 0:	//mapdeps.txt was read and names no pack for this map
 			Con_Printf(CON_WARNING
 				"  No asset pack supplies these.  data/mapdeps.txt names none for this map,\n"
