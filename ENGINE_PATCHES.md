@@ -1,5 +1,24 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1372 -- retain selected-row metadata for historical warm saves (QC only)
+
+Problem: current-format historical streamed saves omitted recorder metadata required
+by warm restoration. An acting baseline kept positive saved clocks but lost recording
+after load; the predicted zero saved clock was falsified, not relabelled as a pass.
+
+Change: capture the full recorder tuple with each rewind row and write it from that
+selected row, never today's live head. Grow the dynamic row layout and reject an
+unavailable modern tuple before file/queue mutation. No format/native/pin/tag/Build
+change, old-file migration, cold-cut duration recovery or general zero-clock fix.
+
+Verified: reviewed subject ordinary warm controls22/0, actual client helper26/0;
+standing/crouched body, clock, loaded stance, real GUI sampled position, hold/release
+and recording continuation. Frozen P1366 server counterfactual ACTS and loses recorder
+attachment. Latest public-base integration/build/readers and deployment recorded in
+tools/p1372-warm-stream.md. Full TAS, changing nonzero native counter tuples,
+unavailable-state runtime mutation counters and owner visual/original-case acceptance
+remain open, not implied by metadata presence or source review.
+
 ## Patch 1370 — start the existing prefix at the aligned overlap
 
 **Problem.** best_offset compares negative alignments after skipping their leading
