@@ -2943,6 +2943,8 @@ Con_DLPrintf(2, "%s: info %u:%s\n", client->name, (info == &svs.info)?0:(unsigne
 			MSG_WriteString(buf, key);
 			MSG_WriteString(buf, blobdata);
 			ClientReliable_FinishWrite(client);
+			if (info == &svs.info && !strcmp(key, "pm_noclipspeed"))
+				client->ncspeed_spawn = -1;	//FTESurf Patch 1383: it believes the shared one now; its own goes again
 		}
 	}
 	else if (client->fteprotocolextensions2 & PEXT2_INFOBLOBS)
