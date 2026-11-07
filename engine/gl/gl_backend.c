@@ -7139,7 +7139,7 @@ static void GLBE_CaptureLog(batch_t *sub, shader_t *cs, const char *kind, batch_
 //:2253-2392), and every water material samples those same targets (water.cpp:259-266). Per view the
 //water that most fills the screen on the eye's side of it is chosen before anything draws and captured
 //once, for all of its batches together (r_waterviews).
-extern cvar_t r_waterviews;
+extern cvar_t r_waterviews, r_waterwalls;
 #define BE_WATERKINDS (SHADER_HASREFLECT|SHADER_HASREFRACT|SHADER_HASREFRACTDEPTH)
 #define BE_WATERPLANES 128	//on-screen facing water planes weighed per view, each over all its batches before the
 							//choice (the library's most is 82 up-facing planes on a whole map); at 1 any more share
@@ -7192,6 +7192,22 @@ static qboolean GLBE_WaterFacesEye(const plane_t *p, qboolean under)
 		return false;	//behind it: GLR_DrawPortal would refuse the capture
 	return under ? p->normal[2] < -0.99f : p->normal[2] > 0.99f;
 }
+//FTESurf Patch 1386: world water the eye sees from its front that GLBE_WaterFacesEye turns down (walls, slopes,
+//an underside seen from below out of the water) samples the view's chosen pair at r_waterviews 1 rather than
+//capturing alone: two more scenes per plane every frame, and a second plane stops r_capturerate's keep for all
+//of them. bhop_ceaseless save 35: 217 -> 448 fps. With no level water on screen one of them is chosen
+//(GLBE_WaterViewsBegin).
+static qboolean GLBE_WaterOtherShares(const plane_t *p)
+{
+	return r_waterwalls.ival && r_waterviews.ival == 1 && DotProduct(r_refdef.vieworg, p->normal) - p->dist >= -r_refdef.mindist;
+}
+//...and Water on a brush entity (func_brush, func_illusionary). $refractiondepth marks a Water material, which
+//func_reflective_glass's (vmt/lmreflect, a mirror of its own plane) does not sample.
+static qboolean GLBE_WaterEntityShares(const batch_t *b, const shader_t *s)
+{
+	return r_waterwalls.ival && r_waterviews.ival == 1 && b->ent != &r_worldentity && (s->flags & SHADER_HASREFRACTDEPTH) &&
+		!(s->flags & (SHADER_NODRAW|SHADER_HASPORTAL|SHADER_HASRIPPLEMAP));
+}
 static void GLBE_MeshBox(const mesh_t *mesh, vec3_t lo, vec3_t hi)
 {
 	int v, k;
@@ -7224,13 +7240,13 @@ void GLBE_WaterViewsNewMap(void)
 	be_occluderasked = false;
 	if (!r_waterviews.ival || !cl.worldmodel || cl.worldmodel->loadstate != MLS_LOADED)
 		return;
-	//only what the choice ever weighs: level faces of a capture material (GLBE_WaterFacesEye), so a map whose
-	//only capture surfaces are windows or sloped water builds nothing
+	//only what the choice ever weighs: faces of a capture material, level ones (GLBE_WaterFacesEye) and, under
+	//r_waterwalls, the rest (Patch 1386), so a map whose only capture surfaces are windows builds nothing
 	for (i = 0; i < cl.worldmodel->nummodelsurfaces; i++)
 	{
 		msurface_t *s = &cl.worldmodel->surfaces[cl.worldmodel->firstmodelsurface + i];
 		shader_t *sh = (s->texinfo && s->texinfo->texture) ? s->texinfo->texture->shader : NULL;
-		if (sh && s->plane && fabs(s->plane->normal[2]) > 0.99f &&
+		if (sh && s->plane && (fabs(s->plane->normal[2]) > 0.99f || (r_waterwalls.ival && r_waterviews.ival == 1)) &&
 			!(sh->flags & (SHADER_NODRAW|SHADER_HASPORTAL|SHADER_HASRIPPLEMAP)) && (sh->flags & (SHADER_HASREFLECT|SHADER_HASREFRACT)))
 			n++;
 	}
@@ -7521,7 +7537,7 @@ static void GLBE_WaterGather(bewaterview_t *wv, batch_t *first, const plane_t *p
 //before this view submits anything: pick its water
 static void GLBE_WaterViewsBegin(batch_t **worldbatches)
 {
-	int level = r_refdef.recurse, i, n = 0, s, t, best, hidden = -1, kept = 0, seat = 0;
+	int level = r_refdef.recurse, i, n = 0, s, t, best, hidden = -1, kept = 0, seat = 0, pass;
 	bewaterview_t *wv;
 	batch_t *b;
 	plane_t p;
@@ -7549,10 +7565,13 @@ static void GLBE_WaterViewsBegin(batch_t **worldbatches)
 	//each view's own eye (r_viewcontents is the top-level one's): a portal's far camera, a sky room's
 	wv->under = cl.worldmodel && cl.worldmodel->funcs.PointContents &&
 		(cl.worldmodel->funcs.PointContents(cl.worldmodel, NULL, r_refdef.vieworg) & (FTECONTENTS_WATER|FTECONTENTS_SLIME|FTECONTENTS_LAVA));
+	//level water first; with none on screen, the rest the eye sees from the front (FTESurf Patch 1386: each
+	//captured alone, surf_affliction's lava channel rendered 184 scenes a frame, 2 fps)
+	for (pass = 0; pass < 2 && !n; pass++)
 	for (i = 0; i < SHADER_SORT_COUNT; i++)
 		for (b = worldbatches[i]; b; b = b->next)
 		{
-			if (!GLBE_WaterCandidate(b) || !GLR_BatchPlane(b, &p) || !GLBE_WaterFacesEye(&p, wv->under))
+			if (!GLBE_WaterCandidate(b) || !GLR_BatchPlane(b, &p) || !(pass ? GLBE_WaterOtherShares(&p) : GLBE_WaterFacesEye(&p, wv->under)))
 				continue;
 			for (s = 0; s < n; s++)
 				if (GLBE_WaterSamePlane(&planes[s].p, &p))
@@ -7771,18 +7790,20 @@ static qboolean GLBE_GenerateBatchTextures(batch_t *batch, shader_t *bs)
 
 	//FTESurf Patch 879: the view's water plane is captured once (GLBE_WaterViewsBegin). Below
 	//GLR_DrawPortal's out-of-recursion path, which would submit the combined batch itself.
-	if (r_waterviews.ival && r_refdef.recurse < R_MAX_RECURSE-1 && GLBE_WaterCandidate(batch))
+	if (r_waterviews.ival && r_refdef.recurse < R_MAX_RECURSE-1 && (GLBE_WaterCandidate(batch) || GLBE_WaterEntityShares(batch, bs)))
 	{
 		bewaterview_t *wv = &be_waterview[r_refdef.recurse];
 		plane_t p;
 		unsigned int need;
 		qboolean chosenplane;
+		qboolean world = batch->ent == &r_worldentity;
 		//nothing of it on screen (the walk lists a node's off-screen faces): no capture, nothing to draw
-		if (!GLBE_WaterOnScreen(batch))
+		if (world && !GLBE_WaterOnScreen(batch))
 			return false;
-		if (wv->chosen && VectorCompare(wv->eye, r_refdef.vieworg) && GLR_BatchPlane(batch, &p) && GLBE_WaterFacesEye(&p, wv->under))
+		if (wv->chosen && VectorCompare(wv->eye, r_refdef.vieworg) &&
+			(!world || (GLR_BatchPlane(batch, &p) && (GLBE_WaterFacesEye(&p, wv->under) || GLBE_WaterOtherShares(&p)))))
 		{
-			chosenplane = GLBE_WaterSamePlane(&p, &wv->plane) || r_waterviews.ival == 1;
+			chosenplane = !world || GLBE_WaterSamePlane(&p, &wv->plane) || r_waterviews.ival == 1;
 			if (chosenplane)	//at 1 every water facing the eye samples the chosen plane's capture, as in Source
 			{
 				p = wv->plane;
