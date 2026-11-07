@@ -2246,8 +2246,11 @@ static void World_LineSpan(world_t *w, moveclip_t *clip, int fa, int gf, int lo,
 	vlo += bvlo; vhi += bvhi;
 	*r0 = floor((vlo + w->gridbias[va]) / w->gridscale[va]);
 	*r1 = floor((vhi + w->gridbias[va]) / w->gridscale[va]);
+	//clamp both ends into [lo, hi), as CALCAREAGRIDBOUNDS files outside points in the edge cells
 	if (*r0 < lo) *r0 = lo;
+	if (*r0 > hi-1) *r0 = hi-1;
 	if (*r1 > hi-1) *r1 = hi-1;
+	if (*r1 < lo) *r1 = lo;
 }
 
 //Does the swept move (start..end widened by mins2/maxs2 and World_MoveBounds' 1 unit, plus slack) meet this box?
@@ -2390,8 +2393,8 @@ static void World_ClipToLinksCounted (world_t *w, areagridlink_t *node, moveclip
 //cl_portal.qc sets SOLID_PORTAL and relinks in the same call.
 #define OVF_WIDE 2048
 static struct {
-	world_t *world;
-	unsigned int gen, stamp;
+	world_t *world, *seenworld;
+	unsigned int gen, stamp, seengen;
 	int n, nwide, ncells;
 	struct ovf_s {wedict_t *ed; vec3_t mn, mx; unsigned int stamp;} *ents;
 	int *wide;			//indices into ents
@@ -2525,6 +2528,26 @@ void CSQC_LineWalk_Register(const char *group)
 #endif
 
 #if defined(HAVE_CLIENT) && defined(CSQC_DAT)
+//Which traces take the fast path.  Point traces (hull 0: no box widening, no hull rounding) that hit only
+//SOLID_BSP and SOLID_PORTAL entities (MOVE_NOMONSTERS without MOVE_HITPROPS), with FTECONTENTS_BODY in
+//the mask (without it World_TransformedTrace reports allsolid for an unloaded model it never traced).
+//Their collision geometry lies inside the absbox World_LinkEdict computed, so the move test and the
+//footprint are exact for entities whose origin/angles/size/model last changed through a link
+//(setorigin/setsize/setmodel).  This game's CSQC SOLID_BSP and SOLID_PORTAL entities all do:
+//cl_sprites.qc Sprite_AddOccluder, cl_emit.qc drop solids, cl_portal.qc Portal_Refresh.
+static qboolean World_LineWalkEligible(const moveclip_t *clip)
+{
+	int i;
+	if ((clip->type & (MOVE_ENTCHAIN|MOVE_HITPROPS|MOVE_EVERYTHING|MOVE_OTHERONLY)) || !(clip->type & MOVE_NOMONSTERS))
+		return false;
+	if (!(clip->hitcontentsmask & FTECONTENTS_BODY))
+		return false;
+	for (i = 0; i < 3; i++)
+		if (clip->mins[i] || clip->maxs[i] || clip->mins2[i] || clip->maxs2[i] || IS_NAN(clip->start[i]) || IS_NAN(clip->end[i]))
+			return false;
+	return true;
+}
+
 //Patch 1363: the overflow list and the footprint's cells, every entity tested against the swept move
 //first.  An entity the move cannot reach cannot hit it or contain its start, so it never changes the
 //answer; with at most one entity that can, visiting order is irrelevant.  False: redo the original way.
@@ -2534,16 +2557,29 @@ static qboolean World_ClipToAllLinksFast (world_t *w, moveclip_t *clip)
 	trace_t base = clip->trace;
 	areagridlink_t *node;
 
+	qboolean usegrid = true;
+
 	areagridsequence++;
 	if (ovf.world != w || ovf.gen != world_linkgen || ovf.ncells != w->gridsize[0] * w->gridsize[1])
-		World_OverflowRebuild(w);
-	if (++ovf.stamp == 0)
+	{	//rebuild only once links have held still across a trace: code that relinks between traces walks the list
+		if (ovf.seenworld == w && ovf.seengen == world_linkgen)
+			World_OverflowRebuild(w);
+		else
+		{
+			ovf.seenworld = w;
+			ovf.seengen = world_linkgen;
+			usegrid = false;
+			World_ClipToLinksCounted(w, &w->jumboarea, clip, &base, &changers);
+		}
+	}
+	if (usegrid && ++ovf.stamp == 0)
 	{	//wrapped: no entry may look visited
 		int i;
 		for (i = 0; i < ovf.n; i++)
 			ovf.ents[i].stamp = 0;
 		ovf.stamp = 1;
 	}
+	if (usegrid)
 	{
 		int i;
 		for (i = 0; i < ovf.nwide; i++)
@@ -2561,7 +2597,7 @@ static qboolean World_ClipToAllLinksFast (world_t *w, moveclip_t *clip)
 			int c = g[0] + g[1]*w->gridsize[0], k;
 			node = &w->gridareas[c];
 			lw_stats.cells++;
-			for (k = ovf.start[c]; k < ovf.start[c+1]; k++)
+			for (k = usegrid ? ovf.start[c] : 0; usegrid && k < ovf.start[c+1]; k++)
 				World_OverflowVisit(w, ovf.idx[k], clip, &base, &changers);
 			if (node->l.next == &node->l)
 				continue;
@@ -2603,7 +2639,7 @@ static void World_ClipToAllLinks (world_t *w, moveclip_t *clip)
 	int ming[2], maxg[2], g[2];
 #if defined(HAVE_CLIENT) && defined(CSQC_DAT)
 	extern world_t csqc_world;
-	if (csqc_linewalk.ival && w == &csqc_world && !(clip->type & MOVE_ENTCHAIN) && World_ClipToAllLinksFast(w, clip))
+	if (csqc_linewalk.ival && w == &csqc_world && World_LineWalkEligible(clip) && World_ClipToAllLinksFast(w, clip))
 		return;
 #endif
 	areagridsequence++;

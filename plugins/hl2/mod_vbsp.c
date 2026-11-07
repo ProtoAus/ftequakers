@@ -731,6 +731,8 @@ typedef struct vbspinfo_s
 	detailcell_t	*detailcells;
 
 	unsigned int contentsremap[32];
+	qboolean	lightwarm_done;		//FTESurf Patch 1364: this load's prop-lighting warm is over
+	double		lightwarm_spent, lightwarm_t0;
 } vbspinfo_t;
 
 /*
@@ -10518,27 +10520,33 @@ static void VBSP_PropSolveLight(model_t *mod, vbspinfo_t *prv, struct staticprop
 FTESurf Patch 1364: solve every static prop's lighting before it is first seen.  The lazy solve in the
 prop loop traced every worldlight for each newly visible prop inside the frame that saw it: bhop_ceaseless
 spent 231 ms of one frame on 22 of them (P1358 halved the work, ~67 ms stayed).  The solve does not read the
-view, so its answer is the same whenever it runs.  Up to hl2_lt_prewarm ms of it in all from the first
-frame after a map load or any invalidation, coming back each frame for models still loading.
+view, so its answer is the same whenever it runs.  Once per map load (prv->lightwarm_*), from its first
+frame: every prop model is requested, and props are solved as their models arrive, within hl2_lt_prewarm
+ms in all and 30 s of waiting for models.  A later lighting change re-solves lazily, as before.
 */
 static cvar_t *hl2_lt_prewarm;
-static struct {model_t *mod; int pending; int solved, left, skipped; double ms, spent; unsigned int lazy; double lazyms;} vbsp_lightwarm;
+static struct {int solved, left, waiting, props, unlit; double ms; unsigned int lazy; double lazyms;} vbsp_lightwarm;
 static void VBSP_PropLightWarm(model_t *mod, vbspinfo_t *prv, refdef_t *r_refdef)
 {
-	double t0 = plugfuncs->GetSeconds(), limit = hl2_lt_prewarm->value / 1000.0 - vbsp_lightwarm.spent;	//one budget per load/invalidation, across passes
-	int i;
-	vbsp_lightwarm.solved = vbsp_lightwarm.left = vbsp_lightwarm.skipped = 0;
+	double t0 = plugfuncs->GetSeconds(), limit = hl2_lt_prewarm->value / 1000.0 - prv->lightwarm_spent;
+	int i, unlit = 0;
+	if (!prv->lightwarm_t0)
+		prv->lightwarm_t0 = t0;
+	vbsp_lightwarm.solved = vbsp_lightwarm.left = vbsp_lightwarm.waiting = 0;
 	for (i = 0; i < prv->numstaticprops; i++)
 	{
 		struct staticprop_s *sent = &prv->staticprops[i];
 		entity_t *src = &sent->ent;
 		if (src->light_known)
 			continue;
+		if (src->model && src->model->loadstate == MLS_NOTLOADED)
+			modfuncs->GetModel(src->model->publicname, MLV_WARN);	//as the prop loop does, for every prop
 		if (!src->model || src->model->loadstate == MLS_FAILED)
 			continue;	//the lazy path never lights it either
+		unlit++;
 		if (src->model->loadstate != MLS_LOADED)
 		{
-			vbsp_lightwarm.skipped++;
+			vbsp_lightwarm.waiting++;
 			continue;
 		}
 		if (plugfuncs->GetSeconds() - t0 >= limit)
@@ -10548,38 +10556,27 @@ static void VBSP_PropLightWarm(model_t *mod, vbspinfo_t *prv, refdef_t *r_refdef
 		}
 		VBSP_PropSolveLight(mod, prv, sent, src, r_refdef);
 		vbsp_lightwarm.solved++;
+		unlit--;
 	}
 	vbsp_lightwarm.ms = (plugfuncs->GetSeconds() - t0) * 1000;
-	vbsp_lightwarm.spent += vbsp_lightwarm.ms / 1000;
-	vbsp_lightwarm.mod = mod;
-	vbsp_lightwarm.pending = vbsp_lightwarm.skipped > 0 && !vbsp_lightwarm.left;	//come back for models still loading, while budget lasts
+	prv->lightwarm_spent += vbsp_lightwarm.ms / 1000;
+	vbsp_lightwarm.props = (int)prv->numstaticprops;
+	vbsp_lightwarm.unlit = unlit;
+	//done when nothing is waiting for its model, the budget is spent, or the models took too long
+	if (!vbsp_lightwarm.waiting || vbsp_lightwarm.left || t0 - prv->lightwarm_t0 > 30)
+		prv->lightwarm_done = true;
 	if (vbsp_lightwarm.solved)
-		Con_Printf("hl2_lt_prewarm: %i props solved in %.1f ms, %i over budget, %i models still loading\n",
-		vbsp_lightwarm.solved, vbsp_lightwarm.ms, vbsp_lightwarm.left, vbsp_lightwarm.skipped);
+		Con_Printf("hl2_lt_prewarm: %i props solved in %.1f ms, %i over budget, %i waiting for their model\n",
+			vbsp_lightwarm.solved, vbsp_lightwarm.ms, vbsp_lightwarm.left, vbsp_lightwarm.waiting);
 }
 static void VBSP_PropLightWarmInfo_f(void)
 {
-	Con_Printf("hl2_lt_prewarm %g: %i props solved in %.1f ms, %i over budget, %i models still loading\n",
-		hl2_lt_prewarm ? hl2_lt_prewarm->value : 0, vbsp_lightwarm.solved, vbsp_lightwarm.ms, vbsp_lightwarm.left, vbsp_lightwarm.skipped);
-	if (vbsp_lightwarm.mod && vbsp_lightwarm.mod->loadstate == MLS_LOADED && vbsp_lightwarm.mod->meshinfo)
-	{	//now: how many are lit, and why the rest are not (a purged map's meshinfo is gone)
-		vbspinfo_t *prv = vbsp_lightwarm.mod->meshinfo;
-		int i, lit = 0, nomodel = 0, failed = 0, loading = 0, unlit = 0;
-		for (i = 0; i < prv->numstaticprops; i++)
-		{
-			entity_t *e = &prv->staticprops[i].ent;
-			if (e->light_known) lit++;
-			else if (!e->model) nomodel++;
-			else if (e->model->loadstate == MLS_FAILED) failed++;
-			else if (e->model->loadstate != MLS_LOADED) loading++;
-			else unlit++;
-		}
-		Con_Printf("  now: %i props, %i lit, %i loaded but unlit, %i loading, %i failed, %i without a model\n",
-			(int)prv->numstaticprops, lit, unlit, loading, failed, nomodel);
-		Con_Printf("  solved in the frame that first drew them, since the last info: %u props, %.1f ms\n", vbsp_lightwarm.lazy, vbsp_lightwarm.lazyms);
-		vbsp_lightwarm.lazy = 0;
-		vbsp_lightwarm.lazyms = 0;
-	}
+	Con_Printf("hl2_lt_prewarm %g: last pass %i props solved in %.1f ms, %i over budget, %i waiting for their model; %i of %i props still unlit after it\n",
+		hl2_lt_prewarm ? hl2_lt_prewarm->value : 0, vbsp_lightwarm.solved, vbsp_lightwarm.ms, vbsp_lightwarm.left, vbsp_lightwarm.waiting,
+		vbsp_lightwarm.unlit, vbsp_lightwarm.props);
+	Con_Printf("  solved in the frame that first drew them, since the last info: %u props, %.1f ms\n", vbsp_lightwarm.lazy, vbsp_lightwarm.lazyms);
+	vbsp_lightwarm.lazy = 0;
+	vbsp_lightwarm.lazyms = 0;
 }
 
 static void VBSP_PrepareFrame(model_t *mod, refdef_t *r_refdef, int area, int clusters[2], pvsbuffer_t *vis, qbyte **entvis_out, qbyte **surfvis_out)
@@ -11006,12 +11003,10 @@ static void VBSP_PrepareFrame(model_t *mod, refdef_t *r_refdef, int area, int cl
 				vbsp_vc_mod = mod;
 				for (i = 0; i < prv->numstaticprops; i++)
 					prv->staticprops[i].ent.light_known = 0;
-				vbsp_lightwarm.pending = 1;	//Patch 1364
-				vbsp_lightwarm.spent = 0;
 			}
 		}
 		//Patch 1364: before the prop loop, so no prop is first solved in the frame that sees it
-		if (vbsp_lightwarm.pending && hl2_lt_prewarm && hl2_lt_prewarm->value > 0)
+		if (!prv->lightwarm_done && hl2_lt_prewarm && hl2_lt_prewarm->value > 0)
 			VBSP_PropLightWarm(mod, prv, r_refdef);
 
 		//FTESurf Patch 257: reset the per-frame accounting.  Every prop starts
