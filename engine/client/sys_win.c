@@ -1745,6 +1745,7 @@ void VARGS Sys_Error (const char *error, ...)
 	vsnprintf (text, sizeof(text), error, argptr);
 	va_end (argptr);
 
+	Log_Fatal(text);	//FTESurf Patch 1417
 	COM_WorkerAbort(text);
 
 #ifndef SERVERONLY

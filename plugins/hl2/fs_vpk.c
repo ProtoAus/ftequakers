@@ -172,8 +172,9 @@ static unsigned int QDECL FSVPK_FLocate(searchpathfuncs_t *handle, flocation_t *
 			loc->fhandle = pf;
 			*loc->rawname = 0;
 			loc->offset = (qofs_t)-1;
+			//FTESurf Patch 1417: unsigned -- byte 3 at 0x80 or more made an int negative, sign-extended into qofs_t
 			loc->len =	 ((pf->file->preloadsize[0]<<0)|(pf->file->preloadsize[1]<<8))
-						+((pf->file->archivesize[0]<<0)|(pf->file->archivesize[1]<<8)|(pf->file->archivesize[2]<<16)|(pf->file->archivesize[3]<<24));
+						+(qofs_t)(((unsigned int)pf->file->archivesize[0]<<0)|((unsigned int)pf->file->archivesize[1]<<8)|((unsigned int)pf->file->archivesize[2]<<16)|((unsigned int)pf->file->archivesize[3]<<24));
 		}
 		return FF_FOUND;
 	}
@@ -194,7 +195,7 @@ static int QDECL FSVPK_EnumerateFiles (searchpathfuncs_t *handle, const char *ma
 			file = &pak->files[num];
 			//FIXME: time 0? maybe use the pak's mtime?
 			size = ((file->file->preloadsize[0]<<0)|(file->file->preloadsize[1]<<8))
-				  +((file->file->archivesize[0]<<0)|(file->file->archivesize[1]<<8)|(file->file->archivesize[2]<<16)|(file->file->archivesize[3]<<24));
+				  +(qofs_t)(((unsigned int)file->file->archivesize[0]<<0)|((unsigned int)file->file->archivesize[1]<<8)|((unsigned int)file->file->archivesize[2]<<16)|((unsigned int)file->file->archivesize[3]<<24));
 			if (!func(file->name, size, 0, parm, handle))
 				return false;
 		}
@@ -346,7 +347,7 @@ static vfsfile_t *QDECL FSVPK_OpenVFS(searchpathfuncs_t *handle, flocation_t *lo
 	vfs->preloaddata = (const qbyte*)f->file + sizeof(*f->file);
 	vfs->preloadsize = (f->file->preloadsize[0]<<0) | (f->file->preloadsize[1]<<8);
 
-	vfs->startpos = (f->file->archiveoffset[0]<<0)|(f->file->archiveoffset[1]<<8)|(f->file->archiveoffset[2]<<16)|(f->file->archiveoffset[3]<<24);
+	vfs->startpos = (qofs_t)(((unsigned int)f->file->archiveoffset[0]<<0)|((unsigned int)f->file->archiveoffset[1]<<8)|((unsigned int)f->file->archiveoffset[2]<<16)|((unsigned int)f->file->archiveoffset[3]<<24));
 	if (frag == 0x7fff)
 		vfs->startpos += pack->databaseofs;	//FTESurf Patch 181: relative to the dir's data section, which begins after the tree
 	vfs->length = loc->len;

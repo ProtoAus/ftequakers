@@ -1,5 +1,28 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1417 -- a file length past 2 GB is refused by name; Sys_Error reaches the log (fs.c, image.c, fs_vpk.c, log.c, sys_win.c, sys_linux.c)
+
+Problem: a player (MetalGio, 8 Nov) got "BZ_Malloc: Failed on allocation of 18446744071578836992 bytes" on
+every story-mode map switch while downloading. That is 0xFFFFFFFF80FFE000: FS_LoadMallocGroupFile (every
+.bsp and model) took VFS_GETLEN's 64-bit length in an int, so a length of 0x80FFDFFF went negative and
+`len+1` reached BZ_Malloc sign-extended. The dialog named no file. Image_LoadHiResTextureWorker passed any
+length straight to BZ_Malloc, and fs_vpk.c built entry sizes and offsets with int shifts, so a VPK entry
+whose top byte is 0x80 or more became a sign-extended qofs_t. Sys_Error wrote its text only to the dialog.
+
+Change: both loaders refuse a length over 0x7ffffffe with "<file>: reports N bytes; not loaded" (a model
+or map then fails to load as a missing one does; a texture takes the failed-texture path). fs_vpk.c's three
+size/offset sums are unsigned. Log_Fatal (log.c) writes "Sys_Error: <text>" to the console log (when on)
+and data/crash/error.txt before the shutdown, once (a guard stops recursion; skipped before the filesystem
+is up); the Windows and Linux client Sys_Errors call it. FTESurf P1418 builds a crash report from it.
+
+Verified (FTESurf-worktrees/xhair-20261108-b8/tools/guardarm.py): a dedicated server loading a sparse
+maps/huge.bsp of 0x80FFDFFF bytes. Before (fteqwsv64 0e2d9f5c): "BZ_Malloc: Failed on allocation of
+18446744071578836992 bytes" -- MetalGio's number exactly -- and exit 1. After: "maps/huge.bsp: reports
+2164252671 bytes; not loaded", then the ordinary missing-map error. No library map is near 2 GB (largest
+518 MB local, 343 MB in the download catalogue), so his length came from a broken archive entry or VPK
+size; with this the next one is named in the console. 0 new warnings (77 upstream lines, none in the
+files changed).
+
 ## Patch 1410 -- the click that activates the window presses no mouse key (gl_vidnt.c, in_win.c)
 
 Problem: clicking the game window while it was in the background ran that button's bind; Lex's MOUSE1

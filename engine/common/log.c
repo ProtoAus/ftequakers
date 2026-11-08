@@ -227,6 +227,20 @@ void Log_String (logtype_t lognum, const char *s)
 	}
 }
 
+//FTESurf Patch 1417: Sys_Error showed its text in the dialog and nowhere else.  Into the console log (when on)
+//and data/crash/error.txt, before the shutdown, so the next start can report it (P1418).
+void Log_Fatal (const char *text)
+{
+	static qboolean busy;	//a second Sys_Error from inside this must not recurse
+	char line[1100];
+	if (busy || !FS_GameIsInitialised())
+		return;
+	busy = true;
+	Q_snprintfz(line, sizeof(line), "Sys_Error: %s\n", text);
+	Log_String(LOG_CONSOLE, line);
+	FS_WriteFile("data/crash/error.txt", line, strlen(line), FS_GAMEONLY);
+}
+
 void Con_Log (const char *s)
 {
 	Log_String(LOG_CONSOLE, s);

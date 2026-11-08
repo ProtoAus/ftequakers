@@ -14830,7 +14830,13 @@ static void Image_LoadHiResTextureWorker(void *ctx, void *data, size_t a, size_t
 		if (f)
 		{
 			fsize = VFS_GETLEN(f);
-			buf = BZ_Malloc(fsize);
+			if (fsize > 0x7ffffffe)
+			{	//FTESurf Patch 1417: see FS_LoadMallocGroupFile; falls through to the failed-texture path
+				Con_Printf(CON_ERROR "%s: reports %"PRIuSIZE" bytes; not loaded\n", fname, fsize);
+				buf = NULL;
+			}
+			else
+				buf = BZ_Malloc(fsize);
 			if (buf)
 			{
 				VFS_READ(f, buf, fsize);

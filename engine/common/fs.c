@@ -4733,7 +4733,18 @@ void *FS_LoadMallocGroupFile(zonegroup_t *ctx, char *path, size_t *fsize, qboole
 		f = VFS_Filter(path, f);
 	if (f)
 	{
-		int len = VFS_GETLEN(f);
+		qofs_t flen = VFS_GETLEN(f);
+		int len;
+		//FTESurf Patch 1417: an int took the 64-bit length, so one past 2 GB (a corrupt archive entry, a VPK size
+		//built with int shifts) reached BZ_Malloc sign-extended and ended the game with an 18-quintillion-byte
+		//"BZ_Malloc: Failed" dialog that named no file.  Refused here, by name.
+		if (flen > 0x7ffffffe)
+		{
+			Con_Printf(CON_ERROR "%s: reports %"PRIuQOFS" bytes; not loaded\n", path, flen);
+			VFS_CLOSE(f);
+			return NULL;
+		}
+		len = flen;
 		if (ctx)
 			mem = ZG_Malloc(ctx, len+1);
 		else

@@ -1068,6 +1068,7 @@ typedef enum {
 } logtype_t;
 void Log_String (logtype_t lognum, const char *s);
 void Con_Log (const char *s);
+void Log_Fatal (const char *text);	//FTESurf Patch 1417
 void Log_Init(void);
 void Log_ShutDown(void);
 #ifdef IPLOG

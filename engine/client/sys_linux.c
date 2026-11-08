@@ -650,6 +650,7 @@ void Sys_Error (const char *error, ...)
 	vsnprintf (string,sizeof(string)-1, error,argptr);
 	va_end (argptr);
 
+	Log_Fatal(string);	//FTESurf Patch 1417
 	COM_WorkerAbort(string);
 
 	fprintf(stderr, "Error: %s\n", string);
