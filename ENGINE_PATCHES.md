@@ -1,5 +1,23 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1410 -- the click that activates the window presses no mouse key (gl_vidnt.c, in_win.c)
+
+Problem: clicking the game window while it was in the background ran that button's bind; Lex's MOUSE1
++duck ducked a hands-free surf_voyager flight (probe.log 12:57:43, beside a [focus] correction).
+WM_MOUSEACTIVATE already returned MA_ACTIVATEANDEAT, so Windows ate the WM_LBUTTONDOWN, and raw input
+(registered without RIDEV_INPUTSINK) does not give a background window the down. The next legacy
+WM_MOUSEMOVE with MK_LBUTTON while the button was still held (any motion, or the grab's SetCursorPos
+recentre: INS_ActivateMouse, INS_Accumulate) reached INS_MouseEvent with oldbuttons clear and
+rawbuttondown[0] false, and the dedupe accepted it as a new press.
+
+Change: WM_MOUSEACTIVATE (not under sys_parentwindow, where a child is sent it on every click) puts the
+activating button from HIWORD(lParam) (L 1, R 2, M 4, X 8|16) in two masks. INS_MouseEvent keeps a masked
+bit at its old state (no press, no release) until a legacy message shows it up. The raw reader drops an
+UP for a masked button and unmasks on a raw DOWN (raw never sees the activating down, so any down is
+new). Separate masks so the path that sees the release first cannot unmask the other. Alt-tab sends no
+WM_MOUSEACTIVATE; clicks on the active window never arm it. DirectInput (in_dinput 1) unchanged.
+`developer 1` prints "[focus] activating click: mouse buttons 0x1 ...".
+
 ## Patch 1399 -- cached shifted-epoch positive controls in the offline census
 
 Problem: the pairs census acquired recordings, then reopened each pathname to

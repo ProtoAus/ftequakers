@@ -1732,6 +1732,19 @@ void INS_Shutdown (void)
 }
 
 
+/*FTESurf Patch 1410: legacy button bits (1 L, 2 R, 4 M, 8/16 X) of a press that activated the window.
+  gl_vidnt.c eats its WM_*BUTTONDOWN and raw input (no RIDEV_INPUTSINK) never gives a background window
+  the down, so a WM_MOUSEMOVE carrying its MK_ bit while it is still held (any motion, or the grab's
+  SetCursorPos recentre) read as a new press. One mask per path: legacy clears on a message showing it up, raw on
+  its up or a new down -- whichever path sees the release first must not unmask the other.*/
+static int legacyactivateclick, rawactivateclick;
+void INS_MouseActivateClick (int buttons)
+{
+	legacyactivateclick |= buttons;
+	rawactivateclick |= buttons;
+	Con_DPrintf("[focus] activating click: mouse buttons %#x are not game keys until released\n", buttons);
+}
+
 /*
 ===========
 INS_MouseEvent
@@ -1741,6 +1754,9 @@ a mouse button was pressed/released, mstate is the current set of buttons presse
 void INS_MouseEvent (int mstate)
 {
 	int		i;
+
+	legacyactivateclick &= mstate;	//FTESurf Patch 1410: held at its old state until released
+	mstate = (mstate & ~legacyactivateclick) | (sysmouse.oldbuttons & legacyactivateclick);
 
 	if (dinput && mouseactive)
 		return;
@@ -2149,6 +2165,14 @@ void INS_RawInput_MouseRead(void)
 				rawbuttondown[b] = true;
 			if (raw->data.mouse.usButtonFlags & btnup[b])
 				rawbuttondown[b] = false;
+			//FTESurf Patch 1410: a down raw sees is a new press; an up with no down is the activating click's
+			if (raw->data.mouse.usButtonFlags & btndown[b])
+				rawactivateclick &= ~(1<<b);
+			else if ((raw->data.mouse.usButtonFlags & btnup[b]) && (rawactivateclick & (1<<b)))
+			{
+				rawactivateclick &= ~(1<<b);
+				raw->data.mouse.usButtonFlags &= ~btnup[b];
+			}
 		}
 	}
 

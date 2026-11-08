@@ -75,6 +75,9 @@ void STT_Event(void);
    #define WM_XBUTTONDOWN      0x020B
    #define WM_XBUTTONUP      0x020C
 #endif
+#ifndef WM_NCXBUTTONDOWN
+   #define WM_NCXBUTTONDOWN    0x00AB
+#endif
 #ifndef MK_XBUTTON1
    #define MK_XBUTTON1         0x0020
 #endif
@@ -3228,6 +3231,15 @@ static LONG WINAPI GLMainWndProc (
 			break;
 
 		case WM_MOUSEACTIVATE:
+			//FTESurf Patch 1410: the click this eats presses no game key. Not when embedded: a child
+			//is never the active window, so it is sent this on every click.
+			if (!sys_parentwindow) switch (HIWORD(lParam))
+			{
+			case WM_LBUTTONDOWN: case WM_NCLBUTTONDOWN: INS_MouseActivateClick(1); break;
+			case WM_RBUTTONDOWN: case WM_NCRBUTTONDOWN: INS_MouseActivateClick(2); break;
+			case WM_MBUTTONDOWN: case WM_NCMBUTTONDOWN: INS_MouseActivateClick(4); break;
+			case WM_XBUTTONDOWN: case WM_NCXBUTTONDOWN: INS_MouseActivateClick(8|16); break;	//which X is not said
+			}
 			lRet = MA_ACTIVATEANDEAT;
 			break;
 
