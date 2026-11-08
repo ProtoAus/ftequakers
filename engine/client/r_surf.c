@@ -4257,6 +4257,9 @@ void Surf_Clear(model_t *mod)
 	vbo_t *vbo;
 //	if (mod->fromgame == fg_doom3)
 //		return;/*they're on the hunk*/
+#ifdef GLQUAKE
+	GLBE_BlendCentresFlush();	//FTESurf Patch 1409: a purged brush model's meshes may come back at the same addresses
+#endif
 
 #ifdef THREADEDWORLD
 	struct webostate_s **link, *t;

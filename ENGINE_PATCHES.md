@@ -1,5 +1,22 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1409 -- r_blendsort 2 keeps static blended faces' sorting centres (gl_backend.c)
+
+Problem: Lex's 0.1%-low survey put surf_bossfight at 514 fps average with 2,861 stutters in 35 s; at the
+owner's r_blendsort 2 the same replay stretch ran 281-288 fps against 541-602 at 1. A CPU sample put 36% of
+the main thread in GLBE_SubmitBlendedFaces; stage timers showed ~400 blended faces a frame and 2.1 ms of it in
+GLBE_BlendAreaDepth, an area-weighted centre summed over every triangle of each dense face, every frame.
+
+Change: on a Source map, a world or brush-entity face's model-space centre is computed once (direct-mapped
+table keyed by mesh pointer, checked against its xyz/index arrays and counts, dropped by a new map and by
+Surf_Clear) and only transformed per frame; the depth, so the order and the picture, are the same. r_blendcache
+0 recomputes every frame. Not on Quake worlds (their scene cache refills one mesh in place per PVS).
+
+Verified: bossfight replay 15 s, r_blendsort 2: cache 1 470/498 fps (1% 179/196) against 0 281 (153); gather
+2.1 -> 0.05 ms a frame. Same paused frame at 0/1/0 on four bossfight views: 0 pixels differ. Review 1 removed a
+run-merging half (it changed multi-pass draw order and gained ~4%) and limited the cache to Source worlds;
+review 2 found nothing.
+
 ## Patch 1412 -- fteqcc -Fomitarraydefs: no per-element array defs (qclib/qccmain.c)
 
 Problem: fteqcc writes a named global def for every array element ("spr_org[17]") and copies
