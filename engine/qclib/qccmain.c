@@ -440,6 +440,7 @@ compiler_flag_t compiler_flag[] = {
 	{&flag_undefwordsize,	hideflag,		"undefwordsize","Undefined Word Size",	"Do not make assumptions about pointer types and word sizes. Block functionality that depends upon specific word sizes. Changed as part of target."},
 	{&flag_pointerrelocs,	hideflag,		"pointerrelocs","Initialised Pointers",	"Allow pointer types to be preinitialised at compile time, both at global scope and optimising local scope a little."},
 	{&flag_noreflection,	FLAG_MIDCOMPILE,"omitinternals","Omit Reflection Info",	"Keeps internal symbols private (equivelent to unix's hidden visibility). This has the effect of reducing filesize, thwarting debuggers, and breaking saved games. This allows you to use arrays without massively bloating the size of your progs.\nWARNING: The bit about breaking saved games was NOT a joke, but does not apply to menuqc or csqc. It also interferes with FTE_MULTIPROGS."},
+	{&flag_noarraydefs,		FLAG_MIDCOMPILE,"omitarraydefs","Omit Array Element Defs",	"Leaves the per-element defs of arrays (named foo[0], foo[1], ...) and their names out of the output. Code, globals and every other def are unchanged. Saved games, core dumps and debuggers then cannot name array contents, so this is for csqc and menuqc. Elements of string, pointer, field and function type keep their defs, because the progs loader relocates those through them."},
 
 	{&flag_embedsrc,		FLAG_MIDCOMPILE,"embedsrc",		"Embed Sources",		"Write the sourcecode into the output file. The resulting .dat can be opened as a standard zip archive (or by fteqccgui).\nGood for GPL compliance!"},
 	{&flag_dumpfilenames,	FLAG_MIDCOMPILE,"dumpfilenames","Write a .lst file",	"Writes a .lst file which contains a list of all file names that we can detect from the qc. This file list can then be passed into external compression tools."},
@@ -2244,6 +2245,20 @@ static pbool QCC_WriteData (int crc)
 			externs->Printf("code: %s:%i: strip %s %s@%i;\n", def->filen, def->s_line, def->type->name, def->name, def->ofs);
 #endif
 			continue;
+		}
+
+		if (flag_noarraydefs && def->arrayelement && !def->nostrip && !def->shared)
+		{	//PR_ReallyLoadProgs relocates string/pointer/function globals and remaps field globals by walking the defs, so those stay.
+			switch(def->type->type)
+			{
+			case ev_string:
+			case ev_pointer:
+			case ev_field:
+			case ev_function:
+				break;
+			default:
+				continue;
+			}
 		}
 
 		if (def->type->type == ev_function)

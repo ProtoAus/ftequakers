@@ -479,6 +479,7 @@ typedef struct QCC_def_s
 	pbool unused:1;				//silently strip it if it wasn't referenced.
 	pbool localscope:1;			//is a local, as opposed to a static (which is only visible within its scope)
 	pbool arraylengthprefix:1;	//hexen2 style arrays have a length prefixed to them for auto bounds checks. this can only work reliably for simple non-struct arrays.
+	pbool arrayelement:1;		//one element of an array ("foo[3]"). -Fomitarraydefs may leave its def out.
 	pbool assumedtype:1;		//#merged. the type is not reliable.
 	pbool weak:1;				//ignore any initialiser value (only permitted on functions)
 	pbool accumulate:1;			//don't finalise the function's statements.
@@ -731,6 +732,7 @@ extern pbool flag_cpriority;
 extern pbool flag_qcfuncs;
 extern pbool flag_embedsrc;
 extern pbool flag_noreflection;
+extern pbool flag_noarraydefs;
 extern pbool flag_nopragmafileline;
 extern pbool flag_utf8strings;
 extern pbool flag_reciprocalmaths;

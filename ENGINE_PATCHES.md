@@ -1,5 +1,40 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1412 -- fteqcc -Fomitarraydefs: no per-element array defs (qclib/qccmain.c)
+
+Problem: fteqcc writes a named global def for every array element ("spr_org[17]") and copies
+its name into the string table at write time; only the array header is stripped
+(QCC_PR_DummyDef). Nothing but saved games, core dumps and debuggers reads them. FTESurf's
+csprogs (main 45fb397d, 8,050,298 bytes): 132,157 of 161,078 globaldefs, 1.90 MB of the 2.24 MB
+string table that passed the 2 MiB -max_strings default in P1391.
+
+Change: -Fomitarraydefs, off by default. QCC_def_t.arrayelement marks the elements DummyDef
+makes; QCC_WriteData leaves out their defs unless nostrip, shared, or typed string, pointer,
+field or function: PR_ReallyLoadProgs relocates string/pointer/function globals and remaps
+field globals by walking the defs, so those keep theirs. Members of struct-array elements
+("_frames[0].pos") are not elements and stay. -Fomitinternals is no substitute: it drops every
+global not marked used, including the system globals CSQC_FindGlobals binds by name.
+
+Verified: the UNPATCHED compiler at be087454f (git-8544) is a drop-in for the pinned c24ede65
+(git-7809-patch-962-24-g18d15ab9f-dirty) on qwprogs, csprogs and menu: 0 warnings, strings,
+statements, functions, globaldefs, fielddefs, globals, bodyless and .lno byte-identical; only
+the copyright string (12 bytes shorter), the offsets after it and the trailing empty-zip
+record's self-offset move. Patched without the flag: identical again. With it, csprogs
+8,050,298 -> 4,940,618 bytes: statements, functions, globals identical; globaldefs 161,078 ->
+42,652, exactly the old list minus 118,426 element defs in order (88,696 float, 26,916 vector,
+2,396 entity, 384 struct, 34 int); fielddefs the same 500 (type, ofs, name), only s_name offsets
+move; strings 2,240,804 -> 552,236, first 286,879 bytes identical (every string a global holds
+and every function name lies below 278,986). Still written: 12,067 string-element defs
+(313 KB) and 1,664 struct-array members. Measured, not used: qwprogs 1,655,890 -> 1,197,022,
+menu 762,430 -> 717,486. It also lifts csprogs off the def-count limit (FTESurf src/qcc.cfg
+MAX_GLOBALS 163,840; P1411 hit it at 164,535 with bigger ps_* arrays): the same tree plus one
+scratch float[4000] fails "Too many globals - 165079" without the flag and builds with it at
+42,653 defs, 0 warnings.
+
+Limits: saved games, coredump/csqccore.txt and QC debuggers no longer name array elements, so
+never for qwprogs. Readers that find an array through "name[0]" (the offline QC VM's gofs)
+need a build without the flag (FTESurf build.ps1 -KeepArrayDefs).
+
 ## Patch 1399 -- cached shifted-epoch positive controls in the offline census
 
 Problem: the pairs census acquired recordings, then reopened each pathname to

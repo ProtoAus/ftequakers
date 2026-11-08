@@ -157,6 +157,7 @@ pbool flag_qcfuncs;			//void() is a function type, and not a syntax error.
 pbool flag_allowuninit;		//ignore uninitialised locals, avoiding all private locals.
 pbool flag_embedsrc;		//embed all source files inside the .dat (can be opened with any zip program)
 pbool flag_noreflection;	//no reflection stuff, for smaller unsavable binaries.
+pbool flag_noarraydefs;		//no per-element array defs, for progs that are never saved (csqc, menuqc).
 pbool flag_nopragmafileline;//ignore #pragma file and #pragma line, so that I can actually read+debug xonotic's code.
 pbool flag_utf8strings;		//strings default to u8"" string rules.
 pbool flag_reciprocalmaths;	//unsafe maths optimisations
@@ -18347,6 +18348,7 @@ QCC_def_t *QCC_PR_DummyDef(QCC_type_t *type, const char *name, QCC_function_t *s
 			redec = false;
 		}
 		def->arraysize = a>=0?0:arraysize;
+		def->arrayelement = a>=0;
 
 		def->s_line = pr_source_line;
 		def->unitn = s_unitn;
