@@ -29,7 +29,10 @@ and every function name lies below 278,986). Still written: 12,067 string-elemen
 menu 762,430 -> 717,486. It also lifts csprogs off the def-count limit (FTESurf src/qcc.cfg
 MAX_GLOBALS 163,840; P1411 hit it at 164,535 with bigger ps_* arrays): the same tree plus one
 scratch float[4000] fails "Too many globals - 165079" without the flag and builds with it at
-42,653 defs, 0 warnings.
+42,653 defs, 0 warnings. Game: compiler 600bcd24e (git-8545, sha256 73f9a1a4) via FTESurf
+build.ps1 -NoDeploy, csprogs fa957ba9 (4,940,606 bytes) hosted on surf_dune by the installed
+patch-1409 exe in a private basedir: "FTESurf CSQC loaded" in 6.0 s, HUD, zone box and
+scoreboard drawn (screenshots looked at), 0 log lines matching error or warning.
 
 Limits: saved games, coredump/csqccore.txt and QC debuggers no longer name array elements, so
 never for qwprogs. Readers that find an array through "name[0]" (the offline QC VM's gofs)
