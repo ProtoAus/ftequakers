@@ -435,6 +435,7 @@ cvar_t r_voidfog							= CVARFD ("r_voidfog", "1", CVAR_ARCHIVE,
 												"1: no fog in the void (default).  Fog returns the frame you are back inside.\n"
 												"Has no effect anywhere r_voidvis does not.");
 // Center-depth ordering is practical for separated panes, not intersecting polygons/OIT.
+cvar_t r_blendcache = CVARD ("r_blendcache", "1", "FTESurf Patch 1409: on Source maps r_blendsort 2 keeps each static blended face's sorting centre (world and brush-entity faces) instead of recomputing it over every triangle each frame; the order and the picture are the same. 0: recompute every frame (surf_bossfight 287 against 495-538 fps).");
 cvar_t r_blendsort = CVARFD ("r_blendsort", "1", CVAR_ARCHIVE,
 	"Blended surface ordering.\n"
 	"0: emit order.\n"
@@ -1437,6 +1438,7 @@ void Renderer_Init(void)
 	Cvar_Register (&r_voidscene, GLRENDEREROPTIONS);
 	Cvar_Register (&r_voidfog, GLRENDEREROPTIONS);	//FTESurf Patch 329
 	Cvar_Register (&r_blendsort, GLRENDEREROPTIONS);
+	Cvar_Register (&r_blendcache, GLRENDEREROPTIONS);	//FTESurf Patch 1409
 #ifdef GLQUAKE
 	Cmd_AddCommandD("r_blendtrace", GLBE_BlendTrace_f, "Prints anonymous view/command/plane diagnostics for the next main-view r_blendsort 2 pass. One-shot; does not change rendering.");
 #endif
