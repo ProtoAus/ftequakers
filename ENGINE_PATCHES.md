@@ -31,6 +31,32 @@ retypes the mouse absolute (INS_Accumulate) and keys.c then drops MOUSE1's bind 
 Key_MouseShouldBeFree, so the arm sets cl_prydoncursor 1. Messages cannot make raw input: the raw
 half (dropped UP, unmask on DOWN) waits on a real click.
 
+## Patch 1413 -- sys_framepacing 5, predictive present pacing (sys_win.c, cl_main.c, gl_screen.c, cl_screen.c)
+
+Problem: Lex at cl_maxfps 100 saw 0.1% lows near 80 fps. Modes 1-3 start frames on the grid and present when
+done, so render-time variance (water capture frames) reaches the present cadence: bhop_ceaseless save 35, 30 s,
+present p99 11.0-11.2, p99.9 12.2-12.3 ms. Mode 4 holds the swap to the grid but starts each frame right after
+the last flip (~10 ms of input age at cap 100) and a miss waits a whole slot (20 ms).
+
+Change: mode 5 starts each frame its predicted render time (sys_framepacing_quantile of the last 64 frame-start
+to pre-hold times, after mode 4's drain; default the slowest, clamped to the interval) plus 0.5 ms before its
+slot, and holds the swap to that slot; a late frame presents at once. An on-time frame's successor aims one slot
+on, a late one's at the slot after its present (the floor of a post-swap time skipped slots in runs under a
+blocking vsync swap: simulated 25 frames at 30 fps, cap 60 on 59.94 Hz). It acts as mode 2 off-GL, uncapped,
+minimised, in timedemo, with cl_netfps 0 (server-capped), with vid_vsync on, and while the swap itself blocks
+(median of 32 over 1 ms -- not demonstrated: windowed here, vid_vsync 1 did not block the swap, p50 0.25 ms). A
+started frame that never reaches the swap hook (loading) paces plain intervals. Engine default 5; FTESurf's
+cfg/default.cfg had pinned every player to 1. r_frametime on Windows GL now samples right after the swap: under a
+held swap the HUD draws at times that move on purpose (mode 5 HUD-timed p99 11.32 against 10.21 at the swap).
+
+Verified: ceaseless save 35, cap 100, 30 s arms, present p99/p99.9: mode 5 10.11-10.23 / 11.49-12.88, mode 2
+11.00-11.23 / 12.18-12.34, mode 4 10.21 / 10.66 (frames start ~10 ms before present; mode 5 ~3.2). Cap 300:
+p99 4.32 -> 3.50. Cap 1000 unreached: 529 vs 530 fps. Mode 5 with vid_vsync 1 stood aside (11.03/12.15); through
+a reconnect it kept pacing. The first cut froze the client (a slot chased the clock with no present); review 1
+found the vsync runs, capped timedemo, a loading busy-wait and the off-GL change; review 2 the graph's clock
+switch and a stale start after minimise. The remaining 0.1% is ~3 frames per 30 s whose render ran 6-9 ms
+against ~3: pacing can only hide those by starting every frame earlier (mode 4).
+
 ## Patch 1409 -- r_blendsort 2 keeps static blended faces' sorting centres (gl_backend.c)
 
 Problem: Lex's 0.1%-low survey put surf_bossfight at 514 fps average with 2,861 stutters in 35 s; at the
