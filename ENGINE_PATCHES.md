@@ -1,5 +1,37 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1420 — offline pair details print acquired opportunities
+
+**Problem:** `cmd_pairs` used measured `matched / compared` for MATCH, but its
+negative detail printed the longer source length under the `compared` label.
+A controlled 37/100 measurement on 200-row inputs correctly read MATCH .3700
+while incorrectly printing compared 200. This is diagnostic metadata, not a
+new statistic, comparison or player finding.
+
+**Change:** Append measured compared as display-only metadata; sort using the
+exact original ten tuple components (including stable ties) and print the
+appended count. Preserve old indices/longer length, identity splits, selection,
+deduplication, MATCH/p99/coverage/prefix and positives. Source `684e49f3154fe888781f6433965e90e0aeef9ac6`,
+`tools/p1420-pair-detail.md`; ENGINE counter1420 only, preserving concurrent
+published P1417 native metadata. No own native pin/tag/QC Build change.
+
+**Verified:** Actual-command baseline one target FAIL/eight positive methods;
+corrected nine command plus six recording-opportunity methods PASS on Windows
+from an exact Git-only closure and on actual aarch64 Python3.11. Old2780 ARM
+control retains one target FAIL/eight command plus all six opportunity PASS.
+Independent full source review CLEAR. CLI help and exact module paths ACTED;
+destination/source/test hashes match the reviewed, qualified executable blobs.
+Only an explicitly selected operator child was delivered, not a default/backend
+promotion. Before/after all159 admitted bindings, actor/unit/launcher/helpers/
+namespace policy/DB inode held; selected parent P1415 source/manifest/owner/
+qualification records and its original clock held (other historical logs not
+re-hashed). Fixture/bytecode absent, no gate/listener/process retained. Original
+SSH host-key refusal kept; documented pinned route used with strict checking,
+no bypass. Publication guard preserved concurrently published native metadata.
+No parser/recorder dependency changed (outside-command AST identical), no new
+reader/corpus result claimed, no production DB/corpus read, calibration, time/RSS,
+new app/namespace-health, default-module deployment or broader AC completion.
+
 ## Patch 1417 -- a file length past 2 GB is refused by name; Sys_Error reaches the log (fs.c, image.c, fs_vpk.c, log.c, sys_win.c, sys_linux.c)
 
 Problem: a player (MetalGio, 8 Nov) got "BZ_Malloc: Failed on allocation of 18446744071578836992 bytes" on
