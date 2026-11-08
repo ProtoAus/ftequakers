@@ -7486,11 +7486,16 @@ extern double   Sys_FramePaceAnchorDelay(double interval, double now, double fra
 #define FRAMEPACING_ACTIVE() Sys_FramePacingActive()
 #define FRAMEPACING_ANCHOR() Sys_FramePacingAnchor()
 #define FRAMEPACING_PRESENT() Sys_FramePacePresentActive()
+extern qboolean Sys_FramePacePredictActive(void);
+extern double Sys_FramePacePredictDelay(double fps);
+#define FRAMEPACING_PREDICT() Sys_FramePacePredictActive()
 #define FRAMEPACING_ANCHORDELAY(interval, now, ref) Sys_FramePaceAnchorDelay(interval, now, ref)
 #else
 #define FRAMEPACING_ACTIVE() false
 #define FRAMEPACING_ANCHOR() false
 #define FRAMEPACING_PRESENT() false
+#define FRAMEPACING_PREDICT() false
+#define Sys_FramePacePredictDelay(fps) 0
 #define FRAMEPACING_ANCHORDELAY(interval, now, ref) ((interval) - ((now) - (ref)))
 #endif
 
@@ -7673,6 +7678,22 @@ double Host_Frame (double time)
 		maxfps = 10;
 
 	if (maxfps > 0
+#ifdef HAVE_MEDIA_ENCODER
+		&& Media_Capturing() != 2
+#endif
+		&& !(vrflags&VRF_OVERRIDEFRAMETIME)
+		&& FRAMEPACING_PREDICT())
+	{	//FTESurf Patch 1413: sys_framepacing 5 starts the frame its predicted render time before its present slot
+		double wait = Sys_FramePacePredictDelay(maxfps);
+		if (wait > 0)
+		{
+			while(COM_DoWork(0, false))
+				;
+			return wait;
+		}
+		spare = 0;
+	}
+	else if (maxfps > 0
 #ifdef HAVE_MEDIA_ENCODER
 		&& Media_Capturing() != 2
 #endif

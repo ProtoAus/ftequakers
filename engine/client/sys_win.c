@@ -1612,14 +1612,15 @@ static cvar_t sys_priority = CVARFCD("sys_highpriority", "0", CVAR_NOTFROMSERVER
 static cvar_t sys_clocktype = CVARFCD("sys_clocktype", "", CVAR_NOTFROMSERVER, Sys_ClockType_Changed, "Controls which system clock to base timings from.\n0: auto\n1: timeGetTime (low precision).\n2: QueryPerformanceCounter (may drift, desync between cpu cores, or run fast with longer uptimes depending on cpu(s) and windows version).\n3: QueryPerformanceCounter-with-force-affinity (shouldn't drift, but may result in less cpu time available).");
 static cvar_t sys_clockprecision = CVARFCD("sys_clockprecision", "1", CVAR_NOTFROMSERVER, Sys_ClockPrecision_Changed, "Attempts to control windows' interrupt interval, in milliseconds. This can cause windows to give better clock precision and shorter waits, but also more overhead from process rescheduling.");
 static void Sys_FramePacing_Changed(cvar_t *var, char *oldval);
-static cvar_t sys_framepacing = CVARFCD("sys_framepacing", "2", CVAR_NOTFROMSERVER, Sys_FramePacing_Changed,
-	"High-precision frame pacing for cl_maxfps.  The engine's own limiter still decides WHEN each frame is due (it already carries sub-frame remainder, so it stays drift-free); this makes the wait HIT that target accurately, via a high-res waitable timer plus a short spin, instead of a coarse Sleep().  Default 2 — uses the DXGI frame-latency wait on D3D11 and falls back to the timer+spin path on OpenGL/Vulkan.  Set to 0 for the vanilla Sleep() path.\n0: vanilla Sleep(). 1: NtSetTimerResolution + high-res waitable timer + spin. 2: (1) + DXGI frame-latency waitable object sync (D3D11 only; identical to 1 elsewhere). 3: (2) + absolute-grid anchor — pins each frame START to a fixed base+N/fps grid to shed the limiter's residual drift; works on every renderer. 4: present-pacing (SpecialK-style) — render frames ASAP and HOLD the buffer swap to the grid, so the PRESENT cadence is flat on a VRR display (absorbs render-time variance) at the cost of ~one frame of latency; OpenGL only — on D3D11/Vulkan it cleanly falls back to mode 3 (frame-START anchor). Use sys_framepacing_stats to compare the present-cadence jitter between modes.");
+static cvar_t sys_framepacing = CVARFCD("sys_framepacing", "5", CVAR_NOTFROMSERVER, Sys_FramePacing_Changed,
+	"High-precision frame pacing for cl_maxfps.  The engine's own limiter still decides WHEN each frame is due (it already carries sub-frame remainder, so it stays drift-free); this makes the wait HIT that target accurately, via a high-res waitable timer plus a short spin, instead of a coarse Sleep().  Default 5 (FTESurf Patch 1413; was 2) on OpenGL; mode 2 uses the DXGI frame-latency wait on D3D11 and falls back to the timer+spin path on OpenGL/Vulkan.  Set to 0 for the vanilla Sleep() path.\n0: vanilla Sleep(). 1: NtSetTimerResolution + high-res waitable timer + spin. 2: (1) + DXGI frame-latency waitable object sync (D3D11 only; identical to 1 elsewhere). 3: (2) + absolute-grid anchor — pins each frame START to a fixed base+N/fps grid to shed the limiter's residual drift; works on every renderer. 4: present-pacing (SpecialK-style) — render frames ASAP and HOLD the buffer swap to the grid, so the PRESENT cadence is flat on a VRR display (absorbs render-time variance) at the cost of ~one frame of latency; OpenGL only — on D3D11/Vulkan it cleanly falls back to mode 3 (frame-START anchor). 5: predictive present pacing (FTESurf Patch 1413) — start each frame its recent render time (sys_framepacing_quantile of the last 64, +0.5ms) before the next grid slot and hold the swap to that slot; a late frame presents at once instead of waiting a slot: mode 4's flat cadence with mode 3's latency; OpenGL only (elsewhere mode 3). Use sys_framepacing_stats to compare the present-cadence jitter between modes.");
 //nettest: how deep the sys_framepacing 4 GPU drain reaches back.  The original behaviour was
 //"fence this frame, then immediately wait on it", which forbids frame N's GPU work from
 //overlapping frame N+1's CPU work.  Measured on fy_killzone that cost 623us/frame -- 22% of the
 //whole frame, 361->481 fps -- while the GPU still had headroom (r_renderscale 2 vs 1 was 14.7us
 //with the drain off).  Waiting on the PREVIOUS frame's fence bounds queue depth just as well,
 //so the paced flip is still the real present, but the pipeline keeps its overlap.
+static cvar_t sys_framepacing_quantile = CVARFD("sys_framepacing_quantile", "100", CVAR_NOTFROMSERVER, "FTESurf Patch 1413: which of the last 64 render times sys_framepacing 5 plans each frame's start by, as a percentile (100 = the slowest of them); a frame starts that long plus 0.5 ms before its slot. Lower: less latency, more frames presenting late.");
 static cvar_t sys_framepacing_drain = CVARFD("sys_framepacing_drain", "2", CVAR_NOTFROMSERVER,
 	"How far back sys_framepacing 4's GPU drain waits before the paced flip. 0: no drain (fastest, but the swap can sit behind a deep GPU queue and the cadence sawtooths). 1: drain THIS frame -- the original behaviour; flattest cadence, but it serialises CPU and GPU and costs ~a fifth of the frame. 2: drain the PREVIOUS frame (default) -- caps queue depth at one frame while keeping CPU/GPU overlap. 3: drain two frames back -- looser still, more latency, least stall. Only used when sys_framepacing is 4 on OpenGL.");
 void Sys_FramePacedWait(double seconds);
@@ -1644,6 +1645,7 @@ void Sys_Init (void)
 	Cvar_Register(&sys_clockprecision, "System vars");
 	Cvar_Register(&sys_framepacing, "System vars");
 	Cvar_Register(&sys_framepacing_drain, "System vars");
+	Cvar_Register(&sys_framepacing_quantile, "System vars");	//FTESurf Patch 1413
 	Cmd_AddCommandD("sys_framepacing_stats", Sys_FramePacing_Stats_f,
 		"Reports what sys_framepacing is actually doing: current mode, acquired timer resolution, waitable-timer tier, DXGI handle availability, and wait-accuracy stats over the last 128 frames. Use this to verify non-zero modes have any effect.");
 	Cmd_AddCommandD("frametimes", Sys_FrameTimes_f,
@@ -2138,7 +2140,7 @@ qboolean Sys_FramePacingAnchor(void)
 {
 	/* mode 3 always; mode 4 too when present-pacing can't run (non-GL) so it cleanly
 	 * degrades to the frame-START grid anchor instead of doing nothing. */
-	return sys_framepacing.ival == 3 || (sys_framepacing.ival == 4 && qrenderer != QR_OPENGL);
+	return sys_framepacing.ival == 3 || (sys_framepacing.ival >= 4 && qrenderer != QR_OPENGL);
 }
 
 /* Returns how long to wait (seconds, in the engine's realtime base) so the next
@@ -2187,8 +2189,76 @@ int Sys_FramePaceDrainDepth(void)
 qboolean Sys_FramePacePresentActive(void)
 {
 	/* present-pacing only exists in the GL swap hook (gl_screen.c); off-GL, mode 4
-	 * falls back to the mode-3 frame-START anchor (see Sys_FramePacingAnchor). */
-	return sys_framepacing.ival == 4 && qrenderer == QR_OPENGL;
+	 * falls back to the mode-3 frame-START anchor (see Sys_FramePacingAnchor).
+	 * FTESurf Patch 1413: mode 5 uses the same hook (drain + hold) while capped. */
+	return qrenderer == QR_OPENGL && (sys_framepacing.ival == 4 || (sys_framepacing.ival == 5 && cl_maxfps.value > 0));
+}
+
+/*FTESurf Patch 1413: mode 5, predictive present pacing. Mode 4 renders as soon as the last flip is done and
+  holds the swap to the grid: a flat cadence, but input is read about a frame early and a frame that misses its
+  slot waits a whole one (bhop_ceaseless save 35, cl_maxfps 100: p99.9 19.7 ms). Mode 5 starts each frame its
+  predicted render time before the slot after the last present -- sys_framepacing_quantile of the last 64 render
+  times plus 0.5 ms -- and holds the swap to that slot only: an early frame waits, a late one presents at once.
+  Render time is frame start to just before the hold, after the drain (so it includes the GPU's backlog).*/
+#define PRED_RING 64
+static double g_pred_ring[PRED_RING];
+static int g_pred_head, g_pred_count;
+static double g_pred_start, g_pred_target;	/* this frame's start and the slot it aims at (0: none) */
+static double g_pred_laststart;				/* the last frame mode 5 started */
+qboolean Sys_FramePacePredictActive(void)
+{
+	return sys_framepacing.ival == 5 && qrenderer == QR_OPENGL;
+}
+static int QDECL Sys_FramePace_CmpD(const void *a, const void *b)
+{
+	double x = *(const double *)a, y = *(const double *)b;
+	return (x > y) - (x < y);
+}
+static double Sys_FramePacePredicted(void)
+{
+	double s[PRED_RING];
+	int k;
+	if (!g_pred_count)
+		return 0;
+	memcpy(s, g_pred_ring, sizeof(*s) * g_pred_count);
+	qsort(s, g_pred_count, sizeof(*s), Sys_FramePace_CmpD);
+	k = (int)(g_pred_count * bound(0, sys_framepacing_quantile.value, 100) / 100.0);
+	return s[min(k, g_pred_count - 1)];
+}
+/* How long the limiter should still wait (seconds) before this frame starts; 0 = start now. */
+double Sys_FramePacePredictDelay(double fps)
+{
+	double now = Sys_DoubleTime(), interval, slot, target, start;
+	if (fps <= 0)
+	{
+		g_pred_start = 0;
+		return 0;
+	}
+	interval = 1.0 / fps;
+	if (interval != g_present_interval || g_present_base <= 0 || (now - g_present_base) > 600.0)
+	{
+		g_present_base     = now;
+		g_present_interval = interval;
+	}
+	if (g_last_present_t <= g_present_base || now - g_last_present_t > 0.25)
+	{	/* no recent present on this grid (just switched on, a re-base, minimised): plain interval starts aimed
+		 * at the next slot, so the plan never chases a slot that moves with the clock */
+		if (g_pred_laststart > 0 && now >= g_pred_laststart && now - g_pred_laststart < interval)
+			return interval - (now - g_pred_laststart);
+		target = g_present_base + (floor((now - g_present_base) / interval) + 1.0) * interval;
+	}
+	else
+	{	/* the slot after the last present (fixed while we wait): a late present has used its slot; +0.05 so a
+		 * present a hair before its slot (the wait's precision) is not taken for the slot before it */
+		slot   = floor((g_last_present_t - g_present_base) / interval + 0.05) + 1.0;
+		target = g_present_base + slot * interval;
+		start  = target - Sys_FramePacePredicted() - 0.0005;
+		if (start > now)
+			return start - now;
+	}
+	g_pred_start = g_pred_laststart = now;
+	g_pred_target = target;
+	return 0;
 }
 
 /* Called from the renderer immediately before the buffer swap.  Blocks until the
@@ -2199,6 +2269,21 @@ void Sys_FramePacePresent(void)
 {
 	double fps = cl_maxfps.value;
 	double now, slot, target, delay;
+	if (sys_framepacing.ival == 5)
+	{	/* FTESurf Patch 1413: record this frame's render time, then hold to the slot it aimed at, if early */
+		if (g_pred_start > 0)
+		{
+			now = Sys_DoubleTime();
+			g_pred_ring[g_pred_head] = now - g_pred_start;
+			g_pred_head = (g_pred_head + 1) % PRED_RING;
+			if (g_pred_count < PRED_RING)
+				g_pred_count++;
+			if (g_pred_target > now)
+				Sys_FramePacedWait(g_pred_target - now);
+			g_pred_start = 0;
+		}
+		return;
+	}
 	if (sys_framepacing.ival != 4 || fps <= 0)
 		return;	/* not in present mode, or uncapped -> swap immediately */
 	now = Sys_DoubleTime();
@@ -2308,6 +2393,8 @@ static void Sys_FramePacing_Changed(cvar_t *var, char *oldval)
 	g_last_present_t = 0;
 	g_anchor_base = 0;	/* re-establish the mode-3 grid on next use */
 	g_anchor_tpf  = 0;
+	g_pred_count = g_pred_head = 0;	/* FTESurf Patch 1413: mode 5 relearns its render time */
+	g_pred_start = g_pred_target = g_pred_laststart = 0;
 	if (mode > 0)
 	{
 		Sys_FramePacing_Init();   /* idempotent */
@@ -2348,6 +2435,10 @@ static void Sys_FramePacing_Stats_f(void)
 	Con_Printf("  2 = (1) + DXGI frame-latency waitable (D3D11 only)\n");
 	Con_Printf("  3 = (2) + absolute-grid anchor on frame START (all renderers)\n");
 	Con_Printf("  4 = present-pacing: hold the SWAP to the grid (flat VRR cadence, GL only; falls back to mode 3 off-GL)\n");
+	Con_Printf("  5 = predictive: start each frame its recent render time before the slot, hold the swap to it (GL only)\n");
+	if (mode == 5)
+		Con_Printf("  mode 5 render time  : %.3f ms predicted (sys_framepacing_quantile of the last %i frames), frames start %.3f ms before their slot\n",
+			Sys_FramePacePredicted() * 1000, g_pred_count, (Sys_FramePacePredicted() + 0.0005) * 1000);
 	Con_Printf("\n");
 	Con_Printf("Subsystem state:\n");
 	Con_Printf("  initialised        : %s\n", g_pace_inited ? "yes" : "no (lazy init on first wait)");
