@@ -1356,6 +1356,10 @@ extern	int in_raw_padreports;	/*Patch 468: reports from the digitizer collection
 extern	int in_raw_padrelease;	/*Patch 468: releases of pad-pressed buttons admitted outside the window, stripped to that*/
 extern	int in_rawpads_live;	/*Patch 468: precision touchpad digitizer collections raw input bound (-1 not reported)*/
 extern	int in_raw_nolegacy_live;	/*Patch 307: whether legacy mouse messages are ACTUALLY suppressed right now (-1 unknown)*/
+extern	int in_raw_legacykey;	/*Patch 1424: legacy key presses no real raw keyboard report corroborated -- these DID reach the game*/
+extern	int in_raw_kbdnohandle;	/*Patch 1424: handle-less raw keyboard reports seen while observing (SendInput leaves these)*/
+extern	int in_rawkbd_observe;	/*Patch 1424: observe-only raw keyboard live (1), not (0), raw input never initialised or backend silent (-1)*/
+extern	int in_rawkbd_observechanges;	/*Patch 1424: transitions of the above, so the journal can mark a gap even when it ends where it began*/
 
 void CL_MakeActive(char *gamename);
 void CL_UpdateWindowTitle(void);

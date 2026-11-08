@@ -267,6 +267,19 @@ and hidcheck must treat it that way.
 -1 is "this backend does not count", as for the two above.*/
 int in_raw_legacybtn = -1;
 
+/*FTESurf Patch 1424: the keyboard half of 307.  Keys stay on the legacy path (raw keyboard
+  would lose the repeat bit, see Patch 309), so in_win.c registers raw keyboard observe-only
+  and counts legacy presses no real device reported.  A NOTE, never an accusation: on-screen
+  keyboards, remappers and controller-to-key tools press keys this way too.
+  in_raw_kbdnohandle counts the handle-less keyboard reports SendInput leaves beside them.
+  -1 until the observe registration binds; in_rawkbd_observe is its live state (-1 also on
+  Windows with in_rawinput 0, which never initialises raw input), journalled as `kbdobserve`
+  at begin and as an 'o' record at every change.*/
+int in_raw_legacykey = -1;
+int in_raw_kbdnohandle = -1;
+int in_rawkbd_observe = -1;
+int in_rawkbd_observechanges;
+
 /*FTESurf Patch 307: the EFFECTIVE suppression state, beside the cvar in the header, for
   exactly the reason Patch 301 put in_rawmice_live beside in_rawinput: the cvar is a
   request and this is what happened.  in_rawinput_nolegacy 1 does nothing at all while
@@ -1043,6 +1056,8 @@ static unsigned int	in_jrn_dropreported, in_jrn_dropbase, in_jrn_events, in_jrn_
 static int			in_jrn_injbase, in_jrn_unenumbase;			/*Patch 306: taken at begin, so the journal reports only its own window*/
 static int			in_jrn_injreported, in_jrn_unenumreported;	/*...and how far the per-frame records have caught up*/
 static int			in_jrn_lgbbase, in_jrn_lgbreported;			/*Patch 307: the same pair for the uncorroborated legacy button*/
+static int			in_jrn_lgkreported, in_jrn_nhkreported;		/*Patch 1424: legacy keys and handle-less keyboard reports, caught up*/
+static int			in_jrn_obsreported;							/*Patch 1424: in_rawkbd_observechanges last written*/
 static int			in_jrn_padbase, in_jrn_padreported;			/*Patch 468: accepted touchpad reports, baseline and caught up*/
 static int			in_jrn_prbase, in_jrn_prreported;			/*...and the digitizer reports that armed the window*/
 static int			in_jrn_prlreported;							/*...and the releases admitted outside it (no trailer total: bounded by acc per line)*/
@@ -1513,6 +1528,35 @@ static void IN_Journal_Bypassed(double when)
 	IN_Journal_Line(when, "b", tail);
 }
 
+/*Patch 1424: 'o <kbdobserve>' when observation started or stopped (even off and on again
+  between two calls), then 'y <legacykeys> <nohandle>', deltas, when either moved.  A press
+  is decided when a raw down matches it or RAWKEY_WINDOW expires, so a 'y' trails its '+'.
+  Always dt 0: an older hidcheck skips an unknown kind BEFORE summing its dt, so any other dt
+  faults its clock check.  No trailer total for the same reason (its `end` lengths are strict).*/
+static void IN_Journal_Keys(void)
+{
+	char tail[64];
+	int lk, nh;
+
+	if (!in_jrn_buf || in_jrn_full)
+		return;
+	if (in_rawkbd_observechanges != in_jrn_obsreported)
+	{
+		in_jrn_obsreported = in_rawkbd_observechanges;
+		Q_snprintfz(tail, sizeof(tail), "%i", in_rawkbd_observe);
+		IN_Journal_Line(in_jrn_last, "o", tail);
+	}
+	lk = (in_raw_legacykey < 0) ? 0 : in_raw_legacykey;
+	nh = (in_raw_kbdnohandle < 0) ? 0 : in_raw_kbdnohandle;
+	if (lk == in_jrn_lgkreported && nh == in_jrn_nhkreported)
+		return;
+
+	Q_snprintfz(tail, sizeof(tail), "%i %i", lk - in_jrn_lgkreported, nh - in_jrn_nhkreported);
+	in_jrn_lgkreported = lk;
+	in_jrn_nhkreported = nh;
+	IN_Journal_Line(in_jrn_last, "y", tail);
+}
+
 /*FTESurf Patch 468: 'p <accepted> <digitizer> <released>', deltas, when any moved.  The
   same three call sites as 'i' (frame, view, end) and for the same reason: an accepted
   report that carried no motion (a tap's button edges, a wheel report, a report while
@@ -1576,6 +1620,7 @@ static void IN_Journal_Frame(void)
 	IN_Journal_Legacy(first);	/*Patch 307*/
 	IN_Journal_RenderCvars(first);	/*Patch 310*/
 	IN_Journal_Bypassed(first);	/*Patch 307*/
+	IN_Journal_Keys();	/*Patch 1424*/
 }
 
 /*
@@ -1814,6 +1859,7 @@ void IN_Journal_View(const float *viewangles)
 	IN_Journal_Legacy(Sys_DoubleTime());	/*Patch 307*/
 	IN_Journal_RenderCvars(Sys_DoubleTime());	/*Patch 310*/
 	IN_Journal_Bypassed(Sys_DoubleTime());	/*Patch 307*/
+	IN_Journal_Keys();	/*Patch 1424*/
 
 	if (!in_jrn_vdx && !in_jrn_vdy &&
 	    !in_jrn_vkpitch && !in_jrn_vkyaw &&
@@ -2149,6 +2195,9 @@ static void IN_JournalBegin_f(void)
 	in_jrn_injreported = in_jrn_injbase = (in_raw_injected < 0) ? 0 : in_raw_injected;
 	in_jrn_unenumreported = in_jrn_unenumbase = (in_raw_unenum < 0) ? 0 : in_raw_unenum;
 	in_jrn_lgbreported = in_jrn_lgbbase = (in_raw_legacybtn < 0) ? 0 : in_raw_legacybtn;	/*Patch 307*/
+	in_jrn_lgkreported = (in_raw_legacykey < 0) ? 0 : in_raw_legacykey;	/*Patch 1424*/
+	in_jrn_nhkreported = (in_raw_kbdnohandle < 0) ? 0 : in_raw_kbdnohandle;
+	in_jrn_obsreported = in_rawkbd_observechanges;
 	in_jrn_padreported = in_jrn_padbase = (in_raw_touchpad < 0) ? 0 : in_raw_touchpad;	/*Patch 468*/
 	in_jrn_prreported = in_jrn_prbase = (in_raw_padreports < 0) ? 0 : in_raw_padreports;
 	in_jrn_prlreported = (in_raw_padrelease < 0) ? 0 : in_raw_padrelease;
@@ -2191,6 +2240,7 @@ static void IN_JournalBegin_f(void)
 		"rawpads %i\n"
 		"nolegacy %i\n"
 		"nolegacylive %i\n"
+		"kbdobserve %i\n"
 		"synth 0\n"
 		"sensitivity %.9g\n"
 		"sensitivityscale %.9g\n"
@@ -2211,6 +2261,7 @@ static void IN_JournalBegin_f(void)
 		in_rawpads_live,	/*Patch 468: precision touchpad digitizer collections bound*/
 		nolegacy?nolegacy->ival:-1,	/*Patch 307: the request...*/
 		in_raw_nolegacy_live,		/*...and what it actually got*/
+		in_rawkbd_observe,			/*Patch 1424: 1 = legacy keys are checked against raw ('y' records)*/
 		sensitivity.value,
 		in_sensitivityscale,
 		m_yaw.value,
@@ -2335,6 +2386,7 @@ static void IN_JournalEnd_f(void)
 	IN_Journal_Legacy(now);		/*Patch 307*/
 	IN_Journal_RenderCvars(now);	/*Patch 310*/
 	IN_Journal_Bypassed(now);	/*Patch 307*/
+	IN_Journal_Keys();		/*Patch 1424*/
 
 	/*The trailer carries the WHOLE-RUN totals beside the per-frame deltas on purpose:
 	  two independent statements of the same quantity, so a hand-edited journal has to

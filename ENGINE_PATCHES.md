@@ -1,5 +1,32 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1424 -- the journal counts legacy key presses no keyboard reported (in_win.c, in_generic.c, client.h)
+
+Problem: with in_rawinput_keyboard 0, the default, every key takes the legacy WM_KEYDOWN path, so a keystroke
+injected with SendInput or PostMessage reached the game and the .hid recorded nothing about it. Patch 306 counted
+injected keys only for the opt-in raw keyboard, which loses the repeat bit (Patch 309) and so is not the default.
+
+Change: the keyboard half of Patch 307. Raw keyboard is registered observe-only (dwFlags 0) while the opt-in path
+is off, so legacy messages still drive the game. A legacy press counts as corroborated when a real device's raw
+DOWN of the same scancode arrives within 100 ms, in either order, one for one; a press still unmatched when its
+window expires is counted (in_raw_legacykey). Expiry runs once a frame from INS_Move, so a count does not wait on
+the next mouse report. Repeats are judged by each path's own held state (rawkey_legheld / rawkey_rawheld), never
+by the lParam repeat bit the game itself ignores; held keys clear on focus change (INS_ClearStates). Handle-less
+raw keyboard reports, which SendInput leaves, are counted beside it (in_raw_kbdnohandle). The .hid gains the header
+key `kbdobserve`, a 'y <keys> <nohandle>' record, and an 'o <state>' record whenever observation starts or stops
+(a mid-run vid_restart/in_restart that tears raw input down); all three are written with dt 0, because an older
+hidcheck skips an unknown kind before summing its dt and any other dt faults its clock check, and the `end` trailer
+is unchanged for the same reason. FTESurf tools/hidcheck.py needs kbdobserve 1 and no 'o' for a whole-run count;
+0, -1, absent or a mid-run change read as unmeasured or partial, never a measured zero. A non-zero count is a note,
+never a fault: AltGr's synthesized Ctrl, on-screen keyboards and remappers press keys this way too.
+
+Verified: bhop_eazy arm (ftesurf/cfg/test/p1424keys.cfg, six arms). Subject: nothing injected -> kbdobserve 1,
+no 'y'; 20 PostMessage taps -> 'y' keys 20; 20 SendInput taps -> keys 20 / nohandle 40; 10 repeat-flagged downs
+-> 10; 5 downs whose ups follow the journal -> 5; raw input toggled mid-run -> 'o 0' then 'o 1', read as partial.
+Each injected key arrived as a '+' record. The installed patch-1421 exe on the same six arms took every key with
+no count and no header key. Both the current and the previous hidcheck read all journals without a fault.
+Genuine-keyboard zero is a pending human check (lextest, ftesurf/cfg/test/p1424human.cfg).
+
 ## Patch 1421 -- Sys_Error's record carries the console's last lines, kept in memory (log.c, sv_sys_win.c)
 
 Problem: FTESurf P1418's crash report first read logs/qconsole.log, which meant turning the console log on for

@@ -335,6 +335,41 @@ static qboolean padbuttondown[5];	/*buttons an ACCEPTED pad report pressed: only
 static const unsigned short padbtn_down[5] = {RI_MOUSE_BUTTON_1_DOWN, RI_MOUSE_BUTTON_2_DOWN, RI_MOUSE_BUTTON_3_DOWN, RI_MOUSE_BUTTON_4_DOWN, RI_MOUSE_BUTTON_5_DOWN};
 static const unsigned short padbtn_up[5] = {RI_MOUSE_BUTTON_1_UP, RI_MOUSE_BUTTON_2_UP, RI_MOUSE_BUTTON_3_UP, RI_MOUSE_BUTTON_4_UP, RI_MOUSE_BUTTON_5_UP};
 #define RAWPAD_WINDOW 0.5
+/*FTESurf Patch 1424: observe-only raw keyboard (see in_raw_legacykey in in_generic.c).  A
+  legacy press is corroborated by a real device's raw DOWN TRANSITION of the same scancode
+  within RAWKEY_WINDOW, in either order, one for one.  rawkey_time is an unconsumed raw
+  down, rawkey_pending a legacy press still waiting for one, counted once it is older than
+  the window (INS_RawKeyExpire).  Repeats are judged by each path's own held state, never
+  by a flag in the message: rawheld skips typematic makes, legheld skips legacy repeats;
+  INS_ClearStates resets both on focus changes.  -1 = none (0 is a real time on this
+  clock).  The key events, the raw reads and the expiry all run on the thread that owns the
+  window (the window thread under WTHREAD); the only main-thread touch is INS_ClearStates
+  clearing the two held latches on focus change, which does not overlap new input to the
+  same window.  The extended bit is not compared: the L/R twins sharing a byte can vouch
+  for each other, which costs less than a quirk counting an honest key.*/
+#define RAWKEY_WINDOW 0.1
+static qboolean rawkbd_observe;
+static double rawkey_time[256];
+static double rawkey_pending[256];
+static qboolean rawkey_rawheld[256], rawkey_legheld[256];
+static int rawkey_npending;
+
+static void INS_RawKeyExpire(double now)
+{
+	int i;
+
+	if (!rawkey_npending)
+		return;
+	for (i = 0; i < (int)countof(rawkey_pending); i++)
+	{
+		if (rawkey_pending[i] >= 0 && now - rawkey_pending[i] > RAWKEY_WINDOW)
+		{
+			rawkey_pending[i] = -1;
+			rawkey_npending--;
+			in_raw_legacykey++;
+		}
+	}
+}
 //nettest: what raw input has accounted for, per button, for the five buttons it has
 //usButtonFlags for.  Read only by INS_MouseEvent, to tell a genuine duplicate legacy
 //message from a device raw input never enumerated -- see the comment there.
@@ -1178,6 +1213,16 @@ void INS_RawInput_DeInit(void)
 		INS_RawInput_MouseDeRegister();
 	if (rawkbdcount > 0)
 		INS_RawInput_KeyboardDeRegister();
+	if (rawkbd_observe)
+	{	/*FTESurf Patch 1424: pending presses are abandoned, not counted here -- DeInit can run
+		  on the main thread (vid_restart) while the window thread still owns the rawkey state,
+		  so it must not write the counters.  Abandoning is undercount-safe; the next
+		  KeyObserveRegister re-zeroes the arrays.*/
+		INS_RawInput_KeyboardDeRegister();
+		rawkbd_observe = false;
+		in_rawkbd_observechanges++;
+	}
+	in_rawkbd_observe = 0;
 	INS_RawInput_PadDeRegister();	//FTESurf Patch 468
 	rawpadcount = 0;
 	in_rawpads_live = 0;
@@ -1309,6 +1354,104 @@ int INS_RawInput_KeyboardRegister(void)
 	return 0;
 }
 
+/*FTESurf Patch 1424: flags 0, so the legacy messages still drive the game, hotkeys and
+  all.  Only while the opt-in raw keyboard (rawkbdcount) is not using the same slot.*/
+static void INS_RawInput_KeyObserveRegister(void)
+{
+	RAWINPUTDEVICE Rid;
+	int i;
+
+	if (rawkbd_observe || rawkbdcount > 0 || !_RRID || !raw)
+		return;
+	for (i = 0; i < (int)countof(rawkey_time); i++)
+	{
+		rawkey_time[i] = rawkey_pending[i] = -1;
+		rawkey_rawheld[i] = rawkey_legheld[i] = false;
+	}
+	rawkey_npending = 0;
+	if (in_raw_legacykey < 0)
+		in_raw_legacykey = 0;
+	if (in_raw_kbdnohandle < 0)
+		in_raw_kbdnohandle = 0;
+	rawkbd_observe = true;	//before registering: a report arriving first must not reach the Patch 306 branch
+	Rid.usUsagePage = 0x01;
+	Rid.usUsage = 0x06;
+	Rid.dwFlags = 0;
+	Rid.hwndTarget = NULL;
+	if (!(*_RRID)(&Rid, 1, sizeof(Rid)))
+	{
+		rawkbd_observe = false;
+		Con_DPrintf("Raw input: could not observe the keyboard\n");
+		return;
+	}
+	in_rawkbd_observe = 1;
+	in_rawkbd_observechanges++;
+}
+
+//FTESurf Patch 1424: a raw keyboard report while observing.
+static void INS_RawInput_KeyObserve(void)
+{
+	int sc;
+	double now;
+
+	if (!raw->header.hDevice)
+	{	//SendInput's: its legacy copy is what reaches the game, and nothing vouches for it
+		in_raw_kbdnohandle++;
+		return;
+	}
+	sc = raw->data.keyboard.MakeCode & 0xff;
+	if (raw->data.keyboard.Flags & RI_KEY_BREAK)
+	{
+		rawkey_rawheld[sc] = false;
+		return;
+	}
+	if (rawkey_rawheld[sc])
+		return;	//typematic repeat: vouches for nothing
+	rawkey_rawheld[sc] = true;
+	now = Sys_DoubleTime();
+	INS_RawKeyExpire(now);
+	if (rawkey_pending[sc] >= 0)
+	{	//the legacy press arrived first, inside the window
+		rawkey_pending[sc] = -1;
+		rawkey_npending--;
+		return;
+	}
+	rawkey_time[sc] = now;
+}
+
+//FTESurf Patch 1424: a legacy key message while observing.
+static void INS_LegacyKeyObserve(LPARAM lParam, qboolean down)
+{
+	int sc = (lParam >> 16) & 0xff;
+	double now;
+
+	if (!rawkbd_observe)
+		return;
+	now = Sys_DoubleTime();
+	INS_RawKeyExpire(now);
+	if (!down)
+	{
+		rawkey_legheld[sc] = false;
+		return;
+	}
+	if (rawkey_legheld[sc])
+		return;	//a repeat by this path's own state; lParam bit 30 is the sender's word
+	rawkey_legheld[sc] = true;
+	if (rawkey_pending[sc] >= 0)
+	{	//pressed again before a raw down vouched for the last press
+		rawkey_pending[sc] = -1;
+		rawkey_npending--;
+		in_raw_legacykey++;
+	}
+	if (rawkey_time[sc] >= 0 && now - rawkey_time[sc] <= RAWKEY_WINDOW)
+		rawkey_time[sc] = -1;	//consumed: one raw down vouches for one press
+	else
+	{
+		rawkey_pending[sc] = now;
+		rawkey_npending++;
+	}
+}
+
 int INS_RawInput_Register(void)
 {
 	if (INS_RawInput_MouseRegister())
@@ -1351,6 +1494,7 @@ void INS_RawInput_Init(void)
 	in_rawmice_live = 0;
 	in_rawkbd_live = 0;
 	in_rawpads_live = 0;	//FTESurf Patch 468: same rule
+	in_rawkbd_observe = 0;	//FTESurf Patch 1424: same rule
 
 	// Return 0 if rawinput is not available
 	HMODULE user32 = LoadLibrary("user32.dll");
@@ -1631,6 +1775,8 @@ INS_Init
 void INS_ReInit (void)
 {
 #ifdef USINGRAWINPUT
+	if (in_rawkbd_observe < 0)
+		in_rawkbd_observe = 0;	//FTESurf Patch 1424: Windows with raw input off is "not observing", not "backend silent"
 	if (in_rawinput_mice.ival || in_rawinput_keyboard.ival)
 	{
 		INS_RawInput_Init();
@@ -1651,6 +1797,7 @@ void INS_ReInit (void)
 			INS_RawInput_MouseDeRegister();
 		}
 	}
+	INS_RawInput_KeyObserveRegister();	//FTESurf Patch 1424
 #endif
 }
 
@@ -2291,6 +2438,13 @@ void INS_RawInput_KeyboardRead(void)
 	WPARAM wParam;
 	LPARAM lParam;
 
+	if (rawkbd_observe)
+	{	//FTESurf Patch 1424: nothing here becomes a key; the legacy message does
+		if (raw->header.dwType == RIM_TYPEKEYBOARD)
+			INS_RawInput_KeyObserve();
+		return;
+	}
+
 	for (i = 0; i < rawkbdcount; i++)
 	{
 		if (rawkbd[i].handles.rawinputhandle == raw->header.hDevice)
@@ -2346,6 +2500,13 @@ void INS_RawInput_Read(HANDLE in_device_handle)
 		return;
 	}
 
+	/*FTESurf Patch 1424: decide pending presses here, on the window thread that owns the
+	  rawkey state.  Every WM_INPUT -- a mouse move included -- is a prompt, so during any
+	  activity a press is counted within the window.  A run that goes perfectly idle (mouse
+	  dead still, no keys) defers its still-pending presses to the next event: an
+	  undercount-safe floor, the same safe direction as Patch 307's click counter.*/
+	if (rawkbd_observe && rawkey_npending)
+		INS_RawKeyExpire(Sys_DoubleTime());
 	INS_RawInput_PadRead();	//FTESurf Patch 468
 	INS_RawInput_MouseRead();
 	INS_RawInput_KeyboardRead();
@@ -2370,6 +2531,11 @@ INS_ClearStates
 */
 void INS_ClearStates (void)
 {
+#ifdef USINGRAWINPUT
+	//FTESurf Patch 1424: an up delivered to another window must not leave a key held here
+	memset(rawkey_rawheld, 0, sizeof(rawkey_rawheld));
+	memset(rawkey_legheld, 0, sizeof(rawkey_legheld));
+#endif
 
 	if (mouseactive)
 	{
@@ -2972,6 +3138,10 @@ void INS_TranslateKeyEvent(WPARAM wParam, LPARAM lParam, qboolean down, int qdev
 	extern int		keyshift[K_MAX];
 	extern int		shift_down;
 
+#ifdef USINGRAWINPUT
+	if (!genkeystate)
+		INS_LegacyKeyObserve(lParam, down);	//FTESurf Patch 1424: only the legacy callers pass false
+#endif
 	qcode = MapKey(lParam);
 
 	if (WinNT && !in_builtinkeymap.value)
