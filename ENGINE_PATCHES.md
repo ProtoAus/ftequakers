@@ -1,5 +1,27 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1434 -- input diagnostics survive receipt snapshots (FTESurf readers/admin only)
+
+Problem: the journal reader already measures uncorroborated legacy key presses, handle-less
+keyboard reports and legacy mouse presses, but captured receipt snapshots omit these diagnostics.
+Review must reopen the journal; measured zero, unavailable and partial observation do not survive
+as typed stored fields. Skipped malformed records can also leave a zero or surviving subtotal.
+
+Change: preserve bounded exact integer counts, observer state and a typed partial-key qualifier in
+captured snapshots, their existing sweep storage and authenticated admin review. Do not invent
+counts for unavailable/off/changed observation. Conservatively withhold all four new input totals
+on any journal content fault; keep existing identity/join measurements and verdicts unchanged.
+The admin renders unavailable explicitly and scopes partial-key wording only to keyboard counts.
+No receipt/journal format, native code/pin/tag, QC Build, capture, policy or historical backfill change.
+
+Verified: new controls reject the original projection (9 snapshot / 5 storage / 34 admin failures).
+Independent review found the malformed-record and warning-scope gaps; raw malformed zero/subtotal
+controls fail 8 times and signed persistence twice before the correction. Final snapshot12 tests,
+storage/admin executed-DOM controls, receipt268, HID307 and recording949 checks pass on Windows.
+Read-only same-byte corpus561 REC +179 VIEW gives740 identical per-file reports and351 existing
+faults (346 REC /5 VIEW), zero increase. No native hardware calibration or backend deployment is
+claimed here; source/platform and delivery receipts are in FTESurf tools/p1434-input-observations.md.
+
 ## Patch 1424 -- the journal counts legacy key presses no keyboard reported (in_win.c, in_generic.c, client.h)
 
 Problem: with in_rawinput_keyboard 0, the default, every key takes the legacy WM_KEYDOWN path, so a keystroke
