@@ -1,5 +1,34 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1437 -- coherent save loads and bounded lead-in grace (FTESurf QC only)
+
+Problem: independently delivered load metadata can cancel a lead-in on its first
+missing HOLD, consume a new sequence with an old operation, or treat a pending
+rewind answer as refusal. Deferring an event also exposes destructive fallbacks:
+a resumed timer can clear a retained trail, and a selection cursor that moved
+can misidentify the loaded prefix or serialize the wrong sequence destination.
+
+Change: publish the existing endpoint string with its sequence/operation/ticks/tag
+and the saved row's origin, and consume a validated coherent cache at callback
+boundaries. Keep pending state
+out of refusal, failed-prefix cleanup, native angle writes and trail transitions.
+Use the validated load endpoint for rewind association, loaded sequence/zero
+restoration and the trail stitch destination. Bound the initial absent-HOLD grace;
+once HOLD was observed, its loss is real. Existing file formats, authoritative
+movement, ranking/taint policy, native pin/tag and QC Build stay unchanged.
+
+Verified: acting state-boundary controls expose a 199-unit camera snap, a missed
+load binding, an 82-degree native-angle overwrite, false rewind refusal, an empty
+resumed picture and lost/misassociated prefixes. Corrected arms retain the saved
+angle, transfer the retained angle prefix once, preserve the exact raw trail
+prefix and pass the location check; final cursor-displacement arm passes all
+existing p817 checks. Off-profile load and retry controls pass. Reader949/0 and
+740 same-buffer corpus reports agree with baseline, 351 existing faults unchanged.
+These are CSQC state emulations, not actual packet/PVS proof or universal frame
+performance. The existing short post-release trail check can fail in untouched
+control too; persistent invisible brushes and owner feel remain unresolved.
+Build/source and deployment states are recorded in FTESurf tools/p1437-save-events.md.
+
 ## Patch 1434 -- input diagnostics survive receipt snapshots (FTESurf readers/admin only)
 
 Problem: the journal reader already measures uncorroborated legacy key presses, handle-less
