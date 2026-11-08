@@ -5,10 +5,11 @@
 Problem: clicking the game window while it was in the background ran that button's bind; Lex's MOUSE1
 +duck ducked a hands-free surf_voyager flight (probe.log 12:57:43, beside a [focus] correction).
 WM_MOUSEACTIVATE already returned MA_ACTIVATEANDEAT, so Windows ate the WM_LBUTTONDOWN, and raw input
-(registered without RIDEV_INPUTSINK) does not give a background window the down. The next legacy
+(registered without RIDEV_INPUTSINK) does not give a background window the down. A legacy
 WM_MOUSEMOVE with MK_LBUTTON while the button was still held (any motion, or the grab's SetCursorPos
 recentre: INS_ActivateMouse, INS_Accumulate) reached INS_MouseEvent with oldbuttons clear and
-rawbuttondown[0] false, and the dedupe accepted it as a new press.
+rawbuttondown[0] false, and the dedupe accepted it as a new press (measured with messages; that a
+real click takes this path is Lex's check).
 
 Change: WM_MOUSEACTIVATE (not under sys_parentwindow, where a child is sent it on every click) puts the
 activating button from HIWORD(lParam) (L 1, R 2, M 4, X 8|16) in two masks. INS_MouseEvent keeps a masked
@@ -16,7 +17,19 @@ bit at its old state (no press, no release) until a legacy message shows it up. 
 UP for a masked button and unmasks on a raw DOWN (raw never sees the activating down, so any down is
 new). Separate masks so the path that sees the release first cannot unmask the other. Alt-tab sends no
 WM_MOUSEACTIVATE; clicks on the active window never arm it. DirectInput (in_dinput 1) unchanged.
-`developer 1` prints "[focus] activating click: mouse buttons 0x1 ...".
+`developer 1` prints "[focus] activating click: mouse buttons 0x1 ..." (log_developer 1 for the log).
+
+Verified (FTESurf-worktrees/focusclick-20261108/artifacts/p1410drive.py): hosted poop.bsp, window
+off-screen, the click as window messages in Windows' order (WM_MOUSEACTIVATE, WM_ACTIVATE, optional
+WM_SETFOCUS, no WM_LBUTTONDOWN since it is eaten, WM_MOUSEMOVE MK_LBUTTON, WM_LBUTTONUP), graded on
+`bind mouse1 "echo ..."` after a positive-control click. A diag build printed `legacy msg 0x200 mk 0x1`,
+`legacy PRESS K_MOUSE1 rawmice 2 rawdown 0 age 8.146`, then the echo. ABAB control / patched, two runs
+each: activating click with a held move (L, L + WM_SETFOCUS, R) 1/1/1 vs 0/0/0, next click 1 on both;
+no move before the up 0 on both; a dragging click on the focused window 1 (not 2); alt-tab then click
+1; activation, release seen as a plain move, click 2 vs 1. Arm trap: an active ungrabbed window
+retypes the mouse absolute (INS_Accumulate) and keys.c then drops MOUSE1's bind unless
+Key_MouseShouldBeFree, so the arm sets cl_prydoncursor 1. Messages cannot make raw input: the raw
+half (dropped UP, unmask on DOWN) waits on a real click.
 
 ## Patch 1409 -- r_blendsort 2 keeps static blended faces' sorting centres (gl_backend.c)
 
