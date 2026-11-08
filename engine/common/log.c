@@ -227,22 +227,74 @@ void Log_String (logtype_t lognum, const char *s)
 	}
 }
 
+//FTESurf Patch 1421: the last CON_TAIL console lines in fixed memory, for Log_Fatal's record.  No disk and no
+//file a server's CSQC could read while the game runs (P1418 review 1 refused an always-on log for both).
+//Written on the main thread only (prints from workers are queued to it); a torn line is harmless.
+#define CON_TAIL	64
+#define CON_TAILW	160
+static char con_tail[CON_TAIL][CON_TAILW];
+static unsigned int con_tail_n;	//lines completed
+static size_t con_tail_len;		//length of the line being built, con_tail[con_tail_n % CON_TAIL]
+
+static void Con_TailAdd (const char *s)
+{
+	char *l;
+	for (; *s; s++)
+	{
+		l = con_tail[con_tail_n % CON_TAIL];
+		if (*s == '\n')
+		{
+			l[con_tail_len] = 0;
+			con_tail_n++;
+			con_tail_len = 0;
+		}
+		else if ((unsigned char)*s >= ' ' && con_tail_len < CON_TAILW - 1)
+			l[con_tail_len++] = *s;
+	}
+	con_tail[con_tail_n % CON_TAIL][con_tail_len] = 0;
+}
+
+//Typed commands (echoed with ']') and anything that names a secret stay out of a record that may be sent on.
+static qboolean Con_TailSecret (const char *l)
+{
+	return *l == ']' || Q_strcasestr(l, "password") || Q_strcasestr(l, "key=") ||
+	       Q_strcasestr(l, "token") || Q_strcasestr(l, "secret");
+}
+
 //FTESurf Patch 1417: Sys_Error showed its text in the dialog and nowhere else.  Into the console log (when on)
-//and data/crash/error.txt, before the shutdown, so the next start can report it (P1418).
+//and data/crash/error.txt, before the shutdown, so the next start can report it (P1418).  P1421: with the
+//engine's version and the console's last lines.
 void Log_Fatal (const char *text)
 {
 	static qboolean busy;	//a second Sys_Error from inside this must not recurse
+	static char rec[CON_TAIL * CON_TAILW + 2048];
 	char line[1100];
+	unsigned int k, first;
+	size_t o;
 	if (busy || !FS_GameIsInitialised())
 		return;
 	busy = true;
 	Q_snprintfz(line, sizeof(line), "Sys_Error: %s\n", text);
 	Log_String(LOG_CONSOLE, line);
-	FS_WriteFile("data/crash/error.txt", line, strlen(line), FS_GAMEONLY);
+	Q_snprintfz(rec, sizeof(rec), "%sengine %s\n== the last console lines (typed commands and lines naming a "
+	            "password, key=, token or secret left out)\n", line, version_string());
+	o = strlen(rec);	//Q_snprintfz returns whether it truncated, not a length
+	first = (con_tail_n >= CON_TAIL - 1) ? con_tail_n - (CON_TAIL - 1) : 0;
+	for (k = first; k <= con_tail_n && o < sizeof(rec) - CON_TAILW - 2; k++)
+	{
+		const char *l = con_tail[k % CON_TAIL];
+		if (*l && !Con_TailSecret(l))
+		{
+			Q_snprintfz(rec + o, sizeof(rec) - o, "%s\n", l);
+			o += strlen(rec + o);
+		}
+	}
+	FS_WriteFile("data/crash/error.txt", rec, strlen(rec), FS_GAMEONLY);
 }
 
 void Con_Log (const char *s)
 {
+	Con_TailAdd(s);	//FTESurf Patch 1421
 	Log_String(LOG_CONSOLE, s);
 }
 

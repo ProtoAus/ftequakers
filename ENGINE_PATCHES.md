@@ -1,5 +1,18 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1421 -- Sys_Error's record carries the console's last lines, kept in memory (log.c, sv_sys_win.c)
+
+Problem: FTESurf P1418's crash report first read logs/qconsole.log, which meant turning the console log on for
+every player. Its review refused that: a server's CSQC can read that file while the game runs (chat, connect
+lines, a Steam sign-in link), and the log writes a file per printed line on the main thread (AGENT_NOTES
+measured 4-6 ms a line). Log_Fatal (Patch 1417) wrote only the error.
+
+Change: Con_Log keeps the last 64 lines (160 bytes each, control bytes dropped) in a fixed array, whether or not
+logging is on. Log_Fatal writes data/crash/error.txt as "Sys_Error: <text>", "engine <version>", then those
+lines, leaving out typed commands (']') and any line naming a password, key=, token or secret. The Windows
+dedicated server's Sys_Error calls Log_Fatal too. Nothing touches the disk until the game is already dying.
+Verified (FTESurf-worktrees/xhair-20261108-b8/tools/tailarm2.py): a dedicated server built with Patch 1417's guard compiled out (fault injection: BZ_Malloc then calls Sys_Error with the filesystem up) echoes markers, two of them naming a password and a key=, and loads a 0x80FFDFFF-byte map. Its data/crash/error.txt: "Sys_Error: BZ_Malloc: Failed on allocation of 18446744071578836992 bytes", the engine line, 17 console lines with both markers, neither secret line. The first cut wrote only the last line: Q_snprintfz returns a truncation flag, not a length. On a dedicated server SV_Error shuts the filesystem down before its Sys_Error, so a missing map leaves no record there (Log_Fatal checks FS_GameIsInitialised).
+
 ## Patch 1420 — offline pair details print acquired opportunities
 
 **Problem:** `cmd_pairs` used measured `matched / compared` for MATCH, but its

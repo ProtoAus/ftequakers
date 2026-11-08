@@ -920,6 +920,7 @@ void Sys_Error (const char *error, ...)
 	Sys_Printf ("ERROR: %s\n", text);
 
 	Con_Log(text);
+	Log_Fatal(text);	//FTESurf Patch 1421: a Windows server's record too (sys_win.c's client has it)
 
 	NET_Shutdown();	//free sockets and stuff.
 
