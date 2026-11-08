@@ -27,7 +27,15 @@ existing p817 checks. Off-profile load and retry controls pass. Reader949/0 and
 These are CSQC state emulations, not actual packet/PVS proof or universal frame
 performance. The existing short post-release trail check can fail in untouched
 control too; persistent invisible brushes and owner feel remain unresolved.
-Build/source and deployment states are recorded in FTESurf tools/p1437-save-events.md.
+Published QC68679ee9 built all3VMs warning-free; production recompile all6artifacts
+byte-identical. QW/CS+LNO hash-matched in BOTH Windows installs; existing Pi entrypoint
+restarted all12lobbies. Fresh loopback reads prove fs_savelead3 in all12; native,
+menu, configs and backend unchanged. All213archived members rehashed on/off-box
+before Pi staging; all53983old data prefixes retained in the fresh post observation.
+Immediate post-status timeout remains a failure, not regraded by later health;
+no extra restart/restore. Fresh-client smoke not launched below4GiB RAM, so
+served-cache download/render and owner feel remain pending. Exact UTC/hashes and
+build/deployment limits are recorded in FTESurf tools/p1437-save-events.md.
 
 ## Patch 1434 -- input diagnostics survive receipt snapshots (FTESurf readers/admin only)
 
