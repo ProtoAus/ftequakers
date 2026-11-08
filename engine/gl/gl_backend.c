@@ -334,6 +334,7 @@ static struct
 	int view;				//which of its seat's world views that frame rendered them (BE_SeatView)
 	double rendered;		//realtime they rendered (r_capturerate)
 } be_capkeep = {-1};
+static unsigned int blendcentre_gen = 1;	//FTESurf Patch 1409: GLBE_BlendAreaDepthCached's entries are this map's
 static int be_capfixframe = -1;	//host_framecount whose top-level draws sample a reused capture through be_capfix; -1 once a level-0 target is written
 static float be_capfix[16];	//its view-projection times the inverse of this frame's (SP_M_CAPTUREFIX)
 static const float be_identity16[16] = {1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1};
@@ -7237,6 +7238,7 @@ void GLBE_WaterViewsNewMap(void)
 	memset(be_capstamp, 0, sizeof(be_capstamp));	//FTESurf Patch 1018: the old map's captures
 	be_capkeep.frame = be_capkeep.keptframe = be_capfixframe = -1;	//FTESurf Patch 1245
 	be_waterdepthfailed = false;	//FTESurf Patch 1020: a refused depth copy is tried again
+	blendcentre_gen++;	//FTESurf Patch 1409: the old map's mesh centres
 #ifdef PLUGINS
 	be_occluderasked = false;
 	if (!r_waterviews.ival || !cl.worldmodel || cl.worldmodel->loadstate != MLS_LOADED)
@@ -8682,26 +8684,27 @@ static double GLBE_BlendFaceDepth(const mesh_t *mesh, const float *matrix)
 }
 
 // Mode2: BSP edge splits must not change a face's sorting centre.
-static double GLBE_BlendAreaDepth(const mesh_t *mesh, const float *matrix)
+static qboolean GLBE_BlendAreaCentre(const mesh_t *mesh, double *center)
 {
-	double center[3] = {0, 0, 0}, total = 0;
+	double total = 0;
 	unsigned int a, b, c;
 	int t, j;
+	center[0] = center[1] = center[2] = 0;
 	if (!mesh->xyz_array || mesh->numvertexes <= 0 || !mesh->indexes ||
 		mesh->numindexes <= 0 || mesh->numindexes % 3)
-		return GLBE_BlendFaceDepth(mesh, matrix);
+		return false;
 	for (t = 0; t < mesh->numindexes; t += 3)
 	{
 		double ab[3], ac[3], cross[3], area;
 		a = mesh->indexes[t]; b = mesh->indexes[t+1]; c = mesh->indexes[t+2];
 		if (a >= (unsigned int)mesh->numvertexes || b >= (unsigned int)mesh->numvertexes ||
 			c >= (unsigned int)mesh->numvertexes)
-			return GLBE_BlendFaceDepth(mesh, matrix);
+			return false;
 		for (j = 0; j < 3; j++)
 		{
 			if (IS_NAN(mesh->xyz_array[a][j]) || IS_NAN(mesh->xyz_array[b][j]) ||
 				IS_NAN(mesh->xyz_array[c][j]))
-				return GLBE_BlendFaceDepth(mesh, matrix);
+				return false;
 			ab[j] = (double)mesh->xyz_array[b][j] - mesh->xyz_array[a][j];
 			ac[j] = (double)mesh->xyz_array[c][j] - mesh->xyz_array[a][j];
 		}
@@ -8717,10 +8720,48 @@ static double GLBE_BlendAreaDepth(const mesh_t *mesh, const float *matrix)
 				mesh->xyz_array[b][j] + mesh->xyz_array[c][j]) / 3;
 	}
 	if (total <= 0)
-		return GLBE_BlendFaceDepth(mesh, matrix);
+		return false;
 	for (j = 0; j < 3; j++)
 		center[j] /= total;
-	return GLBE_BlendCenterDepth(center, matrix);
+	return true;
+}
+static double GLBE_BlendAreaDepth(const mesh_t *mesh, const float *matrix)
+{
+	double center[3];
+	return GLBE_BlendAreaCentre(mesh, center) ? GLBE_BlendCenterDepth(center, matrix) : GLBE_BlendFaceDepth(mesh, matrix);
+}
+/*FTESurf Patch 1409: a static mesh's area centre (world faces, brush-entity faces: model space, fixed for the
+  map) is computed once and only transformed each frame. surf_bossfight's ~400 dense blended faces spent 2.1 ms
+  a frame in GLBE_BlendAreaCentre at r_blendsort 2. Keyed by mesh pointer, checked against its arrays and
+  counts; a new map's generation drops every entry.*/
+#define BLENDCENTRE_SLOTS 8192
+static struct
+{
+	const mesh_t *mesh;
+	const void *xyz, *idx;
+	int nv, ni;
+	unsigned int gen;
+	qboolean ok;
+	double c[3];
+} blendcentre[BLENDCENTRE_SLOTS];
+static double GLBE_BlendAreaDepthCached(const batch_t *batch, const mesh_t *mesh, const float *matrix)
+{
+	unsigned int h;
+	if (batch->buildmeshes || !batch->ent || (batch->ent != &r_worldentity && (!batch->ent->model || batch->ent->model->type != mod_brush)))
+		return GLBE_BlendAreaDepth(mesh, matrix);	//rebuilt each frame (alias, procedural): no fixed centre
+	h = (unsigned int)(((size_t)mesh >> 4) * 2654435761u) & (BLENDCENTRE_SLOTS-1);
+	if (blendcentre[h].mesh != mesh || blendcentre[h].gen != blendcentre_gen || blendcentre[h].xyz != (const void*)mesh->xyz_array ||
+		blendcentre[h].idx != (const void*)mesh->indexes || blendcentre[h].nv != mesh->numvertexes || blendcentre[h].ni != mesh->numindexes)
+	{
+		blendcentre[h].mesh = mesh;
+		blendcentre[h].gen = blendcentre_gen;
+		blendcentre[h].xyz = mesh->xyz_array;
+		blendcentre[h].idx = mesh->indexes;
+		blendcentre[h].nv = mesh->numvertexes;
+		blendcentre[h].ni = mesh->numindexes;
+		blendcentre[h].ok = GLBE_BlendAreaCentre(mesh, blendcentre[h].c);
+	}
+	return blendcentre[h].ok ? GLBE_BlendCenterDepth(blendcentre[h].c, matrix) : GLBE_BlendFaceDepth(mesh, matrix);
 }
 
 // Procedural commands must not build or retain the shared alias mesh until replay.
@@ -9547,6 +9588,8 @@ static void GLBE_SubmitBlendedFaces(batch_t *world, batch_t *dynamic)
 	qboolean planar, kept = false, combined = false;
 	glblendplanestats_t bstats = {0};
 	glblendface_t *both = NULL;
+	mesh_t **runmesh;
+	size_t e;
 
 	// Finish capture/portal/sky recursion before gathering this view's records.
 	// The temp-batch pool appends during recursion; this view's batch addresses survive.
@@ -9624,7 +9667,7 @@ static void GLBE_SubmitBlendedFaces(batch_t *world, batch_t *dynamic)
 						continue;
 					faces[n].batch = batch;
 					faces[n].mesh = mesh;
-					faces[n].facedepth = GLBE_BlendAreaDepth(mesh, matrix);
+					faces[n].facedepth = r_blendruns.ival ? GLBE_BlendAreaDepthCached(batch, mesh, matrix) : GLBE_BlendAreaDepth(mesh, matrix);
 					faces[n].depth = group ? groupdepth : faces[n].facedepth;
 					faces[n].group = group;
 					faces[n].sequence = n;
@@ -9690,18 +9733,27 @@ static void GLBE_SubmitBlendedFaces(batch_t *world, batch_t *dynamic)
 		if (f < n) Con_Printf("ALPHATRACE remaining commands omitted (bounded to %u)\n", GLBLEND_PLANE_FACES);
 		Con_Printf("ALPHATRACE end\n");
 	}
-	for (f = 0; f < n; f++)
+	//FTESurf Patch 1409: consecutive sorted faces of one batch go as one batch, their meshes in sorted order (a
+	//draw keeps primitive order, so the blend order is unchanged): fewer state changes, ~4% on surf_bossfight.
+	runmesh = BZ_Malloc(max(n, 1) * sizeof(*runmesh));
+	for (f = 0; f < n; f = e)
 	{
 		view = *faces[f].batch;
 		view.next = NULL;
+		e = f + 1;
 		if (faces[f].mesh)
 		{
-			view.mesh = &faces[f].mesh;
+			unsigned int k = 0;
+			runmesh[k++] = faces[f].mesh;
+			while (r_blendruns.ival && e < n && faces[e].mesh && faces[e].batch == faces[f].batch)
+				runmesh[k++] = faces[e++].mesh;
+			view.mesh = runmesh;
 			view.firstmesh = 0;
-			view.meshes = view.maxmeshes = 1;
+			view.meshes = view.maxmeshes = k;
 		}
 		GLBE_SubmitMeshesSortList(&view);
 	}
+	BZ_Free(runmesh);
 	BZ_Free(faces);
 }
 
