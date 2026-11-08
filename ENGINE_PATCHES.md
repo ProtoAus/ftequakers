@@ -65427,3 +65427,31 @@ FTESurf tools/p703native_retirement.md and tools/native_retirement_readlock.md.
 hostile concurrent ancestor/hardlink protection, broad orphan collection or
 all-network-silence claim. No QC Build/public version/feed, progs/configs,
 Linux/Pi or release operation is implied by this source entry.
+
+## Patch 1415 — correct the offline pairs census upper-tail p99
+
+**Problem:** `recsim.py cmd_pairs` labelled a sorted negative-pair MATCH value
+p99 but selected the lowest 1% index: 100 values printed .0100 rather than .9900;
+two values could put p99 below the existing median.
+
+**Change:** Select the empirical nearest rank with exact integer arithmetic,
+`(99*N+99)//100-1`, in the existing nonempty summary branch. Acquisition, pair
+selection/deduplication, scoring, coverage, positives and all other output fields
+stay unchanged. Offline operator diagnostic only, not a calibrated threshold or
+ranking/enforcement change. `ENGINE.txt` patch counter advances; native commit/tag,
+VM, recorder/parser/collector, QC Build and live default reader stay unchanged.
+
+**Verified:** Actual command controls: predecessor three target failures/four
+positive passes; corrected seven pass, including zero/ties/unavailable/small N.
+Windows reader families92 methods (one existing skip), reccheck949/0. Read-only
+runs559rec+169view,728 acquired buffers/351 pre-existing faults, no increase;
+historical byte identity not claimed. Independent source review CLEAR. Clean
+exact-commit summary7 pass; optional wider parser-file arm15 pass/one missing test
+fixture import ERROR retained NOT PASSED. Actual aarch64/Python3.11 direct CLI
+help and summary7 pass; exact old control3 failures/4 passes. Explicit operator-only
+copy hash verified at 8 Nov 2026 04:53:08 UTC; canonical helper metadata,159 backend
+bindings/actor/unit/namespace policy and DB inode unchanged. No DB contents opened
+or frozen claim, new calibration, service restart or active test process. Two
+local artifact-copy refusals after remote success preserved; collection completed
+from the same immutable received output, no remote action repeated.
+Source commit b98e5db04e1c7ca8f5192ddf1ac906e1d204b965; `tools/p1415-recsim-p99.md`.
