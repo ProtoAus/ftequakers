@@ -826,7 +826,6 @@ static struct
 {
 	qboolean on;
 	double base, last;			//realtime when switched on, and of the previous frame
-	double dumped;				//FTESurf Patch 1413: a dump ran then; its frame is not a sample
 	float ms[FT_RING], at[FT_RING];	//each frame in the window, and when (s since base)
 	int head, count;
 	int bins[FT_BINS];
@@ -969,20 +968,9 @@ static qboolean R_FrameTime_Throttled(void)
 		idlefps = Cvar_FindVar("cl_idlefps");
 	return idlefps && idlefps->value > 0;
 }
-static double R_FrameTime_Now(void)
-{	//FTESurf Patch 1413: on Windows GL, the last buffer swap. The display follows the swaps; with the swap held
-	//(sys_framepacing 4/5) the HUD draws at a time that moves on purpose.
-#if defined(_WIN32) && !defined(FTE_SDL) && defined(GLQUAKE)
-	extern double Sys_FramePace_LastPresent(void);
-	double p = Sys_FramePace_LastPresent();
-	if (p > 0)
-		return p;
-#endif
-	return Sys_DoubleTime();
-}
 static void R_FrameTime_Sample(void)
 {
-	double now = R_FrameTime_Now(), window, span;
+	double now = Sys_DoubleTime(), window, span;
 	float ms, at;
 	int b, i;
 	qboolean rebuild = false;
@@ -1007,15 +995,6 @@ static void R_FrameTime_Sample(void)
 			ft.excludedms += (now - ft.last) * 1000;
 		}
 		ft.last = now;
-		return;
-	}
-	if (ft.dumped)
-	{	//swap-timed, the dump's frame ends at the first swap after it
-		if (now >= ft.dumped)
-		{
-			ft.dumped = 0;
-			ft.last = now;
-		}
 		return;
 	}
 	ms = (now - ft.last) * 1000;
@@ -1136,8 +1115,15 @@ static void R_FrameTime_Draw(void)
 //a dump stalled its own frame by 0.3 s in the P801 arm: asking must not add a stutter
 static void R_FrameTime_AfterDump(void)
 {
-	ft.dumped = Sys_DoubleTime();
+	ft.last = Sys_DoubleTime();
 }
+#if defined(_WIN32) && !defined(FTE_SDL) && defined(GLQUAKE)
+void R_FrameTime_Swapped(void)
+{	//FTESurf Patch 1413: gl_screen.c, right after the buffer swap -- the display follows the swaps, and with the
+	//swap held (sys_framepacing 4/5) the HUD draws at times that move on purpose
+	R_FrameTime_Sample();
+}
+#endif
 static void R_FrameTime_Reset_f(void)
 {
 	ft.on = false;	//the next frame starts clean
@@ -1235,7 +1221,10 @@ void RSpeedShow(void)
 	R_Budget_Sample();	//FTESurf Patch 782
 	if (r_budget.ival)
 		R_Budget_Draw();
-	R_FrameTime_Sample();	//FTESurf Patch 801
+#if defined(_WIN32) && !defined(FTE_SDL) && defined(GLQUAKE)
+	if (qrenderer != QR_OPENGL)	//FTESurf Patch 1413: there R_FrameTime_Swapped samples
+#endif
+		R_FrameTime_Sample();	//FTESurf Patch 801
 	if (r_frametime.ival)
 		R_FrameTime_Draw();
 	if (!r_speeds.ival)

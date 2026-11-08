@@ -7510,6 +7510,7 @@ double Host_Frame (double time)
 	double newrealtime, spare;
 	float maxfps;
 	qboolean maxfpsignoreserver;
+	qboolean predict;	//FTESurf Patch 1413
 	qboolean idle;
 	static qboolean hadwork;
 	unsigned int vrflags;
@@ -7677,12 +7678,15 @@ double Host_Frame (double time)
 	if (vid.isminimized && (maxfps <= 0 || maxfps > 10))
 		maxfps = 10;
 
-	if (maxfps > 0 && maxfpsignoreserver && !vid.isminimized && !cls.timedemo
+	predict = maxfps > 0 && maxfpsignoreserver && !vid.isminimized && !cls.timedemo
 #ifdef HAVE_MEDIA_ENCODER
 		&& Media_Capturing() != 2
 #endif
 		&& !(vrflags&VRF_OVERRIDEFRAMETIME)
-		&& FRAMEPACING_PREDICT())
+		&& FRAMEPACING_PREDICT();
+	if (!predict)
+		(void)Sys_FramePacePredictDelay(0);	//FTESurf Patch 1413: drops a mode-5 start that never presented
+	if (predict)
 	{	//FTESurf Patch 1413: sys_framepacing 5 starts the frame its predicted render time before its present slot
 		double wait = Sys_FramePacePredictDelay(maxfps);
 		if (wait > 0)

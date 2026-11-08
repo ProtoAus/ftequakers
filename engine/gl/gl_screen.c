@@ -278,6 +278,7 @@ qboolean GLSCR_UpdateScreen (void)
 		extern void Sys_FramePacePresent(void);
 		extern qboolean Sys_FramePaceDrainActive(void);
 		extern void Sys_FramePace_RecordPresent(void);
+		extern void R_FrameTime_Swapped(void);
 		//nettest: FRAME PACING bucket.  This is where the missing third of the frame was.
 		//
 		//The drain below sat in no RSPEED_ bucket, and it could not have been caught by any of
@@ -355,6 +356,7 @@ qboolean GLSCR_UpdateScreen (void)
 #if defined(_WIN32) && !defined(FTE_SDL)
 		RSpeedRemark();
 		Sys_FramePace_RecordPresent();	//sample present-to-present cadence for sys_framepacing_stats (every mode)
+		R_FrameTime_Swapped();	//FTESurf Patch 1413: and for r_frametime
 		RSpeedEnd(RSPEED_SCR_PACING);
 #endif
 	}

@@ -2254,7 +2254,10 @@ double Sys_FramePacePredictDelay(double fps)
 {
 	double now = Sys_DoubleTime(), interval, target, start;
 	if (fps <= 0)
+	{	/* cl_main.c: the old limiter starts this frame; a mode-5 start that never presented is dropped */
+		g_pred_start = 0;
 		return 0;
+	}
 	interval = 1.0 / fps;
 	if (interval != g_present_interval || g_present_base <= 0 || (now - g_present_base) > 600.0)
 	{
@@ -2372,11 +2375,6 @@ void Sys_FramePace_RecordPresent(void)
 			g_swap_blocks = g_swap_count >= SWAP_RING / 2 && Sys_FramePace_Quantile(g_swap_ring, g_swap_count, 0.5) > SWAP_BLOCKS;
 	}
 	g_preswap_t = 0;
-}
-/* FTESurf Patch 1413: r_frametime's clock (cl_screen.c); 0 when there is no recent GL swap to time from */
-double Sys_FramePace_LastPresent(void)
-{
-	return (qrenderer == QR_OPENGL && g_last_present_t > 0 && Sys_DoubleTime() - g_last_present_t < 0.25) ? g_last_present_t : 0;
 }
 
 static int QDECL Sys_FrameTimes_Cmp(const void *a, const void *b)
@@ -2531,7 +2529,7 @@ static void Sys_FramePacing_Stats_f(void)
 		Con_Printf("  GPU drain (4/5)     : %s\n", drain);
 	}
 
-	if (mode >= 3)
+	if (mode == 3 || mode == 4)
 	{
 		Con_Printf("\nAbsolute-grid anchor:\n");
 		Con_Printf("  grid fps           : %.2f\n", g_anchor_tpf > 0 ? 1.0 / g_anchor_tpf : 0.0);
