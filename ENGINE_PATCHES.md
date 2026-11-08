@@ -65455,3 +65455,40 @@ or frozen claim, new calibration, service restart or active test process. Two
 local artifact-copy refusals after remote success preserved; collection completed
 from the same immutable received output, no remote action repeated.
 Source commit b98e5db04e1c7ca8f5192ddf1ac906e1d204b965; `tools/p1415-recsim-p99.md`.
+
+## Patch 1419 â€” withhold stored-sample summaries containing numeric infinity
+
+**Problem:** A historical compared80/+Inf MATCH is withheld by authenticated
+detail but the offline summary returned an infinite identity maximum and notable
+notice. New-comparison finite guarding was already present; history was untouched.
+
+**Change:** Same grouped SQL sample query adds an internal typed numeric-infinity
+flag, using strict binary64 finite extrema, not a similarity threshold. Any flagged
+compared row withholds the whole summary (fixed nonfinite/None state and unavailable
+line), never a silently filtered/zero sample. Finite/zero/skip/identity/NOTABLE and
+other-metric/legacy contracts stay unchanged. No DDL/DML, persisted/output counter,
+extra sample query/result groups, capture/ranking/native pin/tag/QC Build change.
+
+**Verified:** Actual authenticated baseline one target fails, finite.75/zero pass;
+genuine corrected six sign/identity targets fail before correction. First matrix's
+five AUTOINCREMENT fixture errors retained/not product proof. Extrema prototype
+independently falsified by SQLite TEXT masking; final per-row flag covers it.
+Independent source review CLEAR; final Windows32 methods pass (7admin/9summary/
+6SQLbudget/10finitecollector), history/schema/group/query/callback/finite recovery
+controls held. Product bytes outside two summary functions unchanged. Clean exact
+qualified module/test source bytes retained; actual aarch64/Python3.11 synthetic
+entrypoint and nine pure summary methods pass, old same9 program seven target
+failure entries across2methods/seven other methods pass. Explicit operator-only
+copy hash verified 8 Nov 2026 05:54:25 UTC. Default runtime module/canonical helpers,
+159bindings/actualactor/unit/policy/DBinode unchanged, no production contents read,
+namespace-import probe, service restart or app/native/calibration proof. New flag
+adds VM work; explicit budget may exhaust sooner, not a new performance bound.
+One post-commit receipt check overstrictly compared the CRLF reservation to LF blob;
+normalized metadata verified, source exact, no repeated commit/tests. Existing
+fixture warnings retained. `tools/p1419-summary-nonfinite.md` records scope/use.
+
+Original unpublished local1417 label relinquished after collision with published
+peer1417/1418; final sole reservation1419. Same qualified module34627/test bytes,
+original nominal operator directory/time unchanged, no rerun/redating. Peer
+reservations and both histories preserved, no old conflicting commit published.
+Public source commit 9ededf4c06b9f50ed15e8fc178c839bb65915cf7; module34627, exact qualified bytes.
