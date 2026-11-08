@@ -7677,7 +7677,7 @@ double Host_Frame (double time)
 	if (vid.isminimized && (maxfps <= 0 || maxfps > 10))
 		maxfps = 10;
 
-	if (maxfps > 0
+	if (maxfps > 0 && maxfpsignoreserver && !vid.isminimized && !cls.timedemo
 #ifdef HAVE_MEDIA_ENCODER
 		&& Media_Capturing() != 2
 #endif

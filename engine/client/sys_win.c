@@ -1613,7 +1613,7 @@ static cvar_t sys_clocktype = CVARFCD("sys_clocktype", "", CVAR_NOTFROMSERVER, S
 static cvar_t sys_clockprecision = CVARFCD("sys_clockprecision", "1", CVAR_NOTFROMSERVER, Sys_ClockPrecision_Changed, "Attempts to control windows' interrupt interval, in milliseconds. This can cause windows to give better clock precision and shorter waits, but also more overhead from process rescheduling.");
 static void Sys_FramePacing_Changed(cvar_t *var, char *oldval);
 static cvar_t sys_framepacing = CVARFCD("sys_framepacing", "5", CVAR_NOTFROMSERVER, Sys_FramePacing_Changed,
-	"High-precision frame pacing for cl_maxfps.  The engine's own limiter still decides WHEN each frame is due (it already carries sub-frame remainder, so it stays drift-free); this makes the wait HIT that target accurately, via a high-res waitable timer plus a short spin, instead of a coarse Sleep().  Default 5 (FTESurf Patch 1413; was 2) on OpenGL; mode 2 uses the DXGI frame-latency wait on D3D11 and falls back to the timer+spin path on OpenGL/Vulkan.  Set to 0 for the vanilla Sleep() path.\n0: vanilla Sleep(). 1: NtSetTimerResolution + high-res waitable timer + spin. 2: (1) + DXGI frame-latency waitable object sync (D3D11 only; identical to 1 elsewhere). 3: (2) + absolute-grid anchor — pins each frame START to a fixed base+N/fps grid to shed the limiter's residual drift; works on every renderer. 4: present-pacing (SpecialK-style) — render frames ASAP and HOLD the buffer swap to the grid, so the PRESENT cadence is flat on a VRR display (absorbs render-time variance) at the cost of ~one frame of latency; OpenGL only — on D3D11/Vulkan it cleanly falls back to mode 3 (frame-START anchor). 5: predictive present pacing (FTESurf Patch 1413) — start each frame its recent render time (sys_framepacing_quantile of the last 64, +0.5ms) before the next grid slot and hold the swap to that slot; a late frame presents at once instead of waiting a slot: mode 4's flat cadence with mode 3's latency; OpenGL only (elsewhere mode 3). Use sys_framepacing_stats to compare the present-cadence jitter between modes.");
+	"High-precision frame pacing for cl_maxfps.  The engine's own limiter still decides WHEN each frame is due (it already carries sub-frame remainder, so it stays drift-free); this makes the wait HIT that target accurately, via a high-res waitable timer plus a short spin, instead of a coarse Sleep().  Default 5 (FTESurf Patch 1413; was 2) on OpenGL; mode 2 uses the DXGI frame-latency wait on D3D11 and falls back to the timer+spin path on OpenGL/Vulkan.  Set to 0 for the vanilla Sleep() path.\n0: vanilla Sleep(). 1: NtSetTimerResolution + high-res waitable timer + spin. 2: (1) + DXGI frame-latency waitable object sync (D3D11 only; identical to 1 elsewhere). 3: (2) + absolute-grid anchor — pins each frame START to a fixed base+N/fps grid to shed the limiter's residual drift; works on every renderer. 4: present-pacing (SpecialK-style) — render frames ASAP and HOLD the buffer swap to the grid, so the PRESENT cadence is flat on a VRR display (absorbs render-time variance) at the cost of ~one frame of latency; OpenGL only — on D3D11/Vulkan it cleanly falls back to mode 3 (frame-START anchor). 5: predictive present pacing (FTESurf Patch 1413) — start each frame its recent render time (sys_framepacing_quantile of the last 64, +0.5ms) before the next grid slot and hold the swap to that slot; a late frame presents at once instead of waiting a slot: mode 4's flat cadence with mode 3's latency. Acts as mode 2 off-OpenGL, uncapped, minimised, in timedemo, with cl_netfps 0, with vid_vsync on, and while the swap itself blocks (driver-forced vsync). Use sys_framepacing_stats to compare the present-cadence jitter between modes.");
 //nettest: how deep the sys_framepacing 4 GPU drain reaches back.  The original behaviour was
 //"fence this frame, then immediately wait on it", which forbids frame N's GPU work from
 //overlapping frame N+1's CPU work.  Measured on fy_killzone that cost 623us/frame -- 22% of the
@@ -1622,7 +1622,7 @@ static cvar_t sys_framepacing = CVARFCD("sys_framepacing", "5", CVAR_NOTFROMSERV
 //so the paced flip is still the real present, but the pipeline keeps its overlap.
 static cvar_t sys_framepacing_quantile = CVARFD("sys_framepacing_quantile", "100", CVAR_NOTFROMSERVER, "FTESurf Patch 1413: which of the last 64 render times sys_framepacing 5 plans each frame's start by, as a percentile (100 = the slowest of them); a frame starts that long plus 0.5 ms before its slot. Lower: less latency, more frames presenting late.");
 static cvar_t sys_framepacing_drain = CVARFD("sys_framepacing_drain", "2", CVAR_NOTFROMSERVER,
-	"How far back sys_framepacing 4's GPU drain waits before the paced flip. 0: no drain (fastest, but the swap can sit behind a deep GPU queue and the cadence sawtooths). 1: drain THIS frame -- the original behaviour; flattest cadence, but it serialises CPU and GPU and costs ~a fifth of the frame. 2: drain the PREVIOUS frame (default) -- caps queue depth at one frame while keeping CPU/GPU overlap. 3: drain two frames back -- looser still, more latency, least stall. Only used when sys_framepacing is 4 on OpenGL.");
+	"How far back the GPU drain of sys_framepacing 4 and 5 waits before the paced flip. 0: no drain (fastest, but the swap can sit behind a deep GPU queue and the cadence sawtooths). 1: drain THIS frame -- the original behaviour; flattest cadence, but it serialises CPU and GPU and costs ~a fifth of the frame. 2: drain the PREVIOUS frame (default) -- caps queue depth at one frame while keeping CPU/GPU overlap. 3: drain two frames back -- looser still, more latency, least stall. Only used by sys_framepacing 4, and 5 while capped, on OpenGL.");
 void Sys_FramePacedWait(double seconds);
 static void Sys_FramePacing_Stats_f(void);
 static void Sys_FrameTimes_f(void);
@@ -1882,6 +1882,8 @@ static void Sys_ClockPrecision_Changed(cvar_t *var, char *oldval)
           a fixed grid via Sys_FramePacePresent() (hooked before the renderer's
           buffer swap), so the present cadence is flat -- at ~one frame more
           latency than mode 3.  OpenGL only for now (hook is in gl_screen.c).
+ Mode 5 = predictive present pacing (FTESurf Patch 1413): see the block over
+          Sys_FramePacePredictActive.
 
  Cvar live-toggleable.  All Windows APIs resolved via GetProcAddress
  so the binary still loads on pre-Win10-1803.
@@ -2140,7 +2142,7 @@ qboolean Sys_FramePacingAnchor(void)
 {
 	/* mode 3 always; mode 4 too when present-pacing can't run (non-GL) so it cleanly
 	 * degrades to the frame-START grid anchor instead of doing nothing. */
-	return sys_framepacing.ival == 3 || (sys_framepacing.ival >= 4 && qrenderer != QR_OPENGL);
+	return sys_framepacing.ival == 3 || (sys_framepacing.ival == 4 && qrenderer != QR_OPENGL);
 }
 
 /* Returns how long to wait (seconds, in the engine's realtime base) so the next
@@ -2189,70 +2191,97 @@ int Sys_FramePaceDrainDepth(void)
 qboolean Sys_FramePacePresentActive(void)
 {
 	/* present-pacing only exists in the GL swap hook (gl_screen.c); off-GL, mode 4
-	 * falls back to the mode-3 frame-START anchor (see Sys_FramePacingAnchor).
-	 * FTESurf Patch 1413: mode 5 uses the same hook (drain + hold) while capped. */
-	return qrenderer == QR_OPENGL && (sys_framepacing.ival == 4 || (sys_framepacing.ival == 5 && cl_maxfps.value > 0));
+	 * falls back to the mode-3 frame-START anchor (see Sys_FramePacingAnchor). */
+	return sys_framepacing.ival == 4 && qrenderer == QR_OPENGL;
 }
 
 /*FTESurf Patch 1413: mode 5, predictive present pacing. Mode 4 renders as soon as the last flip is done and
   holds the swap to the grid: a flat cadence, but input is read about a frame early and a frame that misses its
   slot waits a whole one (bhop_ceaseless save 35, cl_maxfps 100: p99.9 19.7 ms). Mode 5 starts each frame its
-  predicted render time before the slot after the last present -- sys_framepacing_quantile of the last 64 render
-  times plus 0.5 ms -- and holds the swap to that slot only: an early frame waits, a late one presents at once.
-  Render time is frame start to just before the hold, after the drain (so it includes the GPU's backlog).*/
+  predicted render time before its slot -- sys_framepacing_quantile of the last 64 render times plus 0.5 ms --
+  and holds the swap to that slot only: an early frame waits, a late one presents at once. Render time is frame
+  start to just before the hold, after the drain (so it includes the GPU's backlog). An on-time frame's successor
+  aims one slot on; a late one's aims at the slot after its present. With vid_vsync on, or while the swap itself
+  blocks (driver-forced vsync: median of the last 32 over SWAP_BLOCKS), mode 5 stands aside for the mode-2 limiter:
+  holding to a grid vsync does not share drops frames in runs (simulated: 25 at 30 fps, cap 60 on 59.94 Hz). The
+  swap test is not demonstrated: windowed on the PC's rig, vid_vsync 1 did not block the swap (p50 0.25 ms).*/
 #define PRED_RING 64
+#define SWAP_RING 32
+#define SWAP_BLOCKS 0.001
 static double g_pred_ring[PRED_RING];
 static int g_pred_head, g_pred_count;
-static double g_pred_start, g_pred_target;	/* this frame's start and the slot it aims at (0: none) */
+static double g_pred_start, g_pred_target;	/* the frame in flight: its start and the slot it aims at (0: none) */
 static double g_pred_laststart;				/* the last frame mode 5 started */
+static double g_pred_ontime;				/* the slot the last frame presented on time for (0: it was late) */
+static qboolean g_pred_stale;				/* a frame mode 5 started never reached the swap hook (loading) */
+static double g_swap_ring[SWAP_RING], g_preswap_t;
+static int g_swap_head, g_swap_count;
+static qboolean g_swap_blocks;
+/* cl_main.c's limiter: mode 5 plans this frame's start */
 qboolean Sys_FramePacePredictActive(void)
 {
-	return sys_framepacing.ival == 5 && qrenderer == QR_OPENGL;
+	extern cvar_t vid_vsync;
+	return sys_framepacing.ival == 5 && qrenderer == QR_OPENGL && !vid_vsync.value && !g_swap_blocks;
+}
+/* gl_screen.c's drain gate: mode 4, or a frame mode 5 started */
+qboolean Sys_FramePaceDrainActive(void)
+{
+	return Sys_FramePacePresentActive() || (sys_framepacing.ival == 5 && qrenderer == QR_OPENGL && g_pred_start > 0);
 }
 static int QDECL Sys_FramePace_CmpD(const void *a, const void *b)
 {
 	double x = *(const double *)a, y = *(const double *)b;
 	return (x > y) - (x < y);
 }
-static double Sys_FramePacePredicted(void)
+static double Sys_FramePace_Quantile(const double *ring, int count, double q)
 {
 	double s[PRED_RING];
 	int k;
-	if (!g_pred_count)
+	if (count <= 0)
 		return 0;
-	memcpy(s, g_pred_ring, sizeof(*s) * g_pred_count);
-	qsort(s, g_pred_count, sizeof(*s), Sys_FramePace_CmpD);
-	k = (int)(g_pred_count * bound(0, sys_framepacing_quantile.value, 100) / 100.0);
-	return s[min(k, g_pred_count - 1)];
+	count = min(count, PRED_RING);
+	memcpy(s, ring, sizeof(*s) * count);
+	qsort(s, count, sizeof(*s), Sys_FramePace_CmpD);
+	k = (int)(count * q);
+	return s[bound(0, k, count - 1)];
+}
+static double Sys_FramePacePredicted(void)
+{
+	return Sys_FramePace_Quantile(g_pred_ring, g_pred_count, bound(0, sys_framepacing_quantile.value, 100) / 100.0);
 }
 /* How long the limiter should still wait (seconds) before this frame starts; 0 = start now. */
 double Sys_FramePacePredictDelay(double fps)
 {
-	double now = Sys_DoubleTime(), interval, slot, target, start;
+	double now = Sys_DoubleTime(), interval, target, start;
 	if (fps <= 0)
-	{
-		g_pred_start = 0;
 		return 0;
-	}
 	interval = 1.0 / fps;
 	if (interval != g_present_interval || g_present_base <= 0 || (now - g_present_base) > 600.0)
 	{
 		g_present_base     = now;
 		g_present_interval = interval;
+		g_pred_ontime      = 0;
 	}
-	if (g_last_present_t <= g_present_base || now - g_last_present_t > 0.25)
-	{	/* no recent present on this grid (just switched on, a re-base, minimised): plain interval starts aimed
-		 * at the next slot, so the plan never chases a slot that moves with the clock */
+	if (g_pred_start > 0)
+	{	/* the frame started last never reached the swap hook; plain starts until one does */
+		g_pred_start  = 0;
+		g_pred_stale  = true;
+		g_pred_ontime = 0;
+	}
+	if (g_pred_stale || g_last_present_t <= g_present_base || now - g_last_present_t > 0.25)
+	{	/* nothing to plan from (loading, just switched on, a re-base, minimised): plain interval starts aimed at
+		 * the next slot, so the plan never chases a slot that moves with the clock */
 		if (g_pred_laststart > 0 && now >= g_pred_laststart && now - g_pred_laststart < interval)
 			return interval - (now - g_pred_laststart);
 		target = g_present_base + (floor((now - g_present_base) / interval) + 1.0) * interval;
 	}
 	else
-	{	/* the slot after the last present (fixed while we wait): a late present has used its slot; +0.05 so a
-		 * present a hair before its slot (the wait's precision) is not taken for the slot before it */
-		slot   = floor((g_last_present_t - g_present_base) / interval + 0.05) + 1.0;
-		target = g_present_base + slot * interval;
-		start  = target - Sys_FramePacePredicted() - 0.0005;
+	{
+		if (g_pred_ontime > 0)
+			target = g_pred_ontime + interval;
+		else	/* +0.05: a present a hair before its slot (the wait's precision) is not taken for the slot before */
+			target = g_present_base + (floor((g_last_present_t - g_present_base) / interval + 0.05) + 1.0) * interval;
+		start = target - Sys_FramePacePredicted() - 0.0005;
 		if (start > now)
 			return start - now;
 	}
@@ -2265,21 +2294,27 @@ double Sys_FramePacePredictDelay(double fps)
  * next present-grid slot using the same high-res timer+spin wait as the other
  * modes, so consecutive flips are evenly spaced.  A long render just drops to the
  * next slot rather than bursting to catch up. */
-void Sys_FramePacePresent(void)
+static void Sys_FramePacePresentHold(void)
 {
 	double fps = cl_maxfps.value;
 	double now, slot, target, delay;
 	if (sys_framepacing.ival == 5)
-	{	/* FTESurf Patch 1413: record this frame's render time, then hold to the slot it aimed at, if early */
+	{	/* FTESurf Patch 1413: record the render time of a frame mode 5 started, then hold it to its slot if early */
+		g_pred_stale = false;
+		g_pred_ontime = 0;
 		if (g_pred_start > 0)
 		{
 			now = Sys_DoubleTime();
-			g_pred_ring[g_pred_head] = now - g_pred_start;
+			g_pred_ring[g_pred_head] = min(now - g_pred_start, g_present_interval);	/* longer cannot be planned for */
 			g_pred_head = (g_pred_head + 1) % PRED_RING;
 			if (g_pred_count < PRED_RING)
 				g_pred_count++;
-			if (g_pred_target > now)
-				Sys_FramePacedWait(g_pred_target - now);
+			if (g_pred_target >= now)
+			{
+				g_pred_ontime = g_pred_target;
+				if (g_pred_target > now)
+					Sys_FramePacedWait(g_pred_target - now);
+			}
 			g_pred_start = 0;
 		}
 		return;
@@ -2297,6 +2332,11 @@ void Sys_FramePacePresent(void)
 	delay  = target - now;
 	if (delay > 0)
 		Sys_FramePacedWait(delay);	/* reuse the high-res timer+spin wait (+stats) */
+}
+void Sys_FramePacePresent(void)
+{
+	Sys_FramePacePresentHold();
+	g_preswap_t = Sys_DoubleTime();	/* FTESurf Patch 1413: Sys_FramePace_RecordPresent times the swap from here */
 }
 
 /* Called once per frame from the renderer right after the buffer swap, to sample the
@@ -2322,6 +2362,21 @@ void Sys_FramePace_RecordPresent(void)
 			g_ft_lost++;
 	}
 	g_last_present_t = now;
+	if (g_preswap_t > 0 && now >= g_preswap_t)
+	{	/* FTESurf Patch 1413: how long the swap itself blocked; mode 5 stands aside while it does */
+		g_swap_ring[g_swap_head] = now - g_preswap_t;
+		g_swap_head = (g_swap_head + 1) % SWAP_RING;
+		if (g_swap_count < SWAP_RING)
+			g_swap_count++;
+		if (sys_framepacing.ival == 5)
+			g_swap_blocks = g_swap_count >= SWAP_RING / 2 && Sys_FramePace_Quantile(g_swap_ring, g_swap_count, 0.5) > SWAP_BLOCKS;
+	}
+	g_preswap_t = 0;
+}
+/* FTESurf Patch 1413: r_frametime's clock (cl_screen.c); 0 when there is no recent GL swap to time from */
+double Sys_FramePace_LastPresent(void)
+{
+	return (qrenderer == QR_OPENGL && g_last_present_t > 0 && Sys_DoubleTime() - g_last_present_t < 0.25) ? g_last_present_t : 0;
 }
 
 static int QDECL Sys_FrameTimes_Cmp(const void *a, const void *b)
@@ -2394,7 +2449,10 @@ static void Sys_FramePacing_Changed(cvar_t *var, char *oldval)
 	g_anchor_base = 0;	/* re-establish the mode-3 grid on next use */
 	g_anchor_tpf  = 0;
 	g_pred_count = g_pred_head = 0;	/* FTESurf Patch 1413: mode 5 relearns its render time */
-	g_pred_start = g_pred_target = g_pred_laststart = 0;
+	g_pred_start = g_pred_target = g_pred_laststart = g_pred_ontime = 0;
+	g_pred_stale = g_swap_blocks = false;
+	g_swap_count = g_swap_head = 0;
+	g_preswap_t = 0;
 	if (mode > 0)
 	{
 		Sys_FramePacing_Init();   /* idempotent */
@@ -2439,6 +2497,11 @@ static void Sys_FramePacing_Stats_f(void)
 	if (mode == 5)
 		Con_Printf("  mode 5 render time  : %.3f ms predicted (sys_framepacing_quantile of the last %i frames), frames start %.3f ms before their slot\n",
 			Sys_FramePacePredicted() * 1000, g_pred_count, (Sys_FramePacePredicted() + 0.0005) * 1000);
+	if (g_swap_count)
+		Con_Printf("  swap blocked        : p50 %.3f  p90 %.3f  max %.3f ms (last %i)%s\n",
+			Sys_FramePace_Quantile(g_swap_ring, g_swap_count, 0.5) * 1000, Sys_FramePace_Quantile(g_swap_ring, g_swap_count, 0.9) * 1000,
+			Sys_FramePace_Quantile(g_swap_ring, g_swap_count, 1.0) * 1000, g_swap_count,
+			mode != 5 ? "" : !Sys_FramePacePredictActive() ? " -- mode 5 stands aside (vid_vsync, or the swap blocks)" : " -- mode 5 pacing");
 	Con_Printf("\n");
 	Con_Printf("Subsystem state:\n");
 	Con_Printf("  initialised        : %s\n", g_pace_inited ? "yes" : "no (lazy init on first wait)");
@@ -2447,8 +2510,8 @@ static void Sys_FramePacing_Stats_f(void)
 	Con_Printf("  waitable timer tier : %s\n", g_pace_timer ? (g_pace_timer_highres ? "HIGH_RESOLUTION (Win10 1803+)" : "standard (Win7/Vista)") : "none");
 	Con_Printf("  DXGI waitable handle: %s\n", hdxgi ? "present (D3D11 renderer active)" : "absent (GL/Vk/non-D3D11 renderer, or not created yet)");
 	{	//sys_framepacing 4 GPU-drain path — confirms the ARB_sync fence is live vs the glFinish fallback
-		const char *drain = "n/a (only mode 4 drains the GPU before the paced swap)";
-		if (mode == 4)
+		const char *drain = "n/a (only modes 4 and 5 drain the GPU before the paced swap)";
+		if (mode == 4 || mode == 5)
 		{
 #ifdef GLQUAKE
 			if (qrenderer == QR_OPENGL)
@@ -2463,9 +2526,9 @@ static void Sys_FramePacing_Stats_f(void)
 			}
 			else
 #endif
-				drain = "n/a (off-GL: mode 4 falls back to the mode-3 frame-START anchor)";
+				drain = "n/a (off-GL: mode 4 falls back to the mode-3 anchor, mode 5 to mode 2)";
 		}
-		Con_Printf("  mode-4 GPU drain    : %s\n", drain);
+		Con_Printf("  GPU drain (4/5)     : %s\n", drain);
 	}
 
 	if (mode >= 3)

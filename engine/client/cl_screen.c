@@ -809,7 +809,7 @@ static void R_Budget_Dump_f(void)
 //FTESurf Patch 801: r_frametime. One sample per rendered frame, from RSpeedShow. The graph keeps the
 //slowest frame of each column's slice, so a spike is never averaged away; the lows come from a
 //histogram updated as frames arrive and expire, so computing them never costs a frame of its own.
-cvar_t r_frametime = CVARFD("r_frametime", "0", 0, "FTESurf Patch 801. A frame-time graph at the top right: the last r_frametime_seconds, each column the slowest frame in its slice, green, yellow over 1.5x the median and red over 2.5x (a stutter). Above it the last second's fps (show_fps' figure), then estimated average fps and the 1% and 0.1% tails (histogram estimates of the slowest fractions' mean) over r_frametime_window. r_frametime_dump sorts retained raw samples for exact tail means and nearest-rank percentiles, with sample coverage, focus-idle exclusions since reset, the worst frames and where you were; r_frametime_reset starts the window again.");
+cvar_t r_frametime = CVARFD("r_frametime", "0", 0, "FTESurf Patch 801. A frame-time graph at the top right: the last r_frametime_seconds, each column the slowest frame in its slice, green, yellow over 1.5x the median and red over 2.5x (a stutter). Above it the last second's fps (show_fps' figure), then estimated average fps and the 1% and 0.1% tails (histogram estimates of the slowest fractions' mean) over r_frametime_window. On Windows OpenGL frames are timed at the buffer swap (FTESurf Patch 1413). r_frametime_dump sorts retained raw samples for exact tail means and nearest-rank percentiles, with sample coverage, focus-idle exclusions since reset, the worst frames and where you were; r_frametime_reset starts the window again.");
 cvar_t r_frametime_seconds = CVARFD("r_frametime_seconds", "10", 0, "FTESurf Patch 801. Seconds the r_frametime graph spans.");
 cvar_t r_frametime_window = CVARFD("r_frametime_window", "30", 0, "FTESurf Patch 801. Seconds r_frametime's lows and stutter count cover (1 to 120).");
 
@@ -826,6 +826,7 @@ static struct
 {
 	qboolean on;
 	double base, last;			//realtime when switched on, and of the previous frame
+	double dumped;				//FTESurf Patch 1413: a dump ran then; its frame is not a sample
 	float ms[FT_RING], at[FT_RING];	//each frame in the window, and when (s since base)
 	int head, count;
 	int bins[FT_BINS];
@@ -968,9 +969,20 @@ static qboolean R_FrameTime_Throttled(void)
 		idlefps = Cvar_FindVar("cl_idlefps");
 	return idlefps && idlefps->value > 0;
 }
+static double R_FrameTime_Now(void)
+{	//FTESurf Patch 1413: on Windows GL, the last buffer swap. The display follows the swaps; with the swap held
+	//(sys_framepacing 4/5) the HUD draws at a time that moves on purpose.
+#if defined(_WIN32) && !defined(FTE_SDL) && defined(GLQUAKE)
+	extern double Sys_FramePace_LastPresent(void);
+	double p = Sys_FramePace_LastPresent();
+	if (p > 0)
+		return p;
+#endif
+	return Sys_DoubleTime();
+}
 static void R_FrameTime_Sample(void)
 {
-	double now = Sys_DoubleTime(), window, span;
+	double now = R_FrameTime_Now(), window, span;
 	float ms, at;
 	int b, i;
 	qboolean rebuild = false;
@@ -995,6 +1007,15 @@ static void R_FrameTime_Sample(void)
 			ft.excludedms += (now - ft.last) * 1000;
 		}
 		ft.last = now;
+		return;
+	}
+	if (ft.dumped)
+	{	//swap-timed, the dump's frame ends at the first swap after it
+		if (now >= ft.dumped)
+		{
+			ft.dumped = 0;
+			ft.last = now;
+		}
 		return;
 	}
 	ms = (now - ft.last) * 1000;
@@ -1115,7 +1136,7 @@ static void R_FrameTime_Draw(void)
 //a dump stalled its own frame by 0.3 s in the P801 arm: asking must not add a stutter
 static void R_FrameTime_AfterDump(void)
 {
-	ft.last = Sys_DoubleTime();
+	ft.dumped = Sys_DoubleTime();
 }
 static void R_FrameTime_Reset_f(void)
 {
