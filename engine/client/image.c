@@ -14826,7 +14826,8 @@ static void Image_LoadHiResTextureWorker(void *ctx, void *data, size_t a, size_t
 
 	if (Image_LocateHighResTexture(tex, &loc, fname, sizeof(fname), &locflags))
 	{
-		SCR_NoteTextureSource(FS_WhichPackForLocation(&loc, WP_FULLPATH));	//FTESurf Patch 1453
+		if (!(tex->flags & IF_UIPIC))	//FTESurf Patch 1453: the map's textures, not the loading screen's own pictures
+			SCR_NoteTextureSource(FS_WhichPackForLocation(&loc, WP_FULLPATH));
 		f = FS_OpenReadLocation(fname, &loc);
 		if (f)
 		{

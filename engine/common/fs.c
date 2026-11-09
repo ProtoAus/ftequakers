@@ -12430,8 +12430,7 @@ static void FS_AutoMountStep(const char *spec, qboolean cached)
 	else if (strstr(spec, "Momentum"))
 		g = "Momentum";
 	Q_snprintfz(step, sizeof(step), cached ? "mount %s cached" : "mount %s", g);
-	SCR_SetLoadingFile(step);
-	SCR_LoadingPumpNow();
+	SCR_SetLoadingFileNow(step);
 }
 #endif
 void FS_AutoMountForMap(const char *mapname)

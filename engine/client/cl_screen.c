@@ -3613,7 +3613,16 @@ int SCR_GetLoadingStage(void)
 {
 	return loading_stage;
 }
-static volatile int scr_texsrc, scr_texsrcsent;	//FTESurf Patch 1453: see SCR_NoteTextureSource
+//FTESurf Patch 1453: see SCR_NoteTextureSource.  seen: any thread; sent/order/hold: main thread.
+static volatile qbyte scr_texseen[10];
+static qbyte scr_texsent[10], scr_texorder[10], scr_texcount;
+static qboolean scr_texhold;
+static void SCR_TexSourcesReset(void)
+{
+	memset((void*)scr_texseen, 0, sizeof(scr_texseen));
+	memset(scr_texsent, 0, sizeof(scr_texsent));
+	scr_texcount = 0;
+}
 void SCR_SetLoadingStage(int stage)
 {
 	switch(stage)
@@ -3628,10 +3637,11 @@ void SCR_SetLoadingStage(int stage)
 		scr_loadingreleased = false;	//Patch 1258
 		break;
 	case LS_CONNECTION:
-		scr_texsrc = scr_texsrcsent = 0;	//Patch 1453: each load names its first source
+		SCR_TexSourcesReset();	//Patch 1453: each load lists its own
 		SCR_SetLoadingFile("waiting for connection...");
 		break;
 	case LS_SERVER:
+		SCR_TexSourcesReset();
 		SCR_SetLoadingFile("starting server...");
 		break;
 	case LS_CLIENT:
@@ -3707,8 +3717,9 @@ qboolean SCR_LoadingPumpWanted(void)
 #endif
 }
 static void SCR_LoadingStepSet(const char *str);
-//FTESurf Patch 1453: the game the textures now loading come from.  Any thread (the loader workers)
-//writes an index; the main thread's pump turns a change into a "textures <game>" step.
+//FTESurf Patch 1453: the games this load's textures came from.  Any thread (the loader workers) marks
+//a game the first time; the main thread's pump turns a new one into the step "textures <list so far>".
+//Once per game per load: the source flips constantly (map, HL2, CS:S), and each step breaks a model run.
 static const char *const scr_texsrcname[] = {"", "CS:S", "HL2", "CS:GO", "TF2", "Portal 2", "Portal", "Momentum",
 	"the map", "World of Surf"};
 void SCR_NoteTextureSource(const char *pack)
@@ -3737,11 +3748,11 @@ void SCR_NoteTextureSource(const char *pack)
 		id = 2;
 	else
 		id = 9;
-	if (id != scr_texsrc)
+	if (!scr_texseen[id])
 	{
 		if (developer.ival)
 			Con_DPrintf("loadscreen: textures from %s (%s)\n", scr_texsrcname[id], pack);
-		scr_texsrc = id;
+		scr_texseen[id] = 1;
 	}
 }
 
@@ -3750,13 +3761,26 @@ void SCR_LoadingPump(void)
 	double now;
 	qboolean oldwarndraw;
 
-	if (scr_texsrc != scr_texsrcsent && Sys_IsMainThread() && loading_stage != LS_NONE)
+	if (!scr_texhold && loading_stage != LS_NONE && Sys_IsMainThread())
 	{	//Patch 1453: before the early-outs, so a stage with no redraw still records it
-		char step[32];
-		int id = scr_texsrc;
-		scr_texsrcsent = id;
-		Q_snprintfz(step, sizeof(step), "textures %s", scr_texsrcname[id]);
-		SCR_LoadingStepSet(step);
+		int id, n = scr_texcount;
+		for (id = 1; id < countof(scr_texseen); id++)
+			if (scr_texseen[id] && !scr_texsent[id])
+			{
+				scr_texsent[id] = 1;
+				scr_texorder[scr_texcount++] = id;
+			}
+		if (scr_texcount != n)
+		{
+			char step[128] = "textures ";
+			for (id = 0; id < scr_texcount; id++)
+			{
+				if (id)
+					Q_strncatz(step, ", ", sizeof(step));
+				Q_strncatz(step, scr_texsrcname[scr_texorder[id]], sizeof(step));
+			}
+			SCR_LoadingStepSet(step);
+		}
 	}
 	if (scr_loadingdraw || qrenderer != QR_OPENGL || !Sys_IsMainThread() || !SCR_LoadingPumpWanted())
 		return;
@@ -3778,12 +3802,15 @@ void SCR_LoadingPump(void)
 	r_refdef.warndraw = oldwarndraw;
 }
 
-//Patch 1453: the step before one long call (a game's mount) is drawn even inside the 60 Hz limit;
-//bhop_landmark's CS:GO mount came 3 ms after "starting server..." and stalled 5.6 s on it unseen.
-void SCR_LoadingPumpNow(void)
+//Patch 1453: a step before one long call (a game's mount), drawn past the 60 Hz limit -- bhop_landmark's
+//CS:GO mount came 3 ms after "starting server..." drew and stalled 5.6 s on it unseen -- and not replaced
+//by a texture source noted meanwhile (the card picture's, on a lobby join; P1453 review).
+void SCR_SetLoadingFileNow(char *str)
 {
 	scr_loadingswap = 0;
-	SCR_LoadingPump();
+	scr_texhold = true;
+	SCR_SetLoadingFile(str);
+	scr_texhold = false;
 }
 
 //The step's bookkeeping, without a redraw.  No va(): callers hold va() strings across this

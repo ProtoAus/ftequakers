@@ -7,16 +7,20 @@ FS_AutoMountForMap's per-map mounts set none either, though one takes seconds (b
 so the screen held whatever line came before.
 
 Fix: FS_AutoMountStep sets "mount <game>" (CS:GO, TF2, Portal 2, Portal, Momentum, else "content"; " cached" when the
-proven cache dir stands in) before each resolved, not-yet-mounted per-map game, and draws it with SCR_LoadingPumpNow --
-the pump with its 60 Hz limiter cleared, because the step lands ~3 ms after "starting server..." drew and the limiter
-dropped it. When Image_LocateHighResTexture finds a texture, SCR_NoteTextureSource classifies its pack's purepath into
-a source-game index (any thread); SCR_LoadingPump turns a change into the step "textures <game>" on the main thread.
-The menu (m_loading.qc) words both. Still undrawn: a `map` typed while the menu or console holds the keys (P1259's
-Key_Dest guard refuses every pump); the Play button closes the menu before its `map` runs.
+proven cache dir stands in) before each resolved, not-yet-mounted per-map game, through SCR_SetLoadingFileNow: one
+redraw past the 60 Hz limiter (the step lands ~3 ms after "starting server..." drew, and the limiter dropped it), with
+texture-source steps held so a source noted meanwhile cannot replace it. When Image_LocateHighResTexture finds a
+texture that is not a UI picture, SCR_NoteTextureSource marks its pack's source game seen (any thread); SCR_LoadingPump
+turns a newly seen game into the step "textures <every game so far, in order>" on the main thread. Once per game per
+load (reset at LS_SERVER and LS_CONNECTION): the source flips constantly between the map, HL2 and CS:S, and each step
+would split a model run. UI pictures are excluded because the loading screen's own card picture is one, and on a lobby
+join its source replaced the mount line for the whole stall (review). The menu (m_loading.qc) words both. Still
+undrawn: a `map` typed while the menu or console holds the keys (P1259's Key_Dest guard refuses every pump); the Play
+button closes the menu before its `map` runs.
 
-Measured (P1453 arm, Play path, bhop_landmark's first load): before, "5671 ms without a redraw, from  to textures
-Momentum"; after, "7368 ms without a redraw, from mount CS:GO to spawnserver", the mount line on screen for the stall.
-Sources seen across surf_gigapede and bhop_landmark: the map, HL2, CS:S, CS:GO, World of Surf.
+Measured (P1453 arms, Play path, bhop_landmark's first load): before, "5671 ms without a redraw, from  to textures
+Momentum"; after, "5744 ms without a redraw, from mount CS:GO to spawnserver", the mount line on screen for the stall,
+then "textures the map" growing to "the map, World of Surf, CS:GO, CS:S" (4 steps in the load).
 
 ## Patch 1454 -- no "Not Responding" ghost window during long loads (sys_win.c)
 
