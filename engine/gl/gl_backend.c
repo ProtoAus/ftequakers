@@ -328,16 +328,22 @@ static struct
 	entity_t *ent;			//the batch's: the world for water, a func_reflective_glass for glass
 	int fbw, fbh;
 	playerview_t *pv;
-	float vp[16];			//the projection times the view's rotation they were rendered for (GLBE_TurnVP)
-	vec3_t eye, fwd;		//and the eye and its forward (a teleport or a flick renders afresh)
+	//FTESurf Patch 1455: per kind group (BE_CAPG_*), rendered apart since they may be kept apart
+	float vp[2][16];		//the projection times the view's rotation they were rendered for (GLBE_TurnVP)
+	vec3_t eye[2], fwd[2];	//and the eye and its forward (a teleport or a flick renders afresh)
 	int keptframe;			//host_framecount a keep was applied in: the plane's other batches share it
+	unsigned int keptkinds;	//...and the kinds it kept
 	int view;				//which of its seat's world views that frame rendered them (BE_SeatView)
-	double rendered;		//realtime they rendered (r_capturerate)
+	double rendered[2];		//realtime they rendered (r_capturerate)
 } be_capkeep = {-1};
 static unsigned int blendcentre_gen = 1;	//FTESurf Patch 1409: GLBE_BlendAreaDepthCached's entries are this map's
 void GLBE_BlendCentresFlush(void) { blendcentre_gen++; }
-static int be_capfixframe = -1;	//host_framecount whose top-level draws sample a reused capture through be_capfix; -1 once a level-0 target is written
-static float be_capfix[16];	//its view-projection times the inverse of this frame's (SP_M_CAPTUREFIX)
+//FTESurf Patch 1455: kind groups -- the reflection, and the refraction with its depth (one view writes both)
+#define BE_CAPG_REFL 0
+#define BE_CAPG_REFR 1
+static const unsigned int be_capgroup[2] = {SHADER_HASREFLECT, SHADER_HASREFRACT|SHADER_HASREFRACTDEPTH};
+static int be_capfixframe[2] = {-1, -1};	//per group: host_framecount whose top-level draws sample it reused through be_capfix; -1 once its target is written
+static float be_capfix[2][16];	//its view-projection times the inverse of this frame's (SP_M_CAPTUREFIX, SP_M_CAPTUREFIX2)
 static const float be_identity16[16] = {1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1};
 static int be_seatviews[MAX_SPLITS];	//world-drawing top-level views begun, per seat
 static int be_seatframe[MAX_SPLITS], be_seatbase[MAX_SPLITS];	//FTESurf Patch 1245: be_seatviews at a seat's first world view of a frame
@@ -4710,7 +4716,10 @@ static void BE_Program_Set_Attributes(const program_t *prog, struct programpermu
 			qglUniformMatrix3x4fv(ph, shaderstate.sourcevbo->numbones, false, shaderstate.sourcevbo->bones);
 			break;
 		case SP_M_CAPTUREFIX:	//FTESurf Patch 1245: only the top-level view samples a reused capture
-			qglUniformMatrix4fvARB(ph, 1, false, (be_capfixframe == host_framecount && !r_refdef.recurse) ? be_capfix : be_identity16);
+			qglUniformMatrix4fvARB(ph, 1, false, (be_capfixframe[BE_CAPG_REFL] == host_framecount && !r_refdef.recurse) ? be_capfix[BE_CAPG_REFL] : be_identity16);
+			break;
+		case SP_M_CAPTUREFIX2:	//FTESurf Patch 1455
+			qglUniformMatrix4fvARB(ph, 1, false, (be_capfixframe[BE_CAPG_REFR] == host_framecount && !r_refdef.recurse) ? be_capfix[BE_CAPG_REFR] : be_identity16);
 			break;
 		case SP_M_INVVIEWPROJECTION:
 			{
@@ -7237,7 +7246,7 @@ void GLBE_WaterViewsNewMap(void)
 	for (i = 0; i < MAX_SPLITS; i++)
 		be_waterlastvalid[i] = false;	//planes of the old map
 	memset(be_capstamp, 0, sizeof(be_capstamp));	//FTESurf Patch 1018: the old map's captures
-	be_capkeep.frame = be_capkeep.keptframe = be_capfixframe = -1;	//FTESurf Patch 1245
+	be_capkeep.frame = be_capkeep.keptframe = be_capfixframe[0] = be_capfixframe[1] = -1;	//FTESurf Patch 1245
 	be_waterdepthfailed = false;	//FTESurf Patch 1020: a refused depth copy is tried again
 	GLBE_BlendCentresFlush();	//FTESurf Patch 1409: the old map's mesh centres
 #ifdef PLUGINS
@@ -7679,18 +7688,32 @@ static void GLBE_WaterViewsEnd(void)
 
 extern cvar_t r_capturehalfrate, r_capturerate;
 extern int host_framecount;
+cvar_t r_capturestagger = CVARFD("r_capturestagger", "1", CVAR_ARCHIVE, "FTESurf Patch 1455: under r_capturerate, when the reflection and the refraction of the kept water plane are both due, render only the older one this frame and keep the other (each still renders at the rate; a kind kept 1.5 intervals renders regardless), so a capture frame draws one extra view instead of two. Only for shaders that take m_capturefix2 (vmt/water); at or below the rate both render every frame. 0: both together.");
 //FTESurf Patch 1281: kept captures are on at either setting; a rate redraws by the clock, else by frame count
 #define BE_CAPTUREKEEPS (r_capturehalfrate.ival || r_capturerate.value > 0)
-static qboolean GLBE_CaptureDue(void)
-{
+static double GLBE_CaptureAge(int g)
+{	//in intervals of r_capturerate; a clock that went back (capture, the QC debugger) is overdue rather than never
+	double age = realtime - be_capkeep.rendered[g];
+	return age < 0 ? 1e9 : age * max(r_capturerate.value, 20);
+}
+static qboolean GLBE_CaptureDue(int g)
+{	//at 3/4 of the interval: frames capped at the rate arrive a little early as often as late (cl_maxfps
+	//carries each frame's lateness into the next), and a full interval kept every other one of them.
 	if (r_capturerate.value > 0)
-	{	//at 3/4 of the interval: frames capped at the rate arrive a little early as often as late (cl_maxfps
-		//carries each frame's lateness into the next), and a full interval kept every other one of them.
-		//A clock that went back (capture, the QC debugger) is due rather than never.
-		double age = realtime - be_capkeep.rendered;
-		return age < 0 || age * max(r_capturerate.value, 20) >= 0.75;
-	}
+		return GLBE_CaptureAge(g) >= 0.75;
 	return be_capkeep.reused >= r_capturehalfrate.ival;
+}
+//FTESurf Patch 1455: a program whose sampling of the refraction follows m_capturefix2 (cached for the last one asked)
+static qboolean GLBE_ProgTakesFix2(program_t *prog)
+{
+	static program_t *last;
+	static qboolean takes;
+	if (prog != last)
+	{
+		last = prog;
+		takes = prog && prog->shadertext && strstr(prog->shadertext, "m_capturefix2");
+	}
+	return takes;
 }
 //FTESurf Patch 1245: m_capturefix turns a reused capture's camera to this frame's and does not move it:
 //what it reflects is taken as distant. Moved too (exact on the water plane) was worse on a 24-unit slide,
@@ -7703,52 +7726,80 @@ static void GLBE_TurnVP(float *out)
 	v[12] = v[13] = v[14] = 0;
 	Matrix4_Multiply(shaderstate.projectionmatrix, v, out);
 }
-//last frame's captures of this plane, if nothing has written those targets since
-static qboolean GLBE_CaptureKeep(const plane_t *p, entity_t *ent, unsigned int need)
+//last frame's captures of this plane, if nothing has written those targets since: the kinds of need it keeps
+//(FTESurf Patch 1455: a group at a time; stagger lets one group render while the other is kept)
+static unsigned int GLBE_CaptureKeep(const plane_t *p, entity_t *ent, unsigned int need, qboolean stagger)
 {
-	int seat = BE_Seat();
+	int seat = BE_Seat(), g;
 	vec3_t d;
-	if (!need || (need & ~be_capkeep.kinds) || be_capkeep.ent != ent || be_capkeep.pv != r_refdef.playerview ||
-		!GLBE_WaterSamePlane(p, &be_capkeep.plane))
-		return false;
+	unsigned int keep = 0, due = 0;
+	if (!need || be_capkeep.ent != ent || be_capkeep.pv != r_refdef.playerview || !GLBE_WaterSamePlane(p, &be_capkeep.plane))
+		return 0;
 	//a seat can draw several world views a frame (stereo eyes, r_projection's faces, renderscenes): a view reuses
 	//only what the same view of the last frame rendered, and a second view sharing this frame's keep renders afresh
 	if (be_capkeep.view != BE_SeatView(seat))
-		return false;
-	if (be_capkeep.keptframe == host_framecount && be_capfixframe == host_framecount)
-		return true;	//another batch of the plane kept this frame
-	VectorSubtract(r_refdef.vieworg, be_capkeep.eye, d);
-	//vmt/water and vmt/lmreflect take m_capturefix; Quake's altwater does not
-	if (be_capkeep.frame != host_framecount - 1 || GLBE_CaptureDue() || be_capkeep.views != 1 ||
+		return 0;
+	if (be_capkeep.keptframe == host_framecount)
+		return need & be_capkeep.keptkinds;	//another batch of the plane kept this frame
+	if (be_capkeep.frame != host_framecount - 1 || be_capkeep.views != 1 ||
 		be_capkeep.fbw != vid.fbpwidth || be_capkeep.fbh != vid.fbpheight ||
-		!r_worldentity.model || !(r_worldentity.model->engineflags & MDLF_SOURCEBSP) ||
-		DotProduct(d, d) > 128*128 || DotProduct(vpn, be_capkeep.fwd) < 0.866f)	//past 128 units or 30 degrees
-		return false;
-	if (((need & SHADER_HASREFLECT) && !TEXVALID(shaderstate.tex_reflection[0])) ||
-		((need & SHADER_HASREFRACT) && !TEXVALID(shaderstate.tex_refraction[0])) ||
-		((need & SHADER_HASREFRACTDEPTH) && !TEXVALID(shaderstate.tex_refractiondepth[0])))
-		return false;
-	if (need & SHADER_HASREFLECT)
+		!r_worldentity.model || !(r_worldentity.model->engineflags & MDLF_SOURCEBSP))
+		return 0;
+	for (g = 0; g < 2; g++)
+	{	//vmt/water and vmt/lmreflect take m_capturefix; Quake's altwater does not
+		unsigned int k = need & be_capgroup[g];
+		if (!k)
+			continue;
+		if (k & ~be_capkeep.kinds)
+			return 0;
+		VectorSubtract(r_refdef.vieworg, be_capkeep.eye[g], d);
+		if (DotProduct(d, d) > 128*128 || DotProduct(vpn, be_capkeep.fwd[g]) < 0.866f)	//past 128 units or 30 degrees
+			return 0;
+		if (((k & SHADER_HASREFLECT) && !TEXVALID(shaderstate.tex_reflection[0])) ||
+			((k & SHADER_HASREFRACT) && !TEXVALID(shaderstate.tex_refraction[0])) ||
+			((k & SHADER_HASREFRACTDEPTH) && !TEXVALID(shaderstate.tex_refractiondepth[0])))
+			return 0;
+		if (GLBE_CaptureDue(g))
+			due |= k;
+		else
+			keep |= k;
+	}
+	if (due && !keep && stagger && r_capturestagger.ival && r_capturerate.value > 0 &&
+		(need & be_capgroup[BE_CAPG_REFL]) && (need & be_capgroup[BE_CAPG_REFR]) && host_frametime * r_capturerate.value < 1)
+	{	//both due, above the rate: keep the newer group one more frame unless it is overdue
+		g = GLBE_CaptureAge(BE_CAPG_REFL) < GLBE_CaptureAge(BE_CAPG_REFR) ? BE_CAPG_REFL : BE_CAPG_REFR;
+		if (GLBE_CaptureAge(g) < 1.5)
+			keep = need & be_capgroup[g];
+	}
+	else if (due && keep && !(stagger && r_capturestagger.ival && r_capturerate.value > 0))
+		keep = 0;	//one fix for both (a shader without m_capturefix2, or stagger off): render them together, as before
+	if (!keep)
+		return 0;
+	if (keep & SHADER_HASREFLECT)
 		BE_StampCapture(BE_CAPREFL);
-	if (need & SHADER_HASREFRACT)
+	if (keep & SHADER_HASREFRACT)
 		BE_StampCapture(BE_CAPREFR);
-	if (need & SHADER_HASREFRACTDEPTH)
+	if (keep & SHADER_HASREFRACTDEPTH)
 		BE_StampCapture(BE_CAPDEPTH);
 	be_capkeep.frame = host_framecount;
 	be_capkeep.keptframe = host_framecount;
+	be_capkeep.keptkinds = keep;
 	be_capkeep.reused++;
-	if (GLBE_CaptureLogging())
-		Con_Printf("[capture]  kept, %.1f ms old, reuse %i\n", (realtime - be_capkeep.rendered) * 1000, be_capkeep.reused);
+	for (g = 0; g < 2; g++)
 	{
 		float vp[16], inv[16];
+		if (!(keep & be_capgroup[g]))
+			continue;
+		if (GLBE_CaptureLogging())
+			Con_Printf("[capture]  kept %s, %.1f ms old, reuse %i\n", g ? "refraction" : "reflection", (realtime - be_capkeep.rendered[g]) * 1000, be_capkeep.reused);
 		GLBE_TurnVP(vp);
 		if (Matrix4_Invert(vp, inv))
-			Matrix4_Multiply(be_capkeep.vp, inv, be_capfix);
+			Matrix4_Multiply(be_capkeep.vp[g], inv, be_capfix[g]);
 		else
-			memcpy(be_capfix, be_identity16, sizeof(be_capfix));
-		be_capfixframe = host_framecount;
+			memcpy(be_capfix[g], be_identity16, sizeof(be_capfix[g]));
+		be_capfixframe[g] = host_framecount;
 	}
-	return true;
+	return keep;
 }
 
 static qboolean GLBE_GenerateBatchTextures(batch_t *batch, shader_t *bs)
@@ -7813,8 +7864,8 @@ static qboolean GLBE_GenerateBatchTextures(batch_t *batch, shader_t *bs)
 	{
 		bewaterview_t *wv = &be_waterview[r_refdef.recurse];
 		plane_t p;
-		unsigned int need;
-		qboolean chosenplane;
+		unsigned int need, kept = 0;
+		qboolean chosenplane, fix2 = false;
 		qboolean world = batch->ent == &r_worldentity;
 		//nothing of it on screen (the walk lists a node's off-screen faces): no capture, nothing to draw
 		if (world && !GLBE_WaterOnScreen(batch))
@@ -7840,11 +7891,17 @@ static qboolean GLBE_GenerateBatchTextures(batch_t *batch, shader_t *bs)
 				GLBE_CaptureLog(batch, chosenplane ? wv->chosen->shader : bs, "shared", chosenplane ? &wv->combined : &wv->other);
 				return true;
 			}
-			if (chosenplane && !r_refdef.recurse && BE_CAPTUREKEEPS && GLBE_CaptureKeep(&p, &r_worldentity, need & ~wv->helddone))
-			{
-				wv->helddone |= need;
-				GLBE_CaptureLog(batch, wv->chosen->shader, "kept", &wv->combined);
-				return true;
+			if (chosenplane && !r_refdef.recurse && BE_CAPTUREKEEPS)
+			{	//FTESurf Patch 1455: a group at a time when the water's shader takes m_capturefix2
+				fix2 = wv->chosen->shader && GLBE_ProgTakesFix2(wv->chosen->shader->prog);
+				kept = GLBE_CaptureKeep(&p, &r_worldentity, need & ~wv->helddone, fix2);
+				if (kept && !(need & ~wv->helddone & ~kept))
+				{
+					wv->helddone |= need;
+					GLBE_CaptureLog(batch, wv->chosen->shader, "kept", &wv->combined);
+					return true;
+				}
+				wv->helddone |= kept;
 			}
 			if (chosenplane)
 			{
@@ -7863,8 +7920,9 @@ static qboolean GLBE_GenerateBatchTextures(batch_t *batch, shader_t *bs)
 				cb = &wv->other;
 			}
 			//P1386: beside kinds kept this frame (be_capfix) a fresh one would come from another camera, and the
-			//keep's record would be stamped fresh: render every kind the targets hold and the record lists
-			if (chosenplane && !r_refdef.recurse && be_capfixframe == host_framecount)
+			//keep's record would be stamped fresh: render every kind the targets hold and the record lists.
+			//P1455: unless the shader takes m_capturefix2, which turns each group by its own camera
+			if (chosenplane && !r_refdef.recurse && be_capkeep.keptframe == host_framecount && !fix2)
 				need |= wv->helddone | be_capkeep.kinds;
 			else
 				need &= ~wv->helddone;
@@ -7882,11 +7940,13 @@ static qboolean GLBE_GenerateBatchTextures(batch_t *batch, shader_t *bs)
 		plane_t gp;
 		if (GLR_BatchPlane(batch, &gp))
 		{
-			if (GLBE_CaptureKeep(&gp, batch->ent, bs->flags & BE_WATERKINDS))
+			unsigned int gkept = GLBE_CaptureKeep(&gp, batch->ent, bs->flags & BE_WATERKINDS, GLBE_ProgTakesFix2(bs->prog));
+			if (gkept == (bs->flags & BE_WATERKINDS))
 			{
 				GLBE_CaptureLog(batch, bs, "kept", batch);
 				return true;
 			}
+			cf &= ~gkept;	//FTESurf Patch 1455: the group kept is not rendered again
 			keepable = true;
 			keepplane = gp;
 			keepent = batch->ent;
@@ -8155,14 +8215,19 @@ static qboolean GLBE_GenerateBatchTextures(batch_t *batch, shader_t *bs)
 	if (!r_refdef.recurse && (cf & BE_WATERKINDS))
 	{	//FTESurf Patch 1245: what reached a level-0 target, as the branches above write them
 		unsigned int written = cf & BE_WATERKINDS;
+		int g;
 		if (!gl_config.ext_framebuffer_objects)
 			written &= ~SHADER_HASREFLECT;
 		if (!(r_refract_fboival || (cf & (SHADER_HASPORTAL|SHADER_HASREFRACTDEPTH))))
 			written &= ~SHADER_HASREFRACT;	//the screen copy writes no target
 		if (written)
-		{
-			be_capfixframe = -1;	//whatever samples the targets now samples what was just rendered
-			be_capkeep.keptframe = -1;
+		{	//whatever samples those targets now samples what was just rendered (FTESurf Patch 1455: per group)
+			if (written & be_capgroup[BE_CAPG_REFL])
+				be_capfixframe[BE_CAPG_REFL] = -1;
+			if (written & be_capgroup[BE_CAPG_REFR])
+				be_capfixframe[BE_CAPG_REFR] = -1;
+			if (written & be_capkeep.keptkinds)
+				be_capkeep.keptframe = -1;
 		}
 		if (keepable && written)
 		{
@@ -8178,7 +8243,6 @@ static qboolean GLBE_GenerateBatchTextures(batch_t *batch, shader_t *bs)
 				be_capkeep.views++;	//a second plane, entity, seat or world view this frame: nothing is kept next frame
 			be_capkeep.frame = host_framecount;
 			be_capkeep.reused = 0;
-			be_capkeep.rendered = realtime;
 			be_capkeep.kinds |= written;
 			be_capkeep.plane = keepplane;
 			be_capkeep.ent = keepent;
@@ -8186,9 +8250,14 @@ static qboolean GLBE_GenerateBatchTextures(batch_t *batch, shader_t *bs)
 			be_capkeep.fbh = vid.fbpheight;
 			be_capkeep.pv = r_refdef.playerview;
 			be_capkeep.view = BE_SeatView(BE_Seat());
-			memcpy(be_capkeep.vp, keepvp, sizeof(keepvp));
-			VectorCopy(keepeye, be_capkeep.eye);
-			VectorCopy(keepfwd, be_capkeep.fwd);
+			for (g = 0; g < 2; g++)
+				if (written & be_capgroup[g])
+				{	//FTESurf Patch 1455: only the groups this call rendered
+					be_capkeep.rendered[g] = realtime;
+					memcpy(be_capkeep.vp[g], keepvp, sizeof(keepvp));
+					VectorCopy(keepeye, be_capkeep.eye[g]);
+					VectorCopy(keepfwd, be_capkeep.fwd[g]);
+				}
 		}
 		else if (written)
 			be_capkeep.frame = -1;	//another capture overwrote the level's targets

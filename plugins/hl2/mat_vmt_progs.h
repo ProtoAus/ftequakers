@@ -1877,14 +1877,21 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "#if defined(FTE_CAPTUREFIX) && !defined(SCREEN)\n"
 // FTESurf Patch 1245: a reused capture (r_capturehalfrate) saw this point at m_capturefix * tf
 // (identity when fresh; a point behind that camera keeps this frame's). The ripple map is this frame's.
+// FTESurf Patch 1455: the refraction (and its depth) by m_capturefix2, the reflection by m_capturefix --
+// r_capturestagger keeps one while the other renders, each from its own camera.
 "vec2 rstc = stc;\n"
-"vec4 ctf = m_capturefix * tf;\n"
+"vec2 lstc = stc;\n"
+"vec4 ctf = m_capturefix2 * tf;\n"
 "if (ctf.w > 0.5)\n"
 "stc = (1.0 + (ctf.xy / ctf.w)) * 0.5;\n"
 "else\n"
 "ctf = tf;\n"
+"vec4 ltf = m_capturefix * tf;\n"
+"if (ltf.w > 0.5)\n"
+"lstc = (1.0 + (ltf.xy / ltf.w)) * 0.5;\n"
 "#else\n"
 "#define rstc stc\n"
+"#define lstc stc\n"
 "#endif\n"
 "#ifdef ANIMBUMP\n"
 "int bumplayers = textureSize(s_bumpanim, 0).z;\n"
@@ -2046,7 +2053,7 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "refl = (huv.x >= 0.0 ? texture2D(s_refract, huv).rgb : vec3(FOGTINT)) * vec3(TINT_REFL);\n"
 "}\n"
 "#else\n"
-"refl = texture2D(s_reflect, clamp(stc - n.st * float(STRENGTH_REFL) * float(r_glsl_turbscale_reflect) * distortion, 0.0, 1.0)).rgb * vec3(TINT_REFL);\n"
+"refl = texture2D(s_reflect, clamp(lstc - n.st * float(STRENGTH_REFL) * float(r_glsl_turbscale_reflect) * distortion, 0.0, 1.0)).rgb * vec3(TINT_REFL);\n"
 "#endif\n"
 
 "if (cvar_hl2_waterdebug > 0.5)\n"
@@ -3719,14 +3726,21 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "#if defined(FTE_CAPTUREFIX) && !defined(SCREEN)\n"
 // FTESurf Patch 1245: a reused capture (r_capturehalfrate) saw this point at m_capturefix * tf
 // (identity when fresh; a point behind that camera keeps this frame's). The ripple map is this frame's.
+// FTESurf Patch 1455: the refraction (and its depth) by m_capturefix2, the reflection by m_capturefix --
+// r_capturestagger keeps one while the other renders, each from its own camera.
 "vec2 rstc = stc;\n"
-"vec4 ctf = m_capturefix * tf;\n"
+"vec2 lstc = stc;\n"
+"vec4 ctf = m_capturefix2 * tf;\n"
 "if (ctf.w > 0.5)\n"
 "stc = (1.0 + (ctf.xy / ctf.w)) * 0.5;\n"
 "else\n"
 "ctf = tf;\n"
+"vec4 ltf = m_capturefix * tf;\n"
+"if (ltf.w > 0.5)\n"
+"lstc = (1.0 + (ltf.xy / ltf.w)) * 0.5;\n"
 "#else\n"
 "#define rstc stc\n"
+"#define lstc stc\n"
 "#endif\n"
 "#ifdef ANIMBUMP\n"
 "int bumplayers = textureSize(s_bumpanim, 0).z;\n"
@@ -3888,7 +3902,7 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "refl = (huv.x >= 0.0 ? texture2D(s_refract, huv).rgb : vec3(FOGTINT)) * vec3(TINT_REFL);\n"
 "}\n"
 "#else\n"
-"refl = texture2D(s_reflect, clamp(stc - n.st * float(STRENGTH_REFL) * float(r_glsl_turbscale_reflect) * distortion, 0.0, 1.0)).rgb * vec3(TINT_REFL);\n"
+"refl = texture2D(s_reflect, clamp(lstc - n.st * float(STRENGTH_REFL) * float(r_glsl_turbscale_reflect) * distortion, 0.0, 1.0)).rgb * vec3(TINT_REFL);\n"
 "#endif\n"
 
 "if (cvar_hl2_waterdebug > 0.5)\n"

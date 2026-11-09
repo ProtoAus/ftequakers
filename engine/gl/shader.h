@@ -478,6 +478,7 @@ typedef struct {
 		SP_M_INVMODELVIEWPROJECTION,
 		SP_M_INVMODELVIEW,
 		SP_M_CAPTUREFIX,	//FTESurf Patch 1245: this view's clip space to a reused capture's (identity when fresh)
+		SP_M_CAPTUREFIX2,	//FTESurf Patch 1455: the same for the refraction (and its depth); SP_M_CAPTUREFIX is then the reflection's
 
 		SP_RENDERTEXTURESCALE,	/*multiplier for currentrender->texcoord*/
 		SP_SOURCESIZE,			/*size of $sourcecolour*/

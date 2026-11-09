@@ -3256,6 +3256,7 @@ struct shader_field_names_s shader_unif_names[] =
 	{"m_invmodelviewprojection",SP_M_INVMODELVIEWPROJECTION},//inverted mvp matrix.
 	{"m_invmodelview",			SP_M_INVMODELVIEW},//inverted mv matrix.
 	{"m_capturefix",			SP_M_CAPTUREFIX},//FTESurf Patch 1245: clip space to a reused capture's
+	{"m_capturefix2",			SP_M_CAPTUREFIX2},//FTESurf Patch 1455: the refraction's, when kept apart from the reflection
 /**///m_modelinv
 
 	/*viewer properties*/

@@ -174,14 +174,21 @@ void main (void)
 #if defined(FTE_CAPTUREFIX) && !defined(SCREEN)
 	// FTESurf Patch 1245: a reused capture (r_capturehalfrate) saw this point at m_capturefix * tf
 	// (identity when fresh; a point behind that camera keeps this frame's). The ripple map is this frame's.
+	// FTESurf Patch 1455: the refraction (and its depth) by m_capturefix2, the reflection by m_capturefix --
+	// r_capturestagger keeps one while the other renders, each from its own camera.
 	vec2 rstc = stc;
-	vec4 ctf = m_capturefix * tf;
+	vec2 lstc = stc;
+	vec4 ctf = m_capturefix2 * tf;
 	if (ctf.w > 0.5)
 		stc = (1.0 + (ctf.xy / ctf.w)) * 0.5;
 	else
 		ctf = tf;
+	vec4 ltf = m_capturefix * tf;
+	if (ltf.w > 0.5)
+		lstc = (1.0 + (ltf.xy / ltf.w)) * 0.5;
 #else
 	#define rstc stc
+	#define lstc stc
 #endif
 #ifdef ANIMBUMP
 	int bumplayers = textureSize(s_bumpanim, 0).z;
@@ -343,7 +350,7 @@ void main (void)
 		refl = (huv.x >= 0.0 ? texture2D(s_refract, huv).rgb : vec3(FOGTINT)) * vec3(TINT_REFL);
 	}
 #else
-	refl = texture2D(s_reflect, clamp(stc - n.st * float(STRENGTH_REFL) * float(r_glsl_turbscale_reflect) * distortion, 0.0, 1.0)).rgb * vec3(TINT_REFL);
+	refl = texture2D(s_reflect, clamp(lstc - n.st * float(STRENGTH_REFL) * float(r_glsl_turbscale_reflect) * distortion, 0.0, 1.0)).rgb * vec3(TINT_REFL);
 #endif
 
 	if (cvar_hl2_waterdebug > 0.5)
