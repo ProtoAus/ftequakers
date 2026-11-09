@@ -343,12 +343,13 @@ static const unsigned short padbtn_up[5] = {RI_MOUSE_BUTTON_1_UP, RI_MOUSE_BUTTO
   by a flag in the message: rawheld skips typematic makes, legheld skips legacy repeats;
   INS_ClearStates resets both on focus changes.  -1 = none (0 is a real time on this
   clock).  The key events, the raw reads and the expiry all run on the thread that owns the
-  window (the window thread under WTHREAD); the only main-thread touch is INS_ClearStates
-  clearing the two held latches on focus change, which does not overlap new input to the
-  same window.  The extended bit is not compared: the L/R twins sharing a byte can vouch
-  for each other, which costs less than a quirk counting an honest key.*/
+  window (the window thread under WTHREAD), including registration transitions and
+  INS_ClearStates via the bounded keyboard message. The extended bit is not compared:
+  the L/R twins sharing a byte can vouch for each other, which costs less than a quirk
+  counting an honest key.*/
 #define RAWKEY_WINDOW 0.1
 static qboolean rawkbd_observe;
+static qboolean rawkbd_nolegacy;
 static double rawkey_time[256];
 static double rawkey_pending[256];
 static qboolean rawkey_rawheld[256], rawkey_legheld[256];
@@ -426,6 +427,8 @@ void INS_RawInput_MouseDeRegister(void);
 int INS_RawInput_MouseRegister(void);
 void INS_RawInput_KeyboardDeRegister(void);
 int INS_RawInput_KeyboardRegister(void);
+static void INS_RawInput_KeyObserveRegister(void);
+static int INS_RawInput_KeyboardRequest(rawkbdop_t op);
 void INS_RawInput_DeInit(void);
 
 #endif
@@ -758,12 +761,12 @@ static void INS_ActivateMouse (void)
 #endif
 		{
 #ifdef USINGRAWINPUT
-			if (rawkbdcount > 0)
+			if (rawkbdcount > 0 && in_rawinput_keyboard.ival)
 			{
 				if (INS_RawInput_KeyboardRegister())
 				{
-					Con_SafePrintf("Raw input: unable to register raw input for keyboard, deinitializing\n");
-					INS_RawInput_KeyboardDeRegister();
+					Con_SafePrintf("Raw input: unable to register raw input for keyboard\n");
+					INS_RawInput_KeyObserveRegister();
 				}
 			}
 #endif
@@ -1163,15 +1166,7 @@ void INS_RawInput_MouseDeRegister(void)
 
 void INS_RawInput_KeyboardDeRegister(void)
 {
-	RAWINPUTDEVICE Rid;
-
-	// deregister raw input
-	Rid.usUsagePage = 0x01;
-	Rid.usUsage = 0x06;
-	Rid.dwFlags = RIDEV_REMOVE;
-	Rid.hwndTarget = NULL;
-
-	(*_RRID)(&Rid, 1, sizeof(Rid));
+	INS_RawInput_KeyboardRequest(RAWKBD_REMOVE);
 }
 
 /*FTESurf Patch 468: the precision touchpad's digitizer collection.  Registered beside
@@ -1209,20 +1204,13 @@ static void INS_RawInput_PadDeRegister(void)
 
 void INS_RawInput_DeInit(void)
 {
+	/*Patch 1452: Windows retains a refused binding. Abort the destructive
+	  transaction before dropping its dispatch table/buffer (or mouse state).
+	  ReInit retries removal before allocating any replacement resources.*/
+	if (INS_RawInput_KeyboardRequest(RAWKBD_REMOVE) && (rawkbd_nolegacy || rawkbd_observe))
+		return;
 	if (rawmicecount > 0)
 		INS_RawInput_MouseDeRegister();
-	if (rawkbdcount > 0)
-		INS_RawInput_KeyboardDeRegister();
-	if (rawkbd_observe)
-	{	/*FTESurf Patch 1424: pending presses are abandoned, not counted here -- DeInit can run
-		  on the main thread (vid_restart) while the window thread still owns the rawkey state,
-		  so it must not write the counters.  Abandoning is undercount-safe; the next
-		  KeyObserveRegister re-zeroes the arrays.*/
-		INS_RawInput_KeyboardDeRegister();
-		rawkbd_observe = false;
-		in_rawkbd_observechanges++;
-	}
-	in_rawkbd_observe = 0;
 	INS_RawInput_PadDeRegister();	//FTESurf Patch 468
 	rawpadcount = 0;
 	in_rawpads_live = 0;
@@ -1339,53 +1327,85 @@ static void INS_RawInput_MouseSetLegacy(qboolean wantnolegacy)
 		rawmouse_nolegacy ? "SUPPRESSED (injected clicks blocked)" : "allowed");
 }
 
-int INS_RawInput_KeyboardRegister(void)
-{
-	RAWINPUTDEVICE Rid;
-
-	Rid.usUsagePage = 0x01;
-	Rid.usUsage = 0x06;
-	Rid.dwFlags = RIDEV_NOLEGACY | RIDEV_APPKEYS | RIDEV_NOHOTKEYS; // fetch everything, disable hotkey behavior (should cvar?)
-	Rid.hwndTarget = NULL;
-
-	if (!(*_RRID)(&Rid, 1, sizeof(Rid)))
-		return 1;
-
-	return 0;
-}
-
-/*FTESurf Patch 1424: flags 0, so the legacy messages still drive the game, hotkeys and
-  all.  Only while the opt-in raw keyboard (rawkbdcount) is not using the same slot.*/
-static void INS_RawInput_KeyObserveRegister(void)
+/*Patch 1452: runs on the window/input thread. Refusal retains the Windows binding.
+  No callbacks or pointers cross the registration handoff.*/
+int INS_RawInput_KeyboardControl(rawkbdop_t op)
 {
 	RAWINPUTDEVICE Rid;
 	int i;
+	qboolean observe;
 
-	if (rawkbd_observe || rawkbdcount > 0 || !_RRID || !raw)
-		return;
-	for (i = 0; i < (int)countof(rawkey_time); i++)
+	if (op == RAWKBD_CLEARHELD)
 	{
-		rawkey_time[i] = rawkey_pending[i] = -1;
-		rawkey_rawheld[i] = rawkey_legheld[i] = false;
+		memset(rawkey_rawheld, 0, sizeof(rawkey_rawheld));
+		memset(rawkey_legheld, 0, sizeof(rawkey_legheld));
+		return 0;
 	}
-	rawkey_npending = 0;
-	if (in_raw_legacykey < 0)
-		in_raw_legacykey = 0;
-	if (in_raw_kbdnohandle < 0)
-		in_raw_kbdnohandle = 0;
-	rawkbd_observe = true;	//before registering: a report arriving first must not reach the Patch 306 branch
+	if (op != RAWKBD_REMOVE && op != RAWKBD_OPTIN && op != RAWKBD_OBSERVE)
+		return 1;
+	if (!_RRID)
+		return 1;
+	if (op == RAWKBD_OBSERVE && (rawkbd_observe || rawkbd_nolegacy))
+		return 0;
+	if (op == RAWKBD_OBSERVE && !raw)
+		return 1;
+
 	Rid.usUsagePage = 0x01;
 	Rid.usUsage = 0x06;
-	Rid.dwFlags = 0;
+	Rid.dwFlags = op == RAWKBD_REMOVE ? RIDEV_REMOVE : op == RAWKBD_OPTIN ?
+		RIDEV_NOLEGACY | RIDEV_APPKEYS | RIDEV_NOHOTKEYS : 0;
 	Rid.hwndTarget = NULL;
 	if (!(*_RRID)(&Rid, 1, sizeof(Rid)))
+		return 1;
+
+	observe = op == RAWKBD_OBSERVE;
+	if (observe)
 	{
-		rawkbd_observe = false;
-		Con_DPrintf("Raw input: could not observe the keyboard\n");
-		return;
+		for (i = 0; i < (int)countof(rawkey_time); i++)
+		{
+			rawkey_time[i] = rawkey_pending[i] = -1;
+			rawkey_rawheld[i] = rawkey_legheld[i] = false;
+		}
+		rawkey_npending = 0;
+		if (in_raw_legacykey < 0)
+			in_raw_legacykey = 0;
+		if (in_raw_kbdnohandle < 0)
+			in_raw_kbdnohandle = 0;
 	}
-	in_rawkbd_observe = 1;
-	in_rawkbd_observechanges++;
+	if (rawkbd_observe != observe)
+		in_rawkbd_observechanges++;
+	rawkbd_observe = observe;
+	rawkbd_nolegacy = op == RAWKBD_OPTIN;
+	in_rawkbd_observe = observe;
+	return 0;
+}
+
+static int INS_RawInput_KeyboardRequest(rawkbdop_t op)
+{
+	DWORD thread, process;
+
+	/*No window means no input owner. Only removal is safe/needed after destruction;
+	  startup registration is retried by ReInit once the window exists.*/
+	if (!mainwindow)
+		return op == RAWKBD_REMOVE ? INS_RawInput_KeyboardControl(op) : 1;
+	thread = GetWindowThreadProcessId(mainwindow, &process);
+	if (!thread || process != GetCurrentProcessId())
+		return 1;
+	if (thread == GetCurrentThreadId())
+		return INS_RawInput_KeyboardControl(op);
+	return SendMessage(mainwindow, WM_USER_RAWKBD, op, 0) != 0;
+}
+
+int INS_RawInput_KeyboardRegister(void)
+{
+	return INS_RawInput_KeyboardRequest(RAWKBD_OPTIN);
+}
+
+/*Flags 0 observation never replaces a successfully acquired opt-in binding.*/
+static void INS_RawInput_KeyObserveRegister(void)
+{
+	if (INS_RawInput_KeyboardRequest(RAWKBD_OBSERVE))
+		Con_DPrintf("Raw input: could not observe the keyboard\n");
 }
 
 //FTESurf Patch 1424: a raw keyboard report while observing.
@@ -1485,6 +1505,10 @@ void INS_RawInput_Init(void)
 	int inputdevices, i, j, mtemp, ktemp;
 	char dname[MAX_RI_DEVICE_SIZE];
 
+	/*A refused teardown still owns these resources and services its binding.*/
+	if (raw)
+		return;
+
 	/*FTESurf Patch 301: publish what raw input ACTUALLY got, for the .hid header.
 	  Zeroed here rather than at the counters below, because every `return` between
 	  this line and there is a path on which raw input is unavailable -- a missing
@@ -1494,7 +1518,7 @@ void INS_RawInput_Init(void)
 	in_rawmice_live = 0;
 	in_rawkbd_live = 0;
 	in_rawpads_live = 0;	//FTESurf Patch 468: same rule
-	in_rawkbd_observe = 0;	//FTESurf Patch 1424: same rule
+	in_rawkbd_observe = rawkbd_observe;	//A refused removal can retain the previous binding.
 
 	// Return 0 if rawinput is not available
 	HMODULE user32 = LoadLibrary("user32.dll");
@@ -1777,7 +1801,11 @@ void INS_ReInit (void)
 #ifdef USINGRAWINPUT
 	if (in_rawkbd_observe < 0)
 		in_rawkbd_observe = 0;	//FTESurf Patch 1424: Windows with raw input off is "not observing", not "backend silent"
-	if (in_rawinput_mice.ival || in_rawinput_keyboard.ival)
+	/*Retry an aborted teardown, including explicit opt-out with both settings 0.
+	  Never overwrite/reallocate the last usable retained binding resources.*/
+	if (raw)
+		INS_RawInput_DeInit();
+	if (!raw && (in_rawinput_mice.ival || in_rawinput_keyboard.ival))
 	{
 		INS_RawInput_Init();
 	}
@@ -2445,6 +2473,9 @@ void INS_RawInput_KeyboardRead(void)
 		return;
 	}
 
+	if (!rawkbd_nolegacy)
+		return;
+
 	for (i = 0; i < rawkbdcount; i++)
 	{
 		if (rawkbd[i].handles.rawinputhandle == raw->header.hDevice)
@@ -2512,6 +2543,10 @@ void INS_RawInput_Read(HANDLE in_device_handle)
 	INS_RawInput_KeyboardRead();
 }
 #else
+int INS_RawInput_KeyboardControl(rawkbdop_t op)
+{
+	return 1;
+}
 void INS_RawInput_Read(HANDLE in_device_handle)
 {
 }
@@ -2532,9 +2567,8 @@ INS_ClearStates
 void INS_ClearStates (void)
 {
 #ifdef USINGRAWINPUT
-	//FTESurf Patch 1424: an up delivered to another window must not leave a key held here
-	memset(rawkey_rawheld, 0, sizeof(rawkey_rawheld));
-	memset(rawkey_legheld, 0, sizeof(rawkey_legheld));
+	//An up delivered to another window must not leave a key held here.
+	INS_RawInput_KeyboardRequest(RAWKBD_CLEARHELD);
 #endif
 
 	if (mouseactive)

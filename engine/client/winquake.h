@@ -70,6 +70,11 @@ void GLVID_Crashed(void);
 #define WM_USER_VKPRESENT				(WM_USER+7)	//used by vulkan
 #define WM_USER_NVVKPRESENT				(WM_USER+8)	//used by vulkan-over-opengl
 
+#define WM_USER_RAWKBD                    (WM_USER+9)
+
+typedef enum { RAWKBD_REMOVE, RAWKBD_OPTIN, RAWKBD_OBSERVE, RAWKBD_CLEARHELD } rawkbdop_t;
+int INS_RawInput_KeyboardControl(rawkbdop_t op);
+
 #undef byte
 
 extern	HINSTANCE	global_hInstance;
