@@ -1459,6 +1459,11 @@ struct qcgcfree_s
 	int oneoff;					//...or not kept: the kept one was still busy, so its job frees this one
 	tempstr_t *ptr[1];
 };
+static void PR_QCGC_FreeDone(void *ctx, void *data, size_t a, size_t b)
+{
+	struct qcgcfree_s *f = ctx;
+	f->busy = false;
+}
 static void PR_QCGC_FreeJob(void *ctx, void *data, size_t a, size_t b)
 {
 	struct qcgcfree_s *f = ctx;
@@ -1466,9 +1471,9 @@ static void PR_QCGC_FreeJob(void *ctx, void *data, size_t a, size_t b)
 	for (i = 0; i < f->n; i++)
 		f->memfree(f->ptr[i]);
 	if (f->oneoff)
-		free(f);
-	else
-		f->busy = false;	//FTESurf Patch 1446: the list itself is the VM's
+		free(f);	//nothing waits for a one-off
+	else	//FTESurf Patch 1446: the VM's own list; on the main thread, as gc->done is, or COM_WorkerPartialSync never wakes
+		COM_InsertWork(WG_MAIN, PR_QCGC_FreeDone, f, NULL, 0, 0);
 }
 void PR_QCGC_Done(void *ctx, void *data, size_t a, size_t b)
 {
@@ -1720,7 +1725,8 @@ static void PR_FreeAllTemps			(progfuncs_t *progfuncs)
 	while (prinst.gccontext)
 	{
 		COM_WorkerPartialSync(prinst.gccontext, &prinst.gccontext->done, false);
-		PR_QCGC_Finish(progfuncs);
+		if (prinst.gccontext && prinst.gccontext->done)
+			PR_QCGC_Finish(progfuncs);
 	}
 	free(prinst.gcspare);	//FTESurf Patch 1446
 	prinst.gcspare = NULL;
