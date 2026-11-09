@@ -1,5 +1,28 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1449 -- tas_rollout follows the view, aims at a ramp face, and reports walls (sv_tas_rollout.inc, pm_source.c, pmove.h, pr_cmds.c, server.h)
+
+Problem: the surf path planner (FTESurf P1443/P1449) searched turn rates, but a human surfs with the view on the
+velocity and a strafe side, which QC could only approximate in repeated rollouts that never converged on a ramp;
+a flight had no way to steer onto a ramp face; and a wall brushed mid-flight read as no contact, so a search
+could not see what cost it 10 u/s.
+
+Fix: tas_rollout row bits FOLLOW (256), PITCHV (512) and AIM (1024). FOLLOW rows carry a turn command q in the
+yaw slot and the engine sets the yaw word and strafe side from the velocity the tick starts with (the wish
+direction's dot with the horizontal velocity is 30 - |q|); PITCHV sets the pitch along the velocity; both write
+the words back, so the tape replays exactly what was rolled. AIM rows, after 3 ticks without a ramp or ground
+contact, steer toward an aim point (6-argument form) and, given a face normal (7-argument form), toward a lead
+point on the heading that meets that face parallel. pm_source.c notes a wall or ceiling clipped in a command
+(outside the ramp band, not a floor; saved and restored with the contact across StepMove's attempts) and
+tas_rollout reports such a tick, with no ramp contact, as contact kind 4.
+
+Measured (FTESurf rigs, tools/p1449_chain3.py): every played search's landing bit-equal to its rollout (21 of 21
+plays in a surf_null chain, 27 of 27 on surf_monolith); with FOLLOW one rollout a candidate, 638 candidates in
+6-8 s; a surf_null flight that lost 10 u/s to a brush 20 u off the demo's line (one tick of 228 u/s velocity
+change) now reports kind 4 there. Two review rounds: round 1 found AIM steering during non-world or ambiguous
+ramp rides, the wall note surviving StepMove's discarded attempt, and an unchecked decode after the write-back;
+round 2 nothing.
+
 ## Patch 1453 -- the loading screen names each game it mounts and where its textures come from (fs.c, cl_screen.c, image.c, screen.h)
 
 Problem: the menu loading screen read "Loading Texture (2x)". Texture loads run on loader threads and set no step, and
