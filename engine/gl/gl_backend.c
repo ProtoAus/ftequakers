@@ -9542,7 +9542,9 @@ static void GLBE_BlendPlaneSort(glblendface_t *faces, size_t n, glblendplanestat
 rebuild:
 	// FTESurf Patch 1463: pass 1 leaves a strict pair's overlap verdict until Kahn asks for its edge. Its direction is
 	// the plane proof's (the verdict is the hint or disjoint); only whether it exists waits. In surf_fairy's worst
-	// views pass 1 ends in a cycle after ~1010 verdicts, most for edges out of faces already placed.
+	// views pass 1 ends in a cycle after ~1010 verdicts, most for edges out of faces already placed. Same order as
+	// eager unless the overlap budget runs out during pass 1 (lazy spends a subset of eager's work); r_blendtrace's
+	// edges= and work= then count only what was resolved.
 	lazy = stats->pass == 1 && r_blendsort_lazy.ival;
 	stats->edges = 0;
 	memset(edges, 0, stats->admitted * stats->admitted);
@@ -9609,13 +9611,12 @@ rebuild:
 				verdict[idx] = GLBE_BlendOverlapOrder(planes[i2].mesh, &proj[i2], planes[j2].mesh, &proj[j2], ab, &owork);
 				bov_verdicts[1]++;
 				bov_disjoint += verdict[idx] == GLBLEND_ORDER_DISJOINT;
-				ab = verdict[idx];
-				if (ab == GLBLEND_ORDER_DISJOINT)
+				if (verdict[idx] == GLBLEND_ORDER_DISJOINT)
 					continue;
-				if (!ab) ab = -1;
-				to = ab < 0 ? j2 : i2;
-				edges[(ab < 0 ? i2 : j2)*stats->admitted + to] = 1;
-				degree[to]++;
+				// The hint's direction: for a strict hint GLBE_BlendOverlapOrder returns it or disjoint. Were that to
+				// change, from's cursor would never see an edge drawn the other way, so draw it the way Kahn asked.
+				edges[from*stats->admitted + pick] = 1;
+				degree[pick]++;
 				stats->edges++;
 			}
 			if (!degree[pick])
