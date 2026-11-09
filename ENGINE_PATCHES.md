@@ -1,5 +1,20 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1451 -- the QC tempstring collector's buffers are made during the loading screen (initlib.c, progslib.h, pr_csqc.c, cl_main.c, client.h)
+
+Problem: Patch 1446 keeps the collector's snapshot block and free list per VM, but the first collection of every
+map still allocated them and faulted their pages in on the main thread, early in the first run attempt.
+
+Fix: pubprogfuncs_t gains PrewarmGC (appended; NULL without THREADEDGC). PR_PrewarmGC sizes the block from the
+current hunk segments and max(maxtempstrings, PR_GC_MINTEMPS), allocates and zero-touches it and the free list unless
+a collection is in flight or the list is busy. CL_MakeActive calls it for CSQC after the shader warm list (load stage
+"qc collector buffers").
+
+Measured (FTESurf artifacts/run_idlegc.py: surf_nuclear, 75 s at the spawn with the HUD making its temp strings, no
+replay loaded): the first collection's start 2.66 -> 1.28 ms, its finish 1.97 -> 1.56 ms; the 6-8 collections in
+75 s otherwise alike (starts 0.8-3.8 ms, finishes 0.2-1.8 ms). With a replay loaded after activation the hunk grows
+from ~7 to ~23 MB and the first collection still reallocates.
+
 ## Patch 1446 -- the QC tempstring collector keeps its buffers; r_spikes names prediction, entity, QC and collector costs (initlib.c, progsint.h, cl_screen.c, cl_pred.c, pr_csqc.c)
 
 Problem: P1444's r_spikes put surf_nuclear's largest spikes in frame pairs at two places on its route: 5-8 ms in

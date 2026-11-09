@@ -1616,6 +1616,39 @@ static void PR_QCGC_Finish(progfuncs_t *progfuncs)
 	pr_gc_mainus += (Sys_DoubleTime() - t0) * 1e6;
 	pr_gc_dones++;
 }
+/*FTESurf Patch 1451: the collector's kept buffers (Patch 1446), allocated and touched now -- CL_MakeActive, behind
+  the loading screen -- or the first collection in play faults ~25-30 MB of fresh pages in on the main thread.*/
+static void PDECL PR_PrewarmGC(pubprogfuncs_t *ppf)
+{
+	progfuncs_t *progfuncs = (progfuncs_t*)ppf;
+	size_t ofs[NOSTR_MAX+1], len[NOSTR_MAX+1], memsize = 0, padded, temps, need;
+	unsigned int n, i;
+	struct qcgccontext_s *gc;
+	if (!externs->usethreadedgc || externs->usethreadedgc == 2 || prinst.gccontext)
+		return;
+	n = PR_QCGC_Segments(progfuncs, ofs, len);
+	for (i = 0; i < n; i++)
+		memsize += len[i];
+	padded = (memsize + 7) & ~(size_t)7;
+	temps = prinst.maxtempstrings > PR_GC_MINTEMPS ? prinst.maxtempstrings : PR_GC_MINTEMPS;	//the floor the first finish sets
+	need = sizeof(*gc) - sizeof(gc->amem) + padded + (sizeof(*gc->tempstrings) + sizeof(*gc->dead))*temps;
+	if (!prinst.gcspare || prinst.gcspare->allocbytes < need)
+	{
+		free(prinst.gcspare);
+		gc = prinst.gcspare = malloc(need + need/8);
+		memset(gc, 0, need + need/8);
+		gc->allocbytes = need + need/8;
+	}
+	if (!prinst.gcfree || (!prinst.gcfree->busy && prinst.gcfree->cap < temps + 1))
+	{	//a busy one belongs to its job until PR_QCGC_FreeDone
+		struct qcgcfree_s *f;
+		size_t bytes = sizeof(*f) - sizeof(f->ptr) + sizeof(f->ptr[0]) * (temps + 1);
+		free(prinst.gcfree);
+		f = prinst.gcfree = malloc(bytes);
+		memset(f, 0, bytes);
+		f->cap = temps + 1;
+	}
+}
 #endif
 void PR_RunGC (progfuncs_t *progfuncs)
 {
@@ -2148,6 +2181,9 @@ pubprogfuncs_t * PDECL InitProgs(progexterns_t *ext)
 	funcs->funcs.SetProfiling = PR_SetProfiling;	//FTESurf Patch 800: after `user`, so set here, not in deffuncs
 	funcs->funcs.ProfileExclude = PR_ProfileExclude;
 	funcs->funcs.EnumProfile = PR_EnumProfile;
+#ifdef THREADEDGC
+	funcs->funcs.PrewarmGC = PR_PrewarmGC;	//FTESurf Patch 1451
+#endif
 
 	funcs->funcs.progstate = &funcs->inst.progstate;
 

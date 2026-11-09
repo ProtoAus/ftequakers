@@ -491,6 +491,10 @@ void CL_MakeActive(char *gamename)
 		SCR_LoadTimesStage("shader warm list");
 		GLSLWarm_MapActive();
 	}
+#ifdef CSQC_DAT
+	SCR_LoadTimesStage("qc collector buffers");	//FTESurf Patch 1451: their pages here, not in the first collection
+	CSQC_PrewarmGC();
+#endif
 
 	//and now free any textures that were not still needed.
 	SCR_LoadTimesStage("purge images");

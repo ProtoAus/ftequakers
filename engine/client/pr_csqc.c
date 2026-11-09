@@ -8363,6 +8363,11 @@ qboolean CSQC_SetProfiling(qboolean on)
 		return false;
 	return csqcprogs->SetProfiling(csqcprogs, on || pr_enable_profiling.ival);
 }
+void CSQC_PrewarmGC(void)
+{	//FTESurf Patch 1451
+	if (csqcprogs && csqcprogs->PrewarmGC)
+		csqcprogs->PrewarmGC(csqcprogs);
+}
 void CSQC_EnumProfile(void (*cb)(void *ctx, const char *func, const char *file, double selfus, double totalus), void *ctx)
 {
 	if (csqcprogs && csqcprogs->EnumProfile)

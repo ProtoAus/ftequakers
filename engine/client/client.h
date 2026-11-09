@@ -1610,6 +1610,7 @@ qboolean CL_MayLerp(void);
 qboolean CSQC_Inited(void);
 qboolean CSQC_SetProfiling(qboolean on);	//FTESurf Patch 800: false while QC is running
 void CSQC_EnumProfile(void (*cb)(void *ctx, const char *func, const char *file, double selfus, double totalus), void *ctx);
+void CSQC_PrewarmGC(void);	//FTESurf Patch 1451
 void	 CSQC_RendererRestarted(qboolean initing);
 qboolean CSQC_UnconnectedOkay(qboolean inprinciple);
 qboolean CSQC_UnconnectedInit(void);

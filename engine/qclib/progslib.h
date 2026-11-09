@@ -253,6 +253,8 @@ struct pubprogfuncs_s
 	pbool (PDECL *SetProfiling)					(pubprogfuncs_t *progfuncs, pbool on);
 	void (PDECL *ProfileExclude)				(pubprogfuncs_t *progfuncs, pbool begin);
 	void (PDECL *EnumProfile)					(pubprogfuncs_t *progfuncs, void (*cb)(void *ctx, const char *func, const char *file, double selfus, double totalus), void *ctx, pbool reset);
+	//FTESurf Patch 1451, appended: the tempstring collector's buffers allocated and touched now (NULL without THREADEDGC)
+	void (PDECL *PrewarmGC)						(pubprogfuncs_t *progfuncs);
 };
 
 typedef struct progexterns_s {
