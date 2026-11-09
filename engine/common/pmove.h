@@ -399,6 +399,7 @@ qboolean PMSrc_BankGravityEnd(void);
 // P1344: output-only committed contact, never carried movement/input state.
 void PMSrc_TASContactBegin(qboolean enabled);
 int PMSrc_TASContactEnd(vec3_t normal, float *distance, vec3_t point);
+qboolean PMSrc_TASContactWall(void);
 float PMSrc_MaxSpeedForInputs (int pm_type, int buttons, float stamina);
 void PMSrc_Init (void);		//registers the pm_selftest command
 

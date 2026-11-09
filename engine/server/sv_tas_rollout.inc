@@ -14,6 +14,7 @@
 #define SV_TAS_ROLL_MAX 2048
 #define SV_TAS_ROLL_IN 7	/* fwd side up, pitch yaw roll angle words, buttons (tas_tape's words) */
 #define SV_TAS_ROLL_OUT 13	/* origin3 velocity3 onground ducked contact-kind normal3 entity-QC-may-act-on (negated: before the tick) */
+/* contact-kind: pm_source.c's (0 none, 1 world ramp, 2 nonworld, 3 ambiguous); P1449: 4 = no ramp but a wall or ceiling clipped */
 /* P1449: buttons bits a row may carry. FOLLOW: the yaw slot holds a turn command q (sign = strafe side, +
  * left) and this tick's yaw word and side are set from the velocity before it, so that the wish direction
  * dotted with the horizontal velocity is 30 - |q| (Source's AirAccelerate adds 30 - that: 0 nothing, 30
@@ -61,11 +62,29 @@ static void SV_TASRollFollow(float *r, int fl)
 	r[6] -= fl;
 }
 
-/* P1449: the AIM command for this tick (see SV_TAS_ROLL_AIM). */
-static float SV_TASRollAim(const float *aim, float gain)
+/* P1449: the AIM command for this tick (see SV_TAS_ROLL_AIM). With the face to board (n), it steers at a
+ * lead point set back from the aim along the heading that meets the face parallel -- along the ramp's
+ * horizontal run (signed by the heading now), tilted out from the face so the horizontal motion cancels
+ * the fall into it (v.n = 0 at this vertical speed) -- so the flight curves in along the ramp, not onto
+ * its top or into its side (Lex, 9 Nov). */
+static float SV_TASRollAim(const float *aim, float gain, const float *n)
 {
-	double err = atan2(aim[1] - pmove.origin[1], aim[0] - pmove.origin[0]) - atan2(pmove.velocity[1], pmove.velocity[0]);
-	double mag;
+	double tx = aim[0], ty = aim[1];
+	double err, mag;
+	if (n && (n[0] || n[1]))
+	{
+		double nh = sqrt(n[0] * n[0] + n[1] * n[1]), ux = n[0] / nh, uy = n[1] / nh;	/* out from the face */
+		double rx = -uy, ry = ux, vh = sqrt(pmove.velocity[0] * pmove.velocity[0] + pmove.velocity[1] * pmove.velocity[1]);
+		double s, c, dx, dy, dist = sqrt((aim[0] - pmove.origin[0]) * (aim[0] - pmove.origin[0]) + (aim[1] - pmove.origin[1]) * (aim[1] - pmove.origin[1]));
+		if (rx * pmove.velocity[0] + ry * pmove.velocity[1] < 0) { rx = -rx; ry = -ry; }	/* the run's way we are going */
+		s = vh > 1 ? -pmove.velocity[2] * n[2] / (vh * nh) : 0;
+		if (s > 0.9) s = 0.9;
+		if (s < -0.9) s = -0.9;
+		c = sqrt(1 - s * s);
+		dx = rx * c + ux * s; dy = ry * c + uy * s;
+		tx -= dx * 0.5 * dist; ty -= dy * 0.5 * dist;
+	}
+	err = atan2(ty - pmove.origin[1], tx - pmove.origin[0]) - atan2(pmove.velocity[1], pmove.velocity[0]);
 	err *= 180.0 / M_PI;
 	while (err > 180) err -= 360;
 	while (err < -180) err += 360;
@@ -127,7 +146,7 @@ static int SV_TASRolloutActor(edict_t *e, int *kind)
  * -6 water/ladder/duck transition, -7 non-default gravity (bank gravity would observe it),
  * -8 the TAS clock, -9 a carrier (QC's run_basevel, or standing on a non-world entity),
  * -10 a row that does not decode. A trigger volume the body starts in is named, negated, on the first tick. */
-int SV_TASRollout(edict_t *e, float *in, int n, float *out, const float *aim, float aimgain)
+int SV_TASRollout(edict_t *e, float *in, int n, float *out, const float *aim, float aimgain, const float *aimn)
 {
 	static playermove_t saved;
 	extern float frametime;
@@ -139,7 +158,7 @@ int SV_TASRollout(edict_t *e, float *in, int n, float *out, const float *aim, fl
 	eval_t *ev;
 	wedict_t *start;
 	extern cvar_t pm_physicsmode;
-	int i, k, msec, kind, rep, startrep, ran, airk;
+	int i, k, msec, kind, rep, startrep, ran, airk, wall;
 	cl = SV_TASRewindClient(e);
 	if (!cl || !SV_TASInputPool(cl) || n < 1 || n > SV_TAS_ROLL_MAX || !in || !out)
 		return -1;
@@ -231,7 +250,7 @@ int SV_TASRollout(edict_t *e, float *in, int n, float *out, const float *aim, fl
 		float *o = out + k*SV_TAS_ROLL_OUT;
 		int fl = SV_TASRollFlags(r);
 		if ((fl & SV_TAS_ROLL_AIM) && airk >= 3)
-			r[4] = SV_TASRollAim(aim, aimgain);	/* P1449: a flight steers to the aim point */
+			r[4] = SV_TASRollAim(aim, aimgain, aimn);	/* P1449: a flight steers to the aim point */
 		if (fl > 0)
 			SV_TASRollFollow(r, fl & ~SV_TAS_ROLL_AIM);	/* P1449: from the velocity this tick starts with */
 		if (fl & SV_TAS_ROLL_AIM)
@@ -259,11 +278,14 @@ int SV_TASRollout(edict_t *e, float *in, int n, float *out, const float *aim, fl
 		PMSrc_BankGravityBegin(false);
 		PM_PlayerMove(sv.gamespeed);
 		PMSrc_BankGravityEnd();
+		wall = PMSrc_TASContactWall();
 		kind = PMSrc_TASContactEnd(normal, &distance, point);
 		if (pmove.ticksrun != 1 || pmove.portalcrossings || pmove.pm_type != PM_NORMAL ||
 			pmove.srcladder || pmove.waterlevel > 1 || pmove.numtouch < 0 || pmove.numtouch > MAX_PHYSENTS)
 			break;		// a tick the plain case does not cover: stop before it counts
 		rep = SV_TASRolloutActor(e, &kind);
+		if (kind == 0 && wall)
+			kind = 4;
 		if (k == 0 && startrep)
 			rep = -startrep;	// negative, and first: PreThink acts on it before tick 1's move
 		VectorCopy(pmove.origin, o);
