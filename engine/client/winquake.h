@@ -72,7 +72,7 @@ void GLVID_Crashed(void);
 
 #define WM_USER_RAWKBD                    (WM_USER+9)
 
-typedef enum { RAWKBD_REMOVE, RAWKBD_OPTIN, RAWKBD_OBSERVE, RAWKBD_CLEARHELD } rawkbdop_t;
+typedef enum { RAWKBD_REMOVE, RAWKBD_OPTIN, RAWKBD_OBSERVE, RAWKBD_CLEARHELD, RAWKBD_QUIESCE, RAWKBD_RESUME } rawkbdop_t;
 int INS_RawInput_KeyboardControl(rawkbdop_t op);
 
 #undef byte

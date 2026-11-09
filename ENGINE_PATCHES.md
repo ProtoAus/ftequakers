@@ -38,27 +38,34 @@ runs (hung 2.6-2.7 s); P1454 0 in both (hung 2.4-3.8 s).
 
 ## Patch 1452 -- keyboard registration and restart resource lifetime (in_win.c, winquake.h, Windows WndProcs)
 
-Problem: enumerated keyboards were mistaken for a successful Windows raw-keyboard
-registration, leaving the existing observer unavailable before an opt-in grab.
-A refused Windows mode change preserves the previous binding; clearing its mode
-or freeing the buffer/device table would lose input or falsely count unmatched keys.
+Problem: enumeration was mistaken for successful keyboard observation before an
+opt-in grab. Refused removal retains the Windows binding, so its raw buffer and
+device tables must remain usable. Accepted teardown also needs exclusion from
+threaded raw reads; a mode-change acknowledgment alone does not protect lifetime.
 
-Change: serialize bounded registration and pairing transitions on the input/window
-thread. Track successful observation versus opt-in registration, preserve a usable
-binding on refusal, and retry teardown before reallocating during restart. A refused
-removal retains the resources needed to service that binding. Observation never
-translates a second game key. Existing opt-in flags, capture fields, ranking and
-thresholds are unchanged; no new input blocking or human-attestation claim.
+Change: serialize bounded registration/pairing operations on the input owner and
+quiesce the entire raw buffer/capacity/table/count transaction through restart.
+Refused binding removal preserves its cohort; excluded or late reads cannot
+recreate a bare buffer and skip initialization. Reentrant acquisition is refused.
+Keep known binding mode separate from published observation availability: exclusion
+abandons pending pairing without counting it and publishes partial coverage through
+the existing change counter, even when the binding is retained or sampling coalesces.
+Ordinary keyboard removal does not pause mouse reads. Opt-in flags, game-key policy,
+capture fields, ranking and thresholds are unchanged; the internal channel is not
+a sender-authentication or physical-input attestation boundary.
 
-Verified: literal production mode/dispatch/Init/DeInit/ReInit controls discriminate
-both the original enumeration gap and the rejected draft's retained-binding/free-
-resource error (15 assertions fail there). Corrected controls and real Windows
-registration-success/message-thread arms pass, including make/break identity and
-buffer lifetime. Two independent source/input-lifecycle and evidence reviews clear
-the correction. Six reviewed source blobs are unchanged when composed with P1451
-and P1454. Full-build, warning baseline and actual installed-client provenance are
-recorded separately in FTESurf tools/p1452-keyboard-registration.md; physical/HID
-noise calibration remains a human check, not a synthetic-test pass.
+Verified: literal production Read/lifecycle/pairing and journal-producer controls
+use an owned caller/window-thread boundary, tracked allocation lifetime and acting
+make/break identity checks. The rejected draft, unsafe accepted-cleanup, null-only
+and initial-coverage negatives fail 15/8/4/16 assertions respectively; corrected
+and real registration-success arms pass. Unchanged reader consumption distinguishes
+partial sampled/coalesced coverage from the false whole-count/zero negatives.
+Fresh independent source and evidence reviews clear the bounded correction. Final
+stamped Full-build, warning and installed-client checks are recorded separately in
+FTESurf tools/p1452-keyboard-registration.md, not inferred from focused controls.
+A raw/legacy pair split across resumption can still yield a partial processing-time
+uncorrelated decision: transition/grace and genuine-HID calibration remain pending.
+No false-positive-free hardware, gameplay, numerical detector or promotion claim.
 
 ## Patch 1451 -- the QC tempstring collector's buffers are made during the loading screen (initlib.c, progslib.h, pr_csqc.c, cl_main.c, client.h)
 

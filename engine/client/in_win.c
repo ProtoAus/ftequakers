@@ -350,16 +350,31 @@ static const unsigned short padbtn_up[5] = {RI_MOUSE_BUTTON_1_UP, RI_MOUSE_BUTTO
 #define RAWKEY_WINDOW 0.1
 static qboolean rawkbd_observe;
 static qboolean rawkbd_nolegacy;
+// Owner-only gate: the caller may mutate the entire cohort only between QUIESCE/RESUME.
+static qboolean rawinput_quiesced;
+static int rawinput_readdepth;
 static double rawkey_time[256];
 static double rawkey_pending[256];
 static qboolean rawkey_rawheld[256], rawkey_legheld[256];
 static int rawkey_npending;
 
+static void INS_RawKeyReset(void)
+{
+	int i;
+
+	for (i = 0; i < (int)countof(rawkey_time); i++)
+	{
+		rawkey_time[i] = rawkey_pending[i] = -1;
+		rawkey_rawheld[i] = rawkey_legheld[i] = false;
+	}
+	rawkey_npending = 0;
+}
+
 static void INS_RawKeyExpire(double now)
 {
 	int i;
 
-	if (!rawkey_npending)
+	if (rawinput_quiesced || !raw || !rawkbd_observe || !rawkey_npending)
 		return;
 	for (i = 0; i < (int)countof(rawkey_pending); i++)
 	{
@@ -1202,7 +1217,7 @@ static void INS_RawInput_PadDeRegister(void)
 	rawpad_registered = false;
 }
 
-void INS_RawInput_DeInit(void)
+static void INS_RawInput_DeInitQuiesced(void)
 {
 	/*Patch 1452: Windows retains a refused binding. Abort the destructive
 	  transaction before dropping its dispatch table/buffer (or mouse state).
@@ -1233,7 +1248,16 @@ void INS_RawInput_DeInit(void)
 	rawkbd = NULL;
 	Z_Free(raw);
 	raw = NULL;
+	ribuffersize = 0;
 	memset(multicursor_active, 0, sizeof(multicursor_active));
+}
+
+void INS_RawInput_DeInit(void)
+{
+	if (INS_RawInput_KeyboardRequest(RAWKBD_QUIESCE))
+		return;
+	INS_RawInput_DeInitQuiesced();
+	INS_RawInput_KeyboardRequest(RAWKBD_RESUME);
 }
 #endif
 
@@ -1327,14 +1351,39 @@ static void INS_RawInput_MouseSetLegacy(qboolean wantnolegacy)
 		rawmouse_nolegacy ? "SUPPRESSED (injected clicks blocked)" : "allowed");
 }
 
+// Binding mode survives refused removal; availability excludes lifecycle blackouts.
+static void INS_RawInput_KeyObserveAvailability(void)
+{
+	qboolean available = !rawinput_quiesced && raw && _GRID && rawkbd_observe;
+
+	if (in_rawkbd_observe != available)
+		in_rawkbd_observechanges++;
+	in_rawkbd_observe = available;
+}
+
 /*Patch 1452: runs on the window/input thread. Refusal retains the Windows binding.
   No callbacks or pointers cross the registration handoff.*/
 int INS_RawInput_KeyboardControl(rawkbdop_t op)
 {
 	RAWINPUTDEVICE Rid;
-	int i;
 	qboolean observe;
 
+	if (op == RAWKBD_QUIESCE)
+	{
+		// A reentrant SendMessage must not acknowledge a read still on this stack.
+		if (rawinput_readdepth || rawinput_quiesced)
+			return 1;
+		rawinput_quiesced = true;
+		INS_RawKeyReset();	// Unmatched work cannot survive discarded corroboration.
+		INS_RawInput_KeyObserveAvailability();
+		return 0;
+	}
+	if (op == RAWKBD_RESUME)
+	{
+		rawinput_quiesced = false;
+		INS_RawInput_KeyObserveAvailability();
+		return 0;
+	}
 	if (op == RAWKBD_CLEARHELD)
 	{
 		memset(rawkey_rawheld, 0, sizeof(rawkey_rawheld));
@@ -1361,22 +1410,15 @@ int INS_RawInput_KeyboardControl(rawkbdop_t op)
 	observe = op == RAWKBD_OBSERVE;
 	if (observe)
 	{
-		for (i = 0; i < (int)countof(rawkey_time); i++)
-		{
-			rawkey_time[i] = rawkey_pending[i] = -1;
-			rawkey_rawheld[i] = rawkey_legheld[i] = false;
-		}
-		rawkey_npending = 0;
+		INS_RawKeyReset();
 		if (in_raw_legacykey < 0)
 			in_raw_legacykey = 0;
 		if (in_raw_kbdnohandle < 0)
 			in_raw_kbdnohandle = 0;
 	}
-	if (rawkbd_observe != observe)
-		in_rawkbd_observechanges++;
 	rawkbd_observe = observe;
 	rawkbd_nolegacy = op == RAWKBD_OPTIN;
-	in_rawkbd_observe = observe;
+	INS_RawInput_KeyObserveAvailability();
 	return 0;
 }
 
@@ -1384,10 +1426,10 @@ static int INS_RawInput_KeyboardRequest(rawkbdop_t op)
 {
 	DWORD thread, process;
 
-	/*No window means no input owner. Only removal is safe/needed after destruction;
-	  startup registration is retried by ReInit once the window exists.*/
+	/*No window means no input owner: cleanup and its gate can run locally.
+	  Startup registration is retried by ReInit once the window exists.*/
 	if (!mainwindow)
-		return op == RAWKBD_REMOVE ? INS_RawInput_KeyboardControl(op) : 1;
+		return op == RAWKBD_REMOVE || op == RAWKBD_QUIESCE || op == RAWKBD_RESUME ? INS_RawInput_KeyboardControl(op) : 1;
 	thread = GetWindowThreadProcessId(mainwindow, &process);
 	if (!thread || process != GetCurrentProcessId())
 		return 1;
@@ -1445,7 +1487,7 @@ static void INS_LegacyKeyObserve(LPARAM lParam, qboolean down)
 	int sc = (lParam >> 16) & 0xff;
 	double now;
 
-	if (!rawkbd_observe)
+	if (rawinput_quiesced || !raw || !rawkbd_observe)
 		return;
 	now = Sys_DoubleTime();
 	INS_RawKeyExpire(now);
@@ -1498,7 +1540,7 @@ int INS_RawInput_IsRDPDevice(char *cDeviceString)
 	return 1;
 }
 
-void INS_RawInput_Init(void)
+static void INS_RawInput_InitQuiesced(void)
 {
 	  // "0" to exclude, "1" to include
 	PRAWINPUTDEVICELIST pRawInputDeviceList;
@@ -1518,7 +1560,6 @@ void INS_RawInput_Init(void)
 	in_rawmice_live = 0;
 	in_rawkbd_live = 0;
 	in_rawpads_live = 0;	//FTESurf Patch 468: same rule
-	in_rawkbd_observe = rawkbd_observe;	//A refused removal can retain the previous binding.
 
 	// Return 0 if rawinput is not available
 	HMODULE user32 = LoadLibrary("user32.dll");
@@ -1729,6 +1770,14 @@ void INS_RawInput_Init(void)
 
 	return; // success
 }
+
+void INS_RawInput_Init(void)
+{
+	if (INS_RawInput_KeyboardRequest(RAWKBD_QUIESCE))
+		return;
+	INS_RawInput_InitQuiesced();
+	INS_RawInput_KeyboardRequest(RAWKBD_RESUME);
+}
 #endif
 
 /*
@@ -1799,15 +1848,15 @@ INS_Init
 void INS_ReInit (void)
 {
 #ifdef USINGRAWINPUT
-	if (in_rawkbd_observe < 0)
-		in_rawkbd_observe = 0;	//FTESurf Patch 1424: Windows with raw input off is "not observing", not "backend silent"
+	if (INS_RawInput_KeyboardRequest(RAWKBD_QUIESCE))
+		return;
 	/*Retry an aborted teardown, including explicit opt-out with both settings 0.
 	  Never overwrite/reallocate the last usable retained binding resources.*/
 	if (raw)
-		INS_RawInput_DeInit();
+		INS_RawInput_DeInitQuiesced();
 	if (!raw && (in_rawinput_mice.ival || in_rawinput_keyboard.ival))
 	{
-		INS_RawInput_Init();
+		INS_RawInput_InitQuiesced();
 	}
 #endif
 
@@ -1826,6 +1875,7 @@ void INS_ReInit (void)
 		}
 	}
 	INS_RawInput_KeyObserveRegister();	//FTESurf Patch 1424
+	INS_RawInput_KeyboardRequest(RAWKBD_RESUME);
 #endif
 }
 
@@ -2513,11 +2563,15 @@ void INS_RawInput_Read(HANDLE in_device_handle)
 {
 	int dwSize;
 
+	if (rawinput_quiesced || !raw || rawinput_readdepth)
+		return;
+	rawinput_readdepth++;
+
 	// get raw input
 	if ((*_GRID)((HRAWINPUT)in_device_handle, RID_INPUT, NULL, &dwSize, sizeof(RAWINPUTHEADER)) == -1)
 	{
 		Con_Printf("Raw input: unable to add to get size of raw input header.\n");
-		return;
+		goto done;
 	}
 
 	if (dwSize > ribuffersize)
@@ -2528,7 +2582,7 @@ void INS_RawInput_Read(HANDLE in_device_handle)
 
 	if ((*_GRID)((HRAWINPUT)in_device_handle, RID_INPUT, raw, &dwSize, sizeof(RAWINPUTHEADER)) != dwSize ) {
 		Con_Printf("Raw input: unable to add to get raw input header.\n");
-		return;
+		goto done;
 	}
 
 	/*FTESurf Patch 1424: decide pending presses here, on the window thread that owns the
@@ -2541,6 +2595,8 @@ void INS_RawInput_Read(HANDLE in_device_handle)
 	INS_RawInput_PadRead();	//FTESurf Patch 468
 	INS_RawInput_MouseRead();
 	INS_RawInput_KeyboardRead();
+done:
+	rawinput_readdepth--;
 }
 #else
 int INS_RawInput_KeyboardControl(rawkbdop_t op)
