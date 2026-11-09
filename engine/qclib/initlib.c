@@ -1722,20 +1722,22 @@ static void PR_FreeAllTemps			(progfuncs_t *progfuncs)
 {
 	unsigned int i;
 #ifdef THREADEDGC
-	while (prinst.gccontext)
+	//FTESurf Patch 1446 review 2: both re-read each pass -- a wait runs main-thread work, which may start or finish one
+	while (prinst.gccontext || (prinst.gcfree && prinst.gcfree->busy))
 	{
-		COM_WorkerPartialSync(prinst.gccontext, &prinst.gccontext->done, false);
-		if (prinst.gccontext && prinst.gccontext->done)
-			PR_QCGC_Finish(progfuncs);
+		if (prinst.gccontext)
+		{
+			COM_WorkerPartialSync(prinst.gccontext, &prinst.gccontext->done, false);
+			if (prinst.gccontext && prinst.gccontext->done)
+				PR_QCGC_Finish(progfuncs);
+		}
+		else
+			COM_WorkerPartialSync(prinst.gcfree, &prinst.gcfree->busy, true);
 	}
-	free(prinst.gcspare);	//FTESurf Patch 1446
+	free(prinst.gcspare);
 	prinst.gcspare = NULL;
-	if (prinst.gcfree)
-	{
-		COM_WorkerPartialSync(prinst.gcfree, &prinst.gcfree->busy, true);
-		free(prinst.gcfree);
-		prinst.gcfree = NULL;
-	}
+	free(prinst.gcfree);
+	prinst.gcfree = NULL;
 #endif
 	for (i = 0; i < prinst.maxtempstrings; i++)
 	{
