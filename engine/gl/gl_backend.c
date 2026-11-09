@@ -9543,8 +9543,8 @@ rebuild:
 	// FTESurf Patch 1463: pass 1 leaves a strict pair's overlap verdict until Kahn asks for its edge. Its direction is
 	// the plane proof's (the verdict is the hint or disjoint); only whether it exists waits. In surf_fairy's worst
 	// views pass 1 ends in a cycle after ~1010 verdicts, most for edges out of faces already placed. Same order as
-	// eager unless the overlap budget runs out during pass 1 (lazy spends a subset of eager's work); r_blendtrace's
-	// edges= and work= then count only what was resolved.
+	// eager unless eager's overlap budget runs out during pass 1 (lazy spends a subset of its work). In lazy mode
+	// r_blendtrace's edges= (pass 1 final) and work= count only what was resolved.
 	lazy = stats->pass == 1 && r_blendsort_lazy.ival;
 	stats->edges = 0;
 	memset(edges, 0, stats->admitted * stats->admitted);
