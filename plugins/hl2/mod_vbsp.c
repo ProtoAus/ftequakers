@@ -51,6 +51,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include "com_mesh.h"
 #include "com_bih.h"
 #include "LzmaDec.h"	//nettest: Strata Source (BSP v25) + newer Valve maps LZMA-compress individual lumps
+extern qboolean hl2_bodyparts;	//FTESurf Patch 1440 (mod_hl2.c): model_t's bodypart arrays exist
 
 static plugfsfuncs_t		*filefuncs;
 static plugmodfuncs_t		*modfuncs;
@@ -8193,6 +8194,10 @@ static int VBSP_PropModelOpaque(const entity_t *ent)
 		return 2;
 	for (inf = ent->model->meshinfo; inf; inf = inf->nextsurf, n++)
 	{
+		//FTESurf Patch 1440: a bodypart alternative the prop does not draw does not decide its opacity
+		if (hl2_bodyparts && inf->geomset < countof(ent->model->geomcount) && ent->model->geomcount[inf->geomset])
+		if (inf->geomid != ((unsigned int)ent->body / max(1u, ent->model->geombase[inf->geomset])) % ent->model->geomcount[inf->geomset])
+			continue;
 		if (inf->numskins <= 0 || !inf->ofsskins)
 			return 3;
 		sk = &inf->ofsskins[(ent->skinnum >= 0 && ent->skinnum < inf->numskins) ? ent->skinnum : 0];

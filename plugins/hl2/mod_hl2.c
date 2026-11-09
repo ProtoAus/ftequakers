@@ -13,6 +13,7 @@
 
 static plugfsfuncs_t *filefuncs;
 static plugmodfuncs_t *modfuncs;
+qboolean hl2_bodyparts;	//FTESurf Patch 1440: the exe has model_t's geombase/geomcount (com_mesh.h)
 static plugfsfuncs_t *fsfuncs;
 
 //FTESurf Build 8: the model's COLLISION shape, which is not its render mesh.
@@ -730,11 +731,11 @@ static qboolean Mod_HL2_LoadVTX(hl2parsecontext_t *ctx, const void *buffer, size
 		const hl2mdlsurf_t *msurf = (const hl2mdlsurf_t*)((const qbyte*)mbody + mbody->surf_ofs);
 		//FTESurf Patch 1440: a bodypart's alternative models are one geomset; the engine draws the one the entity's
 		//body picks (gl_alias.c GL_ChooseSkin). A single model, or a bodypart past 32, stays always drawn.
-		qboolean alts = (vbody->surf_count > 1 && b < countof(ctx->mod->geomcount));
+		qboolean alts = (hl2_bodyparts && mbody->surf_count > 1 && vbody->surf_count > 1 && b < countof(ctx->mod->geomcount));
 		if (alts)
-		{
+		{	//the .mdl's count, as Source decodes; the loop below walks the .vtx's (one revision ties them)
 			ctx->mod->geombase[b] = mbody->base;
-			ctx->mod->geomcount[b] = min(vbody->surf_count, 0xffff);
+			ctx->mod->geomcount[b] = min(mbody->surf_count, 0xffff);
 		}
 		vsurf = (const void*)((const qbyte*)vbody + vbody->surf_ofs);
 		for (s = 0; s < vbody->surf_count; s++, vsurf++, msurf++)
@@ -1638,6 +1639,7 @@ qboolean MDL_Init(void)
 
 	if (modfuncs && modfuncs->version != MODPLUGFUNCS_VERSION)
 		modfuncs = NULL;
+	hl2_bodyparts = plugfuncs->GetEngineInterface(plugmodeltail1440_name, sizeof(int)) != NULL;	//P1440
 
 	if (modfuncs && filefuncs)
 	{

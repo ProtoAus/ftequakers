@@ -2189,6 +2189,12 @@ static void QDECL Plug_IN_Gyroscope(unsigned int devid, float pitch, float yaw, 
 
 static void *QDECL PlugBI_GetEngineInterface(const char *interfacename, size_t structsize)
 {
+	if (!strcmp(interfacename, plugmodeltail1440_name))
+	{	//FTESurf Patch 1440: see com_mesh.h
+		static const int tail = 1440;
+		if (structsize == sizeof(tail))
+			return (void*)&tail;
+	}
 	if (!strcmp(interfacename, plugcorefuncs_name))
 	{
 		if (structsize == sizeof(plugcorefuncs))

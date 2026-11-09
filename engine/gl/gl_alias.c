@@ -620,6 +620,9 @@ void R_GAliasFlushSkinCache(qboolean final)
 	Mod_WipeAllSkins(final);
 }
 
+//FTESurf Patch 1440: model_t's bodypart arrays (gl_model.h) are sized by hand
+typedef char p1440_geomsets_match[(countof(((model_t*)0)->geomcount) == MAX_GEOMSETS) ? 1 : -1];
+
 static shader_t *GL_ChooseSkin(galiasinfo_t *inf, model_t *model, int surfnum, entity_t *e, texnums_t **forcedtex)
 {
 	galiasskin_t *skins;
