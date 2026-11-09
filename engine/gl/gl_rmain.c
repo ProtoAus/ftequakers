@@ -65,6 +65,7 @@ static void R_SceneDepthDrawn(int v)
 		Cvar_ForceSetValue(&r_scenedepth_drawn, v);
 }
 extern cvar_t	r_colourcorrection;	//FTESurf Patch 288
+extern cvar_t	r_postprocess;		//FTESurf Patch 1459
 extern cvar_t	r_underwateroverlay;	//FTESurf Patch 1013
 static qboolean r_uwnowarp;	//FTESurf Patch 1013: a Source volume with no overlay draws neither warp
 static shader_t *cc_warned;			//Patch 290: last grade shader we complained about
@@ -2847,7 +2848,7 @@ void GLR_RenderView (void)
 	else
 	{
 		renderscale = r_renderscale.value;
-		if (R_CanBloom())
+		if (r_postprocess.ival && R_CanBloom())	//FTESurf Patch 1459
 			r_refdef.flags |= RDF_BLOOM;
 	}
 
@@ -2877,7 +2878,7 @@ void GLR_RenderView (void)
 					uwpostproc = s;
 			}
 		}
-		if (!r_waterwarp.value || r_projection.ival)
+		if (!r_waterwarp.value || r_projection.ival || !r_postprocess.ival)	//P1459: as r_waterwarp 0
 			r_refdef.flags &= ~RDF_UNDERWATER;	//no warp at all
 		else if (r_waterwarp.value > 0 && uwpostproc && !r_uwnowarp)
 			r_refdef.flags |= RDF_WATERWARP;	//try fullscreen warp instead if we can
@@ -2922,9 +2923,14 @@ void GLR_RenderView (void)
 
 	if (!(r_refdef.flags & RDF_NOWORLDMODEL))
 	{
-		if (r_fxaa.ival)
+		//FTESurf Patch 1459: r_postprocess 0 (the gfx menu's Post-process row) draws the scene as rendered:
+		//no FXAA, custom post shader, colour grade or bloom (above), no underwater warp. Gamma stays.
+		qboolean postproc = r_postprocess.ival != 0;
+		if (postproc && r_fxaa.ival)
 			r_refdef.flags |= RDF_ANTIALIAS;
-		if (*r_postprocshader.string)
+		if (!postproc)
+			;
+		else if (*r_postprocshader.string)
 			custompostproc = R_RegisterCustom(NULL, r_postprocshader.string, SUF_NONE, NULL, NULL);
 		else if (!r_graphics.ival)
 			custompostproc = R_RegisterShader("postproc_ascii", 0, 
@@ -2959,7 +2965,7 @@ void GLR_RenderView (void)
 		keeps the grade off the HUD -- correct, and the thing that would look most
 		obviously wrong if it were not.
 		*/
-		if (*r_colourcorrection.string)
+		if (postproc && *r_colourcorrection.string)
 		{
 			qboolean active = true;
 			if (!strncmp(r_colourcorrection.string, "ftesurf/cc/", 11))

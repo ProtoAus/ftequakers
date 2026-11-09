@@ -8099,6 +8099,54 @@ static qboolean VBSP_MissReason(model_t *mod, const char *name, char *out, size_
 	return true;
 }
 
+//FTESurf Patch 1460: the map's whole unresolved list, kept in <gamedir>/data/missing/<map>.txt so a player
+//can hand it over later (the console shows 24 and scrolls away). Rewritten each load and removed once the
+//map resolves, so the folder is the current set. Client only: a server draws nothing to miss.
+static void VBSP_MissingFile(const char *modname, int state, const char *spec, const char *nogame)
+{
+	char mapshort[MAX_QPATH], path[MAX_QPATH+32], line[MAX_QPATH*6], *dot;
+	const char *sl = strrchr(modname, '/');
+	vfsfile_t *f;
+	int i;
+
+	if (qrenderer == QR_NONE)
+		return;
+	Q_strlcpy(mapshort, sl?sl+1:modname, sizeof(mapshort));
+	dot = strrchr(mapshort, '.');
+	if (dot)
+		*dot = 0;
+	if (!*mapshort || Q_snprintfz(path, sizeof(path), "data/missing/%s.txt", mapshort))
+		return;
+	if (!vmt_stat_missing)
+	{
+		filefuncs->Remove(path, FS_GAMEONLY);
+		return;
+	}
+	f = filefuncs->OpenVFS(path, "wb", FS_GAMEONLY);
+	if (!f)
+	{
+		Con_Printf(CON_WARNING "  could not write %s\n", path);
+		return;
+	}
+	Q_snprintfz(line, sizeof(line), "// %s: %i material(s) did not resolve at load, %i on drawn faces or props (hl2 plugin, P1460)\n"
+			"// fs_automount_state %i  spec \"%s\"  games not found on this PC \"%s\"\n",
+			modname, vmt_stat_missing, vmt_miss_visible, state, spec, nogame);
+	VFS_PUTS(f, line);
+	for (i = 0; i < vmt_miss_reasons; i++)
+	{
+		Q_snprintfz(line, sizeof(line), "%s\t%s\n", vmt_stat_missing_name[i], vmt_miss_reason[i]);
+		VFS_PUTS(f, line);
+	}
+	if (vmt_stat_missing > vmt_miss_reasons)
+	{
+		Q_snprintfz(line, sizeof(line), "// ...and %i more past the %i names stored\n",
+				vmt_stat_missing - vmt_miss_reasons, VMT_MISSING_LIST);
+		VFS_PUTS(f, line);
+	}
+	VFS_CLOSE(f);
+	Con_Printf(CON_WARNING "  The whole list is saved in %s\n", path);
+}
+
 /* Patch 509: movement's NativeTrace includes the receiver prop itself, omits
  * NOHULL displacements and obeys movement-only collision switches. Build a
  * separate world-only tree. No prop shadow meshes or inline movers are present;
@@ -8965,7 +9013,10 @@ static void VBSP_BuildBIHMain(void *ctx, void *unusedp, size_t unuseda, size_t u
 				"  reload, or fs_load the pack by hand.\n");
 			break;
 		}
+		VBSP_MissingFile(mod->name, state, spec, nogame);	//FTESurf Patch 1460
 	}
+	else
+		VBSP_MissingFile(mod->name, 0, "", "");
 	/*
 	FTESurf Patch 181: materials that WERE found and would not parse.
 
