@@ -370,6 +370,134 @@ static void R_Budget_Publish(double now)
 	memset(budget.quant, 0, sizeof(budget.quant));
 }
 
+//FTESurf Patch 1444: r_budget's window averages hide a single slow frame; this keeps the slowest frames since
+//r_frametime_reset, each with its own self time per budget group and what else it did
+cvar_t r_spikes = CVARFD("r_spikes", "0", 0, "FTESurf Patch 1444. Keeps the slowest frames since r_frametime_reset, each with its own CPU time by r_budget's groups, its late shader compiles and image uploads, packets read and nested views (water, glass, portals); r_frametime_dump lists them under the average frame. Times the engine's buckets, draws nothing.");
+#define SPIKE_KEEP 8
+typedef struct
+{
+	float ms, at;					//frame interval; realtime
+	float grp[BUDGET_GROUPS];		//ms of self time
+	float topms;					//the largest single bucket
+	unsigned char topg, topm;		//...as budget_groups[topg].m[topm]
+	unsigned short compiles, images, packets, views;
+} spike_t;
+static struct
+{
+	qboolean on;
+	double last, summs, sum[BUDGET_GROUPS];
+	unsigned int frames, compiles, images, views;	//the counters' previous readings
+	int packets;
+	spike_t s[SPIKE_KEEP];			//slowest first
+} spk;
+#ifdef GLQUAKE
+void R_MapReadyLate(unsigned int *compiles, unsigned int *images);	//gl_shader.c
+#endif
+static unsigned short R_Spikes_Delta(unsigned int now, unsigned int *prev)
+{	//r_viewstats zeroes its counters and each activation the late ones
+	unsigned int d = now >= *prev ? now - *prev : now;
+	*prev = now;
+	return min(d, 65535);
+}
+//once a frame, from RSpeedShow before R_Budget_Sample (which clears rspeeds_self when it is on)
+static void R_Spikes_Sample(void)
+{
+	double now = Sys_DoubleTime();
+	unsigned int compiles = 0, images = 0, views = 0, i, j, c;
+	spike_t f;
+	if (!r_spikes.ival)
+	{
+		spk.on = false;
+		return;
+	}
+#ifdef GLQUAKE
+	if (qrenderer == QR_OPENGL)
+		R_MapReadyLate(&compiles, &images);
+#endif
+	for (i = 1; i < R_MAX_RECURSE; i++)
+		views += r_vs_views[i];
+	if (!spk.on)
+	{
+		memset(&spk, 0, sizeof(spk));
+		spk.on = true;
+		spk.last = now;
+		spk.compiles = compiles, spk.images = images, spk.views = views;
+		spk.packets = cls.netchan.incoming_sequence;
+		if (!r_budget.ival)
+			memset(rspeeds_self, 0, sizeof(rspeeds_self));
+		return;
+	}
+	memset(&f, 0, sizeof(f));
+	f.ms = (now - spk.last) * 1000;
+	f.at = now;
+	spk.last = now;
+	for (i = 0; i < BUDGET_GROUPS; i++)
+	{
+		for (j = 0; j < countof(budget_groups[i].m) && budget_groups[i].m[j].b >= 0; j++)
+		{
+			float ms = rspeeds_self[budget_groups[i].m[j].b] / 1000;
+			f.grp[i] += ms;
+			if (ms > f.topms)
+				f.topms = ms, f.topg = i, f.topm = j;
+		}
+		spk.sum[i] += f.grp[i];
+	}
+	spk.summs += f.ms;
+	spk.frames++;
+	f.compiles = R_Spikes_Delta(compiles, &spk.compiles);
+	f.images = R_Spikes_Delta(images, &spk.images);
+	f.views = R_Spikes_Delta(views, &spk.views);
+	f.packets = bound(0, cls.netchan.incoming_sequence - spk.packets, 65535);
+	spk.packets = cls.netchan.incoming_sequence;
+	if (!r_budget.ival)
+		memset(rspeeds_self, 0, sizeof(rspeeds_self));
+	if (f.ms <= spk.s[SPIKE_KEEP-1].ms)
+		return;
+	for (c = 0; f.ms <= spk.s[c].ms; c++)
+		;
+	memmove(&spk.s[c+1], &spk.s[c], sizeof(spk.s[0]) * (SPIKE_KEEP-1 - c));
+	spk.s[c] = f;
+}
+//the largest four of grp[], as "name ms" pairs
+static void R_Spikes_Groups(char *out, size_t outsize, const float *grp)
+{
+	qboolean used[BUDGET_GROUPS] = {0};
+	int k, i, best;
+	for (k = 0; k < 4; k++)
+	{
+		for (best = -1, i = 0; i < BUDGET_GROUPS; i++)
+			if (!used[i] && (best < 0 || grp[i] > grp[best]))
+				best = i;
+		if (best < 0 || grp[best] < 0.005)
+			break;
+		used[best] = true;
+		Q_strncatz(out, va("%s %s %.2f", k ? "," : "", R_Budget_GroupName(best, true), grp[best]), outsize);
+	}
+}
+static void R_Spikes_Append(char *out, size_t outsize)
+{
+	float avg[BUDGET_GROUPS], timed;
+	double now = Sys_DoubleTime();
+	int i, g;
+	if (!spk.on || !spk.frames)
+		return;
+	for (g = 0; g < BUDGET_GROUPS; g++)
+		avg[g] = spk.sum[g] / spk.frames;
+	Q_strncatz(out, va("  slowest frames by CPU group (r_spikes, %u frames since reset; ms, largest four):\n    average %6.2f:", spk.frames, spk.summs / spk.frames), outsize);
+	R_Spikes_Groups(out, outsize, avg);
+	Q_strncatz(out, "\n", outsize);
+	for (i = 0; i < SPIKE_KEEP && spk.s[i].ms; i++)
+	{
+		for (timed = 0, g = 0; g < BUDGET_GROUPS; g++)
+			timed += spk.s[i].grp[g];
+		Q_strncatz(out, va("    %7.2f %5.1f s ago:", spk.s[i].ms, now - spk.s[i].at), outsize);
+		R_Spikes_Groups(out, outsize, spk.s[i].grp);
+		Q_strncatz(out, va("; largest bucket %s %.2f; untimed %.2f; compiles %u images %u packets %u views %u\n",
+			budget_groups[spk.s[i].topg].m[spk.s[i].topm].name, spk.s[i].topms, max(0, spk.s[i].ms - timed),
+			spk.s[i].compiles, spk.s[i].images, spk.s[i].packets, spk.s[i].views), outsize);
+	}
+}
+
 //once a frame, from RSpeedShow: this frame's buckets into the window
 static void R_Budget_Sample(void)
 {
@@ -1127,6 +1255,7 @@ void R_FrameTime_Swapped(void)
 static void R_FrameTime_Reset_f(void)
 {
 	ft.on = false;	//the next frame starts clean
+	spk.on = false;	//FTESurf Patch 1444
 }
 static int R_FrameTime_RawCompare(const void *a, const void *b)
 {
@@ -1135,7 +1264,7 @@ static int R_FrameTime_RawCompare(const void *a, const void *b)
 }
 static void R_FrameTime_Dump_f(void)
 {
-	char out[4096];
+	char out[8192];
 	float *raw;
 	int i, n, p, n1, n01, stutters = 0;
 	static const int pct[] = {500, 900, 990, 999};
@@ -1192,6 +1321,7 @@ static void R_FrameTime_Dump_f(void)
 			? va("    %7.2f  %6.1f s ago  setpos %.0f %.0f %.0f %.0f %.0f 0\n", ft.bad[i].ms, now - ft.bad[i].at,
 				ft.bad[i].org[0], ft.bad[i].org[1], ft.bad[i].org[2], ft.bad[i].ang[0], ft.bad[i].ang[1])
 			: va("    %7.2f  %6.1f s ago  (where was not kept)\n", ft.bad[i].ms, now - ft.bad[i].at), sizeof(out));
+	R_Spikes_Append(out, sizeof(out));	//FTESurf Patch 1444
 	free(raw);
 	{
 		char *line = out, *nl;
@@ -1218,6 +1348,7 @@ void RSpeedShow(void)
 	int frameinterval = 100;
 	int tsize;
 
+	R_Spikes_Sample();	//FTESurf Patch 1444: reads rspeeds_self first
 	R_Budget_Sample();	//FTESurf Patch 782
 	if (r_budget.ival)
 		R_Budget_Draw();
@@ -1541,6 +1672,7 @@ void CLSCR_Init(void)
 	Cvar_Register(&r_budget, cl_screengroup);	//FTESurf Patch 782
 	Cvar_Register(&r_budget_window, cl_screengroup);
 	Cvar_Register(&r_budget_csqc, cl_screengroup);	//FTESurf Patch 800
+	Cvar_Register(&r_spikes, cl_screengroup);	//FTESurf Patch 1444
 	Cvar_Register(&r_frametime, cl_screengroup);	//FTESurf Patch 801
 	Cvar_Register(&r_frametime_seconds, cl_screengroup);
 	Cvar_Register(&r_frametime_window, cl_screengroup);

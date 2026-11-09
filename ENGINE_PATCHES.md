@@ -1,5 +1,26 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1444 -- r_spikes: the slowest frames' own CPU time by group (cl_screen.c, cl_main.c, gl_shader.c)
+
+Problem: r_budget averages a window (0.5 s), so the frames that set the 0.1% lows -- a handful in 30 s -- vanish
+into it, and r_frametime's slowest-frame list says only how long and where. cl_debug_spikes splits Host_Frame
+coarsely (one "gfx" for the whole render) and prints every slow frame as it happens.
+
+Fix: r_spikes 1 turns the RSpeed buckets on (r_speeds_timing) and, once a frame from RSpeedShow before
+R_Budget_Sample, sums that frame's rspeeds_self into budget_groups, keeping the 8 slowest frames since
+r_frametime_reset with: the interval, each group's ms, the largest single bucket, late shader compiles and image
+uploads (R_MapReadyLate, gl_shader.c), packets read (netchan incoming_sequence) and nested views (r_vs_views depth
+1+, water/glass/portal captures). r_frametime_dump prints them under the average frame. Nothing is drawn; off, it
+costs one cvar test a frame. It clears rspeeds_self itself only while r_budget is off (R_Budget_Sample does
+otherwise).
+
+First use (FTESurf artifacts/run_spikelog.py, surf_nuclear's best replay at 1x, Lex's settings, uncapped, warm
+session, two runs): the largest spikes are pairs of CSQC frames at the same two places on the route -- "prediction"
+5.5-7.7 ms then "QC UpdateView, HUD" 5.2-8.3 ms (average frame 1.6-1.7 ms, CSQC 0.7); frames with 2 nested water
+views spend 4-6 ms in PrepareFrame + opaque draws; one swap/present stall of 49.8 ms and one of 8.7 ms; one
+"network" frame of 5.0 ms. Packets were 0-1 in every listed frame. surf_pantheon's slowest are draw calls 2-3.4 ms
+plus CSQC 1.4-2.7 ms, no single cause.
+
 ## Patch 1440 -- Source MDL bodyparts draw the model the entity's body picks (gl_alias.c, gl_model.h, com_mesh.h, plugin.c; fteplug_hl2 mod_hl2.c, mod_vbsp.c)
 
 Problem: fteplug_hl2 tagged every mesh geomset 0 / geomid 0, so all of a bodypart's alternative models drew at

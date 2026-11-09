@@ -137,6 +137,12 @@ void R_MapReadyImageDone(const char *name, double start, qboolean failed)
 	Q_strncpyz(mapready.lastimage, name, sizeof(mapready.lastimage));
 }
 
+void R_MapReadyLate(unsigned int *compiles, unsigned int *images)
+{	//FTESurf Patch 1444: r_spikes takes per-frame deltas (both restart at each activation)
+	*compiles = mapready.latecompiles;
+	*images = mapready.lateimages;
+}
+
 typedef struct glslwarm_s
 {
 	bucket_t bucket;

@@ -380,6 +380,7 @@ qbyte		*h2playertranslations;
 cvar_t	host_speeds = CVAR("host_speeds","0");		// set for running times
 cvar_t	cl_debug_spikes = CVARD("cl_debug_spikes", "0", "Logs a timing breakdown whenever a client Host_Frame exceeds cl_debug_spike_ms.");
 extern cvar_t r_budget;	//FTESurf Patch 782, cl_screen.c
+extern cvar_t r_spikes;	//FTESurf Patch 1444, cl_screen.c
 cvar_t	cl_debug_spike_ms = CVARD("cl_debug_spike_ms", "2.0", "Frame time threshold, in milliseconds, for cl_debug_spikes logging.");
 
 int			fps_count;
@@ -7561,7 +7562,7 @@ double Host_Frame (double time)
 		spike_start = Sys_DoubleTime();
 	//FTESurf Patch 782: latched so every RSpeed bracket in this frame agrees; the frame's own work is
 	//timed from here to its end, and an early return between frames adds nothing to it (that is idle)
-	r_speeds_timing = (r_speeds.ival > 1 || r_budget.ival);
+	r_speeds_timing = (r_speeds.ival > 1 || r_budget.ival || r_spikes.ival);
 	rspeed_depth = 0;	//every bracket of this frame nests under this one; an unclosed one from before is gone
 	hostwork_start = RSpeed_Begin(&hostwork_depth);
 
