@@ -13,7 +13,7 @@
 
 #define SV_TAS_ROLL_MAX 2048
 #define SV_TAS_ROLL_IN 7	/* fwd side up, pitch yaw roll angle words, buttons (tas_tape's words) */
-#define SV_TAS_ROLL_OUT 13	/* origin3 velocity3 onground ducked contact-kind normal3 entity-QC-may-act-on */
+#define SV_TAS_ROLL_OUT 13	/* origin3 velocity3 onground ducked contact-kind normal3 entity-QC-may-act-on (negated: before the tick) */
 
 /* The first entity per-command QC could act on after this tick (0 none): SV_RunCmd's touch loop
  * (a touched non-world solid whose touch or the player's would run; such a touch also makes the
@@ -54,7 +54,7 @@ static int SV_TASRolloutActor(edict_t *e, int *kind)
  * -3 not paused or held, -4 a QC movement limit or forced duck pending, -5 a gravity direction,
  * -6 water/ladder/duck transition, -7 non-default gravity (bank gravity would observe it),
  * -8 the TAS clock, -9 a carrier (QC's run_basevel, or standing on a non-world entity),
- * -10 a row that does not decode. A trigger volume the body starts in is named on the first tick. */
+ * -10 a row that does not decode. A trigger volume the body starts in is named, negated, on the first tick. */
 int SV_TASRollout(edict_t *e, const float *in, int n, float *out)
 {
 	static playermove_t saved;
@@ -176,7 +176,7 @@ int SV_TASRollout(edict_t *e, const float *in, int n, float *out)
 			break;		// a tick the plain case does not cover: stop before it counts
 		rep = SV_TASRolloutActor(e, &kind);
 		if (!rep && k == 0)
-			rep = startrep;
+			rep = -startrep;	// negative: PreThink acts on it before tick 1's move
 		VectorCopy(pmove.origin, o);
 		VectorCopy(pmove.velocity, o + 3);
 		o[6] = pmove.onground;
