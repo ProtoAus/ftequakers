@@ -2120,6 +2120,44 @@ void World_TouchAllLinks (world_t *w, wedict_t *ent)
 	}
 }
 
+//FTESurf Patch 1443: the trigger World_TouchAllLinks would fire first for ent's hull at org,
+//without touching it -- tas_rollout stops there. The box is World_LinkEdict's (hull + 1).
+wedict_t *World_TriggerAt (world_t *w, wedict_t *ent, vec3_t org, vec3_t mins, vec3_t maxs)
+{
+	wedict_t *touchedicts[2048], *touch;
+	vec3_t amin, amax;
+	int num, solid, i;
+	for (i = 0; i < 3; i++)
+	{
+		amin[i] = org[i] + mins[i] - 1;
+		amax[i] = org[i] + maxs[i] + 1;
+	}
+	num = World_AreaEdicts(w, amin, amax, touchedicts, countof(touchedicts), AREA_TRIGGER);
+	while (num-- > 0)
+	{
+		touch = touchedicts[num];
+		if (ED_ISFREE(touch) || touch == ent)
+			continue;
+		solid = touch->v->solid;
+		if (!touch->v->touch || (solid != SOLID_TRIGGER && solid != SOLID_BSPTRIGGER))
+			continue;
+		if (amin[0] > touch->v->absmax[0] || amin[1] > touch->v->absmax[1] || amin[2] > touch->v->absmax[2] ||
+			amax[0] < touch->v->absmin[0] || amax[1] < touch->v->absmin[1] || amax[2] < touch->v->absmin[2])
+			continue;
+		if (!((int)ent->xv->dimension_solid & (int)touch->xv->dimension_hit))
+			continue;
+		if (solid == SOLID_BSPTRIGGER)
+		{
+			model_t *tmod = w->Get_CModel(w, touch->v->modelindex);
+			unsigned int tmask = (tmod && tmod->fromgame == fg_new) ? ~0u : MASK_WORLDSOLID;
+			if (!World_ClipMoveToEntity(w, touch, touch->v->origin, touch->v->angles, org, mins, maxs, org, 0, false, (ent->xv->geomtype == GEOMTYPE_CAPSULE), tmask).startsolid)
+				continue;
+		}
+		return touch;
+	}
+	return NULL;
+}
+
 void World_UnlinkEdict (wedict_t *ent)
 {
 	size_t i;

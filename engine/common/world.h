@@ -359,6 +359,7 @@ extern int World_AreaEdicts (world_t *w, vec3_t mins, vec3_t maxs, wedict_t **li
 
 #ifdef USEAREAGRID
 void World_TouchAllLinks (world_t *w, wedict_t *ent);
+wedict_t *World_TriggerAt (world_t *w, wedict_t *ent, vec3_t org, vec3_t mins, vec3_t maxs);	//FTESurf Patch 1443
 extern size_t areagridsequence;
 #else
 void World_TouchLinks (world_t *w, wedict_t *ent, areanode_t *node);

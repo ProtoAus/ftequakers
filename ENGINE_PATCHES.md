@@ -1,5 +1,25 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1443 -- tas_rollout: N ticks of TAS inputs through the real mover, nothing kept (sv_tas_rollout.inc, world.c, pr_cmds.c)
+
+Problem: the TAS optimizer plays each candidate through the real mover at game speed (one candidate per
+couple of seconds), and the surf path planner (FTESurf tools/p1443-path-planner.md) needs 10^5-10^6.
+
+Fix: a server-QC builtin, `float tas_rollout(entity player, float *rows, float ticks, float *out)`. From the
+paused TAS body it repeats SV_RunCmd's mover setup for the plain case and runs one PM_PlayerMove per row (the
+TAS step's msec, tas_tape's input words), writing origin, velocity, onground, ducked, the P1344 contact kind
+and normal, and the first trigger the hull overlaps (World_TriggerAt, World_TouchAllLinks' own test without
+the touch) each tick. pmove, movevars, pmove_mins/maxs and frametime are saved and restored; the edict,
+client, recorder and QC are never written. Per-command QC does not run, so QC cuts a prediction at a trigger.
+It refuses to start (a negative code per reason) where SV_RunCmd's inputs are not the plain ones: a carrier,
+a QC movement limit or forced duck, a gravity direction, water/ladder/duck transition, non-default gravity
+(P1129 bank-gravity observation), an unsupported TAS clock.
+
+Measured (FTESurf tools/p1443_rollcheck.py, bhop_eazy, every `tas optimize` candidate predicted before its
+tape plays): 44 of 44 landings bit-equal in origin and velocity (22 ground, 22 air); a mutant mirroring the
+strafe input gives 0 of 22 (18.3 u, 253 u/s off); a server without the builtin prints no check. 70-75k ticks/s
+on this PC (588 rollouts/s of 128 ticks).
+
 ## Patch 1444 -- r_spikes: the slowest frames' own CPU time by group (cl_screen.c, cl_main.c, gl_shader.c)
 
 Problem: r_budget averages a window (0.5 s), so the frames that set the 0.1% lows -- a handful in 30 s -- vanish
