@@ -1,5 +1,39 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1446 -- the QC tempstring collector keeps its buffers; r_spikes names prediction, entity, QC and collector costs (initlib.c, progsint.h, cl_screen.c, cl_pred.c, pr_csqc.c)
+
+Problem: P1444's r_spikes put surf_nuclear's largest spikes in frame pairs at two places on its route: 5-8 ms in
+"prediction" (engine CL_PredictMove), then 5-8 ms in "QC UpdateView" the next frame, against a 1.7 ms average frame.
+Splitting them: one predicted move, no entities arriving, the QC profiler showing 0.07 ms of QC self time -- the time
+was the CSQC tempstring GC's main-thread phases, at whichever QC exit they landed (PR_RunGC runs at every outermost
+exit). Every 15-20 s on every map: the start malloced a ~25 MB block for the snapshot (pages faulted in during the
+copy), the finish walked ~130k dead slots into a fresh 1 MB list and freed the block. Measured per phase: start
+4.6-6.4 ms, finish 3.9-7.7 ms; the frame holding one 7.5-12 ms.
+
+Fix: the snapshot block (with dead[] inside it, no longer malloced by the worker) is kept in prinst.gcspare and reused
+while large enough (12.5% headroom); the free list is kept in prinst.gcfree, its busy flag cleared by a WG_MAIN job
+(PR_QCGC_FreeDone) as gc->done is, and replaced by a one-off its own job frees when still busy -- PR_QCGC_Finish never
+waits (COM_WorkerPartialSync runs main-thread work, which can run QC and re-enter). PR_FreeAllTemps loops while a
+collection or a busy list remains, re-reading both, then frees both. Each VM keeps ~25-40 MB for its life (a busy
+CSQC; ~7 MB of hunk plus 12 B a slot outside replays).
+Clearing the dead slots in chunks across frames was built and dropped: during a map load QC allocated faster than the
+chunks cleared, and the full table doubled to 1,046,528 slots (the client looked hung).
+
+Measured (FTESurf artifacts/run_spikelog.py, surf_nuclear best replay at 1x, Lex's settings, uncapped): collector
+phases 1.7-4.1 ms (one 5.2 ms start right after a map load, before any block is kept), the frame holding one
+4.5-6.4 ms, against 6.5-9.2 ms / 8.6-12 ms unfixed in the same sessions' alternation. Load + two map changes, five
+runs, all answered.
+
+r_spikes additions, per slow frame: the prediction bucket split (SetSolidEntities, TransitionEntities, PredictMove =
+PM_PlayerMove + the CSQC trigger hook), physents and predicted moves (engine; QC runstandardplayerphysics), CSQC
+entity spawns/updates and their QC time, the collector's phases with a run summary listing every phase, and with
+r_spikes 2 the frame's three busiest CSQC functions by self time (the profiler, read and reset each frame, left to
+r_budget_csqc when that is on). Engine work called from QC is excluded from QC self time.
+
+Reviews: two rounds on the collector. Round 1: the teardown wait on a busy flag a worker cleared could sleep forever
+(the rebased build hung after a load) -> cleared on the main thread; finish only a done collection. Round 2: nothing
+practical; three re-entry holes needing a VM's own QC during its teardown, no route found -> the loop re-reads both.
+
 ## Patch 1443 -- tas_rollout: N ticks of TAS inputs through the real mover, nothing kept (sv_tas_rollout.inc, world.c, pr_cmds.c)
 
 Problem: the TAS optimizer plays each candidate through the real mover at game speed (one candidate per
