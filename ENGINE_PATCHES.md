@@ -1,5 +1,26 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1463 -- r_blendsort 2's second pass asks for a strict pair's overlap only when the sort needs that edge (gl_backend.c, renderer.c)
+
+Problem: with Patch 1457 in, surf_fairy's worst views still spent ~0.7-0.9 ms per view in GLBE_BlendPlaneSort, and those
+sorts end status -2 (a cycle in every pass). Pass 1 asked GLBE_BlendOverlapOrder for every strictly ordered pair up
+front (1008 of 1309 verdicts in the t=7.6 main view), though only an edge into the face Kahn is about to place can
+change the order, and a cycle needs only one existing edge into each face left.
+
+Fix: pass 1 leaves each strict pair's verdict pending; its direction is the plane proof's (for a strict hint the overlap
+function returns the hint or disjoint), so only whether the edge exists waits. Before placing the lowest-index face with
+no known incoming edge, Kahn resolves that face's pending incoming edges from unplaced faces, through a per-face cursor
+that never revisits a pair (O(n^2) per pass), until one exists (the face waits) or none is left (it is placed). The
+picks, the cycle verdict and the order are eager Kahn's unless eager's overlap budget runs out during pass 1 (lazy
+spends a subset of its work); a resolved edge is always drawn from->pick, so a future change to that contract cannot
+break Kahn's bookkeeping. r_blendsort_lazy 0 resolves every pair up front. In lazy mode r_blendtrace's edges= and work=
+count only what was resolved.
+
+Measured (paused replay views, same exe, cvar A/B): pass-1 verdicts 1008 -> 210 (t=7.6 main), 1024 -> 212 (reflection),
+911 -> 253 (t=16.0 main), 491 -> 141 (t=16.0 reflection, pass 1 succeeds, 4 faces moved); every view's printed face
+order identical between 0 and 1 (r_blendtrace cmd lines, 6 views). t=7.6 transparent CPU 1.86/1.88 -> 1.66 and 1.79/1.85
+-> 1.69 ms in two runs; t=16.0 within noise. Two review rounds (a resolved edge's direction made unconditional).
+
 ## Patch 1462 -- the save-load key releases when let go (FTESurf QC cl_saveloc.qc)
 
 Problem: "on a lobby your save-lock key ... loads fast, but then won't release for like 0.5 sec" (Lex, 10 Nov).
