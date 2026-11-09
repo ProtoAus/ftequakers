@@ -9468,6 +9468,8 @@ static void GLBE_BlendPlaneSort(glblendface_t *faces, size_t n, glblendplanestat
 	glblendproject_t *projverts = NULL;
 	signed char *projcount = NULL, *pair = NULL, *verdict = NULL;
 	double *projbox = NULL;	// FTESurf Patch 1457
+	qboolean lazy = false;	// FTESurf Patch 1463
+	unsigned int cursor[GLBLEND_PLANE_FACES], i2, j2;
 	unsigned char *edges = NULL;
 	unsigned int degree[GLBLEND_PLANE_FACES] = {0}, order[GLBLEND_PLANE_FACES];
 	unsigned int verts = 0, tris = 0, i, j, pick, step, from, to, cost, idx, owork = 0;
@@ -9538,6 +9540,10 @@ static void GLBE_BlendPlaneSort(glblendface_t *faces, size_t n, glblendplanestat
 		}
 	}
 rebuild:
+	// FTESurf Patch 1463: pass 1 leaves a strict pair's overlap verdict until Kahn asks for its edge. Its direction is
+	// the plane proof's (the verdict is the hint or disjoint); only whether it exists waits. In surf_fairy's worst
+	// views pass 1 ends in a cycle after ~1010 verdicts, most for edges out of faces already placed.
+	lazy = stats->pass == 1 && r_blendsort_lazy.ival;
 	stats->edges = 0;
 	memset(edges, 0, stats->admitted * stats->admitted);
 	memset(degree, 0, sizeof(degree));
@@ -9559,6 +9565,8 @@ rebuild:
 			{
 				if (verdict[idx] == GLBLEND_PAIR_PENDING)
 				{
+					if (lazy && ab)
+						continue;
 					verdict[idx] = GLBE_BlendOverlapOrder(planes[i].mesh, &proj[i], planes[j].mesh, &proj[j], ab, &owork);
 					bov_verdicts[stats->pass ? 1 : 0]++;
 					bov_disjoint += verdict[idx] == GLBLEND_ORDER_DISJOINT;
@@ -9574,10 +9582,45 @@ rebuild:
 			stats->edges++;
 		}
 	// Stable Kahn priority is baseline rank. Never compare planes in qsort.
+	memset(cursor, 0, sizeof(cursor));
 	for (step = 0; step < stats->admitted; step++)
 	{
 		for (pick = 0; pick < stats->admitted; pick++)
-			if (!degree[pick]) break;
+		{
+			if (degree[pick])
+				continue;
+			// FTESurf Patch 1463: resolve pick's unknown incoming strict edges from unplaced faces until one exists
+			// (pick waits) or none is left (pick is the lowest free face, as eager Kahn would choose). A placed face's
+			// degree is GLBLEND_PLANE_FACES+1; a real one is under GLBLEND_PLANE_FACES. The cursor never revisits a
+			// resolved pair, so the walk is O(n^2) for the pass.
+			for (; lazy && cursor[pick] < stats->admitted && !degree[pick]; cursor[pick]++)
+			{
+				from = cursor[pick];
+				if (from == pick || degree[from] >= GLBLEND_PLANE_FACES)
+					continue;
+				i2 = from < pick ? from : pick;
+				j2 = from < pick ? pick : from;
+				idx = i2*stats->admitted + j2;
+				ab = pair[idx];
+				if (verdict[idx] != GLBLEND_PAIR_PENDING || !ab || ab == GLBLEND_PAIR_UNSEEN || ab == GLBLEND_PAIR_OPPOSED)
+					continue;
+				if ((ab < 0 ? i2 : j2) != from)
+					continue;	// an edge out of pick never holds it back
+				verdict[idx] = GLBE_BlendOverlapOrder(planes[i2].mesh, &proj[i2], planes[j2].mesh, &proj[j2], ab, &owork);
+				bov_verdicts[1]++;
+				bov_disjoint += verdict[idx] == GLBLEND_ORDER_DISJOINT;
+				ab = verdict[idx];
+				if (ab == GLBLEND_ORDER_DISJOINT)
+					continue;
+				if (!ab) ab = -1;
+				to = ab < 0 ? j2 : i2;
+				edges[(ab < 0 ? i2 : j2)*stats->admitted + to] = 1;
+				degree[to]++;
+				stats->edges++;
+			}
+			if (!degree[pick])
+				break;
+		}
 		if (pick == stats->admitted)
 		{
 			if (stats->pass < 2) { stats->pass++; goto rebuild; }
