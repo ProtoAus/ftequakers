@@ -15,8 +15,9 @@ costs one cvar test a frame. It clears rspeeds_self itself only while r_budget i
 otherwise).
 
 First use (FTESurf artifacts/run_spikelog.py, surf_nuclear's best replay at 1x, Lex's settings, uncapped, warm
-session, two runs): the largest spikes are pairs of CSQC frames at the same two places on the route -- "prediction"
-5.5-7.7 ms then "QC UpdateView, HUD" 5.2-8.3 ms (average frame 1.6-1.7 ms, CSQC 0.7); frames with 2 nested water
+session, two runs): the largest spikes are frame pairs at the same two places on the route -- "prediction"
+5.5-7.7 ms (engine: CL_SetSolidEntities/TransitionEntities/PredictMove, though r_budget files it under CSQC) then
+"QC UpdateView, HUD" 5.2-8.3 ms (average frame 1.6-1.7 ms, CSQC 0.7); frames with 2 nested water
 views spend 4-6 ms in PrepareFrame + opaque draws; one swap/present stall of 49.8 ms and one of 8.7 ms; one
 "network" frame of 5.0 ms. Packets were 0-1 in every listed frame. surf_pantheon's slowest are draw calls 2-3.4 ms
 plus CSQC 1.4-2.7 ms, no single cause.
