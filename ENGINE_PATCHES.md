@@ -1,5 +1,30 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1440 -- Source MDL bodyparts draw the model the entity's body picks (gl_alias.c, gl_model.h, com_mesh.h, plugin.c; fteplug_hl2 mod_hl2.c, mod_vbsp.c)
+
+Problem: fteplug_hl2 tagged every mesh geomset 0 / geomid 0, so all of a bodypart's alternative models drew at
+once. bhop_crash_egypt's crate_generic.mdl (102 crates; one bodypart: box, 14 shatter frames, blank) showed the
+whole shatter around the box, and the map's SetBodyGroup 1..14 over 0.43 s had nothing to switch (Lex's report).
+
+Fix: mod_hl2.c tags a bodypart with more than one model (the first 32) as a geomset, each model its id, and writes
+the bodypart's base and the .mdl's model count into two arrays appended to model_t. GL_ChooseSkin draws such a
+surface while (entity body / base) % count is its id -- Source's packed m_nBody (studio.cpp R_StudioSetupModel);
+single-model bodyparts stay always drawn, other formats keep id 0 only. body is the existing networked field
+(PEXT2_BODYGROUP); FTESurf QC sets it from the SetBodyGroup keyfield and input. The exe answers the interface
+"FTESurfModelTail/1440" and the plugin writes the tail only then: on an older exe those writes would land in the
+next mod_known slot (its name and load state), so there the plugin leaves every alternative drawn, as before. The
+plugin's prop-opacity walk skips alternatives a prop does not draw.
+
+Left: collision is unchanged -- a prop whose collision is its render mesh (no usable .phy) still collides with its
+hidden alternatives, as it did before. Client prediction and the server must build the same prop trees and the
+lobby server runs an older engine; change both together. Bodyparts past 32, csprogs-drawn props (riders, P860
+movers) and bodies over 255 (the wire's byte) draw submodel 0.
+
+Measured (FTESurf runs/p1440, bhop_crash_egypt from inside the map, test engine against the installed one, the
+same QC): the crates draw whole (the installed engine shows every alternative, Lex's screenshot); SetBodyGroup 5,
+14 and 15 change the crate 31k, 16k and 17k px and 0 returns it to background (6k), against 3-6k throughout on the
+installed engine.
+
 ## Patch 1442 -- the activation warm-up keeps the window responsive; r_mapready_budget 6 (gl_shader.c, sys_win.c, sys.h)
 
 Problem: CL_MakeActive runs Shader_DoReload and GLSLWarm_MapActive in one frame. Windows marks a window that has
