@@ -7703,15 +7703,23 @@ static qboolean GLBE_CaptureDue(int g)
 		return GLBE_CaptureAge(g) >= 0.75;
 	return be_capkeep.reused >= r_capturehalfrate.ival;
 }
-//FTESurf Patch 1455: a program whose sampling of the refraction follows m_capturefix2 (cached for the last one asked)
+//FTESurf Patch 1455: a shader whose program -- its own or a pass's (vmt/water's is a pass's) -- samples the refraction
+//through m_capturefix2; cached for the last shader asked
 static qboolean GLBE_ProgTakesFix2(program_t *prog)
 {
-	static program_t *last;
+	return prog && prog->shadertext && strstr(prog->shadertext, "m_capturefix2");
+}
+static qboolean GLBE_ShaderTakesFix2(shader_t *s)
+{
+	static shader_t *last;
 	static qboolean takes;
-	if (prog != last)
+	int i;
+	if (s != last)
 	{
-		last = prog;
-		takes = prog && prog->shadertext && strstr(prog->shadertext, "m_capturefix2");
+		last = s;
+		takes = s && GLBE_ProgTakesFix2(s->prog);
+		for (i = 0; s && !takes && i < s->numpasses; i++)
+			takes = GLBE_ProgTakesFix2(s->passes[i].prog);
 	}
 	return takes;
 }
@@ -7893,7 +7901,7 @@ static qboolean GLBE_GenerateBatchTextures(batch_t *batch, shader_t *bs)
 			}
 			if (chosenplane && !r_refdef.recurse && BE_CAPTUREKEEPS)
 			{	//FTESurf Patch 1455: a group at a time when the water's shader takes m_capturefix2
-				fix2 = wv->chosen->shader && GLBE_ProgTakesFix2(wv->chosen->shader->prog);
+				fix2 = GLBE_ShaderTakesFix2(wv->chosen->shader);
 				kept = GLBE_CaptureKeep(&p, &r_worldentity, need & ~wv->helddone, fix2);
 				if (kept && !(need & ~wv->helddone & ~kept))
 				{
@@ -7940,7 +7948,7 @@ static qboolean GLBE_GenerateBatchTextures(batch_t *batch, shader_t *bs)
 		plane_t gp;
 		if (GLR_BatchPlane(batch, &gp))
 		{
-			unsigned int gkept = GLBE_CaptureKeep(&gp, batch->ent, bs->flags & BE_WATERKINDS, GLBE_ProgTakesFix2(bs->prog));
+			unsigned int gkept = GLBE_CaptureKeep(&gp, batch->ent, bs->flags & BE_WATERKINDS, GLBE_ShaderTakesFix2(bs));
 			if (gkept == (bs->flags & BE_WATERKINDS))
 			{
 				GLBE_CaptureLog(batch, bs, "kept", batch);
