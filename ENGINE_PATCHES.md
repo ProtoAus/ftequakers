@@ -1,5 +1,16 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1464 -- the lobby join line reads "<user> joined <mapname>" (FTESurf QC sv_lobby.qc)
+
+Problem: Lex asked for a lobby join message (10 Nov). The existing one (Patch 371) read "server: <user> joined"
+and did not say where.
+
+Fix: Lobby_AnnJoin says "<user> joined <mapname>" to the lobby's other players, the name in its colour as before;
+same lobby_announce switch, same 30 s pace per player, the joiner's welcome line unchanged. QC only.
+
+Measured (dedicated server, log_developer 1, one client): the live lobby build logged "said> ^5server:^7 ^2L49Join^7
+joined", P1464 "said> ^2L49Join^7 joined surf_dune".
+
 ## Patch 1463 -- r_blendsort 2's second pass asks for a strict pair's overlap only when the sort needs that edge (gl_backend.c, renderer.c)
 
 Problem: with Patch 1457 in, surf_fairy's worst views still spent ~0.7-0.9 ms per view in GLBE_BlendPlaneSort, and those
