@@ -3613,6 +3613,7 @@ int SCR_GetLoadingStage(void)
 {
 	return loading_stage;
 }
+static volatile int scr_texsrc, scr_texsrcsent;	//FTESurf Patch 1453: see SCR_NoteTextureSource
 void SCR_SetLoadingStage(int stage)
 {
 	switch(stage)
@@ -3627,6 +3628,7 @@ void SCR_SetLoadingStage(int stage)
 		scr_loadingreleased = false;	//Patch 1258
 		break;
 	case LS_CONNECTION:
+		scr_texsrc = scr_texsrcsent = 0;	//Patch 1453: each load names its first source
 		SCR_SetLoadingFile("waiting for connection...");
 		break;
 	case LS_SERVER:
@@ -3704,11 +3706,58 @@ qboolean SCR_LoadingPumpWanted(void)
 	return false;
 #endif
 }
+static void SCR_LoadingStepSet(const char *str);
+//FTESurf Patch 1453: the game the textures now loading come from.  Any thread (the loader workers)
+//writes an index; the main thread's pump turns a change into a "textures <game>" step.
+static const char *const scr_texsrcname[] = {"", "CS:S", "HL2", "CS:GO", "TF2", "Portal 2", "Portal", "Momentum",
+	"the map", "World of Surf"};
+void SCR_NoteTextureSource(const char *pack)
+{
+	char low[MAX_OSPATH];
+	int id;
+	if (!pack || !*pack)
+		return;
+	Q_strncpyz(low, pack, sizeof(low));
+	Q_strlwr(low);
+	if (strstr(low, ".bsp"))
+		id = 8;
+	else if (strstr(low, "global offensive") || strstr(low, "csgo"))
+		id = 3;
+	else if (strstr(low, "team fortress") || !strncmp(low, "tf/", 3) || strstr(low, "/tf/"))
+		id = 4;
+	else if (strstr(low, "portal 2") || strstr(low, "portal2"))
+		id = 5;
+	else if (strstr(low, "portal"))
+		id = 6;
+	else if (strstr(low, "counter-strike source") || strstr(low, "cstrike"))
+		id = 1;
+	else if (strstr(low, "momentum"))
+		id = 7;
+	else if (strstr(low, "half-life 2") || strstr(low, "hl2"))
+		id = 2;
+	else
+		id = 9;
+	if (id != scr_texsrc)
+	{
+		if (developer.ival)
+			Con_DPrintf("loadscreen: textures from %s (%s)\n", scr_texsrcname[id], pack);
+		scr_texsrc = id;
+	}
+}
+
 void SCR_LoadingPump(void)
 {
 	double now;
 	qboolean oldwarndraw;
 
+	if (scr_texsrc != scr_texsrcsent && Sys_IsMainThread() && loading_stage != LS_NONE)
+	{	//Patch 1453: before the early-outs, so a stage with no redraw still records it
+		char step[32];
+		int id = scr_texsrc;
+		scr_texsrcsent = id;
+		Q_snprintfz(step, sizeof(step), "textures %s", scr_texsrcname[id]);
+		SCR_LoadingStepSet(step);
+	}
 	if (scr_loadingdraw || qrenderer != QR_OPENGL || !Sys_IsMainThread() || !SCR_LoadingPumpWanted())
 		return;
 #ifdef MENU_DAT
@@ -3727,6 +3776,14 @@ void SCR_LoadingPump(void)
 	SCR_UpdateScreen();
 	scr_loadingpumping = false;
 	r_refdef.warndraw = oldwarndraw;
+}
+
+//Patch 1453: the step before one long call (a game's mount) is drawn even inside the 60 Hz limit;
+//bhop_landmark's CS:GO mount came 3 ms after "starting server..." and stalled 5.6 s on it unseen.
+void SCR_LoadingPumpNow(void)
+{
+	scr_loadingswap = 0;
+	SCR_LoadingPump();
 }
 
 //The step's bookkeeping, without a redraw.  No va(): callers hold va() strings across this

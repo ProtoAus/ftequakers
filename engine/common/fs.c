@@ -12413,6 +12413,27 @@ static qboolean FS_MapDepsNetSpec(const char *spec)
 			return true;
 	return false;
 }
+#ifdef HAVE_CLIENT
+//FTESurf Patch 1453: "mount <game>" on the loading screen for a per-map mount (FS_MapDepsNetSpec's games).
+static void FS_AutoMountStep(const char *spec, qboolean cached)
+{
+	char step[64];
+	const char *g = "content";
+	if (strstr(spec, "/csgo"))
+		g = "CS:GO";
+	else if (strstr(spec, "/tf"))
+		g = "TF2";
+	else if (strstr(spec, "/portal2"))
+		g = "Portal 2";
+	else if (strstr(spec, "/portal"))
+		g = "Portal";
+	else if (strstr(spec, "Momentum"))
+		g = "Momentum";
+	Q_snprintfz(step, sizeof(step), cached ? "mount %s cached" : "mount %s", g);
+	SCR_SetLoadingFile(step);
+	SCR_LoadingPumpNow();
+}
+#endif
 void FS_AutoMountForMap(const char *mapname)
 {
 	char *file, *net, *line, *nl, *e, *spec;
@@ -12583,6 +12604,10 @@ void FS_AutoMountForMap(const char *mapname)
 		//from a hang.  FS_Addon_Mount dup-skips, so the second load of the
 		//same map says this and returns immediately.
 		qboolean already = *path && FS_Addon_IsMounted(path);
+#ifdef HAVE_CLIENT
+		if (!already && *path)	//Patch 1453: a game this PC has (an unresolved one mounts nothing)
+			FS_AutoMountStep(wantspec[i], *cachedir[i] != 0);
+#endif
 
 		if (!fs_thread_mutex || Sys_LockMutex(fs_thread_mutex))
 		{

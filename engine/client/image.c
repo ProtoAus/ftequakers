@@ -14826,6 +14826,7 @@ static void Image_LoadHiResTextureWorker(void *ctx, void *data, size_t a, size_t
 
 	if (Image_LocateHighResTexture(tex, &loc, fname, sizeof(fname), &locflags))
 	{
+		SCR_NoteTextureSource(FS_WhichPackForLocation(&loc, WP_FULLPATH));	//FTESurf Patch 1453
 		f = FS_OpenReadLocation(fname, &loc);
 		if (f)
 		{

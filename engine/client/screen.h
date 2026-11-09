@@ -317,6 +317,8 @@ void SCR_SetLoadingStage(int stage);
 void SCR_SetLoadingFile(char *str);
 qboolean SCR_LoadingPumpWanted(void);	//FTESurf Patch 1244
 void SCR_LoadingPump(void);
+void SCR_LoadingPumpNow(void);	//FTESurf Patch 1453
+void SCR_NoteTextureSource(const char *pack);	//FTESurf Patch 1453: any thread
 void SCR_ReleaseLoadingPlaque(const char *dlname);	//FTESurf Patch 1258
 extern qboolean scr_loadingdraw, scr_loadingpumping;
 extern double scr_loadingswap;

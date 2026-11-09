@@ -1,5 +1,23 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1453 -- the loading screen names each game it mounts and where its textures come from (fs.c, cl_screen.c, image.c, screen.h)
+
+Problem: the menu loading screen read "Loading Texture (2x)". Texture loads run on loader threads and set no step, and
+FS_AutoMountForMap's per-map mounts set none either, though one takes seconds (bhop_landmark's CS:GO VPKs: 5.6-7.4 s),
+so the screen held whatever line came before.
+
+Fix: FS_AutoMountStep sets "mount <game>" (CS:GO, TF2, Portal 2, Portal, Momentum, else "content"; " cached" when the
+proven cache dir stands in) before each resolved, not-yet-mounted per-map game, and draws it with SCR_LoadingPumpNow --
+the pump with its 60 Hz limiter cleared, because the step lands ~3 ms after "starting server..." drew and the limiter
+dropped it. When Image_LocateHighResTexture finds a texture, SCR_NoteTextureSource classifies its pack's purepath into
+a source-game index (any thread); SCR_LoadingPump turns a change into the step "textures <game>" on the main thread.
+The menu (m_loading.qc) words both. Still undrawn: a `map` typed while the menu or console holds the keys (P1259's
+Key_Dest guard refuses every pump); the Play button closes the menu before its `map` runs.
+
+Measured (P1453 arm, Play path, bhop_landmark's first load): before, "5671 ms without a redraw, from  to textures
+Momentum"; after, "7368 ms without a redraw, from mount CS:GO to spawnserver", the mount line on screen for the stall.
+Sources seen across surf_gigapede and bhop_landmark: the map, HL2, CS:S, CS:GO, World of Surf.
+
 ## Patch 1454 -- no "Not Responding" ghost window during long loads (sys_win.c)
 
 Problem: a map's first load can spend several seconds in one call -- surf_quarantine: the CS:GO VPK mount, then ~5 s
