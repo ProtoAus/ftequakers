@@ -14,6 +14,58 @@
 #define SV_TAS_ROLL_MAX 2048
 #define SV_TAS_ROLL_IN 7	/* fwd side up, pitch yaw roll angle words, buttons (tas_tape's words) */
 #define SV_TAS_ROLL_OUT 13	/* origin3 velocity3 onground ducked contact-kind normal3 entity-QC-may-act-on (negated: before the tick) */
+/* P1449: buttons bits a row may carry. FOLLOW: the yaw slot holds a turn command q (sign = strafe side, +
+ * left) and this tick's yaw word and side are set from the velocity before it, so that the wish direction
+ * dotted with the horizontal velocity is 30 - |q| (Source's AirAccelerate adds 30 - that: 0 nothing, 30
+ * the most speed, 60 the hardest turn that keeps speed). PITCHV: the pitch word follows the velocity.
+ * Both are written back into the caller's row (the flag cleared), so the tape it then plays is the rows
+ * this rollout ran, exactly. A QC-side approximation needed several rollouts per candidate and did not
+ * converge on a ramp, where contact makes the path sensitive to every tick. */
+#define SV_TAS_ROLL_FOLLOW 256
+#define SV_TAS_ROLL_PITCHV 512
+
+static float SV_TASRollWord(double deg)
+{
+	double w = floor(deg * 65536.0 / 360.0 + 0.5);
+	while (w > 32767) w -= 65536;
+	while (w < -32768) w += 65536;
+	return (float)w;
+}
+
+/* The flagged slots of row r from pmove's velocity (this tick's start), written back. */
+static void SV_TASRollFollow(float *r, int fl)
+{
+	double vh = sqrt(pmove.velocity[0] * pmove.velocity[0] + pmove.velocity[1] * pmove.velocity[1]);
+	if (fl & SV_TAS_ROLL_FOLLOW)
+	{
+		double q = r[4], c, ph, side = fabs(r[1]) ? fabs(r[1]) : 450;
+		int sd = (q > 0 || (q == 0 && r[1] <= 0)) ? 1 : -1;	/* a zero command keeps the row's side */
+		c = (30 - fabs(q)) / (vh > 1 ? vh : 1);
+		if (c > 1) c = 1;
+		if (c < -1) c = -1;
+		ph = acos(c) * (180.0 / M_PI);	/* the wish direction's angle from the velocity */
+		r[4] = SV_TASRollWord(atan2(pmove.velocity[1], pmove.velocity[0]) * (180.0 / M_PI) + sd * (ph - 90));
+		r[1] = -side * sd;		/* Source: negative sidemove is left */
+	}
+	if (fl & SV_TAS_ROLL_PITCHV)
+	{
+		double p = atan2(-pmove.velocity[2], vh) * (180.0 / M_PI);
+		r[3] = SV_TASRollWord(p > 85 ? 85 : (p < -85 ? -85 : p));
+	}
+	r[6] -= fl;
+}
+
+/* A row's buttons without the P1449 bits, or -1 when they are not a valid set. */
+static int SV_TASRollFlags(const float *r)
+{
+	int b;
+	if (!(r[6] >= 0 && r[6] <= 7 + SV_TAS_ROLL_FOLLOW + SV_TAS_ROLL_PITCHV && floor(r[6]) == r[6]))
+		return -1;
+	b = (int)r[6];
+	if ((b & SV_TAS_ROLL_FOLLOW) && !(r[4] >= -180 && r[4] <= 180))
+		return -1;
+	return b & (SV_TAS_ROLL_FOLLOW | SV_TAS_ROLL_PITCHV);
+}
 
 /* The first entity per-command QC could act on after this tick (0 none): SV_RunCmd's touch loop
  * (a touched non-world solid whose touch or the player's would run; such a touch also makes the
@@ -55,7 +107,7 @@ static int SV_TASRolloutActor(edict_t *e, int *kind)
  * -6 water/ladder/duck transition, -7 non-default gravity (bank gravity would observe it),
  * -8 the TAS clock, -9 a carrier (QC's run_basevel, or standing on a non-world entity),
  * -10 a row that does not decode. A trigger volume the body starts in is named, negated, on the first tick. */
-int SV_TASRollout(edict_t *e, const float *in, int n, float *out)
+int SV_TASRollout(edict_t *e, float *in, int n, float *out)
 {
 	static playermove_t saved;
 	extern float frametime;
@@ -102,8 +154,16 @@ int SV_TASRollout(edict_t *e, const float *in, int n, float *out)
 	if (!msec)
 		return -8;
 	for (k = 0; k < n; ++k)
-		if (!SV_TASInputDecode(in + k*SV_TAS_ROLL_IN, in + k*SV_TAS_ROLL_IN + 3, in[k*SV_TAS_ROLL_IN + 6], &row))
+	{	/* P1449: a FOLLOW row's yaw slot is a command, checked by SV_TASRollFlags, not as a word */
+		const float *r = in + k*SV_TAS_ROLL_IN;
+		float ang[3];
+		int fl = SV_TASRollFlags(r);
+		if (fl < 0)
 			return -10;
+		ang[0] = r[3]; ang[1] = (fl & SV_TAS_ROLL_FOLLOW) ? 0 : r[4]; ang[2] = r[5];
+		if (!SV_TASInputDecode(r, ang, r[6] - fl, &row))
+			return -10;
+	}
 
 	memcpy(&saved, &pmove, sizeof(pmove));
 	savedmv = movevars;
@@ -145,8 +205,11 @@ int SV_TASRollout(edict_t *e, const float *in, int n, float *out)
 	if (pmove.pm_type == PM_NORMAL && !pmove.waterjumptime)
 	for (k = 0; k < n; ++k)
 	{
-		const float *r = in + k*SV_TAS_ROLL_IN;
+		float *r = in + k*SV_TAS_ROLL_IN;
 		float *o = out + k*SV_TAS_ROLL_OUT;
+		int fl = SV_TASRollFlags(r);
+		if (fl > 0)
+			SV_TASRollFollow(r, fl);	/* P1449: from the velocity this tick starts with */
 		SV_TASInputDecode(r, r + 3, r[6], &row);
 		memset(&pmove.cmd, 0, sizeof(pmove.cmd));
 		pmove.cmd.msec = msec;

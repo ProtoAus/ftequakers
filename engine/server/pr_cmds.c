@@ -11683,7 +11683,7 @@ static void QCBUILTIN PF_tas_rollout(pubprogfuncs_t *prinst, struct globalvars_s
 	in = PR_PointerToNative_MoInvalidate(prinst, G_INT(OFS_PARM1), 0, (size_t)n*7*sizeof(float));
 	out = PR_PointerToNative_MoInvalidate(prinst, G_INT(OFS_PARM3), 0, (size_t)n*13*sizeof(float));
 	if (!in || !out || (in < out + (size_t)n*13*sizeof(float) && out < in + (size_t)n*7*sizeof(float))) return;
-	G_FLOAT(OFS_RETURN) = SV_TASRollout(G_EDICT(prinst, OFS_PARM0), (const float*)in, n, (float*)out);
+	G_FLOAT(OFS_RETURN) = SV_TASRollout(G_EDICT(prinst, OFS_PARM0), (float*)in, n, (float*)out);
 }
 
 static BuiltinList_t BuiltinList[] = {				//nq	qw		h2		ebfs
