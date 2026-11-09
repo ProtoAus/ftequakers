@@ -2853,7 +2853,7 @@ void GLR_RenderView (void)
 	}
 
 	//check if we can do underwater warp
-	r_uwnowarp = false;
+	r_uwnowarp = !r_postprocess.ival;	//FTESurf Patch 1459: no underwater warp of either kind; RDF_UNDERWATER (fog) kept
 	if (cls.protocol != CP_QUAKE2)	//quake2 tells us directly
 	{
 		if (r_viewcontents & FTECONTENTS_FLUID)
@@ -2878,7 +2878,7 @@ void GLR_RenderView (void)
 					uwpostproc = s;
 			}
 		}
-		if (!r_waterwarp.value || r_projection.ival || !r_postprocess.ival)	//P1459: as r_waterwarp 0
+		if (!r_waterwarp.value || r_projection.ival)
 			r_refdef.flags &= ~RDF_UNDERWATER;	//no warp at all
 		else if (r_waterwarp.value > 0 && uwpostproc && !r_uwnowarp)
 			r_refdef.flags |= RDF_WATERWARP;	//try fullscreen warp instead if we can
@@ -2924,7 +2924,7 @@ void GLR_RenderView (void)
 	if (!(r_refdef.flags & RDF_NOWORLDMODEL))
 	{
 		//FTESurf Patch 1459: r_postprocess 0 (the gfx menu's Post-process row) draws the scene as rendered:
-		//no FXAA, custom post shader, colour grade or bloom (above), no underwater warp. Gamma stays.
+		//no FXAA, custom post shader, colour grade or bloom (above), no underwater warp (r_uwnowarp). Gamma and fog stay.
 		qboolean postproc = r_postprocess.ival != 0;
 		if (postproc && r_fxaa.ival)
 			r_refdef.flags |= RDF_ANTIALIAS;

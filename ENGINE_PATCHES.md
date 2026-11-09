@@ -1,5 +1,94 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1462 -- the save-load key releases when let go (FTESurf QC cl_saveloc.qc)
+
+Problem: "on a lobby your save-lock key ... loads fast, but then won't release for like 0.5 sec" (Lex, 10 Nov).
+SaveLoc_LeadDone held a key let go until cl_sl_leadin (default 1 s) had passed since the press and the run-up
+had finished. The server never had a minimum.
+
+Fix: a key let go releases once the server has answered the load (a predicted load already has; P1227's
+reason for waiting), with the 1 s backstop from the press; SaveLoc_Release already clears a run-up in progress.
+The hold's HUD text drops its countdown for "Release to play" (nothing for a rewind's keyless countdown).
+Letting go during a run-up cuts the view to the save, where the body already is.
+
+Measured (tools/p1384lead.py's rig, dedicated server, 0.6 s press, 0 and 40 ms added): shipped, lead-in 1 held
+to 1.015 s and the body moved 0.39 s after key-up (lead-in 0: on the key-up frame); P1462, lead-in 1 released at
+0.60-0.63 s and the body moved 0.01 s after key-up, run-up still starting 0.01 s after the press, 0 prediction
+errors. One review (with P1458-P1460): the rewind-countdown prompt, the tooltip, P1459's fog and GL-only scope,
+P1460's state line; fixed in the same delivery.
+
+## Patch 1461 -- timer zones built from a map's own triggers keep their tracks, stages and origins (FTESurf QC sh_zones.qc, sv_zones.qc, cl_zones.qc)
+
+Problem: a map with no zone file is zoned from its trigger_momentum_timer_* entities (56 maps in the Momentum
+library). Every one went on the main track, so bonus starts and ends were extra main starts and ends (surf_domain,
+surf_eggplant, surf_epicube_css, surf_nova_css): a bonus start armed a main run and the nearest end finished it,
+and the zone editor showed three starts and three ends. Stage numbers were used as segments, but Momentum numbers
+stages from 2 (the start is 1), so stage k sat one segment high and ends stayed segment 0 (no splits, `!s` off by
+one, stage legs filed one high); surf_kepler_css's newer zone_number key was not read at all (all 8 stages
+segment 0). The client drew each cage from the submodel's bounds without the entity's origin key, so on maps whose
+triggers carry one (206 of 263 triggers) the lines were drawn elsewhere and culled while the server, from absmin,
+timed the right box; and it walked the lump in file order while the server adds by type, so on 22 maps the two
+zone CRCs could never match.
+
+Fix: Zone_AddLegacy, shared by both VMs: track from track_number (absent or -1 = main), else a bonusN targetname
+("bonus_2" included), refused at 12 (the timer's track arrays); a stage numbered n starts segment n-1 and a
+checkpoint numbered n is ordinal n-1, zone_number preferred over stage; Zone_LegacyEnds puts each end after its
+track's last stage, as Zone_AddTrack numbers a zone file. The client adds the origin key and walks the lump once
+per type in the server's order.
+
+Measured (local game, both VMs from the same build): surf_domain, surf_nova_css, surf_kepler_css. Shipped:
+every zone track 0 segment 0, cages centred near the world origin, client CRC never the server's zonecrc.
+P1461: surf_domain one start/end on each of tracks 0-2, nova tracks 0-3, kepler start 0 / stages 1-8 / end 9,
+cages at the triggers (surf_domain's start drawn around the player), client CRC equal to zonecrc on all three.
+Reviews: round 1 (two lenses) found the stage off-by-one (also on the older stage-key maps),
+the end segment, checkpoint ordinals from 2, the order/CRC mismatch, the 12-track bound, bonus_2, and
+tools/fixtures/zoneprep.qc still calling the old Zone_AddBox; round 2 simulated both tables on all 59 maps
+that zone this way: identical, numbered as a zone file would be, nothing out of range. Map-data leftovers in
+FTESurf BACKLOG.md. Board check: the one ranked main row on an
+affected map (surf_eggplant, 67.995 s) is a main run (KSF main record 47.8 s, bonuses 9-15 s).
+
+## Patch 1460 -- the whole unresolved-material list of a map is saved to data/missing/<map>.txt (hl2 mod_vbsp.c)
+
+Problem: a map load prints at most 24 unresolved materials and the console scrolls them away; a player who wants
+to hand the list over (Lex: "save them for you to check later") has to type hl2_missing and copy it by hand.
+FTESurf P1382's lobby report keeps only the first name.
+
+Fix: VBSP_MissingFile writes every stored name with its reason (the same as hl2_missing), the counts, the automount
+state and the games not found, to <gamedir>/data/missing/<map>.txt at the end of each load, and removes that file
+when a map loads with none missing, so the folder is the current set. Client only (QR_NONE returns). The state
+line is fs_automount_state as published, not the -1 the console text substitutes when a game did not mount.
+
+Measured (fixture install): surf_ferros wrote both of its ELDEN RING prop skins with "a prop skin"; a planted
+data/missing/surf_beginner2.txt was removed when surf_beginner2 loaded clean. The shipped plugin wrote nothing.
+
+## Patch 1459 -- r_postprocess 0 draws the scene as rendered (gl_rmain.c, renderer.c)
+
+Problem: there was no one switch for the full-screen passes: bloom, a Source map's colour grade (P288), FXAA, a
+custom r_postprocshader and the underwater warp each have their own cvar, and the grade is generated per map.
+
+Fix: r_postprocess (archived, default 1). At 0 GLR_RenderView sets none of RDF_BLOOM, RDF_ANTIALIAS,
+RDF_CUSTOMPOSTPROC or RDF_COLOURCORRECT and sets r_uwnowarp, so neither underwater warp draws while RDF_UNDERWATER
+still picks the water fog. Gamma (RDF_SCENEGAMMA), fisheye and render scale are untouched. GL only: the Vulkan and
+D3D renderers keep their own flags. FTESurf's gfx menu row 37 "Post-process".
+
+Measured (surf_tensor2, paused, its colour grade on, r_bloom 0): r_postprocess 0 changed 2,129,954 of 2,133,120
+pixels, 1 again restored the frame exactly (0 px); the shipped exe ("Unknown command") 0 px both ways.
+
+## Patch 1458 -- env_lightglow's fade runs backwards when MaxDist < MinDist; a Light glows gfx row (FTESurf QC cl_sprites.qc, cl_gfx.qc)
+
+Problem: surf_beginner2's stage 7 was a white screen. Its env_lightglow (1500 x 1500, MinDist 150, MaxDist 75)
+was drawn at full strength from anywhere: the distance ramp treated MaxDist < MinDist like Source's equal-endpoint
+case ("on beyond MaxDist"), but RemapValClamped (mathlib.h) remaps it backwards -- full at MaxDist and nearer, off
+from MinDist out. And env_lightglow had no gfx row (vbsp_lightglow), so turning Sprites off left the flares on, and
+the live reload made them fade back in.
+
+Fix: the general remap whenever MinDist != MaxDist; gfx row 36 "Light glows" on vbsp_lightglow ("map has none"
+when the map has none).
+
+Measured (local game, Lex's save 4 position, 529 units from the glow): shipped csprogs "glows 1 reached ... 0 out
+of fade range, 1 drawn" and a white screen; P1458 "1 out of fade range, 0 drawn" and the stage as lit; at ~125
+units both draw it (P1458 dimmed by its ramp). surf_tensor2 at the spawn, Sprites off: shipped "glows 166 reached ... 2
+drawn" and `gfx_menu cycle 36` changed 0 px; P1458 `vbsp_lightglow` 0 and 149,244 px changed.
 ## Patch 1457 -- r_blendsort 2's overlap proofs skip pairs whose screen boxes are apart (gl_backend.c, renderer.c)
 
 Problem: on surf_fairy's worst views the glass sort's plane proof (GLBE_BlendPlaneSort) cost ~1.0-1.2 ms per view, in

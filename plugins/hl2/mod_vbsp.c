@@ -9013,7 +9013,7 @@ static void VBSP_BuildBIHMain(void *ctx, void *unusedp, size_t unuseda, size_t u
 				"  reload, or fs_load the pack by hand.\n");
 			break;
 		}
-		VBSP_MissingFile(mod->name, state, spec, nogame);	//FTESurf Patch 1460
+		VBSP_MissingFile(mod->name, (int)cvarfuncs->GetFloat("fs_automount_state"), spec, nogame);	//FTESurf Patch 1460: as published, not the -1 above
 	}
 	else
 		VBSP_MissingFile(mod->name, 0, "", "");
