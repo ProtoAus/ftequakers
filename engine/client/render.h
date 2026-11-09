@@ -836,6 +836,7 @@ extern	cvar_t	r_voidscene;
 qboolean Surf_WorldOnlyView(playerview_t *pv);
 extern	cvar_t	r_blendsort;	//FTESurf Patch 218 -- see the essay in renderer.c
 extern	cvar_t	r_blendcache;	//FTESurf Patch 1409
+extern	cvar_t	r_blendsort_boxes;	//FTESurf Patch 1457
 void GLBE_BlendCentresFlush(void);	//FTESurf Patch 1409
 extern	qboolean r_voidview;
 /*

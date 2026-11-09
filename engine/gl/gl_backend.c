@@ -9242,7 +9242,25 @@ typedef struct
 	glblendproject_t *verts;	// GLBLEND_CLIP_VERTS per triangle
 	signed char *count;		// per triangle: polygon vertices, 0 if empty
 	int state;			// 0 pending, 1 projected, -1 uncertain or out of budget
+	double *box;			// FTESurf Patch 1457: per triangle, its screen polygon's x0 x1 y0 y1
+	double fbox[4];			// FTESurf Patch 1457: the face's, over its non-empty triangles
 } glblendprojface_t;
+static unsigned int bov_verdicts[2], bov_disjoint, bov_facebox;	// FTESurf Patch 1457: the last sort's, for r_blendtrace
+
+// FTESurf Patch 1457: screen boxes apart by more than rounding (1e-9 of their scale): clipping one polygon
+// by the other can only come out empty, or as a rounding sliver across a real gap.
+static qboolean GLBE_BlendBoxApart(const double *a, const double *b)
+{
+	double s = 1, v;
+	int i;
+	for (i = 0; i < 4; i++)
+	{
+		v = fabs(a[i]); if (v > s) s = v;
+		v = fabs(b[i]); if (v > s) s = v;
+	}
+	s *= 1e-9;
+	return a[1] + s < b[0] || b[1] + s < a[0] || a[3] + s < b[2] || b[3] + s < a[2];
+}
 
 // Clip an indexed world triangle before division; iw is affine on its screen
 // polygon. -1 is uncertainty, -2 budget, 0 empty.
@@ -9321,13 +9339,34 @@ static int GLBE_BlendProjectTriangle(const mesh_t *mesh, int t, glblendproject_t
 // Each admitted face is projected once per sort, on first use.
 static void GLBE_BlendProjectFace(const mesh_t *mesh, glblendprojface_t *face, unsigned int *work)
 {
-	int t, n;
+	int t, n, v;
+	double *b;
+	const glblendproject_t *p;
 	face->state = 1;
+	face->fbox[0] = face->fbox[2] = 1e300;
+	face->fbox[1] = face->fbox[3] = -1e300;
 	for (t = 0; t+2 < mesh->numindexes; t += 3)
 	{
 		n = GLBE_BlendProjectTriangle(mesh, t, face->verts + (t/3)*GLBLEND_CLIP_VERTS, work);
 		if (n < 0) { face->state = -1; return; }
 		face->count[t/3] = n;
+		if (!n)
+			continue;
+		b = face->box + (t/3)*4;
+		p = face->verts + (t/3)*GLBLEND_CLIP_VERTS;
+		b[0] = b[1] = p[0].x;
+		b[2] = b[3] = p[0].y;
+		for (v = 1; v < n; v++)
+		{
+			if (p[v].x < b[0]) b[0] = p[v].x;
+			if (p[v].x > b[1]) b[1] = p[v].x;
+			if (p[v].y < b[2]) b[2] = p[v].y;
+			if (p[v].y > b[3]) b[3] = p[v].y;
+		}
+		if (b[0] < face->fbox[0]) face->fbox[0] = b[0];
+		if (b[1] > face->fbox[1]) face->fbox[1] = b[1];
+		if (b[2] < face->fbox[2]) face->fbox[2] = b[2];
+		if (b[3] > face->fbox[3]) face->fbox[3] = b[3];
 	}
 }
 
@@ -9344,6 +9383,13 @@ static int GLBE_BlendOverlapOrder(const mesh_t *a, glblendprojface_t *fa, const 
 	if (!fa->state) GLBE_BlendProjectFace(a, fa, work);
 	if (!fb->state) GLBE_BlendProjectFace(b, fb, work);
 	if (fa->state < 0 || fb->state < 0) return hint;
+	// FTESurf Patch 1457: no triangle pair below could overlap, so the loops would end at !seen. On surf_fairy
+	// 85% of the proof work was pairs ending disjoint, 96% of the clips empty.
+	if (r_blendsort_boxes.ival && (fa->fbox[0] > fa->fbox[1] || fb->fbox[0] > fb->fbox[1] || GLBE_BlendBoxApart(fa->fbox, fb->fbox)))
+	{
+		bov_facebox++;
+		return GLBLEND_ORDER_DISJOINT;
+	}
 	for (at = 0; at < a->numindexes/3; at++)
 	{
 		na = fa->count[at]; pa = fa->verts + at*GLBLEND_CLIP_VERTS;
@@ -9352,6 +9398,8 @@ static int GLBE_BlendOverlapOrder(const mesh_t *a, glblendprojface_t *fa, const 
 		{
 			nb = fb->count[bt]; pb = fb->verts + bt*GLBLEND_CLIP_VERTS;
 			if (!nb) continue;
+			if (r_blendsort_boxes.ival && GLBE_BlendBoxApart(fa->box + at*4, fb->box + bt*4))
+				continue;	// FTESurf Patch 1457: an empty clip
 			memcpy(clip[0], pa, na*sizeof(*pa)); n = na; src = 0; dst = 1;
 			for (k = 0; k < nb && n; k++)
 			{
@@ -9417,12 +9465,14 @@ static void GLBE_BlendPlaneSort(glblendface_t *faces, size_t n, glblendplanestat
 	glblendprojface_t *proj = NULL;
 	glblendproject_t *projverts = NULL;
 	signed char *projcount = NULL, *pair = NULL, *verdict = NULL;
+	double *projbox = NULL;	// FTESurf Patch 1457
 	unsigned char *edges = NULL;
 	unsigned int degree[GLBLEND_PLANE_FACES] = {0}, order[GLBLEND_PLANE_FACES];
 	unsigned int verts = 0, tris = 0, i, j, pick, step, from, to, cost, idx, owork = 0;
 	size_t f;
 	int ab, ba;
 	stats->admitted = stats->edges = stats->work = stats->moved = 0;
+	bov_verdicts[0] = bov_verdicts[1] = bov_disjoint = bov_facebox = 0;
 	stats->status = stats->pass = 0;
 	stats->overlapfull = false;
 	// The point-eye and divided screen bounds prove only perspective rays.
@@ -9475,10 +9525,12 @@ static void GLBE_BlendPlaneSort(glblendface_t *faces, size_t n, glblendplanestat
 		proj = BZ_Malloc(stats->admitted * sizeof(*proj));
 		projverts = BZ_Malloc(tris * GLBLEND_CLIP_VERTS * sizeof(*projverts));
 		projcount = BZ_Malloc(tris);
+		projbox = BZ_Malloc(tris * 4 * sizeof(*projbox));
 		for (i = 0, tris = 0; i < stats->admitted; i++)
 		{
 			proj[i].verts = projverts + tris*GLBLEND_CLIP_VERTS;
 			proj[i].count = projcount + tris;
+			proj[i].box = projbox + tris*4;
 			proj[i].state = 0;
 			tris += planes[i].mesh->numindexes/3;
 		}
@@ -9504,7 +9556,11 @@ rebuild:
 			else if (!ab || stats->pass == 1)
 			{
 				if (verdict[idx] == GLBLEND_PAIR_PENDING)
+				{
 					verdict[idx] = GLBE_BlendOverlapOrder(planes[i].mesh, &proj[i], planes[j].mesh, &proj[j], ab, &owork);
+					bov_verdicts[stats->pass ? 1 : 0]++;
+					bov_disjoint += verdict[idx] == GLBLEND_ORDER_DISJOINT;
+				}
 				ab = verdict[idx];
 				if (ab == GLBLEND_ORDER_DISJOINT) continue;
 			}
@@ -9556,6 +9612,7 @@ done:
 	stats->work += owork;
 	stats->overlapfull = owork >= GLBLEND_OVERLAP_WORK;
 	if (projcount) BZ_Free(projcount);
+	if (projbox) BZ_Free(projbox);
 	if (projverts) BZ_Free(projverts);
 	if (proj) BZ_Free(proj);
 	if (verdict) BZ_Free(verdict);
@@ -9591,7 +9648,10 @@ static void GLBE_SubmitBlendedFaces(batch_t *world, batch_t *dynamic)
 	qboolean planar, kept = false, combined = false;
 	glblendplanestats_t bstats = {0};
 	glblendface_t *both = NULL;
+	qboolean timing = gl_blendtrace_pending;	// FTESurf Patch 1457: r_blendtrace's ms line
+	double tm[6] = {0};
 
+	if (timing) tm[0] = Sys_DoubleTime();
 	// Finish capture/portal/sky recursion before gathering this view's records.
 	// The temp-batch pool appends during recursion; this view's batch addresses survive.
 	for (l = 0; l < 2; l++)
@@ -9602,6 +9662,7 @@ static void GLBE_SubmitBlendedFaces(batch_t *world, batch_t *dynamic)
 				view.next = NULL;
 				GLBE_SubmitMeshesSortList(&view);
 			}
+	if (timing) tm[1] = Sys_DoubleTime();
 	// Every pass of the armed frame traces: portal and skyroom views, light passes,
 	// the main view. r_portalonly never reaches the main view, so a frame disarms.
 	if (gl_blendtrace_pending && gl_blendtrace_started && gl_blendtrace_frame != host_framecount)
@@ -9623,6 +9684,7 @@ static void GLBE_SubmitBlendedFaces(batch_t *world, batch_t *dynamic)
 			r_refdef.m_projection_std[8], r_refdef.m_projection_std[9], r_refdef.m_projection_std[10], r_refdef.m_projection_std[11],
 			r_refdef.m_projection_std[12], r_refdef.m_projection_std[13], r_refdef.m_projection_std[14], r_refdef.m_projection_std[15]);
 	}
+	if (timing) tm[5] = Sys_DoubleTime();	// gather starts after the header lines
 	for (l = 0; l < 2; l++)
 		for (batch = lists[l]; batch; batch = batch->next)
 			if (!GLBE_BlendBatchImmediate(batch) && batch->meshes > batch->firstmesh)
@@ -9678,6 +9740,7 @@ static void GLBE_SubmitBlendedFaces(batch_t *world, batch_t *dynamic)
 				}
 			}
 	qsort(faces, n, sizeof(*faces), GLBE_BlendFaceCompare);
+	if (timing) tm[2] = Sys_DoubleTime();
 	// Static-world plane relations refine only eligible baseline slots. Portal and
 	// skyroom views sort too: their r_origin is m_view's eye, and the portal oblique
 	// near clip rewrites only the projection z row.
@@ -9700,11 +9763,14 @@ static void GLBE_SubmitBlendedFaces(batch_t *world, batch_t *dynamic)
 			BZ_Free(both);
 		}
 	}
+	if (timing) tm[3] = Sys_DoubleTime();
 	if (trace)
 	{
 		Con_Printf("ALPHATRACE result raw=%u gathered=%u admitted=%u status=%d edges=%u work=%u moved=%u pass=%d overlapfull=%d recurse=%d\n",
 			(unsigned int)count, (unsigned int)n, (unsigned int)stats.admitted, stats.status,
 			(unsigned int)stats.edges, (unsigned int)stats.work, (unsigned int)stats.moved, stats.pass, stats.overlapfull, r_refdef.recurse);
+		Con_Printf("ALPHATRACE verdicts pass0 %u later %u disjoint %u (by face boxes %u)\n",	// FTESurf Patch 1457, last sort
+			bov_verdicts[0], bov_verdicts[1], bov_disjoint, bov_facebox);
 		if (combined)
 			Con_Printf("ALPHATRACE entities admitted=%u status=%d edges=%u work=%u moved=%u pass=%d overlapfull=%d kept=%d\n",
 				(unsigned int)bstats.admitted, bstats.status, (unsigned int)bstats.edges, (unsigned int)bstats.work,
@@ -9734,6 +9800,7 @@ static void GLBE_SubmitBlendedFaces(batch_t *world, batch_t *dynamic)
 		if (f < n) Con_Printf("ALPHATRACE remaining commands omitted (bounded to %u)\n", GLBLEND_PLANE_FACES);
 		Con_Printf("ALPHATRACE end\n");
 	}
+	if (timing) tm[4] = Sys_DoubleTime();
 	for (f = 0; f < n; f++)
 	{
 		view = *faces[f].batch;
@@ -9746,6 +9813,9 @@ static void GLBE_SubmitBlendedFaces(batch_t *world, batch_t *dynamic)
 		}
 		GLBE_SubmitMeshesSortList(&view);
 	}
+	if (trace && timing)
+		Con_Printf("ALPHATRACE ms immediate %.3f gather %.3f sort %.3f submit %.3f recurse=%d\n", (tm[1]-tm[0])*1000,
+			(tm[2]-tm[5])*1000, (tm[3]-tm[2])*1000, (Sys_DoubleTime()-tm[4])*1000, r_refdef.recurse);
 	BZ_Free(faces);
 }
 
