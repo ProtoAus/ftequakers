@@ -175,8 +175,8 @@ int SV_TASRollout(edict_t *e, const float *in, int n, float *out)
 			pmove.srcladder || pmove.waterlevel > 1 || pmove.numtouch < 0 || pmove.numtouch > MAX_PHYSENTS)
 			break;		// a tick the plain case does not cover: stop before it counts
 		rep = SV_TASRolloutActor(e, &kind);
-		if (!rep && k == 0)
-			rep = -startrep;	// negative: PreThink acts on it before tick 1's move
+		if (k == 0 && startrep)
+			rep = -startrep;	// negative, and first: PreThink acts on it before tick 1's move
 		VectorCopy(pmove.origin, o);
 		VectorCopy(pmove.velocity, o + 3);
 		o[6] = pmove.onground;
