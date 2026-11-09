@@ -36,6 +36,30 @@ Measured (FTESurf artifacts/run_hangtest.py, HG_THROTTLE=0: changelevel surf_cen
 CS:GO mount, top-level windows of class "Ghost" counted every 0.1 s): patch-1451 exe 1 ghost window in each of two
 runs (hung 2.6-2.7 s); P1454 0 in both (hung 2.4-3.8 s).
 
+## Patch 1452 -- keyboard registration and restart resource lifetime (in_win.c, winquake.h, Windows WndProcs)
+
+Problem: enumerated keyboards were mistaken for a successful Windows raw-keyboard
+registration, leaving the existing observer unavailable before an opt-in grab.
+A refused Windows mode change preserves the previous binding; clearing its mode
+or freeing the buffer/device table would lose input or falsely count unmatched keys.
+
+Change: serialize bounded registration and pairing transitions on the input/window
+thread. Track successful observation versus opt-in registration, preserve a usable
+binding on refusal, and retry teardown before reallocating during restart. A refused
+removal retains the resources needed to service that binding. Observation never
+translates a second game key. Existing opt-in flags, capture fields, ranking and
+thresholds are unchanged; no new input blocking or human-attestation claim.
+
+Verified: literal production mode/dispatch/Init/DeInit/ReInit controls discriminate
+both the original enumeration gap and the rejected draft's retained-binding/free-
+resource error (15 assertions fail there). Corrected controls and real Windows
+registration-success/message-thread arms pass, including make/break identity and
+buffer lifetime. Two independent source/input-lifecycle and evidence reviews clear
+the correction. Six reviewed source blobs are unchanged when composed with P1451
+and P1454. Full-build, warning baseline and actual installed-client provenance are
+recorded separately in FTESurf tools/p1452-keyboard-registration.md; physical/HID
+noise calibration remains a human check, not a synthetic-test pass.
+
 ## Patch 1451 -- the QC tempstring collector's buffers are made during the loading screen (initlib.c, progslib.h, pr_csqc.c, cl_main.c, client.h)
 
 Problem: Patch 1446 keeps the collector's snapshot block and free list per VM, but the first collection of every
