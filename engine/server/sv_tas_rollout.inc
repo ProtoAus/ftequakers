@@ -1,22 +1,60 @@
 /* FTESurf Patch 1443: tas_rollout -- what n ticks of given inputs would do from the paused TAS
- * body, through SV_RunCmd's own mover setup and one PM_PlayerMove a tick, with nothing kept:
- * pmove, movevars, pmove_mins/maxs and frametime are restored, and the edict, client, recorder
- * and QC never see it. Per-command QC (PlayerPre/PostThink, touches) does not run: each tick names
- * the first trigger the hull overlaps (World_TouchAllLinks' own test) and the rollout goes on, so
- * QC, which knows which triggers move a player, decides where the prediction stops counting.
- * Starts only where SV_RunCmd's inputs are the plain ones (no carrier, limit, ladder, water
- * jump, bank gravity, forced duck): there the copy-back between commands hands the next
- * command exactly the pmove the last one left, so carrying pmove across ticks is the same. */
+ * body, through SV_RunCmd's own mover setup and one PM_PlayerMove a tick. The edict, the client's
+ * movement state, the recorder and QC are never written; pmove, movevars, pmove_mins/maxs and
+ * frametime are restored. (SV_SetQWClientMoveVars' noclip-speed latch and the trace/area caches
+ * are touched as the next real command would touch them; none changes what a later move does.)
+ * Per-command QC -- PlayerPreThink's carriers, limit/slide volumes, gravity; the touch loop --
+ * does not run. So each tick names the first entity that QC could act on (a touched solid whose
+ * touch would run, a non-world ground entity, any trigger volume, with or without .touch) and the
+ * rollout goes on: QC, which knows what each one does, decides where the prediction stops.
+ * Starts only where SV_RunCmd's inputs are the plain ones; there the copy-back between commands
+ * hands the next command exactly the pmove the last one left, so carrying pmove across ticks is
+ * the same. */
 
 #define SV_TAS_ROLL_MAX 2048
 #define SV_TAS_ROLL_IN 7	/* fwd side up, pitch yaw roll angle words, buttons (tas_tape's words) */
-#define SV_TAS_ROLL_OUT 13	/* origin3 velocity3 onground ducked contact-kind normal3 trigger-edict */
+#define SV_TAS_ROLL_OUT 13	/* origin3 velocity3 onground ducked contact-kind normal3 entity-QC-may-act-on */
+
+/* The first entity per-command QC could act on after this tick (0 none): SV_RunCmd's touch loop
+ * (a touched non-world solid whose touch or the player's would run; such a touch also makes the
+ * contact kind 3, as SV_RunCmd's observation does), a non-world ground entity (P924 conveyors),
+ * then any trigger volume. */
+static int SV_TASRolloutActor(edict_t *e, int *kind)
+{
+	wedict_t *t;
+	int j, index, rep = 0;
+	for (j = 0; j < pmove.numtouch; ++j)
+	{
+		index = pmove.touchindex[j];
+		if (index < 0 || index >= pmove.numphysent)
+		{
+			*kind = 3;
+			continue;
+		}
+		if (!pmove.physents[index].info)
+			continue;
+		*kind = 3;
+		if (!rep && !pmove.physents[index].notouch)
+		{
+			edict_t *te = EDICT_NUM_PB(svprogfuncs, pmove.physents[index].info);
+			if (te->v->touch || e->v->touch)
+				rep = pmove.physents[index].info;
+		}
+	}
+	if (!rep && pmove.onground && pmove.groundent >= 0 && pmove.groundent < pmove.numphysent &&
+		pmove.physents[pmove.groundent].info)
+		rep = pmove.physents[pmove.groundent].info;
+	if (!rep && (t = World_TriggerAt(&sv.world, (wedict_t*)e, pmove.origin, pmove.player_mins, pmove.player_maxs, true)))
+		rep = NUM_FOR_EDICT(svprogfuncs, (edict_t*)t);
+	return rep;
+}
 
 /* Returns the ticks run (0..n; fewer when a tick the plain case does not cover came), or a
  * negative reason it cannot start: -1 no TAS client/arguments, -2 not a plain Source walker,
  * -3 not paused or held, -4 a QC movement limit or forced duck pending, -5 a gravity direction,
  * -6 water/ladder/duck transition, -7 non-default gravity (bank gravity would observe it),
- * -8 the TAS clock, -9 a carrier velocity, -10 a row that does not decode. */
+ * -8 the TAS clock, -9 a carrier (QC's run_basevel, or standing on a non-world entity),
+ * -10 a row that does not decode. A trigger volume the body starts in is named on the first tick. */
 int SV_TASRollout(edict_t *e, const float *in, int n, float *out)
 {
 	static playermove_t saved;
@@ -27,9 +65,9 @@ int SV_TASRollout(edict_t *e, const float *in, int n, float *out)
 	sv_tas_input_t row;
 	client_t *cl;
 	eval_t *ev;
-	wedict_t *touched;
+	wedict_t *start;
 	extern cvar_t pm_physicsmode;
-	int i, k, msec, kind, trig, ran;
+	int i, k, msec, kind, rep, startrep, ran;
 	cl = SV_TASRewindClient(e);
 	if (!cl || !SV_TASInputPool(cl) || n < 1 || n > SV_TAS_ROLL_MAX || !in || !out)
 		return -1;
@@ -53,8 +91,12 @@ int SV_TASRollout(edict_t *e, const float *in, int n, float *out)
 		return -7;
 	if (!SV_TASClockForClient(cl, NULL))
 		return -8;
-	ev = SV_TASRewindField(e, "run_basevelocity", ev_vector);
+	// The carrier PreThink cashes out or hands over (SV_BaseVelocityFrame, SV_ConveyorArm), not the
+	// engine's read-and-clear run_basevelocity, which is always zero while paused.
+	ev = SV_TASRewindField(e, "run_basevel", ev_vector);
 	if (ev && !VectorCompare(ev->_vector, vec3_origin))
+		return -9;
+	if (((int)e->v->flags & FL_ONGROUND) && e->v->groundentity)
 		return -9;
 	msec = SV_TASTickMsec(SV_TASCurrentTick());
 	if (!msec)
@@ -95,6 +137,9 @@ int SV_TASRollout(edict_t *e, const float *in, int n, float *out)
 	pmove.onladder = false;
 	pmove.world = &sv.world;
 	SV_SetQWClientMoveVars(cl);
+	// A volume the body already stands in: PreThink finds limit/slide volumes by overlap
+	start = World_TriggerAt(&sv.world, (wedict_t*)e, pmove.origin, pmove.player_mins, pmove.player_maxs, true);
+	startrep = start ? NUM_FOR_EDICT(svprogfuncs, (edict_t*)start) : 0;
 
 	ran = 0;
 	if (pmove.pm_type == PM_NORMAL && !pmove.waterjumptime)
@@ -127,17 +172,21 @@ int SV_TASRollout(edict_t *e, const float *in, int n, float *out)
 		PMSrc_BankGravityEnd();
 		kind = PMSrc_TASContactEnd(normal, &distance, point);
 		if (pmove.ticksrun != 1 || pmove.portalcrossings || pmove.pm_type != PM_NORMAL ||
-			pmove.srcladder || pmove.waterlevel > 1)
+			pmove.srcladder || pmove.waterlevel > 1 || pmove.numtouch < 0 || pmove.numtouch > MAX_PHYSENTS)
 			break;		// a tick the plain case does not cover: stop before it counts
+		rep = SV_TASRolloutActor(e, &kind);
+		if (!rep && k == 0)
+			rep = startrep;
 		VectorCopy(pmove.origin, o);
 		VectorCopy(pmove.velocity, o + 3);
 		o[6] = pmove.onground;
 		o[7] = pmove.ducked;
 		o[8] = kind;
-		VectorCopy(normal, o + 9);
-		touched = World_TriggerAt(&sv.world, (wedict_t*)e, pmove.origin, pmove.player_mins, pmove.player_maxs);
-		trig = touched ? NUM_FOR_EDICT(svprogfuncs, (edict_t*)touched) : 0;
-		o[12] = trig;
+		if (kind == 1)
+			VectorCopy(normal, o + 9);
+		else
+			VectorClear(o + 9);
+		o[12] = rep;
 		ran = k + 1;
 	}
 

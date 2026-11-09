@@ -2121,8 +2121,9 @@ void World_TouchAllLinks (world_t *w, wedict_t *ent)
 }
 
 //FTESurf Patch 1443: the trigger World_TouchAllLinks would fire first for ent's hull at org,
-//without touching it -- tas_rollout stops there. The box is World_LinkEdict's (hull + 1).
-wedict_t *World_TriggerAt (world_t *w, wedict_t *ent, vec3_t org, vec3_t mins, vec3_t maxs)
+//without touching it. The box is World_LinkEdict's (hull + 1). anytrigger also names triggers
+//with no .touch, by that box alone: QC finds those (limit/slide volumes) by overlap per command.
+wedict_t *World_TriggerAt (world_t *w, wedict_t *ent, vec3_t org, vec3_t mins, vec3_t maxs, qboolean anytrigger)
 {
 	wedict_t *touchedicts[2048], *touch;
 	vec3_t amin, amax;
@@ -2139,13 +2140,15 @@ wedict_t *World_TriggerAt (world_t *w, wedict_t *ent, vec3_t org, vec3_t mins, v
 		if (ED_ISFREE(touch) || touch == ent)
 			continue;
 		solid = touch->v->solid;
-		if (!touch->v->touch || (solid != SOLID_TRIGGER && solid != SOLID_BSPTRIGGER))
+		if ((!touch->v->touch && !anytrigger) || (solid != SOLID_TRIGGER && solid != SOLID_BSPTRIGGER))
 			continue;
 		if (amin[0] > touch->v->absmax[0] || amin[1] > touch->v->absmax[1] || amin[2] > touch->v->absmax[2] ||
 			amax[0] < touch->v->absmin[0] || amax[1] < touch->v->absmin[1] || amax[2] < touch->v->absmin[2])
 			continue;
 		if (!((int)ent->xv->dimension_solid & (int)touch->xv->dimension_hit))
 			continue;
+		if (!touch->v->touch)
+			return touch;		// anytrigger: the box decides, as QC's overlap tests would
 		if (solid == SOLID_BSPTRIGGER)
 		{
 			model_t *tmod = w->Get_CModel(w, touch->v->modelindex);
