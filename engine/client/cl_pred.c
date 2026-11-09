@@ -19,6 +19,8 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 */
 #include "quakedef.h"
 #include "winquake.h"
+extern unsigned int r_spikes_pmoves;	//pr_csqc.c, FTESurf Patch 1446
+extern double r_spikes_pmus, r_spikes_hookus;
 
 cvar_t	cl_predict_extrapolate = CVARD("cl_predict_extrapolate", "", "If 1, enables prediction based upon partial input frames which can change over time resulting in a swimmy feel but does not need to interpolate. If 0, prediction will stay in the past and thus use only completed frames. Interpolation will then be used to smooth movement.\nThis cvar only applies when video and input frames are independant (ie: cl_netfps is set).");
 static cvar_t	cl_predict_timenudge = CVARD("cl_predict_timenudge", "0", "A debug feature. You should normally leave this as 0. Nudges local player prediction into the future if positive (resulting in extrapolation), or into the past if negative (resulting in laggy interpolation). Value is in seconds, so small decimals are required. This cvar applies even if input frames are tied to video frames.");
@@ -721,7 +723,13 @@ static void CL_PredictUsercmdPart (int pnum, int entnum, player_state_t *from, p
 	}
 	VectorCopy(pmove.origin, preorigin);
 	preground = pmove.onground;
-	PM_PlayerMove (cl.gamespeed);
+	r_spikes_pmoves++;	//FTESurf Patch 1446
+	{
+		double t0 = r_speeds_timing ? Sys_DoubleTime() : 0;
+		PM_PlayerMove (cl.gamespeed);
+		if (r_speeds_timing)
+			r_spikes_pmus += (Sys_DoubleTime() - t0) * 1e6;
+	}
 	if (cl_pred_localchain)
 	{
 		cl_pred_diag_parts++;
@@ -739,7 +747,12 @@ static void CL_PredictUsercmdPart (int pnum, int entnum, player_state_t *from, p
 		if (preflags & PMPI_HOLD)
 			CSQC_PredictSaveBaseVel(pnum, u->sequence);
 		else
+		{
+			double t0 = r_speeds_timing ? Sys_DoubleTime() : 0;
 			CSQC_PredictPlayerMove(pnum, u, preorigin, offsetmsec, preground);
+			if (r_speeds_timing)
+				r_spikes_hookus += (Sys_DoubleTime() - t0) * 1e6;
+		}
 	}
 
 	to->waterjumptime = pmove.waterjumptime;

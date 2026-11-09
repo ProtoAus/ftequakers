@@ -381,13 +381,33 @@ typedef struct
 	float topms;					//the largest single bucket
 	unsigned char topg, topm;		//...as budget_groups[topg].m[topm]
 	unsigned short compiles, images, packets, views;
+	float predms[3], entms;			//FTESurf Patch 1446: SetSolidEntities/TransitionEntities/PredictMove; CSQC_Ent_Update
+	float pmms, hookms;				//...inside PredictMove: PM_PlayerMove; CSQC_PredictPlayerMove (the trigger hook)
+	float gcms;						//...the QC tempstring collector's main-thread phases (qclib initlib.c)
+	unsigned char gcstarts, gcdones;
+	unsigned int gcbytes;
+	unsigned short entnew, entupd, physents, pmoves, qcpmoves;
+	char qcf[3][40];				//r_spikes 2: the frame's three busiest CSQC functions by self time
+	float qcms[3];
 } spike_t;
+static qboolean spk_qcprof;			//r_spikes 2 turned the CSQC profiler on
+#ifdef CSQC_DAT
+extern unsigned int r_spikes_entnew, r_spikes_entupd, r_spikes_pmoves, r_spikes_qcpmoves;	//pr_csqc.c, FTESurf Patch 1446
+extern double r_spikes_entus, r_spikes_predus[3], r_spikes_pmus, r_spikes_hookus;
+extern int r_spikes_physents;
+extern double pr_gc_mainus;	//qclib initlib.c
+extern unsigned int pr_gc_starts, pr_gc_dones;
+extern size_t pr_gc_bytes;
+#endif
 static struct
 {
 	qboolean on;
 	double last, summs, sum[BUDGET_GROUPS];
 	unsigned int frames, compiles, images, views;	//the counters' previous readings
 	int packets;
+	unsigned int gcphases;			//FTESurf Patch 1446: the collector's main-thread phases since reset
+	float gcmax, gcframemax;		//...the slowest one, and the slowest frame holding one
+	float gcph[12];					//...each one's ms, start positive, finish negative, in order
 	spike_t s[SPIKE_KEEP];			//slowest first
 } spk;
 #ifdef GLQUAKE
@@ -399,11 +419,42 @@ static unsigned short R_Spikes_Delta(unsigned int now, unsigned int *prev)
 	*prev = now;
 	return min(d, 65535);
 }
+#ifdef CSQC_DAT
+static void R_Spikes_QCFunc(void *ctx, const char *func, const char *file, double selfus, double totalus)
+{	//keeps the three largest, largest first
+	spike_t *f = ctx;
+	float ms = selfus / 1000;
+	int k;
+	for (k = 0; k < 3 && ms <= f->qcms[k]; k++)
+		;
+	if (k == 3)
+		return;
+	memmove(&f->qcms[k+1], &f->qcms[k], sizeof(f->qcms[0]) * (2 - k));
+	memmove(f->qcf[k+1], f->qcf[k], sizeof(f->qcf[0]) * (2 - k));
+	f->qcms[k] = ms;
+	Q_strncpyz(f->qcf[k], func ? func : "?", sizeof(f->qcf[k]));
+}
+#endif
+//r_spikes 2 profiles CSQC unless r_budget_csqc owns the profiler (each read resets it)
+static qboolean R_Spikes_QCProfile(void)
+{
+#ifdef CSQC_DAT
+	qboolean want = r_spikes.ival >= 2 && !(r_budget.ival && r_budget_csqc.ival);
+	if (!CSQC_Inited())
+		spk_qcprof = false;	//a map change reloads the VM with the profiler off
+	else if (want != spk_qcprof && CSQC_SetProfiling(want))
+		spk_qcprof = want;
+	return spk_qcprof;
+#else
+	return false;
+#endif
+}
 //once a frame, from RSpeedShow before R_Budget_Sample (which clears rspeeds_self when it is on)
 static void R_Spikes_Sample(void)
 {
 	double now = Sys_DoubleTime();
 	unsigned int compiles = 0, images = 0, views = 0, i, j, c;
+	qboolean qcprof = R_Spikes_QCProfile();
 	spike_t f;
 	if (!r_spikes.ival)
 	{
@@ -423,6 +474,12 @@ static void R_Spikes_Sample(void)
 		spk.last = now;
 		spk.compiles = compiles, spk.images = images, spk.views = views;
 		spk.packets = cls.netchan.incoming_sequence;
+#ifdef CSQC_DAT
+		memset(r_spikes_predus, 0, sizeof(r_spikes_predus));
+		r_spikes_entus = 0, r_spikes_entnew = r_spikes_entupd = 0, r_spikes_physents = 0;
+		r_spikes_pmoves = r_spikes_qcpmoves = 0, r_spikes_pmus = r_spikes_hookus = 0;
+		pr_gc_mainus = 0, pr_gc_starts = pr_gc_dones = 0;
+#endif
 		if (!r_budget.ival)
 			memset(rspeeds_self, 0, sizeof(rspeeds_self));
 		return;
@@ -449,6 +506,32 @@ static void R_Spikes_Sample(void)
 	f.views = R_Spikes_Delta(views, &spk.views);
 	f.packets = bound(0, cls.netchan.incoming_sequence - spk.packets, 65535);
 	spk.packets = cls.netchan.incoming_sequence;
+#ifdef CSQC_DAT
+	for (i = 0; i < 3; i++)
+		f.predms[i] = r_spikes_predus[i] / 1000, r_spikes_predus[i] = 0;
+	f.entms = r_spikes_entus / 1000;
+	f.entnew = min(r_spikes_entnew, 65535);
+	f.entupd = min(r_spikes_entupd, 65535);
+	f.physents = bound(0, r_spikes_physents, 65535);
+	f.pmoves = min(r_spikes_pmoves, 65535);
+	f.qcpmoves = min(r_spikes_qcpmoves, 65535);
+	f.pmms = r_spikes_pmus / 1000, f.hookms = r_spikes_hookus / 1000;
+	f.gcms = pr_gc_mainus / 1000, f.gcstarts = min(pr_gc_starts, 255), f.gcdones = min(pr_gc_dones, 255);
+	f.gcbytes = min(pr_gc_bytes, 0xffffffffu);
+	pr_gc_mainus = 0, pr_gc_starts = pr_gc_dones = 0;
+	if (f.gcstarts || f.gcdones)
+	{
+		if (spk.gcphases < countof(spk.gcph))
+			spk.gcph[spk.gcphases] = f.gcstarts ? f.gcms : -f.gcms;
+		spk.gcphases += f.gcstarts + f.gcdones;
+		spk.gcmax = max(spk.gcmax, f.gcms);
+		spk.gcframemax = max(spk.gcframemax, f.ms);
+	}
+	r_spikes_entus = 0, r_spikes_entnew = r_spikes_entupd = 0, r_spikes_physents = 0;
+	r_spikes_pmoves = r_spikes_qcpmoves = 0, r_spikes_pmus = r_spikes_hookus = 0;
+	if (qcprof)
+		CSQC_EnumProfile(R_Spikes_QCFunc, &f);
+#endif
 	if (!r_budget.ival)
 		memset(rspeeds_self, 0, sizeof(rspeeds_self));
 	if (f.ms <= spk.s[SPIKE_KEEP-1].ms)
@@ -486,6 +569,11 @@ static void R_Spikes_Append(char *out, size_t outsize)
 	Q_strncatz(out, va("  slowest frames by CPU group (r_spikes, %u frames since reset; ms, largest four):\n    average %6.2f:", spk.frames, spk.summs / spk.frames), outsize);
 	R_Spikes_Groups(out, outsize, avg);
 	Q_strncatz(out, "\n", outsize);
+	Q_strncatz(out, va("    qc tempstring collector: %u main-thread phases, slowest %.2f ms, slowest frame holding one %.2f ms;",
+		spk.gcphases, spk.gcmax, spk.gcframemax), outsize);
+	for (i = 0; i < (int)min(spk.gcphases, countof(spk.gcph)); i++)
+		Q_strncatz(out, va(" %s %.2f", spk.gcph[i] >= 0 ? "start" : "finish", fabs(spk.gcph[i])), outsize);
+	Q_strncatz(out, "\n", outsize);
 	for (i = 0; i < SPIKE_KEEP && spk.s[i].ms; i++)
 	{
 		for (timed = 0, g = 0; g < BUDGET_GROUPS; g++)
@@ -495,6 +583,15 @@ static void R_Spikes_Append(char *out, size_t outsize)
 		Q_strncatz(out, va("; largest bucket %s %.2f; untimed %.2f; compiles %u images %u packets %u views %u\n",
 			budget_groups[spk.s[i].topg].m[spk.s[i].topm].name, spk.s[i].topms, max(0, spk.s[i].ms - timed),
 			spk.s[i].compiles, spk.s[i].images, spk.s[i].packets, spk.s[i].views), outsize);
+		Q_strncatz(out, va("          prediction: solids %.2f transition %.2f move %.2f (pmove %.2f, qc hook %.2f; %u physents, %u moves; qc %u moves); csqc ents new %u updated %u in %.2f ms\n",
+			spk.s[i].predms[0], spk.s[i].predms[1], spk.s[i].predms[2], spk.s[i].pmms, spk.s[i].hookms, spk.s[i].physents, spk.s[i].pmoves, spk.s[i].qcpmoves,
+			spk.s[i].entnew, spk.s[i].entupd, spk.s[i].entms), outsize);
+		if (spk.s[i].gcstarts || spk.s[i].gcdones)
+			Q_strncatz(out, va("          qc tempstring collector: %.2f ms on this thread (%u start, %u finish; snapshot %u KiB)\n",
+				spk.s[i].gcms, spk.s[i].gcstarts, spk.s[i].gcdones, spk.s[i].gcbytes / 1024), outsize);
+		if (*spk.s[i].qcf[0])
+			Q_strncatz(out, va("          qc self: %s %.2f, %s %.2f, %s %.2f\n", spk.s[i].qcf[0], spk.s[i].qcms[0],
+				spk.s[i].qcf[1], spk.s[i].qcms[1], spk.s[i].qcf[2], spk.s[i].qcms[2]), outsize);
 	}
 }
 

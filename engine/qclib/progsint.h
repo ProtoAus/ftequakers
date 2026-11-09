@@ -125,6 +125,8 @@ typedef struct prinst_s
 	unsigned int livetemps;	//increased on alloc, decremented after sweep
 	#ifdef THREADEDGC
 		struct qcgccontext_s *gccontext;
+		struct qcgccontext_s *gcspare;	//FTESurf Patch 1446: the last collection's block, kept with its pages committed
+		struct qcgcfree_s *gcfree;		//...and the list of dead strings handed to the freeing worker
 	#endif
 #else
 	unsigned int numtempstrings;

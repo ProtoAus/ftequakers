@@ -38,6 +38,11 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include "snd_vis.h"
 #include "com_bih.h"
 
+//FTESurf Patch 1446: r_spikes' per-frame counts (cl_screen.c reads and zeroes them); the times only while r_speeds_timing
+unsigned int r_spikes_entnew, r_spikes_entupd, r_spikes_pmoves, r_spikes_qcpmoves;
+double r_spikes_entus, r_spikes_predus[3], r_spikes_pmus, r_spikes_hookus;
+int r_spikes_physents;
+
 extern usercmd_t cl_pendingcmd[MAX_SPLITS];
 extern cvar_t sv_demo_write_csqc;
 
@@ -4519,6 +4524,7 @@ static void QCBUILTIN PF_cs_getinputstate (pubprogfuncs_t *prinst, struct global
 static void QCBUILTIN PF_cs_runplayerphysics (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
 {
 	float msecs;
+	r_spikes_qcpmoves++;	//FTESurf Patch 1446
 	float oldtime = *csqcg.time;
 
 	csqcedict_t *ent = (void*)G_EDICT(prinst, OFS_PARM0);
@@ -9513,12 +9519,23 @@ qboolean CSQC_DrawView(void)
 	//path has no reject at all.  Bracketed to find out whether that is actually where the time is
 	//before writing a broadphase for it.
 	{
+	double t0, t1, t2;
 	RSpeedMark();
+	t0 = r_speeds_timing ? Sys_DoubleTime() : 0;
 	//work out which packet entities are solid
 	CL_SetSolidEntities ();
+	t1 = r_speeds_timing ? Sys_DoubleTime() : 0;
 	CL_TransitionEntities();
+	t2 = r_speeds_timing ? Sys_DoubleTime() : 0;
 	if (cl.worldmodel)
 		CL_PredictMove ();
+	if (r_speeds_timing)
+	{	//FTESurf Patch 1446: which of the three a slow frame spent its prediction bucket in
+		r_spikes_predus[0] += (t1 - t0) * 1e6;
+		r_spikes_predus[1] += (t2 - t1) * 1e6;
+		r_spikes_predus[2] += (Sys_DoubleTime() - t2) * 1e6;
+		r_spikes_physents = max(r_spikes_physents, pmove.numphysent);
+	}
 	RSpeedEnd(RSPEED_CSQC_PREDICT);
 	}
 
@@ -11471,6 +11488,7 @@ void CSQC_ParseEntities(qboolean sized)
 				}
 
 				G_FLOAT(OFS_PARM0) = true;
+				r_spikes_entnew++;
 
 				if (cl_shownet.ival == 3)
 					Con_Printf("%3i:     Added %i (%i)\n", MSG_GetReadCount(), entnum, packetsize);
@@ -11495,7 +11513,13 @@ void CSQC_ParseEntities(qboolean sized)
 
 			*csqcg.self = EDICT_TO_PROG(csqcprogs, (void*)ent);
 			csqc_mayread = true;
-			PR_ExecuteProgram(csqcprogs, csqcg.CSQC_Ent_Update);
+			{
+				double t0 = r_speeds_timing ? Sys_DoubleTime() : 0;
+				PR_ExecuteProgram(csqcprogs, csqcg.CSQC_Ent_Update);
+				if (r_speeds_timing)
+					r_spikes_entus += (Sys_DoubleTime() - t0) * 1e6;
+				r_spikes_entupd++;
+			}
 			csqc_mayread = false;
 			if (csqcg.CSQC_Ent_Spawn)
 				csqcent[entnum] = (csqcedict_t*)PROG_TO_WEDICT(csqcprogs, *csqcg.self);	//allow the mod to change the ent.

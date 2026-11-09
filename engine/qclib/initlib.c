@@ -1437,6 +1437,7 @@ static size_t PR_QCGC_Sweep(progfuncs_t *progfuncs, smallbool *marked, tempstr_t
 struct qcgccontext_s
 {
 	int done;
+	size_t allocbytes;		//FTESurf Patch 1446: what was malloced, so the block can be reused
 	unsigned int clearedtemps;	//number of temps that were swept away
 	progfuncs_t *progfuncs;	//careful!
 
@@ -1453,6 +1454,9 @@ struct qcgcfree_s
 {
 	void (VARGS *memfree) (void *mem);	//the host's allocator itself: neither the VM nor its parms table are ours
 	size_t n;
+	size_t cap;					//FTESurf Patch 1446: kept by the VM (prinst.gcfree) between collections
+	int busy;					//...its job has not finished yet
+	int oneoff;					//...or not kept: the kept one was still busy, so its job frees this one
 	tempstr_t *ptr[1];
 };
 static void PR_QCGC_FreeJob(void *ctx, void *data, size_t a, size_t b)
@@ -1461,7 +1465,10 @@ static void PR_QCGC_FreeJob(void *ctx, void *data, size_t a, size_t b)
 	size_t i;
 	for (i = 0; i < f->n; i++)
 		f->memfree(f->ptr[i]);
-	free(f);
+	if (f->oneoff)
+		free(f);
+	else
+		f->busy = false;	//FTESurf Patch 1446: the list itself is the VM's
 }
 void PR_QCGC_Done(void *ctx, void *data, size_t a, size_t b)
 {
@@ -1484,7 +1491,6 @@ void PR_QCGC_Thread(void *ctx, void *data, size_t a, size_t b)
 	{	//FTESurf Patch 1292: no sweep here. A freed string left in the live table until the main thread caught up
 		//would be read or freed again by anything holding its index where the scan cannot see (hash_add, memnostrings).
 		size_t p, n = 0;
-		gc->dead = malloc(sizeof(*gc->dead) * (gc->maxtemps ? gc->maxtemps : 1));
 		for (p = 0; p < gc->maxtemps; p++)
 			if (!marked[p] && gc->tempstrings[p])
 				gc->dead[n++] = p;
@@ -1543,6 +1549,69 @@ static string_t PDECL PR_AllocTempStringLen			(pubprogfuncs_t *ppf, char **str, 
 
 	return (string_t)((unsigned int)i | STRING_TEMP);
 }
+//FTESurf Patch 1446: the collector's main-thread phases, for r_spikes (every VM; cl_screen.c reads and zeroes)
+double pr_gc_mainus;
+unsigned int pr_gc_starts, pr_gc_dones;
+size_t pr_gc_bytes;
+#ifdef THREADEDGC
+/*FTESurf Patch 1446: the main thread clears what the worker found dead (Patch 1292). The free list is the VM's, kept
+  with its pages (a fresh 1 MB list per collection faulted them in here); if its last job somehow still runs, a one-off
+  list instead -- never a wait: COM_WorkerPartialSync runs main-thread work, which can run QC and re-enter this.
+  Clearing in chunks across frames was tried: during a map load QC allocates faster than chunks clear, and the full
+  table doubled to a million slots.*/
+static void PR_QCGC_Finish(progfuncs_t *progfuncs)
+{
+	struct qcgccontext_s *gc = prinst.gccontext;
+	struct qcgcfree_s *f = prinst.gcfree;
+	double t0 = Sys_DoubleTime();
+	size_t i, cleared = 0;
+	if (f && f->busy)
+	{
+		f = malloc(sizeof(*f) - sizeof(f->ptr) + sizeof(f->ptr[0]) * (gc->ndead ? gc->ndead : 1));
+		f->oneoff = true;
+	}
+	else if (!f || f->cap < gc->ndead)
+	{
+		free(f);
+		f = prinst.gcfree = malloc(sizeof(*f) - sizeof(f->ptr) + sizeof(f->ptr[0]) * (gc->maxtemps + 1));
+		f->cap = gc->maxtemps + 1;
+		f->oneoff = false;
+	}
+	f->busy = false;
+	f->memfree = externs->memfree;
+	for (i = 0; i < gc->ndead; i++)
+	{
+		unsigned int p = gc->dead[i];
+		if (p < prinst.maxtempstrings && prinst.tempstrings[p] && prinst.tempstrings[p] == gc->tempstrings[p])
+		{	//still the pointer the snapshot saw unreferenced (a resize since usually changes it; either way the slot
+			//is cleared before its memory is queued, so a lookup gets "", never freed memory)
+			f->ptr[cleared++] = prinst.tempstrings[p];
+			prinst.tempstrings[p] = NULL;
+		}
+	}
+	f->n = cleared;
+	prinst.livetemps -= cleared;
+	if (cleared)
+	{
+		f->busy = !f->oneoff;
+		COM_InsertWork(WG_LOADER, PR_QCGC_FreeJob, f, NULL, 0, 0);
+	}
+	else if (f->oneoff)
+		free(f);
+	free(prinst.gcspare);
+	prinst.gcspare = gc;	//kept for the next collection
+	prinst.gccontext = NULL;
+
+	//if over half the (max)strings are still live, just increase the max so we are not spamming collections
+	//(review 2: on livetemps, as before, or a collection whose survivors sit just under half restarts at once)
+	if (prinst.livetemps >= prinst.maxtempstrings/2)
+		PR_ExpandTempStrings(progfuncs, prinst.maxtempstrings * 2);
+	if (prinst.maxtempstrings < PR_GC_MINTEMPS)	//FTESurf Patch 1292: each collection costs the main thread a copy
+		PR_ExpandTempStrings(progfuncs, PR_GC_MINTEMPS);
+	pr_gc_mainus += (Sys_DoubleTime() - t0) * 1e6;
+	pr_gc_dones++;
+}
+#endif
 void PR_RunGC (progfuncs_t *progfuncs)
 {
 	/* FTESurf diagnostic: pr_gc_threaded 2 switches the collector OFF entirely.
@@ -1575,6 +1644,7 @@ void PR_RunGC (progfuncs_t *progfuncs)
 #ifdef GCTIMINGS
 			double starttime = Sys_DoubleTime(), endtime;
 #endif
+			double gc_t0 = Sys_DoubleTime();
 			size_t ofs[NOSTR_MAX+1], len[NOSTR_MAX+1], memsize = 0, padded;	//FTESurf Patch 763: copy what is read
 			unsigned int n = PR_QCGC_Segments(progfuncs, ofs, len), i;
 			char *dst;
@@ -1582,11 +1652,22 @@ void PR_RunGC (progfuncs_t *progfuncs)
 			for (i = 0; i < n; i++)
 				memsize += len[i];
 			padded = (memsize + 7) & ~(size_t)7;
-			gc = prinst.gccontext = malloc(sizeof(*gc) - sizeof(gc->amem) + padded + sizeof(*gc->tempstrings)*prinst.maxtempstrings);
+			{	//FTESurf Patch 1446: reuse the last block -- a fresh ~25 MB one faulted in every page during the copy
+				//below and was freed again at the finish, 5-8 ms of main thread each (surf_nuclear, the PC)
+				size_t need = sizeof(*gc) - sizeof(gc->amem) + padded + (sizeof(*gc->tempstrings) + sizeof(*gc->dead))*prinst.maxtempstrings;
+				gc = prinst.gcspare;
+				prinst.gcspare = NULL;
+				if (!gc || gc->allocbytes < need)
+				{
+					free(gc);
+					gc = malloc(need + need/8);	//headroom, so the hunk growing a little does not reallocate
+					gc->allocbytes = need + need/8;
+				}
+				prinst.gccontext = gc;
+			}
 			gc->done = false;
 			gc->clearedtemps = 0;
 			gc->progfuncs = progfuncs;
-			gc->dead = NULL;
 			gc->ndead = 0;
 
 			gc->memsize = memsize;
@@ -1596,9 +1677,13 @@ void PR_RunGC (progfuncs_t *progfuncs)
 
 			gc->maxtemps = prinst.maxtempstrings;
 			gc->tempstrings = (void*)((char*)gc->amem+padded);
+			gc->dead = (unsigned int*)(gc->tempstrings + gc->maxtemps);	//FTESurf Patch 1446: in the kept block, not a malloc per collection
 			memcpy(gc->tempstrings, prinst.tempstrings, sizeof(*gc->tempstrings)*gc->maxtemps);
 
 			COM_InsertWork(WG_LOADER, PR_QCGC_Thread, gc, NULL, 0, 0);
+			pr_gc_mainus += (Sys_DoubleTime() - gc_t0) * 1e6;
+			pr_gc_starts++;
+			pr_gc_bytes = padded + sizeof(*gc->tempstrings)*gc->maxtemps;
 
 #ifdef GCTIMINGS
 			endtime = Sys_DoubleTime();
@@ -1624,38 +1709,7 @@ void PR_RunGC (progfuncs_t *progfuncs)
 	}
 #ifdef THREADEDGC
 	else if (prinst.gccontext->done)
-	{	//FTESurf Patch 1292: the main thread clears what the worker found dead, then a worker frees it
-		struct qcgccontext_s *gc = prinst.gccontext;
-		struct qcgcfree_s *f = malloc(sizeof(*f) - sizeof(f->ptr) + sizeof(f->ptr[0]) * (gc->ndead ? gc->ndead : 1));
-		size_t i, cleared = 0;
-		f->memfree = externs->memfree;
-		for (i = 0; i < gc->ndead; i++)
-		{
-			unsigned int p = gc->dead[i];
-			if (p < prinst.maxtempstrings && prinst.tempstrings[p] && prinst.tempstrings[p] == gc->tempstrings[p])
-			{	//still the pointer the snapshot saw unreferenced (a resize since usually changes it; either way the slot
-				//is cleared before its memory is queued, so a lookup gets "", never freed memory)
-				f->ptr[cleared++] = prinst.tempstrings[p];
-				prinst.tempstrings[p] = NULL;
-			}
-		}
-		f->n = cleared;
-		prinst.livetemps -= cleared;
-		if (cleared)
-			COM_InsertWork(WG_LOADER, PR_QCGC_FreeJob, f, NULL, 0, 0);
-		else
-			free(f);
-		free(gc->dead);
-		free(gc);
-		prinst.gccontext = NULL;
-
-		//if over half the (max)strings are still live, just increase the max so we are not spamming collections
-		//(review 2: on livetemps, as before, or a collection whose survivors sit just under half restarts at once)
-		if (prinst.livetemps >= prinst.maxtempstrings/2)
-			PR_ExpandTempStrings(progfuncs, prinst.maxtempstrings * 2);
-		if (prinst.maxtempstrings < PR_GC_MINTEMPS)	//FTESurf Patch 1292: each collection costs the main thread a copy
-			PR_ExpandTempStrings(progfuncs, PR_GC_MINTEMPS);
-	}
+		PR_QCGC_Finish(progfuncs);
 #endif
 }
 
@@ -1666,7 +1720,15 @@ static void PR_FreeAllTemps			(progfuncs_t *progfuncs)
 	while (prinst.gccontext)
 	{
 		COM_WorkerPartialSync(prinst.gccontext, &prinst.gccontext->done, false);
-		PR_RunGC(progfuncs);
+		PR_QCGC_Finish(progfuncs);
+	}
+	free(prinst.gcspare);	//FTESurf Patch 1446
+	prinst.gcspare = NULL;
+	if (prinst.gcfree)
+	{
+		COM_WorkerPartialSync(prinst.gcfree, &prinst.gcfree->busy, true);
+		free(prinst.gcfree);
+		prinst.gcfree = NULL;
 	}
 #endif
 	for (i = 0; i < prinst.maxtempstrings; i++)
