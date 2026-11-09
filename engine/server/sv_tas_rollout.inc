@@ -1,6 +1,7 @@
 /* FTESurf Patch 1443: tas_rollout -- what n ticks of given inputs would do from the paused TAS
  * body, through SV_RunCmd's own mover setup and one PM_PlayerMove a tick. The edict, the client's
- * movement state, the recorder and QC are never written; pmove, movevars, pmove_mins/maxs and
+ * movement state and the recorder are never written, nor QC memory beyond the two buffers (P1449:
+ * FOLLOW/AIM rows get the words they computed written back); pmove, movevars, pmove_mins/maxs and
  * frametime are restored. (SV_SetQWClientMoveVars' noclip-speed latch and the trace/area caches
  * are touched as the next real command would touch them; none changes what a later move does.)
  * Per-command QC -- PlayerPreThink's carriers, limit/slide volumes, gravity; the touch loop --
@@ -45,7 +46,7 @@ static void SV_TASRollFollow(float *r, int fl)
 	double vh = sqrt(pmove.velocity[0] * pmove.velocity[0] + pmove.velocity[1] * pmove.velocity[1]);
 	if (fl & SV_TAS_ROLL_FOLLOW)
 	{
-		double q = r[4], c, ph, side = fabs(r[1]) ? fabs(r[1]) : 450;
+		double q = r[4], c, ph, side = fabs(r[1]) ? (fabs(r[1]) > 32767 ? 32767 : fabs(r[1])) : 450;	/* -side*sd stays a short */
 		int sd = (q > 0 || (q == 0 && r[1] <= 0)) ? 1 : -1;	/* a zero command keeps the row's side */
 		c = (30 - fabs(q)) / (vh > 1 ? vh : 1);
 		if (c > 1) c = 1;
@@ -242,7 +243,7 @@ int SV_TASRollout(edict_t *e, float *in, int n, float *out, const float *aim, fl
 
 	ran = 0;
 	airk = 0;
-	if (aimgain <= 0) aimgain = 10;
+	if (!(aimgain > 0)) aimgain = 10;	/* NaN too */
 	if (pmove.pm_type == PM_NORMAL && !pmove.waterjumptime)
 	for (k = 0; k < n; ++k)
 	{
@@ -255,7 +256,8 @@ int SV_TASRollout(edict_t *e, float *in, int n, float *out, const float *aim, fl
 			SV_TASRollFollow(r, fl & ~SV_TAS_ROLL_AIM);	/* P1449: from the velocity this tick starts with */
 		if (fl & SV_TAS_ROLL_AIM)
 			r[6] -= SV_TAS_ROLL_AIM;
-		SV_TASInputDecode(r, r + 3, r[6], &row);
+		if (!SV_TASInputDecode(r, r + 3, r[6], &row))
+			break;		/* a written-back word out of range (a NaN velocity): not a zero-input tick */
 		memset(&pmove.cmd, 0, sizeof(pmove.cmd));
 		pmove.cmd.msec = msec;
 		pmove.cmd.forwardmove = row.move[0];
@@ -299,7 +301,7 @@ int SV_TASRollout(edict_t *e, float *in, int n, float *out, const float *aim, fl
 			VectorClear(o + 9);
 		o[12] = rep;
 		ran = k + 1;
-		airk = (kind == 1 || pmove.onground) ? 0 : airk + 1;	/* P1449: ticks since the last contact */
+		airk = ((kind >= 1 && kind <= 3) || pmove.onground) ? 0 : airk + 1;	/* P1449: ticks since the last ramp or ground contact */
 	}
 
 	memcpy(&pmove, &saved, sizeof(pmove));

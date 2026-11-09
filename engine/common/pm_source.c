@@ -1788,8 +1788,10 @@ static void PMSrc_StepMove (vec3_t vecDestination, trace_t *trace)
 	trace_t t;
 	float flDownDist, flUpDist;
 	pms_tas_contact_t contactBefore, contactDown;
+	qboolean wallBefore, wallDown;	/* P1449: the wall note follows the attempt kept, as the contact does */
 
 	contactBefore = pms_tas_contact;
+	wallBefore = pms_tas_wall;
 	VectorCopy (vecDestination, vecEndPos);
 	VectorCopy (pmove.origin, vecPos);
 	VectorCopy (pmove.velocity, vecVel);
@@ -1810,9 +1812,11 @@ static void PMSrc_StepMove (vec3_t vecDestination, trace_t *trace)
 	VectorCopy (pmove.origin, vecDownPos);
 	VectorCopy (pmove.velocity, vecDownVel);
 	contactDown = pms_tas_contact;
+	wallDown = pms_tas_wall;
 
 	/* Reset only annotation with the trial; movement policy is unchanged. */
 	pms_tas_contact = contactBefore;
+	pms_tas_wall = wallBefore;
 	/* Reset and try again, stepped up. */
 	VectorCopy (vecPos, pmove.origin);
 	VectorCopy (vecVel, pmove.velocity);
@@ -1860,6 +1864,7 @@ static void PMSrc_StepMove (vec3_t vecDestination, trace_t *trace)
 		VectorCopy (vecDownPos, pmove.origin);
 		VectorCopy (vecDownVel, pmove.velocity);
 		pms_tas_contact = contactDown;
+		pms_tas_wall = wallDown;
 		return;
 	}
 
@@ -1879,6 +1884,7 @@ static void PMSrc_StepMove (vec3_t vecDestination, trace_t *trace)
 		VectorCopy (vecDownPos, pmove.origin);
 		VectorCopy (vecDownVel, pmove.velocity);
 		pms_tas_contact = contactDown;
+		pms_tas_wall = wallDown;
 	}
 	else
 	{	/* keep the stepped position, but the flat move's Z velocity */

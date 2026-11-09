@@ -11669,7 +11669,8 @@ static void QCBUILTIN PF_tas_tape(pubprogfuncs_t *prinst, struct globalvars_s *p
 }
 
 // P1443: n ticks of tas_tape rows (7 floats) through the mover from the paused body, nothing
-// kept; 13 floats a tick out. The two buffers must not overlap (rows are read as ticks are written).
+// kept but the buffers; 13 floats a tick out. The two buffers must not overlap (rows are read as ticks
+// are written; P1449 FOLLOW/AIM rows get their computed words written back).
 void *PR_PointerToNative_MoInvalidate(pubprogfuncs_t *inst, pint_t ptr, size_t offset, size_t datasize);
 static void QCBUILTIN PF_tas_rollout(pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
 {
@@ -11691,7 +11692,7 @@ static void QCBUILTIN PF_tas_rollout(pubprogfuncs_t *prinst, struct globalvars_s
 static BuiltinList_t BuiltinList[] = {				//nq	qw		h2		ebfs
 	{"sourcepractice_reset", PF_sourcepractice_reset, 0, 0, 0, 0, D("float(entity player)", "Trusted server VM: reset this current player's complete Source carry and jump latch at a neutral zero-duration decoded QW command. No world/transport/counter reset or eligibility grant; unsupported contexts return0.")},
 	{"tas_input", PF_tas_input, 0, 0, 0, 0, D("vector(entity player, float slot, float token, float field)", "TAS checkpoint input: availability0, moves1, signed angle words2, compact jump/duck/walk mask3, editor mode/amount/follow4. Not hardware evidence or file import.")},
-	{"tas_rollout", PF_tas_rollout, 0, 0, 0, 0, D("float(entity player, float *rows, float ticks, float *out)", "P1443: what ticks rows of tas_tape words (fwd side up, pitch yaw roll, buttons; 7 floats a row) would do from the paused TAS body, nothing kept: 13 floats a tick (origin, velocity, onground, ducked, contact kind, contact normal, the first entity per-command QC could act on, negated when before the tick). Returns the ticks run, or a negative reason it cannot start.")},
+	{"tas_rollout", PF_tas_rollout, 0, 0, 0, 0, D("float(entity player, float *rows, float ticks, float *out, optional vector aim, optional float aimgain, optional vector aimface)", "P1443: what ticks rows of tas_tape words (fwd side up, pitch yaw roll, buttons; 7 floats a row) would do from the paused TAS body, nothing kept but the buffers (P1449 FOLLOW/PITCHV/AIM row bits 256/512/1024 write their computed words back; aim, aimgain and aimface steer AIM rows): 13 floats a tick (origin, velocity, onground, ducked, contact kind, contact normal, the first entity per-command QC could act on, negated when before the tick). Returns the ticks run, or a negative reason it cannot start.")},
 	{"tas_tape", PF_tas_tape, 0, 0, 0, 0, D("float(entity player, float op, float a, float b, vector moves, vector angles, float buttons)", "TAS-only movement authoring: cancel0, validate1, preflight2, begin3, put4, arm5, status6, plan-cap8, plan-set9, controller-set10(mode,turn amount). No transport/world restore or human eligibility.")},
 	{"tas_rewind", PF_tas_rewind, 0, 0, 0, 0, D("float(entity player, float slot, float token, float op)", "Bounded native movement checkpoints: TAS capture0/probe1/apply2; loopback-only live-base capture3 at slot4000. Apply still requires paused TAS. Transient map/connection-bound handles; no world/counter or human-proof restore.")},
 	{"bank_gravity_source", PF_bank_gravity_source, 0, 0, 0, 0, D("void(entity player, entity source, int attempt, float bad)", "Server VM runtime gravity provenance. No entity fields, file persistence or evidence transport.")},
