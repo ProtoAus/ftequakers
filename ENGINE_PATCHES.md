@@ -3,23 +3,25 @@
 ## Patch 1457 -- r_blendsort 2's overlap proofs skip pairs whose screen boxes are apart (gl_backend.c, renderer.c)
 
 Problem: on surf_fairy's worst views the glass sort's plane proof (GLBE_BlendPlaneSort) cost ~1.0-1.2 ms per view, in
-two views a frame (the main view and a reflection), and both ended status -2 (a cycle in all three passes), so the
-frame drew the baseline order anyway. 85% of the overlap work was face pairs whose verdict was "disjoint", and 96% of
-triangle clips came out empty; 57% of the triangle pairs had screen boxes that do not touch.
+two views a frame (the main view and a reflection), and both ended status -2 (a cycle in all three passes), so the frame
+drew the baseline order anyway. 85% of the overlap work was face pairs whose verdict was "disjoint", and 96% of triangle
+clips came out empty; 57% of the triangle pairs had screen boxes that do not touch.
 
 Fix: GLBE_BlendProjectFace keeps each projected triangle's screen box and the face's. GLBE_BlendOverlapOrder returns
 disjoint at once when the face boxes are apart (the triangle loops would end at !seen), and skips a triangle pair whose
 boxes are apart (an empty clip). "Apart" needs a gap over 1e-9 of the boxes' scale. Verdicts, edges and order match
-clipping every pair while the overlap budget lasts, with one exception the review built: a near-degenerate triangle can
-pass a vertex beyond its tip, and the clip counted that rounding sliver (area ~1e-18, no pixel) across a real gap as
-overlap, an edge the box test does not add. Past the budget, skipped pairs leave budget for later pairs. r_blendsort_boxes 0 clips every pair. r_blendtrace now prints each
-view's ms (immediate, gather, sort, submit) and the last sort's verdict counts.
+clipping every pair while the overlap budget lasts, with one exception the review built: slivers along one screen line
+can pass a vertex beyond a tip, and the clip counted that rounding sliver (area 2^-58 in the built cases, no pixel)
+across a real gap as overlap, an edge the box test does not add. Past the budget, skipped pairs leave budget for later
+pairs. r_blendsort_boxes 0 clips every pair. r_blendtrace now prints each view's ms (immediate, gather, sort, submit)
+and the last sort's verdict counts.
 
-Measured (FTESurf artifacts/probe_static.py, paused replay views, same exe, cvar A/B): fairy t=7.6 main view work
-81053 -> 55482 (overlapfull 0 both), edges 1659 both, sort 1.15-1.24 -> 0.92 ms, transparent CPU 2.31/2.29 -> 1.87 ms, frame 7.25/7.20 ->
-6.91 ms; t=16.0 sort 0.62 -> 0.48 ms, transparent 1.40/1.38 -> 1.17 ms. Parked from the same pass: sorting an opaque
-batch's meshes by index position (r_multidraw merged 40-60% fewer sub-draws, CPU 0.06 ms worse: the cost is per batch,
-not per sub-draw) and drawing consecutive same-batch blend faces in one submit (-0.03 ms); both diffs in the lows2 task root, artifacts/p1457-experiments.diff.
+Measured (FTESurf artifacts/probe_static.py, paused replay views, same exe, cvar A/B): fairy t=7.6 main view work 81053
+-> 55482 (overlapfull 0 both), edges 1659 both, sort 1.15-1.24 -> 0.92 ms, transparent CPU 2.31/2.29 -> 1.87 ms, frame
+7.25/7.20 -> 6.91 ms; t=16.0 sort 0.62 -> 0.48 ms, transparent 1.40/1.38 -> 1.17 ms. Parked from the same pass: sorting
+an opaque batch's meshes by index position (r_multidraw merged 40-60% fewer sub-draws, CPU 0.06 ms worse: the cost is
+per batch, not per sub-draw) and drawing consecutive same-batch blend faces in one submit (-0.03 ms); both diffs in the
+lows2 task root, artifacts/p1457-experiments.diff.
 
 ## Patch 1449 -- tas_rollout follows the view, aims at a ramp face, and reports walls (sv_tas_rollout.inc, pm_source.c, pmove.h, pr_cmds.c, server.h)
 

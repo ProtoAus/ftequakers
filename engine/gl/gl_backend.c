@@ -9249,7 +9249,7 @@ static unsigned int bov_verdicts[2], bov_disjoint, bov_facebox;	// FTESurf Patch
 
 // FTESurf Patch 1457: screen boxes apart by more than rounding (1e-9 of their scale): clipping one polygon
 // by the other can only come out empty, or as a rounding sliver across the gap (review: a near-degenerate
-// triangle can pass a vertex beyond its tip, area ~1e-18), which the clip below counted as overlap.
+// triangle can pass a vertex beyond its tip; area 2^-58 in the built cases), which the clip below counted as overlap.
 static qboolean GLBE_BlendBoxApart(const double *a, const double *b)
 {
 	double s = 1, v;
@@ -9384,9 +9384,9 @@ static int GLBE_BlendOverlapOrder(const mesh_t *a, glblendprojface_t *fa, const 
 	if (!fa->state) GLBE_BlendProjectFace(a, fa, work);
 	if (!fb->state) GLBE_BlendProjectFace(b, fb, work);
 	if (fa->state < 0 || fb->state < 0) return hint;
-	// FTESurf Patch 1457: no triangle pair below could overlap (bar a rounding sliver, see GLBE_BlendBoxApart), so
-	// the loops would end at !seen. On surf_fairy
-	// 85% of the proof work was pairs ending disjoint, 96% of the clips empty.
+	// FTESurf Patch 1457: no triangle pair below could overlap (bar a rounding sliver, see GLBE_BlendBoxApart),
+	// so the loops would end at !seen. On surf_fairy 85% of the proof work was pairs ending disjoint, 96% of
+	// the clips empty.
 	if (r_blendsort_boxes.ival && (fa->fbox[0] > fa->fbox[1] || fb->fbox[0] > fb->fbox[1] || GLBE_BlendBoxApart(fa->fbox, fb->fbox)))
 	{
 		bov_facebox++;
