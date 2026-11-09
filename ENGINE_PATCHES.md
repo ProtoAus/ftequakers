@@ -1,5 +1,23 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1442 -- the activation warm-up keeps the window responsive; r_mapready_budget 6 (gl_shader.c, sys_win.c, sys.h)
+
+Problem: CL_MakeActive runs Shader_DoReload and GLSLWarm_MapActive in one frame. Windows marks a window that has
+not checked its queue for 5 s "Not Responding" and ghosts it, so the warm-up budget had to stay at 2 s -- and a cold
+NVIDIA cache on the PC (i9-9900K, RTX 2080 SUPER) already needs 1.96 s for surf_quarantine's 199 permutations of
+FTESurf P1441's list (a 1 s budget, standing in for a CPU half as fast, left 93 pending: 32 late compiles, 0.1% low
+137 -> 60 fps).
+
+Fix: Sys_KeepAlive (Windows GL only; WINRT/SDL builds skip the call) peeks the queue with PM_NOREMOVE; the warm-up
+calls it before each permutation compile and each resource-drain poll, at most every 0.25 s. Only sent messages are
+dispatched; posted input waits for the next frame's Sys_SendKeyEvents. r_mapready_budget defaults to 6 (was 2); its
+description names Patch 1442 so FTESurf QC can tell the engine has it before moving a saved 2.
+
+Measured (FTESurf artifacts/run_hangtest.py): a renamed exe (cold driver cache) changes to surf_quarantine with a
+29,673-entry stress list at budget 10, IsHungAppWindow sampled every 0.1 s. patch-1413 exe: warm-up 10.0 s, window
+hung 5.4 s (from 5 s into the frame to its end). P1442: warm-up 10.0 s, hung 0 s during it. Both runs also show a
+2.2-2.5 s hung period earlier, while the map itself loads (CS:GO VPK mount + BSP) -- unchanged by this patch.
+
 ## Patch 1437 -- coherent save loads and bounded lead-in grace (FTESurf QC only)
 
 Problem: independently delivered load metadata can cancel a lead-in on its first
