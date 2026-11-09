@@ -11677,13 +11677,14 @@ static void QCBUILTIN PF_tas_rollout(pubprogfuncs_t *prinst, struct globalvars_s
 	int n;
 	char *in, *out;
 	G_FLOAT(OFS_RETURN) = -1;
-	if (prinst != svprogfuncs || prinst->callargc != 4) return;
+	if (prinst != svprogfuncs || (prinst->callargc != 4 && prinst->callargc != 6)) return;	// P1449: 6 = an aim point and gain
 	if (!(nf >= 1 && nf <= 2048 && floorf(nf) == nf)) return;
 	n = (int)nf;
 	in = PR_PointerToNative_MoInvalidate(prinst, G_INT(OFS_PARM1), 0, (size_t)n*7*sizeof(float));
 	out = PR_PointerToNative_MoInvalidate(prinst, G_INT(OFS_PARM3), 0, (size_t)n*13*sizeof(float));
 	if (!in || !out || (in < out + (size_t)n*13*sizeof(float) && out < in + (size_t)n*7*sizeof(float))) return;
-	G_FLOAT(OFS_RETURN) = SV_TASRollout(G_EDICT(prinst, OFS_PARM0), (float*)in, n, (float*)out);
+	G_FLOAT(OFS_RETURN) = SV_TASRollout(G_EDICT(prinst, OFS_PARM0), (float*)in, n, (float*)out,
+		(prinst->callargc == 6) ? G_VECTOR(OFS_PARM4) : NULL, (prinst->callargc == 6) ? G_FLOAT(OFS_PARM5) : 0);
 }
 
 static BuiltinList_t BuiltinList[] = {				//nq	qw		h2		ebfs

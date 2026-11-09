@@ -23,6 +23,12 @@
  * converge on a ramp, where contact makes the path sensitive to every tick. */
 #define SV_TAS_ROLL_FOLLOW 256
 #define SV_TAS_ROLL_PITCHV 512
+/* P1449: with FOLLOW, and once the body has had no contact for 3 ticks (a flight, not a ramp's seam), the
+ * command steers toward the aim point tas_rollout was given: its sign is the side the point's bearing lies
+ * on, its size 30 (the most speed) on the bearing rising to 60 (the hardest turn that keeps speed) aimgain
+ * degrees off. On the bearing the side flips as the heading crosses it -- the strafe zigzag that flies
+ * straight while gaining. The ramp ride keeps the row's own command. */
+#define SV_TAS_ROLL_AIM 1024
 
 static float SV_TASRollWord(double deg)
 {
@@ -55,16 +61,30 @@ static void SV_TASRollFollow(float *r, int fl)
 	r[6] -= fl;
 }
 
+/* P1449: the AIM command for this tick (see SV_TAS_ROLL_AIM). */
+static float SV_TASRollAim(const float *aim, float gain)
+{
+	double err = atan2(aim[1] - pmove.origin[1], aim[0] - pmove.origin[0]) - atan2(pmove.velocity[1], pmove.velocity[0]);
+	double mag;
+	err *= 180.0 / M_PI;
+	while (err > 180) err -= 360;
+	while (err < -180) err += 360;
+	mag = 30 + 30 * (fabs(err) / gain < 1 ? fabs(err) / gain : 1);
+	return (float)(err >= 0 ? mag : -mag);
+}
+
 /* A row's buttons without the P1449 bits, or -1 when they are not a valid set. */
 static int SV_TASRollFlags(const float *r)
 {
 	int b;
-	if (!(r[6] >= 0 && r[6] <= 7 + SV_TAS_ROLL_FOLLOW + SV_TAS_ROLL_PITCHV && floor(r[6]) == r[6]))
+	if (!(r[6] >= 0 && r[6] <= 7 + SV_TAS_ROLL_FOLLOW + SV_TAS_ROLL_PITCHV + SV_TAS_ROLL_AIM && floor(r[6]) == r[6]))
 		return -1;
 	b = (int)r[6];
 	if ((b & SV_TAS_ROLL_FOLLOW) && !(r[4] >= -180 && r[4] <= 180))
 		return -1;
-	return b & (SV_TAS_ROLL_FOLLOW | SV_TAS_ROLL_PITCHV);
+	if ((b & SV_TAS_ROLL_AIM) && !(b & SV_TAS_ROLL_FOLLOW))
+		return -1;
+	return b & (SV_TAS_ROLL_FOLLOW | SV_TAS_ROLL_PITCHV | SV_TAS_ROLL_AIM);
 }
 
 /* The first entity per-command QC could act on after this tick (0 none): SV_RunCmd's touch loop
@@ -107,7 +127,7 @@ static int SV_TASRolloutActor(edict_t *e, int *kind)
  * -6 water/ladder/duck transition, -7 non-default gravity (bank gravity would observe it),
  * -8 the TAS clock, -9 a carrier (QC's run_basevel, or standing on a non-world entity),
  * -10 a row that does not decode. A trigger volume the body starts in is named, negated, on the first tick. */
-int SV_TASRollout(edict_t *e, float *in, int n, float *out)
+int SV_TASRollout(edict_t *e, float *in, int n, float *out, const float *aim, float aimgain)
 {
 	static playermove_t saved;
 	extern float frametime;
@@ -119,7 +139,7 @@ int SV_TASRollout(edict_t *e, float *in, int n, float *out)
 	eval_t *ev;
 	wedict_t *start;
 	extern cvar_t pm_physicsmode;
-	int i, k, msec, kind, rep, startrep, ran;
+	int i, k, msec, kind, rep, startrep, ran, airk;
 	cl = SV_TASRewindClient(e);
 	if (!cl || !SV_TASInputPool(cl) || n < 1 || n > SV_TAS_ROLL_MAX || !in || !out)
 		return -1;
@@ -158,7 +178,7 @@ int SV_TASRollout(edict_t *e, float *in, int n, float *out)
 		const float *r = in + k*SV_TAS_ROLL_IN;
 		float ang[3];
 		int fl = SV_TASRollFlags(r);
-		if (fl < 0)
+		if (fl < 0 || ((fl & SV_TAS_ROLL_AIM) && !aim))
 			return -10;
 		ang[0] = r[3]; ang[1] = (fl & SV_TAS_ROLL_FOLLOW) ? 0 : r[4]; ang[2] = r[5];
 		if (!SV_TASInputDecode(r, ang, r[6] - fl, &row))
@@ -202,14 +222,20 @@ int SV_TASRollout(edict_t *e, float *in, int n, float *out)
 	startrep = start ? NUM_FOR_EDICT(svprogfuncs, (edict_t*)start) : 0;
 
 	ran = 0;
+	airk = 0;
+	if (aimgain <= 0) aimgain = 10;
 	if (pmove.pm_type == PM_NORMAL && !pmove.waterjumptime)
 	for (k = 0; k < n; ++k)
 	{
 		float *r = in + k*SV_TAS_ROLL_IN;
 		float *o = out + k*SV_TAS_ROLL_OUT;
 		int fl = SV_TASRollFlags(r);
+		if ((fl & SV_TAS_ROLL_AIM) && airk >= 3)
+			r[4] = SV_TASRollAim(aim, aimgain);	/* P1449: a flight steers to the aim point */
 		if (fl > 0)
-			SV_TASRollFollow(r, fl);	/* P1449: from the velocity this tick starts with */
+			SV_TASRollFollow(r, fl & ~SV_TAS_ROLL_AIM);	/* P1449: from the velocity this tick starts with */
+		if (fl & SV_TAS_ROLL_AIM)
+			r[6] -= SV_TAS_ROLL_AIM;
 		SV_TASInputDecode(r, r + 3, r[6], &row);
 		memset(&pmove.cmd, 0, sizeof(pmove.cmd));
 		pmove.cmd.msec = msec;
@@ -251,6 +277,7 @@ int SV_TASRollout(edict_t *e, float *in, int n, float *out)
 			VectorClear(o + 9);
 		o[12] = rep;
 		ran = k + 1;
+		airk = (kind == 1 || pmove.onground) ? 0 : airk + 1;	/* P1449: ticks since the last contact */
 	}
 
 	memcpy(&pmove, &saved, sizeof(pmove));
