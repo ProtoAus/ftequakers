@@ -4873,6 +4873,13 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 		if (Sys_LoadLibrary("kernel32.dll", ffsfuncs))
 			pSetDllDirectoryW(L"");	//disables it (null for 'use working directory')
 	}
+	{	//FTESurf Patch 1454: a long single-call load (surf_quarantine's first: ~5 s in the hl2 plugin's BSP loader after
+		//the CS:GO mount) must not turn the window into Windows' "Not Responding" ghost; Sys_KeepAlive covers the warm-up only
+		void (WINAPI *pDisableProcessWindowsGhosting)(void);
+		dllfunction_t ghostfuncs[] = {{(void*)&pDisableProcessWindowsGhosting, "DisableProcessWindowsGhosting"}, {NULL,NULL}};
+		if (Sys_LoadLibrary("user32.dll", ghostfuncs))
+			pDisableProcessWindowsGhosting();
+	}
 
 	Win7_Init();
 

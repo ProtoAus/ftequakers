@@ -1,5 +1,19 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1454 -- no "Not Responding" ghost window during long loads (sys_win.c)
+
+Problem: a map's first load can spend several seconds in one call -- surf_quarantine: the CS:GO VPK mount, then ~5 s
+in the hl2 plugin's BSP loader -- with no message pump, and Windows replaces the window with its "Not Responding"
+ghost. Patch 1442's Sys_KeepAlive covers the shader warm-up only; FTESurf Patch 1453 redraws the loading screen
+before each mount, not inside it.
+
+Fix: WinMain calls DisableProcessWindowsGhosting (user32, loaded by name like SetDllDirectoryW beside it). The window
+still reads hung to IsHungAppWindow while a long call runs; the ghost that replaced it is gone.
+
+Measured (FTESurf artifacts/run_hangtest.py, HG_THROTTLE=0: changelevel surf_centipedes -> surf_quarantine with the
+CS:GO mount, top-level windows of class "Ghost" counted every 0.1 s): patch-1451 exe 1 ghost window in each of two
+runs (hung 2.6-2.7 s); P1454 0 in both (hung 2.4-3.8 s).
+
 ## Patch 1451 -- the QC tempstring collector's buffers are made during the loading screen (initlib.c, progslib.h, pr_csqc.c, cl_main.c, client.h)
 
 Problem: Patch 1446 keeps the collector's snapshot block and free list per VM, but the first collection of every
