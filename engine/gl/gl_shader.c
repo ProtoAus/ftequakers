@@ -97,7 +97,7 @@ cvar_t r_glsl_warm = CVARFD("r_glsl_warm", "1", CVAR_ARCHIVE, "FTESurf Patch 127
 #define GLSLWARM_BYTES (4*1024*1024)		//written and read, at most
 #define GLSLWARM_SEED "glsl/warmseed.txt"	//FTESurf Patch 1282: the release's starter list, read beside this PC's
 #define GLSLWARM_MAX 65536					//permutations kept, all programs together
-cvar_t r_mapready_budget = CVARFD("r_mapready_budget", "2", CVAR_ARCHIVE, "Soft seconds (0..10) for registered models/images and remembered active GLSL permutations at activation. A single upload/driver compile cannot be preempted. Expiry is incomplete, NOT server timer admission; see r_mapready_info.");
+cvar_t r_mapready_budget = CVARFD("r_mapready_budget", "6", CVAR_ARCHIVE, "Soft seconds (0..10) for registered models/images and remembered active GLSL permutations at activation. A single upload/driver compile cannot be preempted. Expiry is incomplete, NOT server timer admission; see r_mapready_info. (FTESurf Patch 1442: 6, was 2; the window stays responsive meanwhile.)");
 static struct
 {
 	qboolean observing, warming, invalidated, budgethit, overflow;
@@ -5741,10 +5741,24 @@ static void MapReady_Resources(void)
 	Image_Readiness(&mapready.images, &mapready.imagepending, &mapready.imagefailed, &mapready.imageunrequested);
 }
 
+static void MapReady_KeepAlive(void)
+{	//FTESurf Patch 1442: the warm-up runs inside one frame, after Shader_DoReload (cold cache: 0.64 s on a 9900K)
+#if defined(_WIN32) && !defined(FTE_SDL) && !defined(WINRT)
+	static double last;
+	double now = Sys_DoubleTime();
+	if (now - last >= 0.25)
+	{
+		last = now;
+		Sys_KeepAlive();
+	}
+#endif
+}
+
 static void MapReady_Drain(double deadline)
 {
 	for (;;)
 	{
+		MapReady_KeepAlive();
 		MapReady_Resources();
 		if (!mapready.modelpending && !mapready.imagepending)
 			break;
@@ -5872,6 +5886,7 @@ void GLSLWarm_MapActive(void)
 						mapready.pending++;
 						continue;
 					}
+					MapReady_KeepAlive();
 					prog->permu[p] = Shader_LoadPermutation(prog, p);
 					if (!prog->permu[p])
 					{

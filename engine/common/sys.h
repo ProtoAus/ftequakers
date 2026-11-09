@@ -96,6 +96,7 @@ void Sys_ServerActivity(void);
 
 void Sys_SendKeyEvents (void);
 // Perform Key_Event () callbacks until the input que is empty
+void Sys_KeepAlive (void);	//FTESurf Patch 1442: Windows GL only (sys_win.c); callers guard
 
 int Sys_EnumerateFiles (const char *gpath, const char *match, int (QDECL *func)(const char *fname, qofs_t fsize, time_t modtime, void *parm, searchpathfuncs_t *spath), void *parm, searchpathfuncs_t *spath);
 

@@ -3195,6 +3195,15 @@ void Sys_CloseTerminal (void)
 //
 ////////////////////////////
 
+//FTESurf Patch 1442: for one long frame (CL_MakeActive's warm-up). Windows ghosts a window that has not checked its
+//queue for 5 s; PM_NOREMOVE leaves input for the next frame's Sys_SendKeyEvents (only sent messages are dispatched).
+void Sys_KeepAlive (void)
+{
+	MSG msg;
+	if (!isDedicated)
+		PeekMessage(&msg, NULL, 0, 0, PM_NOREMOVE);
+}
+
 qboolean QCExternalDebuggerCommand(char *text);
 void Sys_SendKeyEvents (void)
 {
