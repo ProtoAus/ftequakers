@@ -342,6 +342,7 @@ void GLBE_BlendCentresFlush(void) { blendcentre_gen++; }
 #define BE_CAPG_REFL 0
 #define BE_CAPG_REFR 1
 static const unsigned int be_capgroup[2] = {SHADER_HASREFLECT, SHADER_HASREFRACT|SHADER_HASREFRACTDEPTH};
+static qboolean GLBE_ShaderTakesFix2(shader_t *s);
 static int be_capfixframe[2] = {-1, -1};	//per group: host_framecount whose top-level draws sample it reused through be_capfix; -1 once its target is written
 static float be_capfix[2][16];	//its view-projection times the inverse of this frame's (SP_M_CAPTUREFIX, SP_M_CAPTUREFIX2)
 static const float be_identity16[16] = {1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1};
@@ -4716,7 +4717,15 @@ static void BE_Program_Set_Attributes(const program_t *prog, struct programpermu
 			qglUniformMatrix3x4fv(ph, shaderstate.sourcevbo->numbones, false, shaderstate.sourcevbo->bones);
 			break;
 		case SP_M_CAPTUREFIX:	//FTESurf Patch 1245: only the top-level view samples a reused capture
-			qglUniformMatrix4fvARB(ph, 1, false, (be_capfixframe[BE_CAPG_REFL] == host_framecount && !r_refdef.recurse) ? be_capfix[BE_CAPG_REFL] : be_identity16);
+			{	//FTESurf Patch 1455 review 1: a program without m_capturefix2 (lmreflect samples its refraction here too) takes
+				//whichever group is kept -- GLBE_CaptureKeep never mixes the groups for it, so both share one camera
+				int g = BE_CAPG_REFL, j;
+				for (j = 0; j < perm->numparms && perm->parm[j].type != SP_M_CAPTUREFIX2; j++)
+					;
+				if (j == perm->numparms && be_capfixframe[BE_CAPG_REFL] != host_framecount)
+					g = BE_CAPG_REFR;
+				qglUniformMatrix4fvARB(ph, 1, false, (be_capfixframe[g] == host_framecount && !r_refdef.recurse) ? be_capfix[g] : be_identity16);
+			}
 			break;
 		case SP_M_CAPTUREFIX2:	//FTESurf Patch 1455
 			qglUniformMatrix4fvARB(ph, 1, false, (be_capfixframe[BE_CAPG_REFR] == host_framecount && !r_refdef.recurse) ? be_capfix[BE_CAPG_REFR] : be_identity16);
@@ -7164,6 +7173,7 @@ typedef struct
 	plane_t plane;
 	unsigned int need;		//kinds the chosen plane's world batches sample
 	unsigned int needall;	//...and every on-screen world water facing the eye (r_waterviews 1 captures them all)
+	qboolean allfix2;		//FTESurf Patch 1455 review 1: ...and all of those take m_capturefix2 (r_waterviews 1 lets lmreflect sample the pair)
 	batch_t combined;		//the chosen plane's on-screen batches as one, then (at 1) every other on-screen water
 	mesh_t **mesh;			//facing the eye: the capture's PVS covers the water that samples it
 	unsigned int maxmesh;
@@ -7564,6 +7574,7 @@ static void GLBE_WaterViewsBegin(batch_t **worldbatches)
 	wv = &be_waterview[level];
 	wv->chosen = NULL;
 	wv->need = wv->needall = 0;
+	wv->allfix2 = true;
 	wv->helddone = 0;
 	if (r_refdef.playerview && r_refdef.playerview >= cl.playerview && r_refdef.playerview < cl.playerview + MAX_SPLITS)
 		seat = r_refdef.playerview - cl.playerview;
@@ -7614,6 +7625,7 @@ static void GLBE_WaterViewsBegin(batch_t **worldbatches)
 				{
 					planes[s].w += w;
 					wv->needall |= b->shader->flags & BE_WATERKINDS;	//only on-screen water asks
+					wv->allfix2 &= GLBE_ShaderTakesFix2(b->shader);
 				}
 			}
 		//the heaviest plane whose water the eye can see past the world's solids (Source picks the eye's fog
@@ -7688,7 +7700,7 @@ static void GLBE_WaterViewsEnd(void)
 
 extern cvar_t r_capturehalfrate, r_capturerate;
 extern int host_framecount;
-cvar_t r_capturestagger = CVARFD("r_capturestagger", "1", CVAR_ARCHIVE, "FTESurf Patch 1455: under r_capturerate, when the reflection and the refraction of the kept water plane are both due, render only the older one this frame and keep the other (each still renders at the rate; a kind kept 1.5 intervals renders regardless), so a capture frame draws one extra view instead of two. Only for shaders that take m_capturefix2 (vmt/water); at or below the rate both render every frame. 0: both together.");
+cvar_t r_capturestagger = CVARFD("r_capturestagger", "1", CVAR_ARCHIVE, "FTESurf Patch 1455: under r_capturerate, when the reflection and the refraction of the kept water plane are both due, render only the older one this frame and keep the other, when the kept one stays under 1.5 intervals old -- so a capture frame draws one extra view instead of two. Above 4/3 of the rate each kind still refreshes at about the rate; nearer the rate, at or below it, or with any on-screen water whose shader lacks m_capturefix2 (vmt/water has it), both render together. 0: always together.");
 //FTESurf Patch 1281: kept captures are on at either setting; a rate redraws by the clock, else by frame count
 #define BE_CAPTUREKEEPS (r_capturehalfrate.ival || r_capturerate.value > 0)
 static double GLBE_CaptureAge(int g)
@@ -7704,24 +7716,22 @@ static qboolean GLBE_CaptureDue(int g)
 	return be_capkeep.reused >= r_capturehalfrate.ival;
 }
 //FTESurf Patch 1455: a shader whose program -- its own or a pass's (vmt/water's is a pass's) -- samples the refraction
-//through m_capturefix2; cached for the last shader asked
+//through m_capturefix2 (not cached: a reloaded shader can reuse a pointer)
 static qboolean GLBE_ProgTakesFix2(program_t *prog)
 {
 	return prog && prog->shadertext && strstr(prog->shadertext, "m_capturefix2");
 }
 static qboolean GLBE_ShaderTakesFix2(shader_t *s)
 {
-	static shader_t *last;
-	static qboolean takes;
 	int i;
-	if (s != last)
-	{
-		last = s;
-		takes = s && GLBE_ProgTakesFix2(s->prog);
-		for (i = 0; s && !takes && i < s->numpasses; i++)
-			takes = GLBE_ProgTakesFix2(s->passes[i].prog);
-	}
-	return takes;
+	if (!s)
+		return false;
+	if (GLBE_ProgTakesFix2(s->prog))
+		return true;
+	for (i = 0; i < s->numpasses; i++)
+		if (GLBE_ProgTakesFix2(s->passes[i].prog))
+			return true;
+	return false;
 }
 //FTESurf Patch 1245: m_capturefix turns a reused capture's camera to this frame's and does not move it:
 //what it reflects is taken as distant. Moved too (exact on the water plane) was worse on a 24-unit slide,
@@ -7741,6 +7751,15 @@ static unsigned int GLBE_CaptureKeep(const plane_t *p, entity_t *ent, unsigned i
 	int seat = BE_Seat(), g;
 	vec3_t d;
 	unsigned int keep = 0, due = 0;
+	static int dframe = -1;
+	static double dreal, framed = 1;	//FTESurf Patch 1455 review 1: a frame's interval in capture intervals, on realtime
+	if (dframe != host_framecount)
+	{
+		if (dframe >= 0 && host_framecount > dframe)
+			framed = (realtime - dreal) * max(r_capturerate.value, 20) / (host_framecount - dframe);
+		dreal = realtime;
+		dframe = host_framecount;
+	}
 	if (!need || be_capkeep.ent != ent || be_capkeep.pv != r_refdef.playerview || !GLBE_WaterSamePlane(p, &be_capkeep.plane))
 		return 0;
 	//a seat can draw several world views a frame (stereo eyes, r_projection's faces, renderscenes): a view reuses
@@ -7773,10 +7792,11 @@ static unsigned int GLBE_CaptureKeep(const plane_t *p, entity_t *ent, unsigned i
 			keep |= k;
 	}
 	if (due && !keep && stagger && r_capturestagger.ival && r_capturerate.value > 0 &&
-		(need & be_capgroup[BE_CAPG_REFL]) && (need & be_capgroup[BE_CAPG_REFR]) && host_frametime * r_capturerate.value < 1)
-	{	//both due, above the rate: keep the newer group one more frame unless it is overdue
+		(need & be_capgroup[BE_CAPG_REFL]) && (need & be_capgroup[BE_CAPG_REFR]))
+	{	//both due: keep the newer group one more frame if it is still under 1.5 intervals then -- between the rate
+		//and 4/3 of it both stay due every frame and staggering would halve each group's refresh (review 1)
 		g = GLBE_CaptureAge(BE_CAPG_REFL) < GLBE_CaptureAge(BE_CAPG_REFR) ? BE_CAPG_REFL : BE_CAPG_REFR;
-		if (GLBE_CaptureAge(g) < 1.5)
+		if (GLBE_CaptureAge(g) + framed < 1.5)
 			keep = need & be_capgroup[g];
 	}
 	else if (due && keep && !(stagger && r_capturestagger.ival && r_capturerate.value > 0))
@@ -7901,7 +7921,7 @@ static qboolean GLBE_GenerateBatchTextures(batch_t *batch, shader_t *bs)
 			}
 			if (chosenplane && !r_refdef.recurse && BE_CAPTUREKEEPS)
 			{	//FTESurf Patch 1455: a group at a time when the water's shader takes m_capturefix2
-				fix2 = GLBE_ShaderTakesFix2(wv->chosen->shader);
+				fix2 = wv->allfix2 && GLBE_ShaderTakesFix2(wv->chosen->shader);
 				kept = GLBE_CaptureKeep(&p, &r_worldentity, need & ~wv->helddone, fix2);
 				if (kept && !(need & ~wv->helddone & ~kept))
 				{
