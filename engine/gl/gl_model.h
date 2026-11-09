@@ -1195,6 +1195,11 @@ typedef struct model_s
 	//FTESurf Patch 888: the collision tree mover 9 traces instead of this model's, for a .phy
 	//hull whose old 16-bit indices wrapped (BIH_Trace swaps).  In memgroup; NULL = this one.
 	struct model_s *phyfixed;
+	//FTESurf Patch 1440: a Source MDL's bodyparts (fteplug_hl2 fills them; zero for every other format). A surface
+	//with geomset g < MAX_GEOMSETS and geomcount[g] set is drawn while (entity body / geombase[g]) % geomcount[g]
+	//is its geomid -- Source's packed m_nBody (studio.cpp). APPEND-ONLY like the fields above.
+	unsigned int	geombase[32];	//MAX_GEOMSETS (client/render.h)
+	unsigned short	geomcount[32];
 } model_t;
 
 #define MDLF_EMITREPLACE     0x0001 // particle effect engulphs model (don't draw)

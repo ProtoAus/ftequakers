@@ -679,8 +679,14 @@ static shader_t *GL_ChooseSkin(galiasinfo_t *inf, model_t *model, int surfnum, e
 #endif
 		}
 	}
-	else if (inf->geomset < MAX_GEOMSETS && 0 != inf->geomid)
-		return NULL;
+	else if (inf->geomset < MAX_GEOMSETS)
+	{	//FTESurf Patch 1440: a Source bodypart draws the model the entity's body picks; other formats keep id 0
+		unsigned int want = 0, n = model->geomcount[inf->geomset];
+		if (n)
+			want = ((unsigned int)e->body / max(1u, model->geombase[inf->geomset])) % n;
+		if (inf->geomid != want)
+			return NULL;
+	}
 
 
 	/*hexen2 feature: global skins */
