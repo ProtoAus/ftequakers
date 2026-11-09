@@ -20,6 +20,23 @@ tape plays): 44 of 44 landings bit-equal in origin and velocity (22 ground, 22 a
 strafe input gives 0 of 22 (18.3 u, 253 u/s off); a server without the builtin prints no check. 70-75k ticks/s
 on this PC (588 rollouts/s of 128 ticks).
 
+## Patch 1450 -- keyboard enumeration is not proof of registration (tools/hidcheck.py)
+
+Problem: the HID reader inferred that an enumerated/bound keyboard count proved
+successful Windows registration, both when explaining an unavailable observer
+and when attributing key device IDs. Those headers do not establish either claim.
+
+Change: qualify both notes, leave legacy device ID 0 unattributed, and preserve
+existing observation availability, counters, flags and faults. Reader-only; no
+engine input/capture field, native pin/tag, QC Build, ranking or enforcement change.
+The native registration/lifecycle follow-up remains OPEN, not fixed by these notes.
+
+Verified: strengthened tests first expose six assertions on the untouched reader
+(314 checks total), then all314 pass with the correction; receipt268, snapshots12,
+recording949 pass. Same-buffer read-only corpus561 REC/179 VIEW/25 HID has identical
+reports and faults before/after (346/5/0). No new native build or input-policy claim.
+See FTESurf tools/p1450-keyboard-registration.md for limits and delivery status.
+
 ## Patch 1444 -- r_spikes: the slowest frames' own CPU time by group (cl_screen.c, cl_main.c, gl_shader.c)
 
 Problem: r_budget averages a window (0.5 s), so the frames that set the 0.1% lows -- a handful in 30 s -- vanish
