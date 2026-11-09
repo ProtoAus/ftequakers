@@ -436,7 +436,7 @@ cvar_t r_voidfog							= CVARFD ("r_voidfog", "1", CVAR_ARCHIVE,
 												"Has no effect anywhere r_voidvis does not.");
 // Center-depth ordering is practical for separated panes, not intersecting polygons/OIT.
 cvar_t r_blendcache = CVARD ("r_blendcache", "1", "FTESurf Patch 1409: on Source maps r_blendsort 2 keeps each static blended face's sorting centre (world and brush-entity faces) instead of recomputing it over every triangle each frame; the order and the picture are the same. 0: recompute every frame (surf_bossfight 287 against 495-538 fps).");
-cvar_t r_blendsort_boxes = CVARD ("r_blendsort_boxes", "1", "FTESurf Patch 1457: r_blendsort 2's overlap proofs skip face and triangle pairs whose screen boxes are apart, which could only prove 'no overlap'; the verdicts and the order are the same while the proof budget lasts. 0: clip every pair (surf_fairy's worst view: sort 0.92 against 1.2 ms).");
+cvar_t r_blendsort_boxes = CVARD ("r_blendsort_boxes", "1", "FTESurf Patch 1457: r_blendsort 2's overlap proofs skip face and triangle pairs whose screen boxes are apart, which could only prove 'no overlap'; the verdicts match clipping every pair while the proof budget lasts, except a rounding sliver (area ~1e-18, no pixel) that clip found between apart boxes. 0: clip every pair (surf_fairy's worst view: sort 0.92 against 1.2 ms).");
 cvar_t r_blendsort = CVARFD ("r_blendsort", "1", CVAR_ARCHIVE,
 	"Blended surface ordering.\n"
 	"0: emit order.\n"

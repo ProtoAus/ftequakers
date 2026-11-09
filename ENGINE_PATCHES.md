@@ -9,13 +9,14 @@ triangle clips came out empty; 57% of the triangle pairs had screen boxes that d
 
 Fix: GLBE_BlendProjectFace keeps each projected triangle's screen box and the face's. GLBE_BlendOverlapOrder returns
 disjoint at once when the face boxes are apart (the triangle loops would end at !seen), and skips a triangle pair whose
-boxes are apart (an empty clip). "Apart" needs a gap over 1e-9 of the boxes' scale, so only a rounding sliver across a
-real gap could have counted as overlap. Verdicts, edges and order are unchanged while the overlap budget lasts; past it,
-skipped pairs leave budget for later pairs. r_blendsort_boxes 0 clips every pair. r_blendtrace now prints each
+boxes are apart (an empty clip). "Apart" needs a gap over 1e-9 of the boxes' scale. Verdicts, edges and order match
+clipping every pair while the overlap budget lasts, with one exception the review built: a near-degenerate triangle can
+pass a vertex beyond its tip, and the clip counted that rounding sliver (area ~1e-18, no pixel) across a real gap as
+overlap, an edge the box test does not add. Past the budget, skipped pairs leave budget for later pairs. r_blendsort_boxes 0 clips every pair. r_blendtrace now prints each
 view's ms (immediate, gather, sort, submit) and the last sort's verdict counts.
 
 Measured (FTESurf artifacts/probe_static.py, paused replay views, same exe, cvar A/B): fairy t=7.6 main view work
-81053 -> 55482, edges 1659 both, sort 1.15-1.24 -> 0.92 ms, transparent CPU 2.31/2.29 -> 1.87 ms, frame 7.25/7.20 ->
+81053 -> 55482 (overlapfull 0 both), edges 1659 both, sort 1.15-1.24 -> 0.92 ms, transparent CPU 2.31/2.29 -> 1.87 ms, frame 7.25/7.20 ->
 6.91 ms; t=16.0 sort 0.62 -> 0.48 ms, transparent 1.40/1.38 -> 1.17 ms. Parked from the same pass: sorting an opaque
 batch's meshes by index position (r_multidraw merged 40-60% fewer sub-draws, CPU 0.06 ms worse: the cost is per batch,
 not per sub-draw) and drawing consecutive same-batch blend faces in one submit (-0.03 ms); both diffs in the lows2 task root, artifacts/p1457-experiments.diff.
