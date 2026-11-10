@@ -326,7 +326,6 @@ static const unsigned int be_capgroupkinds[BE_CAPGROUPS] = {SHADER_HASREFRACT|SH
 static struct
 {
 	int frame, views;		//host_framecount they last served (rendered or reused), and the views that rendered them
-	unsigned int kinds;		//SHADER_HASREFLECT etc. actually written to a target
 	plane_t plane;
 	entity_t *ent;			//the batch's: the world for water, a func_reflective_glass for glass
 	int fbw, fbh;
@@ -338,6 +337,9 @@ static struct
 		float vp[16];		//the projection times the view's rotation it was rendered for (GLBE_TurnVP)
 		vec3_t eye, fwd;	//and the eye and its forward (a teleport or a flick renders afresh)
 		int keptframe;		//host_framecount a keep was applied in: the plane's other batches share it
+		int heldframe;		//host_framecount it was last served while due (never two frames running)
+		int wroteframe;		//host_framecount it last rendered
+		unsigned int kinds;	//SHADER_HASREFLECT etc. its last render wrote to a target
 		double rendered;	//realtime it rendered (r_capturerate)
 	} g[BE_CAPGROUPS];
 } be_capkeep = {-1};
@@ -7760,14 +7762,22 @@ static unsigned int GLBE_CaptureKeep(const plane_t *p, entity_t *ent, unsigned i
 	{
 		if (!(gk = need & be_capgroupkinds[g]))
 			continue;
-		if (be_capkeep.g[g].keptframe == host_framecount && be_capfixframe[g] == host_framecount)
-		{
-			kept |= gk;	//another batch of the plane kept it this frame
+		if (be_capkeep.frame == host_framecount && !(gk & ~be_capkeep.g[g].kinds) &&
+			((be_capkeep.g[g].keptframe == host_framecount && be_capfixframe[g] == host_framecount) ||	//kept this frame
+			 (be_capkeep.g[g].wroteframe == host_framecount && be_capfixframe[g] != host_framecount)))	//rendered this frame
+		{	//by another batch of the plane
+			if (gk & SHADER_HASREFLECT)
+				BE_StampCapture(BE_CAPREFL);
+			if (gk & SHADER_HASREFRACT)
+				BE_StampCapture(BE_CAPREFR);
+			if (gk & SHADER_HASREFRACTDEPTH)
+				BE_StampCapture(BE_CAPDEPTH);
+			kept |= gk;
 			continue;
 		}
 		renders++;
 		VectorSubtract(r_refdef.vieworg, be_capkeep.g[g].eye, d);
-		if (!common || (gk & ~be_capkeep.kinds) ||
+		if (!common || (gk & ~be_capkeep.g[g].kinds) ||
 			DotProduct(d, d) > 128*128 || DotProduct(vpn, be_capkeep.g[g].fwd) < 0.866f)	//past 128 units or 30 degrees
 			continue;
 		if (((gk & SHADER_HASREFLECT) && !TEXVALID(shaderstate.tex_reflection[0])) ||
@@ -7779,10 +7789,13 @@ static unsigned int GLBE_CaptureKeep(const plane_t *p, entity_t *ent, unsigned i
 			keep |= 1u<<g;
 			renders--;
 		}
-		else if (hold < 0 || be_capkeep.g[g].rendered > be_capkeep.g[hold].rendered)
+		else if (be_capkeep.g[g].heldframe != host_framecount - 1 &&
+			(hold < 0 || be_capkeep.g[g].rendered > be_capkeep.g[hold].rendered))
 			hold = g;
 	}
-	if (staggers && hold >= 0 && renders > 1)
+	//at a frame rate under twice r_capturerate a held group would capture at half the rate rather than a frame late
+	if (staggers && hold >= 0 && renders > 1 &&
+		(r_capturerate.value <= 0 || host_frametime * max(r_capturerate.value, 20) < 0.5))
 		keep |= 1u<<hold;
 	else
 		hold = -1;
@@ -7806,6 +7819,8 @@ static unsigned int GLBE_CaptureKeep(const plane_t *p, entity_t *ent, unsigned i
 			if (gk & SHADER_HASREFRACTDEPTH)
 				BE_StampCapture(BE_CAPDEPTH);
 			be_capkeep.g[g].keptframe = host_framecount;
+			if (g == hold)
+				be_capkeep.g[g].heldframe = host_framecount;
 			be_capkeep.g[g].reused++;
 			if (turned)
 				Matrix4_Multiply(be_capkeep.g[g].vp, inv, be_capfix[g]);
@@ -7946,7 +7961,7 @@ static qboolean GLBE_GenerateBatchTextures(batch_t *batch, shader_t *bs)
 				qboolean staggers = GLBE_CaptureStaggers(cs);
 				for (g = 0; g < BE_CAPGROUPS; g++)
 					if (be_capfixframe[g] == host_framecount && (!staggers || (need & be_capgroupkinds[g])))
-						need |= (wv->helddone | be_capkeep.kinds) & (staggers ? be_capgroupkinds[g] : BE_WATERKINDS);
+						need |= (wv->helddone | be_capkeep.g[0].kinds | be_capkeep.g[1].kinds) & (staggers ? be_capgroupkinds[g] : BE_WATERKINDS);
 			}
 			wv->helddone |= need;
 			cf = (bs->flags & ~BE_WATERKINDS) | need;
@@ -8243,25 +8258,28 @@ static qboolean GLBE_GenerateBatchTextures(batch_t *batch, shader_t *bs)
 		if (!(r_refract_fboival || (cf & (SHADER_HASPORTAL|SHADER_HASREFRACTDEPTH))))
 			written &= ~SHADER_HASREFRACT;	//the screen copy writes no target
 		for (g = 0; g < BE_CAPGROUPS; g++)
-			if (written & be_capgroupkinds[g])
+			if (written && (cf & be_capgroupkinds[g]))	//a screen-copy refraction is this frame's too
 			{
 				be_capfixframe[g] = -1;	//whatever samples the targets now samples what was just rendered
 				be_capkeep.g[g].keptframe = -1;
 			}
 		if (keepable && written)
 		{
+			qboolean other = false;
 			if (be_capkeep.frame != host_framecount)
 			{
-				be_capkeep.kinds = 0;
+				be_capkeep.g[0].kinds = be_capkeep.g[1].kinds = 0;
 				be_capkeep.views = 0;
 			}
-			if (!be_capkeep.kinds)
+			if (!(be_capkeep.g[0].kinds | be_capkeep.g[1].kinds))
 				be_capkeep.views++;
 			else if (!GLBE_WaterSamePlane(&keepplane, &be_capkeep.plane) || be_capkeep.pv != r_refdef.playerview || be_capkeep.ent != keepent ||
 				be_capkeep.view != BE_SeatView(BE_Seat()))
+			{
 				be_capkeep.views++;	//a second plane, entity, seat or world view this frame: nothing is kept next frame
+				other = true;
+			}
 			be_capkeep.frame = host_framecount;
-			be_capkeep.kinds |= written;
 			be_capkeep.plane = keepplane;
 			be_capkeep.ent = keepent;
 			be_capkeep.fbw = vid.fbpwidth;
@@ -8270,12 +8288,21 @@ static qboolean GLBE_GenerateBatchTextures(batch_t *batch, shader_t *bs)
 			be_capkeep.view = BE_SeatView(BE_Seat());
 			for (g = 0; g < BE_CAPGROUPS; g++)
 				if (written & be_capgroupkinds[g])
-				{
+				{	//a render replaces what the group lists, unless this view already rendered it this frame
+					if (other || be_capkeep.g[g].wroteframe != host_framecount)
+						be_capkeep.g[g].kinds = 0;
+					be_capkeep.g[g].kinds |= written & be_capgroupkinds[g];
+					be_capkeep.g[g].wroteframe = host_framecount;
 					be_capkeep.g[g].reused = 0;
 					be_capkeep.g[g].rendered = realtime;
 					memcpy(be_capkeep.g[g].vp, keepvp, sizeof(keepvp));
 					VectorCopy(keepeye, be_capkeep.g[g].eye);
 					VectorCopy(keepfwd, be_capkeep.g[g].fwd);
+				}
+				else if (other)
+				{	//what the earlier plane left there serves no batch of this one
+					be_capkeep.g[g].kinds = 0;
+					be_capkeep.g[g].keptframe = be_capkeep.g[g].wroteframe = -1;
 				}
 		}
 		else if (written)
