@@ -542,6 +542,9 @@ static char *Cbuf_StripText(int level)	//remove all text in the command buffer a
 	return buf;
 }
 
+qboolean cmd_spikes;			//r_spikes: time each line Cbuf runs (cl_screen.c reads and clears)
+double cmd_spikeus, cmd_spiketotalus;
+char cmd_spikeline[40];
 void Cbuf_ExecuteLevel (int level)
 {
 	int		i;
@@ -678,7 +681,22 @@ void Cbuf_ExecuteLevel (int level)
 		}
 
 // execute the command line
-		Cmd_ExecuteString (line, level);
+		if (cmd_spikes)
+		{
+			double t0 = Sys_DoubleTime(), us;
+			char first[sizeof(cmd_spikeline)];
+			Q_strncpyz(first, line, sizeof(first));	//the command may longjmp or rewrite line
+			Cmd_ExecuteString (line, level);
+			us = (Sys_DoubleTime() - t0) * 1000000;
+			cmd_spiketotalus += us;
+			if (us > cmd_spikeus)
+			{
+				cmd_spikeus = us;
+				memcpy(cmd_spikeline, first, sizeof(cmd_spikeline));
+			}
+		}
+		else
+			Cmd_ExecuteString (line, level);
 		if (line != linebuf)
 			free(line);
 	}
