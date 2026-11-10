@@ -3498,6 +3498,19 @@ void GL_ForgetPointers(void)
 }
 
 //the vid routines have initialised a window, and now they are giving us a reference to some of of GetProcAddress to get pointers to the funcs.
+//DIAGNOSTIC (lows2, not shipped): gl_debugperf 1 at launch prints the driver's debug messages in a release build
+cvar_t gl_debugperf = CVARD("gl_debugperf", "0", "DIAGNOSTIC: at context creation, print the driver's GL debug messages (performance and other) with a timestamp.");
+static void APIENTRY GL_DebugPerfProc(GLenum source, GLenum type, GLuint id, GLenum severity, GLsizei length, const GLchar *message, const GLvoid *userParam)
+{
+	static double second;
+	static int lines;
+	double now = Sys_DoubleTime();
+	if (now - second > 1)
+		second = now, lines = 0;
+	if (++lines > 60)
+		return;
+	Con_Printf("gldebug %.4f src %x type %x id %u sev %x: %s\n", now, source, type, id, severity, message);
+}
 qboolean GL_Init(rendererstate_t *info, void *(*getglfunction) (char *name))
 {
 #ifndef GL_STATIC
@@ -3735,6 +3748,27 @@ qboolean GL_Init(rendererstate_t *info, void *(*getglfunction) (char *name))
 	qglGetError();	/*suck up the invalid operation error for non-debug contexts*/
 #endif
 
+	if (gl_debugperf.ival)
+	{
+		void (APIENTRY *cb)(void *proc, const void *user) = getglext("glDebugMessageCallback");
+		void (APIENTRY *ctl)(GLenum source, GLenum type, GLenum severity, GLsizei count, const GLuint *ids, GLboolean enabled) = getglext("glDebugMessageControl");
+		if (!cb)
+			cb = getglext("glDebugMessageCallbackARB");
+		if (!ctl)
+			ctl = getglext("glDebugMessageControlARB");
+		if (cb)
+		{
+			if (ctl)
+				ctl(GL_DONT_CARE, GL_DONT_CARE, GL_DONT_CARE, 0, NULL, true);
+			cb((void*)GL_DebugPerfProc, NULL);
+			qglEnable(0x92E0);	//GL_DEBUG_OUTPUT
+			qglEnable(0x8242);
+			Con_Printf("gl_debugperf: callback installed\n");
+		}
+		else
+			Con_Printf("gl_debugperf: no glDebugMessageCallback\n");
+		qglGetError();
+	}
 	sh_config.texture2d_maxsize = 256;	//early minidrivers might not implement this, but anything else should.
 	qglGetIntegerv(GL_MAX_TEXTURE_SIZE, &sh_config.texture2d_maxsize);
 
