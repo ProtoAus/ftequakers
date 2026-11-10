@@ -8935,6 +8935,7 @@ typedef struct
 	int status; // 0 unchanged, 1 ordered, -1 budget, -2 cycle.
 	int pass; // mode2 graph: 0 overlap, 1 overlap-confirmed, 2 P742.
 	qboolean overlapfull; // GLBLEND_OVERLAP_WORK ran out: later pairs kept their hint
+	int cert; // FTESurf Patch 1465: the certificate slot that proved the failure, -1 none
 } glblendplanestats_t;
 
 //FTESurf Patch 1213: except vmt/unlit, which only calls ftetransform() (see GLBE_BlendProgramPlanar) and since
@@ -9461,6 +9462,161 @@ static int GLBE_BlendOverlapOrder(const mesh_t *a, glblendprojface_t *fa, const 
 	return positive ? 1 : negative ? -1 : 0;
 }
 
+// FTESurf Patch 1465: failure certificates. A failed sort keeps a cycle of its pass-1 graph and one of its pass-2
+// graph (pass 0's edges include pass 1's). A later view where both cycles still hold fails every pass, so it skips the
+// sort and keeps the baseline order. Pass-1 steps must survive a spent overlap budget, where a verdict becomes the
+// hint: a strict edge, or an unproved pair's edge in baseline order. On surf_fairy two views fail every frame.
+extern cvar_t r_blendsort_cert;	// WIP: moves to render.h
+#define GLBLEND_CERT_LEN 16
+#define GLBLEND_CERT_SLOTS 4
+typedef struct
+{
+	const mesh_t *mesh[2][GLBLEND_CERT_LEN];	// [0] pass 1, [1] pass 2: each face's edge goes to the next, the last's to the first
+	unsigned int len[2], stamp;
+} glblendcert_t;
+static glblendcert_t glblend_cert[GLBLEND_CERT_SLOTS];
+static unsigned int glblend_certstamp;
+
+static qboolean GLBE_BlendPairUnseen(const glblendplane_t *a, const glblendplane_t *b)
+{
+	return a->maxs[0] < b->mins[0] || b->maxs[0] < a->mins[0] || a->maxs[1] < b->mins[1] || b->maxs[1] < a->mins[1];
+}
+
+// pair[] for a before b in baseline order, bounds already overlapping.
+static int GLBE_BlendPairSide(const glblendplane_t *a, const glblendplane_t *b)
+{
+	int ab = GLBE_BlendPlaneSide(a, b), ba = -GLBE_BlendPlaneSide(b, a);
+	return (ab && ba && ab != ba) ? GLBLEND_PAIR_OPPOSED : ab ? ab : ba;
+}
+
+// One stored cycle, re-proved from this view's faces: each face admitted, each step an edge of the pass's graph.
+static qboolean GLBE_BlendCertCycle(const glblendface_t *faces, size_t n, const glblendcert_t *cert, int pass)
+{
+	unsigned int len = cert->len[pass], k, a, b, i, j, tris = 0, work = 0;
+	size_t pos[GLBLEND_CERT_LEN], f;
+	glblendplane_t plane[GLBLEND_CERT_LEN];
+	glblendprojface_t proj[GLBLEND_CERT_LEN];
+	glblendproject_t *verts = NULL;
+	signed char *count = NULL;
+	double *box = NULL;
+	qboolean ok = false;
+	int rel, v;
+	if (len < 3 || len > GLBLEND_CERT_LEN)
+		return false;
+	for (k = 0; k < len; k++)
+	{
+		for (f = 0; f < n && faces[f].mesh != cert->mesh[pass][k]; f++)
+			;
+		if (f == n || !GLBE_BlendPlaneGeometry(&faces[f], &plane[k]))
+			return false;
+		pos[k] = f;
+		tris += plane[k].mesh->numindexes/3;
+	}
+	if (!pass)
+	{
+		verts = BZ_Malloc(tris * GLBLEND_CLIP_VERTS * sizeof(*verts));
+		count = BZ_Malloc(tris);
+		box = BZ_Malloc(tris * 4 * sizeof(*box));
+		for (k = 0, tris = 0; k < len; k++)
+		{
+			proj[k].verts = verts + tris*GLBLEND_CLIP_VERTS;
+			proj[k].count = count + tris;
+			proj[k].box = box + tris*4;
+			proj[k].state = 0;
+			tris += plane[k].mesh->numindexes/3;
+		}
+	}
+	for (k = 0; k < len; k++)
+	{
+		a = k; b = (k+1) % len;
+		if (pos[a] == pos[b])
+			goto done;
+		i = pos[a] < pos[b] ? a : b;
+		j = i == a ? b : a;
+		if (GLBE_BlendPairUnseen(&plane[i], &plane[j]))
+			goto done;
+		rel = GLBE_BlendPairSide(&plane[i], &plane[j]);
+		if (rel == -1 || rel == 1)
+		{
+			if ((rel < 0 ? i : j) != a)
+				goto done;
+		}
+		else if (i != a || (!pass && rel == GLBLEND_PAIR_OPPOSED))
+			goto done;	// pass 2 orders unproved and opposed pairs by baseline; pass 1 drops opposed ones
+		if (!pass)
+		{
+			v = GLBE_BlendOverlapOrder(plane[i].mesh, &proj[i], plane[j].mesh, &proj[j], rel, &work);
+			if (work >= GLBLEND_OVERLAP_WORK || v == GLBLEND_ORDER_DISJOINT || (!rel && v > 0))
+				goto done;
+		}
+	}
+	ok = true;
+done:
+	if (verts) BZ_Free(verts);
+	if (count) BZ_Free(count);
+	if (box) BZ_Free(box);
+	return ok;
+}
+
+// An edge of the failed pass's graph between unplaced faces; robust: one a spent overlap budget keeps.
+static qboolean GLBE_BlendCertEdge(const unsigned char *edges, const signed char *pair, const unsigned int *degree,
+	unsigned int n, qboolean robust, unsigned int u, unsigned int v)
+{
+	return edges[u*n+v] && degree[u] <= GLBLEND_PLANE_FACES && degree[v] <= GLBLEND_PLANE_FACES &&
+		(!robust || u < v || pair[(u < v ? u : v)*n + (u < v ? v : u)]);
+}
+
+// A short cycle among the faces Kahn could not place: depth-first, then cut by chords. 0 if none fits.
+static unsigned int GLBE_BlendCertTake(glblendcert_t *take, int pass, const glblendplane_t *planes,
+	const unsigned char *edges, const signed char *pair, const unsigned int *degree, unsigned int n)
+{
+	unsigned char colour[GLBLEND_PLANE_FACES];
+	unsigned int stack[GLBLEND_PLANE_FACES], next[GLBLEND_PLANE_FACES], depth, s, u, v, k, len = 0;
+	qboolean robust = !pass;
+	memset(colour, 0, n);
+	for (s = 0; s < n && !len; s++)
+	{
+		if (colour[s] || degree[s] > GLBLEND_PLANE_FACES)
+			continue;
+		stack[0] = s; next[0] = 0; colour[s] = 1; depth = 1;
+		while (depth && !len)
+		{
+			u = stack[depth-1];
+			for (v = next[depth-1]; v < n && !GLBE_BlendCertEdge(edges, pair, degree, n, robust, u, v); v++)
+				;
+			if (v == n) { colour[u] = 2; depth--; continue; }
+			next[depth-1] = v+1;
+			if (colour[v] == 1)
+			{
+				for (k = 0; stack[k] != v; k++)
+					;
+				len = depth - k;
+				memmove(stack, stack + k, len * sizeof(*stack));
+			}
+			else if (!colour[v])
+			{
+				colour[v] = 1; stack[depth] = v; next[depth] = 0; depth++;
+			}
+		}
+	}
+	for (k = 1; k+1 < len; k++)
+		if (GLBE_BlendCertEdge(edges, pair, degree, n, robust, stack[k], stack[0]))
+			len = k+1;
+	for (k = 0; k+2 < len; k++)
+		for (s = len-1; s > k+1; s--)
+			if (GLBE_BlendCertEdge(edges, pair, degree, n, robust, stack[k], stack[s]))
+			{
+				memmove(stack + k+1, stack + s, (len-s) * sizeof(*stack));
+				len -= s-k-1;
+				break;
+			}
+	if (len < 3 || len > GLBLEND_CERT_LEN)
+		return 0;
+	for (k = 0; k < len; k++)
+		take->mesh[pass][k] = planes[stack[k]].mesh;
+	return len;
+}
+
 static void GLBE_BlendPlaneSort(glblendface_t *faces, size_t n, glblendplanestats_t *stats)
 {
 	glblendplane_t *planes;
@@ -9475,15 +9631,30 @@ static void GLBE_BlendPlaneSort(glblendface_t *faces, size_t n, glblendplanestat
 	unsigned int degree[GLBLEND_PLANE_FACES] = {0}, order[GLBLEND_PLANE_FACES];
 	unsigned int verts = 0, tris = 0, i, j, pick, step, from, to, cost, idx, owork = 0;
 	size_t f;
-	int ab, ba;
+	int ab;
+	glblendcert_t take;	// FTESurf Patch 1465
+	qboolean certify;
+	unsigned int c;
 	stats->admitted = stats->edges = stats->work = stats->moved = 0;
 	bov_verdicts[0] = bov_verdicts[1] = bov_disjoint = bov_facebox = 0;
 	stats->status = stats->pass = 0;
 	stats->overlapfull = false;
+	stats->cert = -1;
 	// The point-eye and divided screen bounds prove only perspective rays.
 	// Nonstandard modes may select an override program with different geometry.
 	if (!GLBE_BlendPlaneViewEligible())
 		return;
+	certify = r_blendsort.ival == 2 && r_blendsort_cert.ival;
+	for (c = 0; certify && c < GLBLEND_CERT_SLOTS; c++)
+		if (GLBE_BlendCertCycle(faces, n, &glblend_cert[c], 1) && GLBE_BlendCertCycle(faces, n, &glblend_cert[c], 0))
+		{
+			glblend_cert[c].stamp = ++glblend_certstamp;
+			stats->status = -2;
+			stats->pass = 2;
+			stats->cert = c;
+			return;
+		}
+	take.len[0] = take.len[1] = 0;
 	planes = BZ_Malloc(GLBLEND_PLANE_FACES * sizeof(*planes));
 	for (f = 0; f < n; f++)
 	{
@@ -9505,16 +9676,13 @@ static void GLBE_BlendPlaneSort(glblendface_t *faces, size_t n, glblendplanestat
 		for (j = i+1; j < stats->admitted; j++)
 		{
 			idx = i*stats->admitted + j;
-			if (planes[i].maxs[0] < planes[j].mins[0] || planes[j].maxs[0] < planes[i].mins[0] ||
-				planes[i].maxs[1] < planes[j].mins[1] || planes[j].maxs[1] < planes[i].mins[1])
+			if (GLBE_BlendPairUnseen(&planes[i], &planes[j]))
 			{ pair[idx] = GLBLEND_PAIR_UNSEEN; continue; }
 			cost = planes[i].mesh->numvertexes + planes[j].mesh->numvertexes;
 			if (cost > GLBLEND_PLANE_WORK - stats->work)
 			{ stats->status = -1; goto done; }
 			stats->work += cost;
-			ab = GLBE_BlendPlaneSide(&planes[i], &planes[j]);
-			ba = -GLBE_BlendPlaneSide(&planes[j], &planes[i]);
-			pair[idx] = (ab && ba && ab != ba) ? GLBLEND_PAIR_OPPOSED : ab ? ab : ba;
+			pair[idx] = GLBE_BlendPairSide(&planes[i], &planes[j]);
 		}
 	// Pass 0 refines unproved pairs by screen overlap; pass 1 also drops strict
 	// edges between faces that never overlap. Pass 2 is P742's graph: a mix of
@@ -9625,8 +9793,18 @@ rebuild:
 		}
 		if (pick == stats->admitted)
 		{
+			if (certify && stats->pass)
+				take.len[stats->pass-1] = GLBE_BlendCertTake(&take, stats->pass-1, planes, edges, pair, degree, stats->admitted);
 			if (stats->pass < 2) { stats->pass++; goto rebuild; }
-			stats->status = -2; goto done;
+			stats->status = -2;
+			if (take.len[0] && take.len[1])
+			{
+				for (c = 0, i = 1; i < GLBLEND_CERT_SLOTS; i++)
+					if (glblend_cert[i].stamp < glblend_cert[c].stamp) c = i;
+				glblend_cert[c] = take;
+				glblend_cert[c].stamp = ++glblend_certstamp;
+			}
+			goto done;
 		}
 		order[step] = pick;
 		degree[pick] = GLBLEND_PLANE_FACES + 1;
@@ -9698,6 +9876,7 @@ static void GLBE_SubmitBlendedFaces(batch_t *world, batch_t *dynamic)
 	qboolean timing = gl_blendtrace_pending;	// FTESurf Patch 1457: r_blendtrace's ms line
 	double tm[6] = {0};
 
+	stats.cert = bstats.cert = -1;	// FTESurf Patch 1465: a view that never sorts
 	if (timing) tm[0] = Sys_DoubleTime();
 	// Finish capture/portal/sky recursion before gathering this view's records.
 	// The temp-batch pool appends during recursion; this view's batch addresses survive.
@@ -9820,6 +9999,7 @@ static void GLBE_SubmitBlendedFaces(batch_t *world, batch_t *dynamic)
 			(unsigned int)stats.edges, (unsigned int)stats.work, (unsigned int)stats.moved, stats.pass, stats.overlapfull, r_refdef.recurse);
 		Con_Printf("ALPHATRACE verdicts pass0 %u later %u disjoint %u (by face boxes %u)\n",	// FTESurf Patch 1457, last sort
 			bov_verdicts[0], bov_verdicts[1], bov_disjoint, bov_facebox);
+		Con_Printf("ALPHATRACE cert world %d entities %d\n", stats.cert, combined ? bstats.cert : -1);	// FTESurf Patch 1465
 		if (combined)
 			Con_Printf("ALPHATRACE entities admitted=%u status=%d edges=%u work=%u moved=%u pass=%d overlapfull=%d kept=%d\n",
 				(unsigned int)bstats.admitted, bstats.status, (unsigned int)bstats.edges, (unsigned int)bstats.work,
