@@ -1,5 +1,33 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1484 -- own a closing journal through callbacks and host abort (in_generic.c)
+
+**Problem:** End finalized shared storage without excluding the independent
+worker, then used mutable journal globals across callback-capable file work.
+A newer capture/digest could be dropped or rehashed by the older completion;
+nonlocal exits also bypassed normal cleanup/publication rules.
+
+**Change:** Finalize/hash under existing worker exclusion, detach into a scoped
+main-only close owner, and restore prior permission before I/O or diagnostics.
+Separate resource nesting from revocable digest-publication identity. Completion
+uses only saved bytes/digest/statistics, never a callback's active capture; pending
+or aborted close is not an available commitment. Drop/new Begin/no-open End revoke
+pending publication without freeing detached storage. Internal cleanup runs before
+all four reviewed host_abort sites, including the client SV_Error alternate and
+Android quit/error. Filename predicates and evidence grammar are unchanged.
+Normal append/backend-counter/foreign-plugin synchronization remains open.
+
+**Verified:** Actual End/Digest/LastDigest/Begin/Drop, permission and four actual
+abort functions with actual SHA-256/CalcHash plus explicit callback/OS-thread hosts:
+pinned prechange132 checks/37 failures; subject136/0. Safe stops/quarantine avoid
+executing deliberate UAF. Cap regression628/0; Begin/Drop regression18/0. Strict
+journal/host Wall/Wextra/Werror; unchanged crypto separately retains the same five
+extra signedness diagnostics in both arms. Independent source/callback/caller
+review: no issues. The discovered VFS path consumes bytes before hash-work pumping;
+returning command callbacks are injected controls, not a claimed production
+command-dispatch exploit or post-callback VFS read. No physical-input, Android
+runtime, general thread safety or detector-calibration claim.
+
 ## Patch 1480 -- exclude the physics worker during journal replacement/drop (in_generic.c)
 
 **Problem:** Main-side Begin/Drop could free, reset or publish journal storage

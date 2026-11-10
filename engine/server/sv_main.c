@@ -409,6 +409,7 @@ void VARGS SV_Error (const char *error, ...)
 		SV_UnspawnServer();
 		CL_Disconnect(string);
 		inerror=false;
+		IN_Journal_AbortClose();
 		longjmp (host_abort, 1);
 	}
 #endif

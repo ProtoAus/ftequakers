@@ -120,7 +120,7 @@ static void finish(size_t prefix, int mode, int expected_truncated) {
     check(snapshot[snapshot_len - 1] == '\n', "terminal newline");
     check(occurrences(snapshot, "\ntruncated ") == expected_truncated, "only genuine truncation marked");
     check(drops == 1 && !in_jrn_buf, "buffer dropped exactly once");
-    check(digests == (mode == 3 ? 2 : 1), "expected digest lifecycle");
+    check(digests == ((mode == 3 && !JOURNAL_CLOSE_DETACHED) ? 2 : 1), "expected digest lifecycle");
     check(writes == (mode == 0 || mode == 3), "expected write lifecycle");
     check(last_kept == (mode == 0), "kept/discard/refusal/write-failure state");
     if (writes) check(written_len == snapshot_len && !memcmp(written, snapshot, snapshot_len),
@@ -164,6 +164,25 @@ int main(void) {
 '''
 
 
+def close_support(text, host_stubs=False):
+    """Extract actual pending-close state/helpers; hosts provide the dependencies."""
+    marker = 'typedef struct in_jrn_close_s'
+    if marker not in text:
+        return '#define JOURNAL_CLOSE_DETACHED 0\n'
+    extra = '''
+#define JOURNAL_CLOSE_DETACHED 1
+typedef unsigned char qbyte;
+static qbyte in_jrn_digest[32];
+#define in_jrn_digestkept last_kept
+'''
+    if host_stubs:
+        extra += '''
+static qboolean CL_AllowIndependantSendCmd(qboolean allow) { (void)allow; return false; }
+static void BZ_Free(void *p) { free(p); }
+'''
+    return extra + text[text.index(marker):text.index('void IN_Journal_Drop(void)')]
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument('--work-root', type=Path, required=True)
@@ -178,7 +197,7 @@ def main():
     # Skip the forward declaration: require the function definition itself.
     start = text.index('static void IN_JournalEnd_f(void)\n{')
     end = text.index('static void IN_JournalNote_f(', start)
-    code = HEADER + raw + text[start:end] + TEST
+    code = HEADER + close_support(text, host_stubs=True) + raw + text[start:end] + TEST
     c = a.work_root / 'journal-close.c'
     binary = a.work_root / 'journal-close.exe'
     c.write_text(code)

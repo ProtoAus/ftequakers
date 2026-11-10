@@ -60,6 +60,7 @@ qboolean IN_SetHandPosition(const char *devname, vec3_t org, vec3_t ang, vec3_t 
 //discards its half of the recording at the same moment, so a salvaged journal would
 //be an orphan.  Note is the gamecode's hook for marking save/load points.
 void IN_Journal_Drop(void);
+void IN_Journal_AbortClose(void);	/*main-only nonlocal unwind, before host_abort*/
 void IN_Journal_Note(const char *text);
 /*FTESurf Patch 311: called by every input entry point that is NOT a platform
   backend -- the plugin input API and the in_journal_synth test command -- so the

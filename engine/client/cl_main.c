@@ -6557,6 +6557,7 @@ NORETURN void VARGS Host_EndGame (const char *message, ...)
 
 	Cvar_Set(&cl_shownet, "0");
 
+	IN_Journal_AbortClose();
 	longjmp (host_abort, 1);
 }
 

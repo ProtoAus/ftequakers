@@ -868,6 +868,7 @@ void Sys_Shutdown(void)
 void Sys_Quit(void)
 {
 #ifndef SERVERONLY
+	IN_Journal_AbortClose();
 	Host_Shutdown ();
 #else
 	SV_Shutdown();
@@ -896,6 +897,9 @@ void Sys_Error (const char *error, ...)
 
 	host_initialized = false;	//don't keep calling Host_Frame, because it'll screw stuff up more. Can't trust Host_Shutdown either. :(
 	vid.activeapp = false;		//make sure we don't busyloop.
+#ifndef SERVERONLY
+	IN_Journal_AbortClose();
+#endif
 	longjmp(host_abort, 1);
 	exit(1);
 }

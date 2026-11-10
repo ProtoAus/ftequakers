@@ -1272,12 +1272,63 @@ qboolean IN_Journal_LastDigest(qbyte digest[32], size_t *len, qboolean *kept)
 	return true;
 }
 
+/*Main-only pending closes own detached bytes, never the next active journal.
+  Resource nesting and eligibility to publish are deliberately separate.*/
+typedef struct in_jrn_close_s
+{
+	struct in_jrn_close_s *prev;
+	char *buf;
+	qbyte digest[32];
+	size_t len;
+	double digestms;
+	qboolean digestok;
+} in_jrn_close_t;
+static in_jrn_close_t *in_jrn_closes, *in_jrn_close_current;
+
+static void IN_Journal_CloseDone(in_jrn_close_t *close, qboolean kept)
+{
+	if (in_jrn_close_current == close)
+	{
+		memcpy(in_jrn_digest, close->digest, sizeof(in_jrn_digest));
+		in_jrn_digestlen = close->len;
+		in_jrn_digestms = close->digestms;
+		in_jrn_digestkept = kept;
+		in_jrn_digestok = close->digestok;
+		in_jrn_close_current = NULL;
+	}
+	in_jrn_closes = close->prev;
+	BZ_Free(close->buf);
+}
+
+/*Immediately before host_abort, while these stack records are still live.
+  No callbacks, active-journal changes or worker-permission restoration here.*/
+void IN_Journal_AbortClose(void)
+{
+	in_jrn_close_t *close;
+
+	if (!in_jrn_closes)
+		return;
+	in_jrn_close_current = NULL;
+	in_jrn_digestok = false;
+	while ((close = in_jrn_closes))
+	{
+		in_jrn_closes = close->prev;
+		BZ_Free(close->buf);
+		close->buf = NULL;
+	}
+}
+
 void IN_Journal_Drop(void)
 {
 	/*Main-side lifecycle: the worker already owns indeplock while appending.
 	  Nested Begin/End callers retain their existing ownership.*/
 	qboolean allowed = CL_AllowIndependantSendCmd(false);
 
+	if (in_jrn_close_current)
+	{
+		in_jrn_close_current = NULL;
+		in_jrn_digestok = false;
+	}
 	if (in_jrn_buf)
 		BZ_Free(in_jrn_buf);
 	in_jrn_buf = NULL;
@@ -2344,9 +2395,14 @@ static void IN_JournalEnd_f(void)
 	char namelocal[MAX_QPATH];	/*Patch 490: a copy that survives COM_WriteFile*/
 	char tail[192];	/*Patch 468: ten trailer fields*/
 	double now, writems;
-	size_t wlen;
-	qboolean discard;	/*Patch 417: decided here, acted on after the trailer*/
+	qboolean discard, allowed, wrote;
+	in_jrn_close_t close;
+	unsigned int events, frames, dropped, hidden;
 
+	/*An empty or nested End also revokes an older pending publication.*/
+	allowed = CL_AllowIndependantSendCmd(false);
+	in_jrn_close_current = NULL;
+	in_jrn_digestok = false;
 	if (!in_jrn_buf)
 	{
 		/*Patch 417: AND FORGET THE LAST ONE'S DIGEST.  A run that ends with no
@@ -2356,6 +2412,7 @@ static void IN_JournalEnd_f(void)
 		  journalled (rec_sign's fourth argument); this is the same fact enforced
 		  at the other end.*/
 		in_jrn_digestok = false;
+		CL_AllowIndependantSendCmd(allowed);
 		if (Cmd_Argc() > 1)
 			Con_Printf("in_journal_end: no journal open\n");
 		return;
@@ -2436,15 +2493,31 @@ static void IN_JournalEnd_f(void)
 	  QC_FixFileName is the same sandbox PF_fopen uses, AND a data/ prefix is required
 	  on top of it, because QC_FixFileName alone also accepts cfg/ and a journal must
 	  not be able to overwrite a config.*/
-	/*Patch 417: ONE DIGEST POINT, over the complete buffer -- trailer, devmap
-	  table and all -- whichever way this journal ends.  `kept` is the only
-	  difference between the two, and it is recorded rather than implied.*/
+	/*Digest the closed bytes once, then transfer storage before any callback-
+	  capable I/O or diagnostic. Only this close's completion may publish it.*/
+	IN_Journal_Digest(false);
+	close.digestok = in_jrn_digestok;
+	memcpy(close.digest, in_jrn_digest, sizeof(close.digest));
+	close.len = in_jrn_digestok ? in_jrn_digestlen : in_jrn_len;
+	close.digestms = in_jrn_digestms;
+	events = in_jrn_events;
+	frames = in_jrn_frames;
+	dropped = in_jrn_dropped - in_jrn_dropbase;
+	hidden = in_jrn_hidden;
+	close.buf = in_jrn_buf;
+	in_jrn_buf = NULL;
+	IN_Journal_Drop();
+	close.prev = in_jrn_closes;
+	in_jrn_closes = &close;
+	in_jrn_close_current = &close;
+	in_jrn_digestok = false;
+	CL_AllowIndependantSendCmd(allowed);
+
 	if (discard)
 	{
-		IN_Journal_Digest(false);
 		Con_DPrintf("in_journal_end: discarded, %u events / %u frames, %uk, digest %.1f ms\n",
-			in_jrn_events, in_jrn_frames, (unsigned)(in_jrn_len/1024), in_jrn_digestms);
-		IN_Journal_Drop();
+			events, frames, (unsigned)(close.len/1024), close.digestms);
+		IN_Journal_CloseDone(&close, false);
 		return;
 	}
 
@@ -2461,12 +2534,10 @@ static void IN_JournalEnd_f(void)
 	    || strcmp(name + strlen(name) - 4, ".hid"))
 	{
 		Con_Printf("in_journal_end: refused \"%s\" -- journals go under data/ as .hid\n", Cmd_Argv(1));
-		IN_Journal_Digest(false);	/*complete bytes; nobody kept them*/
-		IN_Journal_Drop();
+		IN_Journal_CloseDone(&close, false);
 		return;
 	}
 
-	IN_Journal_Digest(true);	/*the bytes as written*/
 	/*Patch 490: COPY THE NAME BEFORE THE WRITE, not after the failure.
 
 	  QC_FixFileName returns either its argument (a Z_Malloc'd Cmd_Argv copy,
@@ -2488,19 +2559,13 @@ static void IN_JournalEnd_f(void)
 	Q_snprintfz(namelocal, sizeof(namelocal), "%s", name);
 	name = namelocal;
 	writems = Sys_DoubleTime();
-	wlen = in_jrn_digestok ? in_jrn_digestlen : in_jrn_len;	//Patch 1116: the signed bytes, exactly
-	if (!COM_WriteFile(name, FS_GAMEONLY, in_jrn_buf, wlen))	//false on a short write too (P1116)
-	{
-		/*A `kept 1` digest for a file that is not there would be the one kind
-		  of commitment nobody can ever check and everybody would believe.*/
-		Con_Printf(CON_WARNING"in_journal_end: %s was not written\n", name);
-		IN_Journal_Digest(false);
-	}
+	wrote = COM_WriteFile(name, FS_GAMEONLY, close.buf, close.len);	//false on a short write too (P1116)
 	writems = (Sys_DoubleTime() - writems) * 1000;
+	if (!wrote)
+		Con_Printf(CON_WARNING"in_journal_end: %s was not written\n", name);
 	Con_DPrintf("in_journal_end: %s, %u events / %u frames / %u dropped / %u hidden, %uk, digest %.1f ms, write %.1f ms\n",
-		name, in_jrn_events, in_jrn_frames, in_jrn_dropped - in_jrn_dropbase, in_jrn_hidden, (unsigned)(in_jrn_len/1024),
-		in_jrn_digestms, writems);
-	IN_Journal_Drop();
+		name, events, frames, dropped, hidden, (unsigned)(close.len/1024), close.digestms, writems);
+	IN_Journal_CloseDone(&close, wrote);
 }
 
 static void IN_JournalNote_f(void)

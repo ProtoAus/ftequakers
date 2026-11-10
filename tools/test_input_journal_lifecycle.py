@@ -10,7 +10,7 @@ import os
 from pathlib import Path
 import subprocess
 
-from test_input_journal_end import HEADER
+from test_input_journal_end import HEADER, close_support
 
 PRE = r'''
 #include <pthread.h>
@@ -218,7 +218,7 @@ def main():
     h = h.replace('hash_sha2_256 = {hash_process};', 'hash_sha2_256 = {hash_process,1,hash_init};')
     c = a.work_root / 'journal-lifecycle.c'
     exe = a.work_root / 'journal-lifecycle.exe'
-    c.write_text(PRE + h + HOST + helper + raw + drop + lifecycle + TEST)
+    c.write_text(PRE + h + HOST + helper + close_support(text) + raw + drop + lifecycle + TEST)
     env = dict(os.environ)
     if Path(a.cc).is_absolute():
         env['PATH'] = str(Path(a.cc).parent) + os.pathsep + env.get('PATH', '')
