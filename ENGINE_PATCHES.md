@@ -1,5 +1,39 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1465 -- r_blendsort 2 skips a sort whose stored failure still holds, and leaves out faces outside the clip volume (gl_backend.c, renderer.c, render.h)
+
+Problem: after Patches 1457/1463, surf_fairy's main view and its water refraction capture still spent ~0.6-0.75 ms each
+in GLBE_BlendPlaneSort every frame, and every one of those sorts fails (status -2), so the faces keep their baseline
+order. A trace-only timer split the t=7.6 main view's 0.75 ms: plane-side proofs 0.22, pass-0 overlap verdicts 0.33
+(projection 0.14), lazy pass 1 0.11, pass 2 0.02. Counters showed pass 1 fails the barrier check, not on a cycle, in ~19
+of 20 of those sorts (an order that moves a face past an unadmitted slot).
+
+Fix 1, failure certificates (r_blendsort_cert, default 1): a failed sort keeps, for passes 1 and 2, why each failed -- a
+cycle of its graph (depth-first, cut short by chords, at most 16 faces), or a crossing: a strict edge from a face to one
+drawn before it with an unadmitted slot between, which any order keeping that edge carries past the slot. Pass 0's edges
+include pass 1's, so both holding means every pass fails. Up to four are kept (LRU) as mesh pointers; before each sort
+they are re-proved from scratch against the view's faces (admission, pair relation, direction, and for pass 1 the
+overlap verdict) and a hit returns status -2 with faces untouched. Pass-1 steps must survive a spent overlap budget,
+where a verdict becomes its hint: only strict edges, and unproved pairs' edges in baseline order, are kept.
+r_blendsort_cert 2 sorts anyway and counts a certified view where a pass did not fail.
+
+Fix 2, r_blendsort_clipcull (default 1): the gather drops a static-world or identity brush-entity face whose every
+vertex is beyond one plane of the clip volume (m_view x m_projection_std; a capture's near plane is its oblique
+water/mirror plane), with a margin of 1e-5 of each sum's magnitude for the GPU's float transform. It draws nothing;
+kept, it took plane proofs in passes 0 and 2. A view can now come under the 128-face cap or lose a cycle and sort where
+it gave up before, which changes that view's glass order (to a sorted one). Also: r_portaldebug 2 returned after
+enabling GL_DEPTH_CLAMP and left it on for the rest of the view; it returns first now.
+
+Measured (surf_fairy, paused replay views, same exe, cvar A/B): certified views sort in 0.01 ms instead of 0.44-0.75;
+transparent CPU at t=7.6 1.38/1.39 -> 0.54 (certificates) / 0.56 (with the cull), frame 6.55 -> 5.45 ms; at t=16.0
+1.31/1.29 -> 0.89 / 0.75. The cull alone (no certificates) cut the main view's sort 0.75 -> 0.61 ms but brought the
+reflection under the cap into a failing sort (+0.35 ms); certificates absorb that. Verify mode over a 30 s replay plus
+paused views: 2345 hits, 2187 proved by the full sort failing every pass, 0 wrong (158 stopped at a budget, status -1,
+before any Kahn); the same build without the pass-1 check: 1223 wrong of 4357. Replay lows (capped 300, alternating):
+off 1% 109/106, 0.1% 87/84; on 110/109/107, 95/90/88 -- the third off run failed to start (0xC0000142, the machine short
+of memory), so no lows delta is claimed. Five review rounds (certificate predicate, clip cull, and three fix rounds):
+trace counters, verify grading, the r_portaldebug leak, wording.
+
 ## Patch 1464 -- the lobby join line reads "<user> joined <mapname>" (FTESurf QC sv_lobby.qc)
 
 Problem: Lex asked for a lobby join message (10 Nov). The existing one (Patch 371) read "server: <user> joined"
