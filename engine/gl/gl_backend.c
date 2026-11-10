@@ -8912,6 +8912,7 @@ static qboolean GLBE_BlendFaceEligible(const batch_t *batch)
 // Mode2 shares default1's conservative static-world raster proof.
 static qboolean GLBE_BlendWorldBatchEligible(batch_t *batch);
 static qboolean GLBE_BlendWorldRasterEmpty(const batch_t *batch, const mesh_t *mesh);
+static qboolean GLBE_BlendWorldClipEmpty(const batch_t *batch, const mesh_t *mesh);
 
 #define GLBLEND_PLANE_FACES 128
 #define GLBLEND_PLANE_VERTS 64
@@ -9772,7 +9773,8 @@ static void GLBE_SubmitBlendedFaces(batch_t *world, batch_t *dynamic)
 					if (!mesh || !mesh->xyz_array || mesh->numvertexes <= 0 || mesh->numindexes <= 0)
 						continue;
 					// Invisible backfaces must not create cycles in the plane graph.
-					if (cullworld && (GLBE_BlendWorldRasterEmpty(batch, mesh) || GLBE_BlendWorldRasterEmptyNear(batch, mesh)))
+					if (cullworld && (GLBE_BlendWorldRasterEmpty(batch, mesh) || GLBE_BlendWorldRasterEmptyNear(batch, mesh) ||
+						GLBE_BlendWorldClipEmpty(batch, mesh)))
 						continue;
 					faces[n].batch = batch;
 					faces[n].mesh = mesh;
@@ -9935,6 +9937,50 @@ static qboolean GLBE_BlendWorldRasterEmpty(const batch_t *batch, const mesh_t *m
 			return false;
 	}
 	return nondegenerate;
+}
+
+// FTESurf Patch 1465: every vertex beyond one plane of the clip volume (a capture's near plane is its oblique
+// water or mirror plane, R_ObliqueNearClip), so no fragment survives. The margin bounds the GPU's float transform
+// by each sum's magnitude. Kept, such a face still takes plane proofs in passes 0 and 2.
+static qboolean GLBE_BlendWorldClipEmpty(const batch_t *batch, const mesh_t *mesh)
+{
+	const float *view = r_refdef.m_view, *proj = r_refdef.m_projection_std;
+	double e[4], eb[4], c[4], cb[4], p[3], m;
+	unsigned int out = 0x3f, bits;
+	int v, j, k;
+	// Portal shaders draw depth-clamped (no near/far clip); weapon and xflip entities use another projection.
+	if (!r_blendsort_clipcull.ival || ((batch->shader->flags | batch->shader->remapto->flags) & SHADER_HASPORTAL) ||
+		(batch->ent->flags & (RF_DEPTHHACK | RF_XFLIP)) || !mesh || !mesh->xyz_array || mesh->numvertexes < 1)
+		return false;
+	for (j = 0; j < 16; j++)
+		if (IS_NAN(view[j]) || IS_NAN(proj[j])) return false;
+	for (v = 0; v < mesh->numvertexes && out; v++)
+	{
+		for (j = 0; j < 3; j++)
+		{
+			if (IS_NAN(mesh->xyz_array[v][j])) return false;
+			p[j] = mesh->xyz_array[v][j];
+		}
+		for (j = 0; j < 4; j++)
+		{
+			e[j] = view[j]*p[0] + view[4+j]*p[1] + view[8+j]*p[2] + view[12+j];
+			eb[j] = fabs(view[j]*p[0]) + fabs(view[4+j]*p[1]) + fabs(view[8+j]*p[2]) + fabs(view[12+j]);
+		}
+		for (j = 0; j < 4; j++)
+			for (c[j] = cb[j] = 0, k = 0; k < 4; k++)
+			{
+				c[j] += proj[k*4+j]*e[k];
+				cb[j] += fabs(proj[k*4+j])*eb[k];
+			}
+		for (bits = 0, k = 0; k < 3; k++)
+		{
+			m = 1e-5*(cb[3] + cb[k]) + 1e-9;
+			if (c[3] + c[k] < -m) bits |= 1u << (2*k);
+			if (c[3] - c[k] < -m) bits |= 2u << (2*k);
+		}
+		out &= bits;
+	}
+	return out != 0;
 }
 
 static void GLBE_SubmitBlendedWorld(batch_t *world)
