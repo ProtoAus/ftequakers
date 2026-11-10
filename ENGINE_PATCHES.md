@@ -50,6 +50,65 @@ reserved space, kept/discarded/refused/failed-write and stale-digest close.
 Independent source review: no issues. The digest stub checks bytes submitted by
 the handler, not SHA-256 correctness, real durability, capture or concurrency.
 
+## Patch 1478 -- Jargon courses: one click for the main course, a bonus or a stage, and Continue (QC sv_tasautosurf.qc, cl_jargon.qc, cl_tasoptui.qc, cl_main.qc)
+
+Problem. Jargon (P1449's `tas autosurf`) started every run from zone 0, the main start, and its guide list was the
+leaderboard's lines plus every KSF replay of the map -- `ksf_monolith_nex.rec` is bonus 4 (`track 4` in its header) and
+was offered for the main start, where its plan began in the wrong box. Stages and bonuses had no start at all, a chain
+lived only in memory (a stop, a crash or a low-memory reap lost it), and a stuck chain simply stopped.
+
+Change.
+- Courses. The panel lists the map's courses from its zones (Main, Stage 1..N from Zone_TrackSegs(0), each Bonus; 40 at
+  most). Guide runs are read once a map for their header (map, track, leg, ksftime) and offered only for their course:
+  the board's lines on, then the leaderboard cache (Online_CacheDir, 3), KSF (3), data/momentum/<map>/<leg>/ (3),
+  data/*.rec; for a stage, whole runs of its track after those, marked "(full run)". The pick follows its file across
+  the 5 s rescans; a requested plan clears the shown one until it arrives.
+- `tas autosurf <guide> ... course T L` (`start` / `plan` without it take the guide's own header). The server refuses a
+  guide of another track or stage, finds the start zone as `!b`/`!s` do (SV_ZoneFindLeg), and cuts the guide to the
+  course: a stage of a full-run guide from its first exit from that stage's box (the timer's hull test) to its entry into
+  the next stage's box; every course at its first END-box row (KSF demos run on past their finish). The plan's
+  nearest-row search starts 64 rows before the course's first row. Stage 1 starts at the main box as a full run (the v3
+  project format has no stage-1 flag) and ends at the split into stage 2. `course` is refused with zone/onjump/onexit.
+- The guide's own start. When the body lands within 64 u of where the guide last stood still before its run, the start
+  replays the guide's rows a tick each (`tas next manual`, the jump read from the physics); within 1500 u on the same
+  floor it walks there first. Otherwise the P1449 runway steering.
+- The end. With `finish` (the panel sends it for a course) a course's finish target counts at any speed; once reached,
+  a no-key coast is predicted with the exact rollout first: a teleport into the course's end box is played (the finish),
+  any other teleport makes the last stretch a failed try (retried or backtracked). The finish is read from the timer's
+  finish record (run_t_finrec / finticks / finleg): a stage run's finish hands over to the next stage's arm at once.
+- Continue. A course chain begun at its box saves the run as a legal-start project `jg_<leg folder>` each time it
+  reaches a stretch further than before (SV_TASProjectSaveLegal), with notes beside it (data/tasproj/<map>/<name>.jargon:
+  guide and its fingerprint, course, options, the stretch reached, head tick and origin, each stretch's records and
+  start state, the plan itself), read back after writing. A new Start does not replace a saved run that got further
+  until it passes it. `tas autosurf continue T L [effort words]` checks the whole notes file (numbers, ranges, indices,
+  counts) before changing anything, checks the guide against its fingerprint, loads the project (an exact replay from
+  the start zone), checks the head tick and origin, and goes on along the saved plan with its own budgets; the panel's
+  effort words replace the saved ones except `finish` and `air`.
+- A stuck course chain tries harder by itself twice (3 tries and ride knots, then 4 tries, polish and boarding spots),
+  again from two stretches before its furthest failure, before it stops.
+- A route capped at 64 points (TAS_ASMAX) says so ("surf it stage by stage"): surf_tensor2's main course plans 64.
+
+Verified (rig, dedicated fteqwsv64 + windowed client, this tree's build-nodeploy outputs, 0 warnings; driver
+tools/p1478_courses.py):
+- t2plan1: surf_tensor2 stage 2 cut from farsh's 3:23 full run plans the same 4 boards as proto's stage-2 replay (within
+  ~40 u, identical faces); a stage-2 guide asked for stage 3 or bonus 1 is refused naming both courses. shape1: a bonus-1
+  guide asked for the main course, and the reverse, refused.
+- t2chain1 -> 2: the runway start jumped 375 u off the line in stage 2's 270 u box; the guide-prestrafe replay (20 u off
+  its standstill) boarded stretch 1 at 1130 u/s against the guide's 1129. shape2: the walk (111 u -> 12 u) then the replay.
+- t2chain2: stretches 1-2 saved, stopped; `continue 0 2` "reproduced every saved state exactly", went on from stretch 3,
+  backtracked after the Continue, saved again.
+- t2chain3-7 (the end): the 95% floor on the finish, a 400 u reach coasting into a wall and into the fail teleport, a
+  96 u target the guide's rows ran out before, and those rows padded (still 350 u short, cut by a trigger) -- hence the
+  predicted coast. shape3: "trying harder ... step 1" fired at its stuck stretch.
+- Two independent reviews (control flow; files, saves and client) found 17 issues, none a crash in the reviewed tree
+  except a hand-edited notes number (NaN, fractions) reaching an array bound check; all fixed as listed above.
+- A third review (of the fixes) found a coast retry that never ended, a last-stretch save that blocked Continue, a
+  load refusal after the chain was cleared, and teleport classes the prediction missed: fixed (FTESurf b5d836d7), build
+  0 warnings, not rerun on the rig (another session's frame-time survey held it).
+- Delivered 11 Nov ~05:30 local from FTESurf main 2360c4a9 (fteqcc 73f9a1a4): the 12 lobbies and both installs run
+  csprogs 56522910 / qwprogs fdce20d0 (.prev 01d9d44e / 91ef42d5), menu unchanged; tasrevd codes.txt 117 -> 118.
+  QC only: no engine commit, tag or pin change. FTESurf tools/p1443-path-planner.md has the rig runs.
+
 ## Patch 1476 -- tas_rollout's flight steering can weave wider: the AIMWIDE row bit (sv_tas_rollout.inc)
 
 Problem: AIM (Patch 1449) sets each tick's strafe side from which side of the heading the aim bearing lies, so on the
