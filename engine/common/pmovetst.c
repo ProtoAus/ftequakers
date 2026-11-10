@@ -23,9 +23,16 @@ static qboolean PM_TransformedHullCheck (model_t *model, framestate_t *framestat
 extern cvar_t pm_portalcsg_scanall;	//FTESurf Patch 283, defined in common.c
 extern cvar_t pm_skipent_portals;	//FTESurf Patch 283, defined in common.c
 int Q1BSP_HullPointContents(hull_t *hull, vec3_t p);
-static	hull_t		box_hull;
-static	mclipnode_t	box_clipnodes[6];
-static	mplane_t	box_planes[6];
+static	FTE_TLS hull_t		box_hull;		//Patch 1467: per thread, PM_InitBoxHull on each
+static	FTE_TLS mclipnode_t	box_clipnodes[6];
+static	FTE_TLS mplane_t	box_planes[6];
+FTE_TLS int pm_threadabort;
+static cvar_t *pm_propcol;	//sv_prop_collision, looked up on the main thread (PM_PrepareThreads or the first trace)
+void PM_PrepareThreads(void)
+{
+	if (!pm_propcol)
+		pm_propcol = Cvar_Get("sv_prop_collision", "2", CVAR_SERVERINFO, NULL);
+}
 
 /*
 ===================
@@ -396,9 +403,8 @@ static qboolean PM_TransformedHullCheck (model_t *model, framestate_t *framestat
 	if (model && (model->numhullplanes >= 4 || model->numhulls > 0) &&
 	    (player_mins[0]!=player_maxs[0] || player_mins[1]!=player_maxs[1] || player_mins[2]!=player_maxs[2]))
 	{
-		static cvar_t *pm_propcol;
 		int cm;
-		if (!pm_propcol)
+		if (!pm_propcol && Sys_IsMainThread())
 			pm_propcol = Cvar_Get("sv_prop_collision", "2", CVAR_SERVERINFO, NULL);
 		cm = pm_propcol ? pm_propcol->ival : 2;
 		if (cm == 3 && (model->numhulls > 0 || model->numhullplanes >= 4))
@@ -560,9 +566,9 @@ static void PM_PortalCSGReport(int entnum, int plane, float miss)
 		entnum, edge[plane], -miss);
 }
 
-static float pm_carveexit_frac = -1;	// Patch 758: where PM_PortalCSG stopped at plane 0, see PM_CarveExitRest
-static vec3_t pm_carveexit_dir;		// ...and the door's forward, which the rest starts 1/16 along
-static int pm_carveexit_depth;
+static FTE_TLS float pm_carveexit_frac = -1;	// Patch 758: where PM_PortalCSG stopped at plane 0, see PM_CarveExitRest
+static FTE_TLS vec3_t pm_carveexit_dir;		// ...and the door's forward, which the rest starts 1/16 along
+static FTE_TLS int pm_carveexit_depth;
 
 static void PM_PortalCSG(physent_t *portal, int entnum, float *trmin, float *trmax, vec3_t start, vec3_t end, trace_t *trace)
 {

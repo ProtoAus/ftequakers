@@ -150,6 +150,15 @@ void Sys_ThreadsInit(void);
 //qboolean Sys_IsThread(void *thread);
 qboolean Sys_IsMainThread(void);
 qboolean Sys_IsThread(void *thread);
+/* FTESurf Patch 1467: per-thread storage for the movement code's state, so tas_rollout_batch can simulate
+ * candidates on worker threads (gcc 16 on mingw uses native TLS: no measurable cost in a hot loop). */
+#if defined(__GNUC__) || defined(__clang__)
+#define FTE_TLS __thread
+#elif defined(_MSC_VER)
+#define FTE_TLS __declspec(thread)
+#else
+#define FTE_TLS
+#endif
 void *Sys_CreateThread(char *name, int (*func)(void *), void *args, int priority, int stacksize);
 void Sys_WaitOnThread(void *thread);
 void Sys_DetachThread(void *thread);

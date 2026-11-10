@@ -95,9 +95,9 @@ HULL BOXES
 */
 
 
-static	hull_t		box_hull;
-static	mclipnode_t	box_clipnodes[6];
-static	mplane_t	box_planes[6];
+static	FTE_TLS hull_t		box_hull;		//Patch 1467: per thread, World_InitBoxHull on each
+static	FTE_TLS mclipnode_t	box_clipnodes[6];
+static	FTE_TLS mplane_t	box_planes[6];
 
 /*
 ===================
@@ -107,6 +107,8 @@ Set up the planes and clipnodes so that the six floats of a bounding box
 can just be stored out and get a proper hull_t structure.
 ===================
 */
+static void World_InitBoxHull (void);
+void World_InitThreadBoxHull (void) { World_InitBoxHull(); }	//Patch 1467: a tas_rollout_batch worker's own box hull
 static void World_InitBoxHull (void)
 {
 	int		i;
@@ -1615,6 +1617,68 @@ int World_AreaEdicts (world_t *w, vec3_t mins, vec3_t maxs, wedict_t **list, int
 	return count;
 }
 
+/* Patch 1467: World_AreaEdicts for a tas_rollout_batch worker: the same edicts in the same order, each visit kept
+ * in its own list instead of the shared edict stamp gridareasequence (which every query writes). */
+static int World_AreaLocalVisit (wedict_t *check, wedict_t **seen, int *nseen, vec3_t mins, vec3_t maxs, int areatype)
+{	//1: list it, 0: skip it, -1: the visit list is full
+	int s;
+	for (s = 0; s < *nseen && seen[s] != check; s++)
+		;
+	if (s < *nseen)
+		return 0;
+	if (*nseen == 1024)
+		return -1;
+	seen[(*nseen)++] = check;
+	if (areatype != AREA_ALL)
+	{
+		if (check->v->solid == SOLID_NOT)
+			return 0;
+		if ((check->v->solid == SOLID_TRIGGER||check->v->solid == SOLID_BSPTRIGGER) != (areatype == AREA_TRIGGER))
+			return 0;
+	}
+	if (check->v->absmin[0] > maxs[0] || check->v->absmin[1] > maxs[1] || check->v->absmin[2] > maxs[2]
+	 || check->v->absmax[0] < mins[0] || check->v->absmax[1] < mins[1] || check->v->absmax[2] < mins[2])
+		return 0;
+	return 1;
+}
+int World_AreaEdictsLocal (world_t *w, vec3_t mins, vec3_t maxs, wedict_t **list, int maxcount, int areatype)
+{
+	wedict_t *seen[1024];
+	areagridlink_t *start, *l;
+	int count = 0, nseen = 0, v;
+	int ming[2], maxg[2], g[2];
+	CALCAREAGRIDBOUNDS(w, mins, maxs);
+	start = &w->jumboarea;	//too large for the grid: first, as World_AreaEdicts does
+	for (l=(areagridlink_t*)start->l.next  ; l != start ; l = (areagridlink_t*)l->l.next)
+	{
+		v = World_AreaLocalVisit(l->ed, seen, &nseen, mins, maxs, areatype);
+		if (v < 0 || (v && count == maxcount))
+		{
+			pm_threadabort = true;	//not all seen: the worker's candidate goes to the main thread
+			return count;
+		}
+		if (v)
+			list[count++] = l->ed;
+	}
+	for (g[0] = ming[0]; g[0] < maxg[0]; g[0]++)
+		for (g[1] = ming[1]; g[1] < maxg[1]; g[1]++)
+		{
+			start = &w->gridareas[g[0] + g[1]*w->gridsize[0]];
+			for (l=(areagridlink_t*)start->l.next  ; l != start ; l = (areagridlink_t*)l->l.next)
+			{
+				v = World_AreaLocalVisit(l->ed, seen, &nseen, mins, maxs, areatype);
+				if (v < 0 || (v && count == maxcount))
+				{
+					pm_threadabort = true;
+					return count;
+				}
+				if (v)
+					list[count++] = l->ed;
+			}
+		}
+	return count;
+}
+
 #else
 static float	*area_mins, *area_maxs;
 static wedict_t	**area_list;
@@ -2158,6 +2222,53 @@ wedict_t *World_TriggerAt (world_t *w, wedict_t *ent, vec3_t org, vec3_t mins, v
 		}
 		return touch;
 	}
+	return NULL;
+}
+
+/* Patch 1467: World_TriggerAt for a tas_rollout_batch worker: the local area query, and a brush trigger's model
+ * must already be loaded (loaded() says so, or marks the worker's candidate for the main thread). */
+wedict_t *World_TriggerAtLocal (world_t *w, wedict_t *ent, vec3_t org, vec3_t mins, vec3_t maxs, qboolean anytrigger,
+	qboolean (*loaded)(world_t *w, int modelindex))
+{
+#ifdef USEAREAGRID
+	wedict_t *touchedicts[2048], *touch;
+	vec3_t amin, amax;
+	int num, solid, i;
+	for (i = 0; i < 3; i++)
+	{
+		amin[i] = org[i] + mins[i] - 1;
+		amax[i] = org[i] + maxs[i] + 1;
+	}
+	num = World_AreaEdictsLocal(w, amin, amax, touchedicts, countof(touchedicts), AREA_TRIGGER);
+	while (num-- > 0)
+	{
+		touch = touchedicts[num];
+		if (ED_ISFREE(touch) || touch == ent)
+			continue;
+		solid = touch->v->solid;
+		if ((!touch->v->touch && !anytrigger) || (solid != SOLID_TRIGGER && solid != SOLID_BSPTRIGGER))
+			continue;
+		if (amin[0] > touch->v->absmax[0] || amin[1] > touch->v->absmax[1] || amin[2] > touch->v->absmax[2] ||
+			amax[0] < touch->v->absmin[0] || amax[1] < touch->v->absmin[1] || amax[2] < touch->v->absmin[2])
+			continue;
+		if (!((int)ent->xv->dimension_solid & (int)touch->xv->dimension_hit))
+			continue;
+		if (!touch->v->touch)
+			return touch;		// anytrigger: the box decides, as QC's overlap tests would
+		if (solid == SOLID_BSPTRIGGER)
+		{
+			model_t *tmod;
+			unsigned int tmask;
+			if (!loaded(w, touch->v->modelindex))
+				return NULL;
+			tmod = w->Get_CModel(w, touch->v->modelindex);	//loaded: no load happens
+			tmask = (tmod && tmod->fromgame == fg_new) ? ~0u : MASK_WORLDSOLID;
+			if (!World_ClipMoveToEntity(w, touch, touch->v->origin, touch->v->angles, org, mins, maxs, org, 0, false, (ent->xv->geomtype == GEOMTYPE_CAPSULE), tmask).startsolid)
+				continue;
+		}
+		return touch;
+	}
+#endif
 	return NULL;
 }
 

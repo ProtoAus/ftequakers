@@ -20,15 +20,15 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 #include "quakedef.h"
 
-movevars_t		movevars;
-playermove_t	pmove;
+FTE_TLS movevars_t		movevars;	//Patch 1467: per thread (tas_rollout_batch's workers)
+FTE_TLS playermove_t	pmove;
 extern cvar_t	pm_noround;	//evile.
 
 #define movevars_dpflags		MOVEFLAG_QWCOMPAT
 #define movevars_maxairspeed	30
 #define movevars_jumpspeed		270
 
-float		frametime;
+FTE_TLS float		frametime;
 
 vec3_t		forward, right, up;
 

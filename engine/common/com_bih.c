@@ -143,10 +143,10 @@ static qboolean BIH_BoundsIntersect (const vec3_t mins1, const vec3_t maxs1, con
 		}
 
 #define	DIST_EPSILON	(0.03125)
-int bih_sourceclip;	//Patch 492: Source's clip rules, set by the Source mover (see BIH_ClipBoxToBrush)
-int bih_phybrushes;	//Patch 764: a static prop with phybrushes is traced as them, set by the Source mover at pmsrcver 7
-int bih_phyfix;		//Patch 888: a .phy hull whose old indices wrapped is traced unwrapped, set by the Source mover at pmsrcver 9
-int bih_phypick;	//Patch 1248: a prop hull piece's contact plane by geometric entry, set by the Source mover at pmsrcver 12
+FTE_TLS int bih_sourceclip;	//Patch 492: Source's clip rules, set by the Source mover (see BIH_ClipBoxToBrush)
+FTE_TLS int bih_phybrushes;	//Patch 764: a static prop with phybrushes is traced as them, set by the Source mover at pmsrcver 7
+FTE_TLS int bih_phyfix;		//Patch 888: a .phy hull whose old indices wrapped is traced unwrapped, set by the Source mover at pmsrcver 9
+FTE_TLS int bih_phypick;	//Patch 1248: a prop hull piece's contact plane by geometric entry, set by the Source mover at pmsrcver 12
 
 #if defined(Q2BSPS) || defined(Q3BSPS)
 //Patch 888: the brushes the mover sweeps for this prop, or 0 to trace its model.
@@ -327,9 +327,9 @@ static unsigned int BIH_PropBrushes (const struct bihtransform_s *trn, q2cbrush_
 
   Not compiled out: the whole value of pm_dispprobe is that it can be switched on
   in a shipped build, on the machine where the snag actually reproduces. */
-int		bih_probe_plane = -1;	/*0 face, 1 back slab, 2-4 in-plane edge, 5-13 bevel, 100-105 axial, -1 not a triangle*/
-vec3_t	bih_probe_norm;
-vec3_t	bih_probe_tri[3];
+FTE_TLS int		bih_probe_plane = -1;	/*0 face, 1 back slab, 2-4 in-plane edge, 5-13 bevel, 100-105 axial, -1 not a triangle*/
+FTE_TLS vec3_t	bih_probe_norm;
+FTE_TLS vec3_t	bih_probe_tri[3];
 
 /*FTESurf Patch 317.  The record above can say WHICH PLANE stopped a trisoup
   triangle, and nothing else -- not which triangle, not which model, and for a
@@ -361,13 +361,13 @@ vec3_t	bih_probe_tri[3];
   (adding one would grow every leaf, and a displacement map has one leaf per
   terrain triangle).  The vertex-index triple is deterministic in the loader's
   own numbering, so it maps straight onto an offline dump of the same file. */
-int				bih_probe_kind;		/*0 nothing, 1 BIH_TRIANGLE, 2 BIH_BRUSH, 3 BIH_PATCHBRUSH*/
-index_t			bih_probe_idx[3];
-model_t		   *bih_probe_model;	/*NULL = world/top level, else the submodel (the prop)*/
-vec3_t			bih_probe_modelorg;
-unsigned int	bih_probe_contents;
+FTE_TLS int				bih_probe_kind;		/*0 nothing, 1 BIH_TRIANGLE, 2 BIH_BRUSH, 3 BIH_PATCHBRUSH*/
+FTE_TLS index_t			bih_probe_idx[3];
+FTE_TLS model_t		   *bih_probe_model;	/*NULL = world/top level, else the submodel (the prop)*/
+FTE_TLS vec3_t			bih_probe_modelorg;
+FTE_TLS unsigned int	bih_probe_contents;
 char			bih_probe_surf[32];
-unsigned int	bih_probe_seq;
+FTE_TLS unsigned int	bih_probe_seq;
 
 /*Patch 317.  A nested BIH_MODEL trace clobbers the record whether or not it goes
   on to win, so the two callers snapshot it across the call and put it back when
@@ -1419,6 +1419,11 @@ static void BIH_RecursiveTrace (struct bihtrace_s *fte_restrict tr, const struct
 			}
 #endif
 
+			if (submod->loadstate != MLS_LOADED && !Sys_IsMainThread())
+			{	//Patch 1467: a tas_rollout_batch worker may not load: its candidate is rerun on the main thread
+				pm_threadabort = true;
+				return;
+			}
 			if (submod->loadstate != MLS_LOADED)
 			{
 				static float throttle;

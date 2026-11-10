@@ -360,8 +360,11 @@ float PMSrc_ClipRenderEye(float rawheight, float worldlimit, float renderfeet);	
 #define MOVEFLAG_QWEDGEBOX						0x00010000	//calculate edgefriction using tracebox and a buggy start pos
 #define MOVEFLAG_QWCOMPAT						(MOVEFLAG_NOGRAVITYONGROUND|MOVEFLAG_QWEDGEBOX)
 
-extern	movevars_t		movevars;
-extern	playermove_t	pmove;
+extern	FTE_TLS movevars_t		movevars;	//Patch 1467: per thread
+extern	FTE_TLS playermove_t	pmove;
+extern	FTE_TLS int				pm_threadabort;	//Patch 1467: a worker met something only the main thread may do (a model load)
+void PM_PrepareThreads(void);				//Patch 1467: main thread, before workers move: lazy lookups done
+void PM_InitBoxHull(void);
 
 /* Optional pre-input edits. Unselected fields retain their baseline values.
    This is a mover boundary, not an acknowledgement or a full-state restore. */

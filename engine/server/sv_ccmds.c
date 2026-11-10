@@ -4243,12 +4243,12 @@ static int SV_DetRange (unsigned int *s, int lo, int hi)
 */
 #define PMDET_TICRATE 0.015f
 
-extern int bih_sourceclip;	//Patch 492, com_bih.c
-extern int bih_phybrushes;	//Patch 764, com_bih.c
-extern int bih_phyfix;		//Patch 888, com_bih.c
-extern int bih_phypick;		//Patch 1248, com_bih.c
-extern int bih_probe_kind;	//Patch 764: which leaf decided the last trace (com_bih.h)
-extern model_t *bih_probe_model;
+extern FTE_TLS int bih_sourceclip;	//Patch 492, com_bih.c (Patch 1467: per thread)
+extern FTE_TLS int bih_phybrushes;	//Patch 764, com_bih.c
+extern FTE_TLS int bih_phyfix;		//Patch 888, com_bih.c
+extern FTE_TLS int bih_phypick;		//Patch 1248, com_bih.c
+extern FTE_TLS int bih_probe_kind;	//Patch 764: which leaf decided the last trace (com_bih.h)
+extern FTE_TLS model_t *bih_probe_model;
 
 static unsigned long long SV_DetHashTrace(unsigned long long h, const trace_t *tr)
 {
@@ -4977,7 +4977,7 @@ static char *SV_RecSim_Line (char **pp, char *end, char *out, size_t outsz)
 	return out;
 }
 
-extern vec3_t pmove_mins, pmove_maxs;
+extern FTE_TLS vec3_t pmove_mins, pmove_maxs;
 extern cvar_t sv_maxvelocity, pm_trisoup_bevels, pm_rotatedboxhulls, pm_portalcsg_scanall;
 
 //Patch 358: pin slots 10-12.  The trace code reads .ival (com_bih.c, pmovetst.c);
