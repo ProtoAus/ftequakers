@@ -1,5 +1,36 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1486 -- guard journal identity values before cvar publication
+
+**Problem:** ordinary drain guards start too late for the five diagnostic cvars:
+main reads seven worker-updated unsigned identity scalars first, even on an empty
+drain. Callback-capable setters cannot simply be put inside a whole-drain lock.
+
+**Change:** capture each desired unsigned value under existing Ready exclusion;
+compare with the same int casts, then release only our transition before the
+entire setter. Recheck before each next expression, not an old tuple across a
+callback. Unknown -1 branch and order stay unchanged. Ready false after Drop does
+NOT suppress the retained last-capture measurements. Unchanged values reuse one
+token into Frame/relative work. Active empty publication now needs one bounded
+read group; inactive and worker-disabled add zero OS locks. No per-event wait,
+new captured field, arithmetic/grammar/consent/enforcement policy or interface.
+
+**Verified:** complete actual identity/View/drain/lifecycle/permission C bodies,
+real OS worker/mutex and controlled field reads: published8131 control982checks/
+42failures versus971/0. 38 repeated failures are read-ownership assertions, not
+cheat cases. The primary joined worker actually advances governed/ghost/bad and
+emits its View row; control stops before unsafe load. Actual violation/skip paths
+also act. Model cvar update-before-callback exercises Begin/Drop/new values and
+retained false ownership; not execution of Cvar_SetCore or native gameplay.
+Initial subject968/4 (quiet worker from stale synthetic previous angle) and
+control982/44 retained, not accepted as an acting comparison; only fixture last
+angle precondition corrected. Full unchanged identity body replaces old no-op
+adapter; host counters now match actual unsigned types. Three exact frozen
+signedness warnings remain visible, changed code/hosts strictWerror. Typed life18/0
+and close actualcrypto136/0 regressions. Independent frozen review clear;
+standard build/native promotion follow separately. Backend/ring/foreign/lifecycle-
+affinity and cross-callback tuple atomicity remain unclaimed.
+
 ## Patch 1485 -- serialize ordinary main journal transactions (in_generic.c, pr_clcmd.c)
 
 **Problem:** Ordinary main Frame/Event/Note/Synth compounds could overlap the

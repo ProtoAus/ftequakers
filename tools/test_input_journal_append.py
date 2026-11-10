@@ -3,7 +3,8 @@
 
 Synthetic constants only. No game, capture, clipboard OS API or player data.
 Producer-entry/header-search checkpoints stop the unsafe control before mutation;
-identity/backend diagnostics, game callbacks and pending-paste creation are models.
+Identity uses its complete actual body; backend diagnostics, Cvar/game callbacks
+and pending-paste creation remain explicit hosts, not engine runtime acceptance.
 Mutex-call counts are not latency measurements or general native thread safety.
 """
 import argparse
@@ -58,7 +59,9 @@ static struct { bool enabled; } vrui;
 static cvar_t in_rawmice,in_rawkbds,in_jrn484_frames,in_jrn484_ghosts;
 static cvar_t in_jrn484_violations,in_jrn484_badframes,in_jrn484_skipped;
 static cvar_t m_longpressthreshold={.value=1},m_slidethreshold={.value=8};
-static cvar_t m_forcewheel,m_forcewheel_threshold;
+static cvar_t m_forcewheel,m_forcewheel_threshold,r_xflip;
+static bool watch_status;
+static int status_mode,status_cb_count,status_reads;
 static int main_locks,main_unlocks,main_owned,worker_owned,recursive,foreign_hint;
 static int callback_mode,callback_count,paste_count,paste_frees,inherited,editormodal;
 static int joy_calls,accel_calls,gyro_calls;
@@ -81,8 +84,15 @@ static void callback_checkpoint(void) {
 static bool Key_Dest_Has_Higher(int d) {(void)d;return false;}
 static bool Key_MouseShouldBeFree(void) {return true;}
 static void INS_Commands(void) {callback_checkpoint();}
+static void status_callback(cvar_t *c);
 static void Cvar_ForceSetValue(cvar_t *c,float value) {
+ bool watched=watch_status;
  callback_checkpoint();c->ival=(int)value;c->value=value;
+ if(c==&in_jrn484_frames || c==&in_jrn484_ghosts || c==&in_jrn484_violations
+    || c==&in_jrn484_badframes || c==&in_jrn484_skipped) {
+  /*Model core update-before-callback; callback setup is not a status read.*/
+  watch_status=false;status_callback(c);watch_status=watched;
+ }
 }
 static void Key_Event(unsigned d,int key,int unicode,bool down) {
  (void)unicode; callback_checkpoint();
@@ -101,7 +111,6 @@ static void CSQC_Gyroscope(float x,float y,float z) {
  (void)x;(void)y;(void)z;gyro_calls++;callback_checkpoint();
 }
 static struct menu_s { bool (*joyaxis)(struct menu_s *,unsigned,int,float); } *topmenu;
-#define IN_Journal_CheckIdentity(x) ((void)(x))
 static void Z_Free(void *p);
 static void producer_entry(void) {
  if(!validate || !runningindepphys)return;
@@ -139,6 +148,26 @@ static bool *hint_slot(bool poisoned) {
 #define in_jrn_mainsynth (*hint_slot(true))
 #endif
 #endif
+static unsigned int *status_slot(int slot) {
+#if HAS_HINT
+ if(watch_status && runningindepphys && pthread_equal(pthread_self(),main_tid) && host_mainactive) {
+  status_reads++;producer_entry();
+ }
+#endif
+ switch(slot) {
+ case 0:return &in_jrn_vcount;
+ case 1:return in_jrn_ghosts;
+ case 2:return in_jrn_violations;
+ case 3:return &in_jrn_vbad;
+ case 4:return &in_jrn_vskip;
+ default:abort();
+ }
+}
+#define in_jrn_vcount (*status_slot(0))
+#define in_jrn_ghosts (status_slot(1))
+#define in_jrn_violations (status_slot(2))
+#define in_jrn_vbad (*status_slot(3))
+#define in_jrn_vskip (*status_slot(4))
 '''
 
 SYNC = r'''
@@ -231,7 +260,46 @@ static void cleanup(void) {
  IN_JournalEnd_f();IN_Journal_Drop();
  if(cl_paste_ready){free(cl_paste_ready);cl_paste_ready=NULL;}
 }
+static cvar_t *mirror(int i) {
+ static cvar_t *vars[]={&in_jrn484_frames,&in_jrn484_ghosts,&in_jrn484_violations,
+  &in_jrn484_badframes,&in_jrn484_skipped};
+ return vars[i];
+}
+static void clear_mirrors(void) {
+ int i;for(i=0;i<5;i++){mirror(i)->ival=0;mirror(i)->value=0;}
+}
+static void sync_mirrors(void) {
+ unsigned int values[]={in_jrn_vcount,in_jrn_ghosts[0]+in_jrn_ghosts[1],
+  in_jrn_violations[0]+in_jrn_violations[1],in_jrn_vbad,in_jrn_vskip};
+ int i;for(i=0;i<5;i++) {
+  mirror(i)->ival=in_jrn_ran?(int)values[i]:-1;
+  mirror(i)->value=in_jrn_ran?(float)values[i]:-1;
+ }
+}
+static void seed_status(unsigned int base) {
+ bool was=CL_AllowIndependantSendCmd(false);
+ in_jrn_vcount=base;in_jrn_ghosts[0]=base+1;in_jrn_ghosts[1]=base+2;
+ in_jrn_violations[0]=base+3;in_jrn_violations[1]=base+4;
+ in_jrn_vbad=base+5;in_jrn_vskip=base+6;
+ CL_AllowIndependantSendCmd(was);
+}
+static void status_callback(cvar_t *c) {
+ int mode=status_mode;status_cb_count++;
+ if(c!=&in_jrn484_frames || !mode)return;
+ status_mode=0;
+ if(mode==2)IN_Journal_Drop();else IN_JournalBegin_f();
+ seed_status((unsigned int)mode*100);
+ if(mode==3){CL_AllowIndependantSendCmd(false);inherited=1;}
+}
+static void watched_commands(void) {
+ watch_status=true;IN_Commands();watch_status=false;
+}
+static void mirrors_are(int f,int g,int v,int b,int s,const char *label) {
+ check(mirror(0)->ival==f && mirror(1)->ival==g && mirror(2)->ival==v
+  && mirror(3)->ival==b && mirror(4)->ival==s,label);
+}
 static void prepare(bool active) {
+ watch_status=false;status_mode=status_cb_count=status_reads=0;
  cleanup();
  events_used=events_avail=0;memset(eventlist,0,sizeof(eventlist));
  memset(ptr,0,sizeof(ptr));memset(joy,0,sizeof(joy));memset(keydown,0,sizeof(keydown));
@@ -239,6 +307,9 @@ static void prepare(bool active) {
  joy_calls=accel_calls=gyro_calls=0;return_worker_started=0;
  argc_value=1;arg_name="";write_ok=true;
  if(active)IN_JournalBegin_f();
+ cl.minpitch=-90;cl.maxpitch=90;m_filter.value=m_accel.value=1;r_xflip.ival=0;
+ /*Pure-group budgets start with unchanged mirrors; changed-setter arms are explicit.*/
+ sync_mirrors();
  main_locks=main_unlocks=0;recursive=foreign_hint=0;
  paused=release_worker=worker_busy=main_ready=attempted=unsafe=done=0;source_stop=false;
  runningindepphys=true;allowindepphys=true;validate=true;
@@ -274,7 +345,7 @@ static void ordinary(void) {
  IN_Commands();check(main_locks==l && main_unlocks==u,"borrowed false neither relocks nor unlocks");
  check(!allowindepphys && main_owned,"borrowed owner stays false and held");
  prepare(true);relative(0);IN_Commands();
- check(main_locks==0,"empty drain needs no group acquisition");
+ check(main_locks==(HAS_STATUS?1:0),"active empty mirror group follows bounded source budget");
  prepare(true);relative(4);queue_paste();editormodal=1;IN_Commands();
  check(cl_paste_ready!=NULL && paste_count==0,"actual editor early return preserves pending answer");
  check(main_locks==1 && main_unlocks==1,"editor/empty flush preserves relative group");
@@ -338,6 +409,66 @@ static void fresh_after_paste(void) {
  s=body();f=strstr(s,"\nf ");v=strstr(s,"\nv ");m=strstr(s,"\nm ");
  check(f && v && m && f<v && v<m && rows(s,"m ")==3,"actual frame paste worker event chronology");free(s);
 }
+static void status_publication(void) {
+ pthread_t control;char *s;
+ prepare(true);relative(0);clear_mirrors();
+ m_filter.value=m_accel.value=0;in_jrn_vhavelast=true;
+ in_jrn_vlast[PITCH]=in_jrn_vlast[YAW]=0; /*Different from worker's angles: no quiet return.*/
+ schedule=1;
+ if(pthread_create(&worker_tid,NULL,worker,NULL))abort();
+ pthread_mutex_lock(&state);wait_for(&paused,NULL);main_ready=1;pthread_mutex_unlock(&state);
+ if(pthread_create(&control,NULL,controller,NULL))abort();
+ if(!setjmp(main_abort))watched_commands();
+ watch_status=false;
+ pthread_join(worker_tid,NULL);pthread_join(control,NULL);schedule=0;
+ check((attempted || unsafe) && done && in_jrn_vcount==1 && in_jrn_ghosts[0]==1
+  && in_jrn_vbad==1,"actual admitted View identity writer acted, not a no-op adapter");
+ check(!unsafe && !source_stop,"status read waits for actual admitted counter writer");
+ check(status_reads==7,"all seven unsigned source loads protected once before setter release");
+ mirrors_are(1,1,0,1,0,"published complete actual worker identity values");
+ check(main_locks==4 && main_unlocks==4,"three changed mirrors split bounded empty publication groups");
+ s=body();check(rows(s,"v ")==1 && rows(s,"f ")==0,"actual worker row complete without inventing idle frame");free(s);
+
+ prepare(true);relative(0);clear_mirrors();m_filter.value=m_accel.value=0;
+ in_jrn_vhavelast=true;in_jrn_vdx=in_jrn_vrawx=1;
+ if(pthread_create(&worker_tid,NULL,worker,NULL))abort();
+ pthread_join(worker_tid,NULL);
+ m_filter.value=1;in_jrn_vdx=in_jrn_vrawx=1;
+ if(pthread_create(&worker_tid,NULL,worker,NULL))abort();
+ pthread_join(worker_tid,NULL);
+ watched_commands();
+ mirrors_are(1,0,1,1,1,"actual violation and skipped writer branches published");
+ check(in_jrn_violations[0]==1 && in_jrn_vskip==1 && done,"actual full identity violation/abstention acted");
+
+ prepare(true);relative(0);watched_commands();
+ check(status_reads==7 && status_cb_count==0,"unchanged mirrors read once without setters");
+ check(main_locks==(HAS_STATUS?1:0) && main_unlocks==main_locks,"one unchanged active empty mirror group");
+ s=body();check(rows(s,"f ")==0 && rows(s,"m ")==0,"idle publication adds no journal row");free(s);
+
+ prepare(true);seed_status(7);IN_Journal_Drop();clear_mirrors();main_locks=main_unlocks=0;
+ watched_commands();mirrors_are(7,17,21,12,13,"inactive retained measurements still publish after Ready false");
+ check(main_locks==0 && main_unlocks==0,"inactive retained publication acquires zero journal mutexes");
+ prepare(true);seed_status(7);clear_mirrors();main_locks=main_unlocks=0;runningindepphys=false;
+ watched_commands();mirrors_are(7,17,21,12,13,"disabled worker still publishes measurements");
+ check(main_locks==0 && main_unlocks==0,"disabled worker needs no real status mutex");
+
+ prepare(false);in_jrn_ran=false;clear_mirrors();watched_commands();
+ mirrors_are(-1,-1,-1,-1,-1,"never measured remains unknown, not measured zero");
+ check(status_reads==0 && main_locks==0,"unknown branch reads no shared counters or mutex");
+ prepare(false);in_jrn_ran=false;clear_mirrors();status_mode=4;watched_commands();
+ mirrors_are(-1,-1,-1,-1,-1,"unknown branch chronology retained when its first setter begins capture");
+ check(in_jrn_ran && in_jrn_vcount==400,"unknown setter callback actually opened and seeded new capture");
+
+ prepare(true);seed_status(10);clear_mirrors();status_mode=1;watched_commands();
+ mirrors_are(10,203,207,105,106,"callback replacement rechecks next source values, not old tuple");
+ check(status_cb_count==5 && in_jrn_vcount==100 && allowindepphys && !main_owned,"actual setter host acted outside owned token");
+ prepare(true);seed_status(10);clear_mirrors();status_mode=2;watched_commands();
+ mirrors_are(10,403,407,205,206,"callback Drop still publishes fresh retained values");
+ check(!in_jrn_buf && allowindepphys && !main_owned,"callback Drop stays inactive without stale token restore");
+ prepare(true);seed_status(10);clear_mirrors();status_mode=3;watched_commands();
+ mirrors_are(10,603,607,305,306,"callback replacement values stay fresh under borrowed ownership");
+ check(!allowindepphys && main_owned && !recursive,"setter's deliberately false ownership survives final release");
+}
 static void *poison_worker(void *ctx) {
  (void)ctx;Sys_LockMutex(indeplock);IN_Journal_MarkSynth("worker");Sys_UnlockMutex(indeplock);return NULL;
 }
@@ -374,7 +505,7 @@ static void offmain(void) {
  check(main_locks==0 && allowindepphys,"off-main route never changes main permission");
 }
 int main(void) {
- main_tid=pthread_self();ordinary();competing(0);competing(1);competing(2);fresh_after_paste();synth_hot();offmain();
+ main_tid=pthread_self();ordinary();competing(0);competing(1);competing(2);fresh_after_paste();status_publication();synth_hot();offmain();
  cleanup();free(freed_snapshot);free(snapshot);free(written);
  printf("journal ordinary append: %d checks, %d failures\n",checks,failures);
  return failures?1:0;
@@ -408,7 +539,7 @@ def main():
     lock = func(host, 'static void Sys_LockMutex(')
     unlock = func(host, 'static void Sys_UnlockMutex(')
     host = host.replace(lock, '').replace(unlock, '')
-    host = host.replace('int serverinfo;', 'int serverinfo,movesequence;')
+    host = host.replace('int serverinfo;', 'int serverinfo,movesequence;float minpitch,maxpitch;')
     host = host.replace('in_jrn_haveabs[2][4]', 'in_jrn_haveabs[8]')
     host = host.replace('static int in_jrn_dropreported,', 'static unsigned in_jrn_dropreported;\nstatic int')
     host = host.replace('lock_calls, unlock_calls, operation', 'lock_calls, unlock_calls')
@@ -421,7 +552,9 @@ def main():
     synth = func(text, 'void IN_Journal_MarkSynth(')
     event = func(text, 'static void IN_Journal_Event(')
     frame = func(text, 'static void IN_Journal_Frame(').replace('{', '{\n producer_entry();', 1)
+    identity = func(text, 'static void IN_Journal_CheckIdentity(')
     view = func(text, 'void IN_Journal_View(').replace('{', '{\n thread_before_realloc();', 1)
+    publish = func(text, 'static void IN_Journal_PublishCounter(') if 'static void IN_Journal_PublishCounter(' in text else ''
     drop = text[text.index('void IN_Journal_Drop(void)'):text.index('static void IN_Journal_Event(')]
     start = text.index('static void IN_JournalBegin_f(void)\n{')
     lifecycle = text[start:text.index('static void IN_JournalNote_f(', start)]
@@ -440,9 +573,9 @@ def main():
     # Frozen dispatch has three existing extra signedness warnings. Keep them
     # visible ONLY there; all changed journal/guard/host code remains strict.
     drain = drain[:start] + '\n#pragma GCC diagnostic push\n#pragma GCC diagnostic warning "-Wsign-compare"\n' + legacy + '\n#pragma GCC diagnostic pop\n' + drain[end:]
-    code = PRE + '\nstatic pthread_t main_tid;\n' + h + host + f'\n#define HAS_HINT {int(has_hint)}\n#define HAS_CACHE {int("in_jrn_mainsynth" in text)}\n' + EXTRA + SYNC + helper + close_support(text)
-    code += ring + devices + guard + raw + note + drop + event + frame + view + lifecycle
-    code += '\n#define strstr checked_strstr\n' + synth + '\n#undef strstr\n' + pt + flush + drain + TEST
+    code = PRE + '\nstatic pthread_t main_tid;\n' + h + host + f'\n#define HAS_HINT {int(has_hint)}\n#define HAS_CACHE {int("in_jrn_mainsynth" in text)}\n#define HAS_STATUS {int(bool(publish))}\n' + EXTRA + SYNC + helper + close_support(text)
+    code += ring + devices + guard + raw + note + drop + event + frame + identity + view + lifecycle
+    code += '\n#define strstr checked_strstr\n' + synth + '\n#undef strstr\n' + pt + flush + publish + drain + TEST
     c = a.work_root / 'journal-append.c'; exe = a.work_root / 'journal-append.exe'
     c.write_text(code)
     env = dict(os.environ)

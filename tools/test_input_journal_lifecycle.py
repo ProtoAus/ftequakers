@@ -82,8 +82,9 @@ static const char *COM_QuotedString(const char *s, char *out, size_t n, bool quo
 }
 static bool in_jrn_synth, in_jrn_haveabs[2][4], in_jrn_ran, in_jrn_vhavelast;
 static float in_jrn_vdx, in_jrn_vdy, in_jrn_vkpitch, in_jrn_vkyaw, in_jrn_vrawx, in_jrn_vrawy;
-static int in_jrn_vflags, in_jrn_vcount, in_jrn_vskip, in_jrn_vbad;
-static int in_jrn_violations[2], in_jrn_ghosts[2];
+static int in_jrn_vflags;
+static unsigned int in_jrn_vcount, in_jrn_vskip, in_jrn_vbad;
+static unsigned int in_jrn_violations[2], in_jrn_ghosts[2];
 #define PITCH 0
 #define YAW 1
 static int in_jrn_dropreported, in_jrn_injreported, in_jrn_unenumreported;

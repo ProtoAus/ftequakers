@@ -2744,6 +2744,17 @@ static void IN_JournalSynth_f(void)
 	Con_Printf("in_journal_synth: injected %i mouse and %i key events\n", n, (n+15)/16);
 }
 
+/*Capture the desired scalar under exclusion, but never carry our token into
+  the setter. Its callbacks may replace/drop the journal or take new ownership.*/
+static void IN_Journal_PublishCounter(in_jrn_guard_t *guard, cvar_t *var, unsigned int wanted)
+{
+	if ((int)var->ival != (int)wanted)
+	{
+		IN_Journal_GuardRelease(guard);
+		Cvar_ForceSetValue(var, wanted);
+	}
+}
+
 void CL_Paste_FlushGuarded(void (*beforegive)(void *), void *ctx);
 /*a 'pointer' is either a multitouch pointer, or a separate device
 note that mice use the keyboard button api, but separate devices*/
@@ -2770,7 +2781,7 @@ static void IN_Commands_Internal(qboolean deliverpaste)
 
 	/*Patch 484: publish the identity counters the same way, on the same guard.
 
-	  ALL FOUR read -1 until a journal has been opened in this process, because
+	  ALL FIVE read -1 until a journal has been opened in this process, because
 	  -1 means "never measured" and 0 means "measured, and found nothing".  Those
 	  are different facts about a player and collapsing them is the failure Patch
 	  301's essay warns about -- a reader who sees 0 violations on a client that
@@ -2801,23 +2812,26 @@ static void IN_Commands_Internal(qboolean deliverpaste)
 	}
 	else
 	{
-		if ((int)in_jrn484_frames.ival != (int)in_jrn_vcount)
-			Cvar_ForceSetValue(&in_jrn484_frames, in_jrn_vcount);
-		if ((int)in_jrn484_ghosts.ival != (int)(in_jrn_ghosts[PITCH] + in_jrn_ghosts[YAW]))
-			Cvar_ForceSetValue(&in_jrn484_ghosts, in_jrn_ghosts[PITCH] + in_jrn_ghosts[YAW]);
-		if ((int)in_jrn484_violations.ival != (int)(in_jrn_violations[PITCH] + in_jrn_violations[YAW]))
-			Cvar_ForceSetValue(&in_jrn484_violations, in_jrn_violations[PITCH] + in_jrn_violations[YAW]);
-		if ((int)in_jrn484_badframes.ival != (int)in_jrn_vbad)
-			Cvar_ForceSetValue(&in_jrn484_badframes, in_jrn_vbad);
-		if ((int)in_jrn484_skipped.ival != (int)in_jrn_vskip)
-			Cvar_ForceSetValue(&in_jrn484_skipped, in_jrn_vskip);
+		/*Ready may be false after Drop: retained last-capture values still publish.
+		  Recheck before each read because an actual setter may run callbacks.*/
+		IN_Journal_Ready(&guard, mainthread);
+		IN_Journal_PublishCounter(&guard, &in_jrn484_frames, in_jrn_vcount);
+		IN_Journal_Ready(&guard, mainthread);
+		IN_Journal_PublishCounter(&guard, &in_jrn484_ghosts, in_jrn_ghosts[PITCH] + in_jrn_ghosts[YAW]);
+		IN_Journal_Ready(&guard, mainthread);
+		IN_Journal_PublishCounter(&guard, &in_jrn484_violations, in_jrn_violations[PITCH] + in_jrn_violations[YAW]);
+		IN_Journal_Ready(&guard, mainthread);
+		IN_Journal_PublishCounter(&guard, &in_jrn484_badframes, in_jrn_vbad);
+		IN_Journal_Ready(&guard, mainthread);
+		IN_Journal_PublishCounter(&guard, &in_jrn484_skipped, in_jrn_vskip);
 	}
 
 	/*Patch 202: the frame marker, and the per-event append below, both sit ABOVE
 	  the IEV_MOUSEDELTA case's ptr[].delta summation -- which is the whole point.
 	  By the time that runs the individual reports have been added together and
 	  are unrecoverable.  Emitted only on a non-empty drain, so an idle frame
-	  costs nothing and the .view already carries one line per rendered frame.*/
+	  emits no row (identity publication still needs bounded exclusion), and the
+	  .view already carries one line per rendered frame.*/
 	if (events_used != events_avail && IN_Journal_Ready(&guard, mainthread))
 		IN_Journal_Frame();
 
