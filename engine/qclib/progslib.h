@@ -302,6 +302,7 @@ typedef struct progexterns_s {
 	int edictsize;	//size of edict_t
 
 	void *user;	/*contains the owner's world reference in FTE*/
+	int gcwritewatch;	//FTESurf Patch 1481: pr_gc_writewatch (initlib.c PR_QCGC_Snapshot)
 } progparms_t, progexterns_t;
 
 #if defined(QCLIBDLL_EXPORTS)

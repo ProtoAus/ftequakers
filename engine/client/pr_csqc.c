@@ -8694,6 +8694,7 @@ qboolean CSQC_Init (qboolean anycsqc, const char *csprogsname, unsigned int chec
 	csqcprogparms.gametime = &csqctime;
 #ifdef MULTITHREAD
 	csqcprogparms.usethreadedgc = pr_gc_threaded.ival;
+	csqcprogparms.gcwritewatch = pr_gc_writewatch.ival;
 #endif
 
 	csqcprogparms.edicts = (struct edict_s **)&csqc_world.edicts;
