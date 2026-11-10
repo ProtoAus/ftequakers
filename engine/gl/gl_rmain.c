@@ -2440,6 +2440,7 @@ qboolean R_RenderScene_Cubemap(void)
 	qboolean usefbo = true;		//this appears to be a 20% speedup in my tests.
 	qboolean fboreset = false;
 	int osm = r_refdef.stereomethod;
+	int ofbpwidth = vid.fbpwidth, ofbpheight = vid.fbpheight;	//FTESurf Patch 1470
 
 	/*needs glsl*/
 	if (!gl_config.arb_shader_objects)
@@ -2630,8 +2631,13 @@ qboolean R_RenderScene_Cubemap(void)
 		}
 
 		GL_MTBind(0, GL_TEXTURE_CUBE_MAP_ARB, scenepp_postproc_cube);
+		//FTESurf Patch 1470: storage only. A copy reads the bound framebuffer, which is Patch 1260's multisampled
+		//scene target under vid_multisample: INVALID_OPERATION, no faces, every face's FBO incomplete.
 		for (i = 0; i < 6; i++)
-			qglCopyTexImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X_ARB + i, 0, GL_RGB, 0, 0, cmapsize, cmapsize, 0);
+			if (usefbo)
+				qglTexImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X_ARB + i, 0, GL_RGBA8, cmapsize, cmapsize, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+			else
+				qglCopyTexImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X_ARB + i, 0, GL_RGB, 0, 0, cmapsize, cmapsize, 0);
 		qglTexParameteri(GL_TEXTURE_CUBE_MAP_ARB, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
 		qglTexParameteri(GL_TEXTURE_CUBE_MAP_ARB, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 		qglTexParameteri(GL_TEXTURE_CUBE_MAP_ARB, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
@@ -2697,6 +2703,12 @@ qboolean R_RenderScene_Cubemap(void)
 	if (usefbo)
 		GLBE_FBO_Pop(oldfbo);
 
+	//FTESurf Patch 1470: the faces' size was for them; the draw below and the view's post-processing use the view's
+	//target. RDF_FISHEYE is in RDF_ALLPOSTPROC with no pass of its own: left set, every pass after it believed
+	//another followed, so the last wrote a texture nothing showed.
+	vid.fbpwidth = ofbpwidth;
+	vid.fbpheight = ofbpheight;
+	r_refdef.flags &= ~RDF_FISHEYE;
 	r_refdef.vrect = vrect;
 	r_refdef.pxrect = prect;
 	VectorCopy(saveorg, r_refdef.vieworg);
