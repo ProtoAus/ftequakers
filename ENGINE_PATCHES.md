@@ -1,5 +1,26 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1466 -- tas_rollout reports walls clipped on rides too, and its face aim takes a lead (sv_tas_rollout.inc, pr_cmds.c, server.h)
+
+Problem: P1449's contact kind 4 (a wall or ceiling clipped) was only set with no ramp under the body, so a ride
+rubbing a ramp's side wall said nothing and the surf planner (FTESurf P1449 autosurf) could not score it; Lex saw
+the bot rub walls and lose speed. And the face aim always set its lead point back half the distance along the
+ramp, an approach parallel to the face: on a long launch past geometry, where a player goes straight for the
+ramp's nearest part once clear and snaps aboard, the bot came in wide and missed.
+
+Fix: row bit WALLBIT (2048): that tick's out[7] is ducked + 2 when pm_source.c's wall note is set, on a ramp or
+the ground too; without the bit out[7] is ducked as before, and like the other row bits it is cleared from each
+row that runs. An optional 8th argument aimlead (0..0.9; unset, NaN or out of range 0.5, P1449's) sets how far
+back along the face the lead point sits: 0 steers straight at the aim. Older callers (4, 6 or 7 arguments, rows
+without the bit) get byte-identical results; an older engine refuses the bit (-10) and 8 arguments (-1), which the
+QC probes for.
+
+Measured (FTESurf rigs, surf_null, the same segment from Lex's ramp 4): played lines touching a wall fell from 23 of
+50 (101 ticks, flights only counted) to 1 of 46 (2 ticks, rides counted too) with the QC scoring ride walls; the
+searched lead ranged 0.30-0.71 on the ramp 9 to 10 flight. Review: one round (engine) found nothing blocking --
+the write-back of a WALLBIT-only row documented, aimlead capped at 0.9 (at 1 an approach along the face put the
+lead point on the body); a second on the fix found nothing.
+
 ## Patch 1464 -- the lobby join line reads "<user> joined <mapname>" (FTESurf QC sv_lobby.qc)
 
 Problem: Lex asked for a lobby join message (10 Nov). The existing one (Patch 371) read "server: <user> joined"
