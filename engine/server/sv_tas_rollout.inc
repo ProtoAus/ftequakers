@@ -305,7 +305,8 @@ static int SV_TASRollRun(edict_t *e, float *in, int n, float *out, const float *
 			if (fl & SV_TAS_ROLL_AIMWIDE)
 			{	/* P1476: |q| = 30 + 30 min(1, |err| / gain), so the error is read back from the command */
 				float side = r[4] >= 0 ? 1 : -1, err = (fabs(r[4]) - 30) / 30 * aimgain;
-				if (aimside != 0 && side != aimside && (err < SV_TAS_AIMWIDE_DEG || aimheld < SV_TAS_AIMWIDE_TICKS))
+				/* the error reads back capped at aimgain: a gain under 2x the hold would never let go (review) */
+				if (aimside != 0 && side != aimside && (err < (aimgain * 0.5 < SV_TAS_AIMWIDE_DEG ? aimgain * 0.5 : SV_TAS_AIMWIDE_DEG) || aimheld < SV_TAS_AIMWIDE_TICKS))
 					r[4] = aimside * 30;
 				else if (side != aimside)
 				{
