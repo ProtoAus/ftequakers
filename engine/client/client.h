@@ -1428,6 +1428,7 @@ void Key_GetBindMap(int *bindmaps);
 void Key_SetBindMap(int *bindmaps);
 
 void CL_UseIndepPhysics(qboolean allow);
+float CL_MaxFPSFloor(float fps);	//FTESurf Patch 1472
 extern qboolean runningindepphys;
 qboolean CL_AllowIndependantSendCmd(qboolean allow);	//returns previous state.
 
