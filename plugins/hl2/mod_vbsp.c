@@ -9501,7 +9501,7 @@ static void VBSP_RecursiveWorldNode (model_t *model, mnode_t *node, unsigned int
 //FTESurf Patch 1468: VBSP_RecursiveWorldNode with the per-view surface marks and the two flags it tests in compact
 //arrays, so its leaf and node loops read 4 and 1 bytes a surface instead of two cache lines of a ~200-byte msurface_t
 //(flags at its start, visframe past 64). Same surfaces in the same order. Sampled: the walk's own time was 6.7% of a
-//surf_pantheon frame. Built at the first frame, after load has set every SURF_PLANEBACK and SURF_OFFNODE.
+//surf_pantheon frame. Built at the first view with hl2_walkarrays on; load has set every SURF_PLANEBACK and SURF_OFFNODE.
 #define VBSP_WALK_BACK		1
 #define VBSP_WALK_OFFNODE	2
 static int *vbsp_wmark;
