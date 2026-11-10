@@ -3611,6 +3611,7 @@ qboolean MP_Init (void)
 	menuprogparms.gametime = &menutime;
 #ifdef MULTITHREAD
 	menuprogparms.usethreadedgc = pr_gc_threaded.ival;
+	menuprogparms.gcwritewatch = pr_gc_writewatch.ival;
 #endif
 
 	menuprogparms.edicts = (struct edict_s **)&menu_edicts;
