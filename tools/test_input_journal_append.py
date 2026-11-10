@@ -122,11 +122,22 @@ static char *checked_strstr(const char *s,const char *needle) {
 }
 #if HAS_HINT
 static bool host_mainactive;
-static bool *hint_slot(void) {
+#if HAS_CACHE
+static bool host_mainsynth;
+#endif
+static bool *hint_slot(bool poisoned) {
  if(!pthread_equal(pthread_self(),main_tid))foreign_hint++;
+#if HAS_CACHE
+ if(poisoned)return &host_mainsynth;
+#else
+ (void)poisoned;
+#endif
  return &host_mainactive;
 }
-#define in_jrn_mainactive (*hint_slot())
+#define in_jrn_mainactive (*hint_slot(false))
+#if HAS_CACHE
+#define in_jrn_mainsynth (*hint_slot(true))
+#endif
 #endif
 '''
 
@@ -327,6 +338,28 @@ static void fresh_after_paste(void) {
  s=body();f=strstr(s,"\nf ");v=strstr(s,"\nv ");m=strstr(s,"\nm ");
  check(f && v && m && f<v && v<m && rows(s,"m ")==3,"actual frame paste worker event chronology");free(s);
 }
+static void *poison_worker(void *ctx) {
+ (void)ctx;Sys_LockMutex(indeplock);IN_Journal_MarkSynth("worker");Sys_UnlockMutex(indeplock);return NULL;
+}
+static void synth_hot(void) {
+ int i;char *s;
+ prepare(true);
+ for(i=0;i<1000;i++)IN_Journal_MarkSynth("plugin");
+ check(main_locks==1 && main_unlocks==1,"1000 main synthetic API marks own once, not per event");
+ s=body();check(strstr(s,"\nsynth 1\n") && strstr(s,"SYNTH source plugin\n"),"cold main synthetic mark actually poisons");free(s);
+ IN_Journal_Drop();IN_JournalBegin_f();main_locks=main_unlocks=0;
+ for(i=0;i<1000;i++)IN_Journal_MarkSynth("plugin");
+ check(main_locks==1 && main_unlocks==1 && in_jrn_synth,"actual Drop/Begin resets current main poisoned hint");
+ prepare(true);
+ if(pthread_create(&worker_tid,NULL,poison_worker,NULL))abort();
+ pthread_join(worker_tid,NULL);
+ check(in_jrn_synth && !foreign_hint,"admitted worker poisons without touching main-only hints");
+ for(i=0;i<1000;i++)IN_Journal_MarkSynth("plugin");
+ check(main_locks==1 && main_unlocks==1,"main observes worker poison once then uses its own cache");
+ s=body();check(strstr(s,"SYNTH source worker\n") && !strstr(s,"SYNTH source plugin\n"),"observing poison preserves original marker provenance");free(s);
+ prepare(false);for(i=0;i<1000;i++)IN_Journal_MarkSynth("plugin");
+ check(main_locks==0 && main_unlocks==0,"inactive synthetic API adds zero acquisitions");
+}
 static void *editor_worker(void *ctx) {
  (void)ctx;Sys_LockMutex(indeplock);
  if(!setjmp(worker_abort))IN_Commands_Editor();
@@ -341,7 +374,7 @@ static void offmain(void) {
  check(main_locks==0 && allowindepphys,"off-main route never changes main permission");
 }
 int main(void) {
- main_tid=pthread_self();ordinary();competing(0);competing(1);competing(2);fresh_after_paste();offmain();
+ main_tid=pthread_self();ordinary();competing(0);competing(1);competing(2);fresh_after_paste();synth_hot();offmain();
  cleanup();free(freed_snapshot);free(snapshot);free(written);
  printf("journal ordinary append: %d checks, %d failures\n",checks,failures);
  return failures?1:0;
@@ -407,7 +440,7 @@ def main():
     # Frozen dispatch has three existing extra signedness warnings. Keep them
     # visible ONLY there; all changed journal/guard/host code remains strict.
     drain = drain[:start] + '\n#pragma GCC diagnostic push\n#pragma GCC diagnostic warning "-Wsign-compare"\n' + legacy + '\n#pragma GCC diagnostic pop\n' + drain[end:]
-    code = PRE + '\nstatic pthread_t main_tid;\n' + h + host + f'\n#define HAS_HINT {int(has_hint)}\n' + EXTRA + SYNC + helper + close_support(text)
+    code = PRE + '\nstatic pthread_t main_tid;\n' + h + host + f'\n#define HAS_HINT {int(has_hint)}\n#define HAS_CACHE {int("in_jrn_mainsynth" in text)}\n' + EXTRA + SYNC + helper + close_support(text)
     code += ring + devices + guard + raw + note + drop + event + frame + view + lifecycle
     code += '\n#define strstr checked_strstr\n' + synth + '\n#undef strstr\n' + pt + flush + drain + TEST
     c = a.work_root / 'journal-append.c'; exe = a.work_root / 'journal-append.exe'

@@ -323,6 +323,8 @@ def main():
         h = h.replace(old,new)
     if 'in_jrn_mainactive' in text:
         h += '\nstatic qboolean in_jrn_mainactive;\n'
+    if 'in_jrn_mainsynth' in text:
+        h += '\nstatic qboolean in_jrn_mainsynth;\n'
     h = h.replace('return 2.0;', 'return host_clock();').replace('return true; }\nstatic void *BZ_Realloc', 'return host_is_main(); }\nstatic void *BZ_Realloc')
     h = h.replace('void *q = realloc(p, n + 1);', 'thread_before_realloc();\n    void *q = host_realloc(p, n + 1);')
     pre = PRE.replace('static void hash_init(void *p);\n','')

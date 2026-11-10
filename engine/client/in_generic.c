@@ -1050,7 +1050,8 @@ rename hazard, stream to .part and accept the other failure mode.
 qboolean QC_FixFileName(const char *name, const char **result, const char **fallbackread);
 
 static char			*in_jrn_buf;
-static qboolean		in_jrn_mainactive;	/*main-only lifecycle hint, never buffer access permission*/
+static qboolean		in_jrn_mainactive;	/*main-only lifecycle hints, never buffer access permission*/
+static qboolean		in_jrn_mainsynth;	/*true implies this active journal was observed poisoned*/
 static size_t		in_jrn_len, in_jrn_cap, in_jrn_max;
 static double		in_jrn_base, in_jrn_last;
 static unsigned int	in_jrn_dropreported, in_jrn_dropbase, in_jrn_events, in_jrn_frames, in_jrn_hidden;
@@ -1376,7 +1377,7 @@ void IN_Journal_Drop(void)
 	if (in_jrn_buf)
 		BZ_Free(in_jrn_buf);
 	in_jrn_buf = NULL;
-	in_jrn_mainactive = false;
+	in_jrn_mainactive = in_jrn_mainsynth = false;
 	in_jrn_len = in_jrn_cap = 0;
 	if (in_jrn_hctx)
 		BZ_Free(in_jrn_hctx);
@@ -2290,6 +2291,7 @@ static void IN_JournalBegin_f(void)
 		in_jrn_cap = in_jrn_max + 1024;
 	in_jrn_buf = BZ_Malloc(in_jrn_cap);
 	in_jrn_mainactive = true;
+	in_jrn_mainsynth = false;
 	in_jrn_len = 0;
 	in_jrn_hctx = BZ_Malloc(hash_sha2_256.contextsize);
 	hash_sha2_256.init(in_jrn_hctx);
@@ -2660,11 +2662,23 @@ void IN_Journal_MarkSynth(const char *source)
 {
 	char note[64];
 	in_jrn_guard_t guard = {false, false};
+	qboolean mainthread = Sys_IsMainThread();
 
-	if (!IN_Journal_Ready(&guard, Sys_IsMainThread()) || in_jrn_synth)
+	/*The plugin input API marks every injected event. Do not lock every call
+	  once main has observed this journal poisoned. Foreign callers use neither hint.*/
+	if (mainthread && in_jrn_mainsynth)
+		return;
+	if (!IN_Journal_Ready(&guard, mainthread))
 	{
 		IN_Journal_GuardRelease(&guard);
-		return;		/*no journal open, or already poisoned -- idempotent*/
+		return;
+	}
+	if (in_jrn_synth)
+	{
+		if (mainthread)
+			in_jrn_mainsynth = true;
+		IN_Journal_GuardRelease(&guard);
+		return;		/*already poisoned, including by an admitted worker*/
 	}
 
 	/*rewrite the header's synth key in place -- it is a fixed-width "0" by
@@ -2681,6 +2695,8 @@ void IN_Journal_MarkSynth(const char *source)
 		}
 	}
 	in_jrn_synth = true;
+	if (mainthread)
+		in_jrn_mainsynth = true;
 
 	/*NAME THE SOURCE.  `synth 1` alone says the file is inadmissible but not why,
 	  and "a developer ran in_journal_synth to test the format" and "a plugin

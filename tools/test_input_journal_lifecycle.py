@@ -218,6 +218,8 @@ def main():
     h = h.replace('hash_sha2_256 = {hash_process};', 'hash_sha2_256 = {hash_process,1,hash_init};')
     if 'in_jrn_mainactive' in text:
         h += '\nstatic qboolean in_jrn_mainactive;\n'
+    if 'in_jrn_mainsynth' in text:
+        h += '\nstatic qboolean in_jrn_mainsynth;\n'
     c = a.work_root / 'journal-lifecycle.c'
     exe = a.work_root / 'journal-lifecycle.exe'
     c.write_text(PRE + h + HOST + helper + close_support(text) + raw + drop + lifecycle + TEST)

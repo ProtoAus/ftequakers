@@ -14,6 +14,8 @@ Frame/Event/annotation positions remain unchanged. Share actual paste body with
 a release-before-give hook; preserve the plain interface and all early returns.
 The shared editor route can enter off-main: never read the main hint or take its
 permission helper there. Main Note/Synth protect full compounds; no per-Raw lock.
+A separate main-only poisoned hint, reset by actual Begin/Drop and derived only
+under exclusion, keeps already-poisoned main plugin input from locking per call.
 No header/VM/plugin layout, capture/consent/grammar or enforcement policy change.
 
 **Verified:** Actual producers/drain/paste/lifecycle/permission with explicit
@@ -26,6 +28,11 @@ Three old extra signedness warnings remain visible ONLY in the exact pinned
 unchanged dispatch block; new journal/guard/host code stays Wall/Wextra/Werror.
 Lifecycle18/0, actual-crypto close136/0; byte-identical Raw/Line/End/context closure
 retains prior cap628/0 evidence. Independent frozen-diff review: no issues.
+Cache regression against initial fe169 guard: 868/3 vs868/0; 1000 marks own once,
+actual reset and worker-first observation retain original poison provenance.
+The five plugin shims are live default-client Input-table entries; their unused
+warnings are SERVERONLY, not evidence of dead client code. Separate cache review
+clear; integrated published P1477/P1481/P1482 is preserved in the final source.
 Mutex call counts are not latency measurements. Status/cvar reads, backend/ring,
 clipboard/cvar and foreign-native races, fatal allocation paths and native
 editor/no-thread/runtime input acceptance remain unqualified.
