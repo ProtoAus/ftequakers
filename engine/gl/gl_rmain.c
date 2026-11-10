@@ -2704,8 +2704,8 @@ qboolean R_RenderScene_Cubemap(void)
 		GLBE_FBO_Pop(oldfbo);
 
 	//FTESurf Patch 1470: the faces' size was for them; the draw below and the view's post-processing use the view's
-	//target. RDF_FISHEYE is in RDF_ALLPOSTPROC with no pass of its own: left set, every pass after it believed
-	//another followed, so the last wrote a texture nothing showed.
+	//target. RDF_FISHEYE is in RDF_ALLPOSTPROC but no R_RenderPostProcess pass clears it, so left set it reads as a
+	//pass still to come to every pass after it.
 	vid.fbpwidth = ofbpwidth;
 	vid.fbpheight = ofbpheight;
 	r_refdef.flags &= ~RDF_FISHEYE;
