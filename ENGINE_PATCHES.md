@@ -1,5 +1,29 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1488 -- gettime(2): seconds since the frame's first gettime(2), for per-frame time budgets (pr_bgcmd.c; QC cl_sprites.qc, cl_main.qc)
+
+Problem: surf_fairy and surf_jumble, the two worst 0.1%-low maps of Lex's 11 Nov survey, spent their slowest frames
+in the glare and sky-test traces: 66-98 tracelines a frame at ~100 us on fairy (r_spikes 2 with per-builtin
+attribution). Both loops are budgeted in rays, which cannot know a map's ray cost; a clock can, but CSQC had none
+finer than gettime(1)'s whole milliseconds, which a float loses past ~2.3 h of uptime.
+
+Fix: gettime(2) answers the seconds since the current frame's first gettime(2), in 0.1 ms steps (small, so a float
+keeps them; a static base reset whenever realtime moves; differences stay right if realtime repeats). QC (FTESurf
+P1488): Sprite_SkyTick (up to half) and Sprite_Glare share vbsp_sprite_tracems (default 1 ms) of tracing a frame;
+the sprite or glow that would have been next is first next frame, a sky burst keeps the credit it did not spend. An
+engine without mode 2 answers realtime there (>= 1 s from Host_Init on), and the QC then caps nothing.
+
+Measured (lows2 rig, quiet machine, board replays, Lex's settings, uncapped; the PC i9-9900K / RTX 2080 SUPER):
+surf_fairy warm pass, two alternating rounds, vbsp_sprite_tracems 0 / 1.5 / 1: avg 296 / 310 / 324, 1% 105 / 137 /
+148, 0.1% 86 / 114 / 125, worst frame 12.4-12.9 / 9.5-9.7 / 8.4-8.5 ms, stutters 745-913 / 81-126 / 34-48.
+surf_jumble 0 / 1: 412 / 434 avg, 1% 203 / 279, 0.1% 183 / 252. One review (control flow, failure modes): the
+census line named a time stop "running out of map" and the stop counter was never printed (both fixed); found sound:
+no starvation (the first traced glow of a frame always runs), cursors and burst credit consistent, the old-engine
+fallback, mode 2 in every build and VM.
+
+Known: the glare's answers refresh more slowly on expensive maps (that is the trade); one glow's five rays may run past
+the budget; a 1 ms clock (sys_clocktype 1) quantises the budget.
+
 ## Patch 1487 -- keep vertical travel out of replay idle spans (QC only)
 
 **Problem:** replay idle classification discarded recorded vertical velocity.
