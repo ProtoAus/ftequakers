@@ -93,6 +93,7 @@ r_qrenderer_t qrenderer = QR_OPENGL;
 
 static cvar_t *hl2_novis;
 static cvar_t *hl2_clipflags;	//FTESurf Patch 831
+static cvar_t *hl2_walkarrays;	//FTESurf Patch 1468
 static cvar_t *hl2_visdebug;	//Opt-in area/leaf-walk statistics, not visibility behavior.
 static cvar_t *hl2_pvscache;	//FTESurf Patch 273: memoise the headnode descent
 static cvar_t *hl2_pvsmemo;		//FTESurf Patch 1261: keep each level's prop and displacement PVS verdicts
@@ -733,6 +734,9 @@ typedef struct vbspinfo_s
 
 	unsigned int contentsremap[32];
 	qboolean	lightwarm_done;		//FTESurf Patch 1364: this load's prop-lighting warm is over
+	int			*walkmark;			//FTESurf Patch 1468: per surface, the world walk's mark (VBSP_WalkBuild)
+	unsigned int	*walkmarkidx;		//per leaf face, its surface's index
+	qbyte		*walkbits;			//per surface, VBSP_WALK_BACK | VBSP_WALK_OFFNODE
 } vbspinfo_t;
 
 /*
@@ -9494,6 +9498,125 @@ static void VBSP_RecursiveWorldNode (model_t *model, mnode_t *node, unsigned int
 // recurse down the back side
 	VBSP_RecursiveWorldNode (model, node->children[!side], clipflags);
 }
+//FTESurf Patch 1468: VBSP_RecursiveWorldNode with the per-view surface marks and the two flags it tests in compact
+//arrays, so its leaf and node loops read 4 and 1 bytes a surface instead of two cache lines of a ~200-byte msurface_t
+//(flags at its start, visframe past 64). Same surfaces in the same order. Sampled: the walk's own time was 6.7% of a
+//surf_pantheon frame. Built at the first frame, after load has set every SURF_PLANEBACK and SURF_OFFNODE.
+#define VBSP_WALK_BACK		1
+#define VBSP_WALK_OFFNODE	2
+static int *vbsp_wmark;
+static const unsigned int *vbsp_wmarkidx;
+static const qbyte *vbsp_wbits;
+static void VBSP_WalkBuild(model_t *mod, vbspinfo_t *prv)
+{
+	size_t i, ns = mod->numsurfaces, nm = mod->nummarksurfaces > 0 ? mod->nummarksurfaces : 0;
+	prv->walkbits = plugfuncs->GMalloc(&mod->memgroup, ns + 1);
+	prv->walkmarkidx = plugfuncs->GMalloc(&mod->memgroup, (nm + 1) * sizeof(*prv->walkmarkidx));
+	for (i = 0; i < ns; i++)
+		prv->walkbits[i] = ((mod->surfaces[i].flags & SURF_PLANEBACK) ? VBSP_WALK_BACK : 0) |
+			((mod->surfaces[i].flags & SURF_OFFNODE) ? VBSP_WALK_OFFNODE : 0);
+	for (i = 0; i < nm; i++)
+		prv->walkmarkidx[i] = mod->marksurfaces[i] - mod->surfaces;
+	prv->walkmark = plugfuncs->GMalloc(&mod->memgroup, (ns + 1) * sizeof(*prv->walkmark));
+	memset(prv->walkmark, 0, (ns + 1) * sizeof(*prv->walkmark));	// visframe's load value
+}
+static void VBSP_RecursiveWorldNodeA (model_t *model, mnode_t *node, unsigned int clipflags)
+{
+	int			c, side;
+	size_t		m, idx;
+	mplane_t	*plane;
+	msurface_t	*surf;
+	mleaf_t		*pleaf;
+	double		dot;
+
+	if (node->contents == FTECONTENTS_SOLID)
+		return;
+	if (node->visframe != vbsp_nodesequence)
+		return;
+	if (clipflags)
+	{
+		int i;
+		for (i = 0; i < refdef->frustum_numplanes; i++)
+		{
+			if (!(clipflags & (1u<<i)))
+				continue;
+			switch (BOX_ON_PLANE_SIDE (node->minmaxs, node->minmaxs+3, &refdef->frustum[i]))
+			{
+			case 2:
+				return;
+			case 1:
+				if (hl2_clipflags->ival)
+					clipflags &= ~(1u<<i);
+				break;
+			}
+		}
+	}
+	if (node->contents != -1)
+	{
+		pleaf = (mleaf_t *)node;
+		vbsp_leaf_invis++;
+		if (! (refdef->areabits[pleaf->area>>3] & (1<<(pleaf->area&7)) ) )
+		{
+			vbsp_leaf_areakill++;
+			return;
+		}
+		c = pleaf->cluster;
+		if (c >= 0)
+			frustumvis[c>>3] |= 1<<(c&7);
+		for (m = pleaf->firstmarksurface - model->marksurfaces, c = pleaf->nummarksurfaces; c > 0; c--, m++)
+		{
+			idx = vbsp_wmarkidx[m];
+			if (vbsp_wbits[idx] & VBSP_WALK_OFFNODE)
+			{
+				if (vbsp_wmark[idx] != vbsp_surfsequence)
+				{	//only add once, it might be in multiple leafs
+					vbsp_wmark[idx] = vbsp_surfsequence;
+					surf = model->surfaces + idx;
+					modfuncs->RenderDynamicLightmaps (surf);
+					VBSP_EMIT_SURF(surf);
+				}
+			}
+			else
+				vbsp_wmark[idx] = vbsp_surfsequence;
+		}
+		return;
+	}
+	plane = node->plane;
+	switch (plane->type)
+	{
+	case PLANE_X:
+		dot = modelorg[0] - plane->dist;
+		break;
+	case PLANE_Y:
+		dot = modelorg[1] - plane->dist;
+		break;
+	case PLANE_Z:
+		dot = modelorg[2] - plane->dist;
+		break;
+	default:
+		dot = DotProduct (modelorg, plane->normal) - plane->dist;
+		break;
+	}
+	side = dot >= 0 ? 0 : 1;
+	VBSP_RecursiveWorldNodeA (model, node->children[side], clipflags);
+	for (c = node->numsurfaces, idx = node->firstsurface; c > 0; c--, idx++)
+	{
+		if (vbsp_wmark[idx] != vbsp_surfsequence)
+			continue;
+		if ((vbsp_wbits[idx] & VBSP_WALK_BACK) != side)
+			continue;		// wrong side
+		vbsp_wmark[idx] = 0;
+		surf = model->surfaces + idx;
+		modfuncs->RenderDynamicLightmaps (surf);
+		VBSP_EMIT_SURF(surf);
+	}
+	VBSP_RecursiveWorldNodeA (model, node->children[!side], clipflags);
+}
+//the mark the walk keeps for a surface this view: its own field, or the array (hl2_walkarrays)
+static int *VBSP_SurfMark(model_t *mod, msurface_t *surf, qboolean arrays)
+{
+	return arrays ? &vbsp_wmark[surf - mod->surfaces] : &surf->visframe;
+}
 static qbyte *VBSP_MarkLeaves (model_t *model, int clusters[2])
 {
 	vbspinfo_t	*prv = (vbspinfo_t*)model->meshinfo;
@@ -10667,6 +10790,7 @@ static void VBSP_PrepareFrame(model_t *mod, refdef_t *r_refdef, int area, int cl
 	vbspinfo_t	*prv = (vbspinfo_t*)mod->meshinfo;
 	qbyte *surfvis, *entvis;
 	qboolean unvisedareas;	//Patch 1271: an unvised map, culled by area
+	qboolean walkarrays;	//FTESurf Patch 1468
 
 	refdef = r_refdef;
 	prv->lvc_framespent = 0;	//FTESurf Patch 1283: each view's light traces start a fresh VLVC_FRAMEMS
@@ -10784,6 +10908,12 @@ static void VBSP_PrepareFrame(model_t *mod, refdef_t *r_refdef, int area, int cl
 
 	entvis = surfvis = VBSP_MarkLeaves(mod, clusters);
 	memo = VBSP_PVSMemo(mod, area, clusters, surfvis);
+	if (hl2_walkarrays->ival && !prv->walkmark)
+		VBSP_WalkBuild(mod, prv);
+	walkarrays = hl2_walkarrays->ival && prv->walkmark;
+	vbsp_wmark = prv->walkmark;
+	vbsp_wmarkidx = prv->walkmarkidx;
+	vbsp_wbits = prv->walkbits;
 	VectorCopy (r_refdef->vieworg, modelorg);
 	unvisedareas = !surfvis && !mod->vis && !hl2_novis->ival && !r_refdef->forcevis;
 	if (unvisedareas)
@@ -10804,15 +10934,15 @@ static void VBSP_PrepareFrame(model_t *mod, refdef_t *r_refdef, int area, int cl
 			if (!VBSP_UnvisedAreaVisible(prv, r_refdef->areabits, leaf->area))
 				continue;
 			for (mark = leaf->firstmarksurface, k = leaf->nummarksurfaces; k > 0; k--)
-				(*mark++)->visframe = vbsp_surfsequence;
+				*VBSP_SurfMark(mod, *mark++, walkarrays) = vbsp_surfsequence;
 		}
 		for (i = 0; i < prv->numdisplacements; i++)
 			if (VBSP_UnvisedPairVisible(prv, r_refdef->areabits, &prv->displacements[i].pvs, 0))
-				prv->displacements[i].surf->visframe = vbsp_surfsequence;
+				*VBSP_SurfMark(mod, prv->displacements[i].surf, walkarrays) = vbsp_surfsequence;
 		for (i = 0; i < mod->nummodelsurfaces; i++)
 		{
 			surf = &mod->surfaces[i];
-			if (surf->visframe != vbsp_surfsequence)
+			if (*VBSP_SurfMark(mod, surf, walkarrays) != vbsp_surfsequence)
 				continue;
 			modfuncs->RenderDynamicLightmaps (surf);
 			VBSP_EMIT_SURF(surf);
@@ -10838,16 +10968,19 @@ static void VBSP_PrepareFrame(model_t *mod, refdef_t *r_refdef, int area, int cl
 		areas[0] = 1;
 		areas[1] = area;
 		vbsp_surfsequence++;
-		VBSP_RecursiveWorldNode (mod, mod->nodes, (1u<<refdef->frustum_numplanes)-1);
+		if (walkarrays)
+			VBSP_RecursiveWorldNodeA (mod, mod->nodes, (1u<<refdef->frustum_numplanes)-1);
+		else
+			VBSP_RecursiveWorldNode (mod, mod->nodes, (1u<<refdef->frustum_numplanes)-1);
 		for (i = 0; i < prv->numdisplacements; i++)
 		{
 			disp = &prv->displacements[i];
 			if (VBSP_PVSMemoTest(memo, prv->numstaticprops + i, mod, NULL, &disp->pvs, surfvis, areas))
 			{
 				surf = disp->surf;
-				if (surf->visframe == vbsp_surfsequence)
+				if (*VBSP_SurfMark(mod, surf, walkarrays) == vbsp_surfsequence)
 					continue;	//nettest: already emitted by the leaf walk this frame — re-adding would overrun surf->sbatch->mesh[] (sized once per surface) and corrupt the heap. Dedup like the leaf walk.
-				surf->visframe = vbsp_surfsequence;
+				*VBSP_SurfMark(mod, surf, walkarrays) = vbsp_surfsequence;
 				modfuncs->RenderDynamicLightmaps (surf);
 				VBSP_EMIT_SURF(surf);
 			}
@@ -14245,6 +14378,9 @@ qboolean VBSP_Init(void)
 		*/
 		hl2_visdebug = cvarfuncs->GetNVFDG("hl2_visdebug", "0", 0, "Print Source area visibility and 300-frame leaf-walk statistics (also requires developer). Does not change visibility.", MAPOPTIONS);
 		hl2_novis = cvarfuncs->GetNVFDG("r_novis", "0", 0, "Draw every leaf, ignoring the PVS. Diagnostic: makes a vis problem visible by removing vis.", MAPOPTIONS);
+		hl2_walkarrays = cvarfuncs->GetNVFDG("hl2_walkarrays", "1", 0, "FTESurf Patch 1468: the world walk keeps its per-view "
+			"surface marks in compact arrays instead of each surface's own field: the same surfaces in the same order, less "
+			"memory read per surface. 0 uses the surfaces' fields (the A/B).", MAPOPTIONS);
 		hl2_clipflags = cvarfuncs->GetNVFDG("hl2_clipflags", "1", 0, "FTESurf Patch 831: the world walk stops testing a frustum plane below a node wholly in front of it. 0 tests every plane at every node (the A/B).", MAPOPTIONS);
 		hl2_pvsmemo = cvarfuncs->GetNVFDG("hl2_pvsmemo", "1", 0, "FTESurf Patch 1261: keep each view level's static-prop and displacement PVS verdicts while its clusters, area and area connections are unchanged, instead of testing every one each frame. 0 tests every frame (the A/B).", MAPOPTIONS);
 		hl2_pvscache = cvarfuncs->GetNVFDG("hl2_pvscache", "1", 0, "FTESurf (P273): reuse the answer to the whole-tree entity-visibility descent when the same node is asked about the same PVS. Exact, not approximate -- the test is a pure function of those two. Measured on surf_tensor2 it was 98% of the listen server's per-frame cost. 0 restores the old recompute-every-time behaviour, so a suspected culling bug is a one-command A/B.", MAPOPTIONS);
