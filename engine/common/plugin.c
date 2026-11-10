@@ -826,7 +826,7 @@ static qboolean QDECL Plug_Cvar_GetString(const char *name, char *outbuffer, qui
 		var = Cvar_Get(name, "", 0, "Plugin vars");
 		if (!var)
 			return false;
-		if (strlen(var->name)+1 > sizeofbuffer)
+		if (strlen(var->string)+1 > sizeofbuffer)	//FTESurf Patch 1475: the value is what is copied (this read the name)
 			return false;
 
 		strcpy(outbuffer, var->string);

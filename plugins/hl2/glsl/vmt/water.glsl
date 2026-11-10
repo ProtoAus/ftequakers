@@ -213,7 +213,7 @@ void main (void)
 	{
 		float lz = texture2D(s_reflectdepth, lstc).r;	// 1: nothing drawn there, or sky -- far, no shift
 		vec4 lc = m_capturedepthrefl * vec4(lstc * 2.0 - 1.0, lz * 2.0 - 1.0, 1.0);
-		if (lz < 0.99999 && abs(lc.w) > 1e-6)
+		if (lz < 0.99999 && lc.w > 1e-6)	// w <= 0: decoded behind that camera (a turned sample off its edge)
 		{
 			float pden = max(-lc.z / lc.w - m_captureshiftrefl.w, ltf.w);
 			if (pden > 1.0)
