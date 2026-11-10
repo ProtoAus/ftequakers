@@ -1050,6 +1050,7 @@ rename hazard, stream to .part and accept the other failure mode.
 qboolean QC_FixFileName(const char *name, const char **result, const char **fallbackread);
 
 static char			*in_jrn_buf;
+static qboolean		in_jrn_mainactive;	/*main-only lifecycle hint, never buffer access permission*/
 static size_t		in_jrn_len, in_jrn_cap, in_jrn_max;
 static double		in_jrn_base, in_jrn_last;
 static unsigned int	in_jrn_dropreported, in_jrn_dropbase, in_jrn_events, in_jrn_frames, in_jrn_hidden;
@@ -1072,8 +1073,9 @@ static qboolean		in_jrn_full, in_jrn_synth;
 /*Patch 1116: SHA-256 of in_jrn_buf[0, in_jrn_hashed), fed as the journal grows, so its
   close hashes a tail instead of the whole run on the frame the run ends (5.9 ms for
   1.6 MB, measured). NULL, or in_jrn_rehash, means hash the whole buffer at close.
-  Fed and freed on the main thread only. cl_threadedphysics appends from its own thread with
-  no lock against this one (review 2), so a journal that saw it is hashed whole at close.*/
+  Fed and freed on the main thread only. Threaded capture still conservatively
+  hashes whole at close; ordinary main append exclusion does not qualify foreign
+  native producers or change the main-only hash-context rule.*/
 static void			*in_jrn_hctx;
 static size_t		in_jrn_hashed;
 static qboolean		in_jrn_rehash;	//a byte below in_jrn_hashed changed (the synth mark)
@@ -1092,6 +1094,43 @@ static float		in_jrn_vrawx, in_jrn_vrawy;
 static int			in_jrn_vflags;
 static float		in_jrn_vlast[2];
 static qboolean		in_jrn_vhavelast;
+
+/*CPU-only main transactions. Release only our transition BEFORE callbacks;
+  a borrowed false stays owned by its caller. Worker producers inherit indeplock.*/
+typedef struct in_jrn_guard_s
+{
+	qboolean active, owned;
+} in_jrn_guard_t;
+static void IN_Journal_GuardAcquire(in_jrn_guard_t *guard)
+{
+	if (guard->active)
+		return;
+	guard->owned = CL_AllowIndependantSendCmd(false);
+	guard->active = true;
+}
+static void IN_Journal_GuardRelease(void *ctx)
+{
+	in_jrn_guard_t *guard = ctx;
+	qboolean owned = guard->owned;
+
+	if (!guard->active)
+		return;
+	guard->active = guard->owned = false;
+	if (owned)
+		CL_AllowIndependantSendCmd(true);
+}
+static qboolean IN_Journal_Ready(in_jrn_guard_t *guard, qboolean mainthread)
+{
+	if (mainthread)
+	{
+		if (!in_jrn_mainactive)
+			return false;
+		IN_Journal_GuardAcquire(guard);
+	}
+	/*The editor can enter the shared drain off-main. Never read the main hint
+	  or take its permission helper there. Foreign native producers remain unsafe.*/
+	return in_jrn_buf != NULL;
+}
 
 /*Raw append.  Grows by doubling; the caller has already decided the line fits.*/
 static void IN_Journal_Raw(const char *s)
@@ -1181,9 +1220,13 @@ void IN_Journal_Note(const char *text)
 {
 	char clean[96];
 	size_t i;
+	in_jrn_guard_t guard = {false, false};
 
-	if (!in_jrn_buf)
+	if (!IN_Journal_Ready(&guard, Sys_IsMainThread()))
+	{
+		IN_Journal_GuardRelease(&guard);
 		return;
+	}
 
 	/*the gamecode writes this, so it is sanitised rather than trusted: anything
 	  that could introduce a newline would let a note forge a record line.*/
@@ -1212,6 +1255,7 @@ void IN_Journal_Note(const char *text)
 	  what this preserves, at the cost of up to one frame of precision on a
 	  timestamp nobody reads.*/
 	IN_Journal_Line(in_jrn_last, "#", clean);
+	IN_Journal_GuardRelease(&guard);
 }
 
 /*
@@ -1332,6 +1376,7 @@ void IN_Journal_Drop(void)
 	if (in_jrn_buf)
 		BZ_Free(in_jrn_buf);
 	in_jrn_buf = NULL;
+	in_jrn_mainactive = false;
 	in_jrn_len = in_jrn_cap = 0;
 	if (in_jrn_hctx)
 		BZ_Free(in_jrn_hctx);
@@ -2244,6 +2289,7 @@ static void IN_JournalBegin_f(void)
 	if (in_jrn_cap > in_jrn_max + 1024)
 		in_jrn_cap = in_jrn_max + 1024;
 	in_jrn_buf = BZ_Malloc(in_jrn_cap);
+	in_jrn_mainactive = true;
 	in_jrn_len = 0;
 	in_jrn_hctx = BZ_Malloc(hash_sha2_256.contextsize);
 	hash_sha2_256.init(in_jrn_hctx);
@@ -2613,9 +2659,13 @@ route -- the one that needs no skill -- and does not pretend to close the others
 void IN_Journal_MarkSynth(const char *source)
 {
 	char note[64];
+	in_jrn_guard_t guard = {false, false};
 
-	if (!in_jrn_buf || in_jrn_synth)
+	if (!IN_Journal_Ready(&guard, Sys_IsMainThread()) || in_jrn_synth)
+	{
+		IN_Journal_GuardRelease(&guard);
 		return;		/*no journal open, or already poisoned -- idempotent*/
+	}
 
 	/*rewrite the header's synth key in place -- it is a fixed-width "0" by
 	  construction, so this cannot move anything after it.*/
@@ -2642,6 +2692,7 @@ void IN_Journal_MarkSynth(const char *source)
 	  the first run of this patch's own falsifier.*/
 	Q_snprintfz(note, sizeof(note), "SYNTH source %s", source?source:"unknown");
 	IN_Journal_Note(note);
+	IN_Journal_GuardRelease(&guard);
 }
 
 static void IN_JournalSynth_f(void)
@@ -2677,12 +2728,14 @@ static void IN_JournalSynth_f(void)
 	Con_Printf("in_journal_synth: injected %i mouse and %i key events\n", n, (n+15)/16);
 }
 
-void CL_Paste_Flush(void);
+void CL_Paste_FlushGuarded(void (*beforegive)(void *), void *ctx);
 /*a 'pointer' is either a multitouch pointer, or a separate device
 note that mice use the keyboard button api, but separate devices*/
 static void IN_Commands_Internal(qboolean deliverpaste)
 {
 	struct eventlist_s *ev;
+	in_jrn_guard_t guard = {false, false};
+	qboolean mainthread = Sys_IsMainThread();
 
 	in_real_keydown = false;	/*Patch 625: nothing is being dispatched yet*/
 	INS_Commands();
@@ -2749,18 +2802,22 @@ static void IN_Commands_Internal(qboolean deliverpaste)
 	  By the time that runs the individual reports have been added together and
 	  are unrecoverable.  Emitted only on a non-empty drain, so an idle frame
 	  costs nothing and the .view already carries one line per rendered frame.*/
-	if (in_jrn_buf && events_used != events_avail)
+	if (events_used != events_avail && IN_Journal_Ready(&guard, mainthread))
 		IN_Journal_Frame();
 
 	if (deliverpaste)
-		CL_Paste_Flush();	/*P939: an async answer precedes the next input, too*/
+		CL_Paste_FlushGuarded(IN_Journal_GuardRelease, &guard);	/*P939: same stream position*/
 	while (events_used != events_avail)
 	{
 		ev = &eventlist[events_used & (EVENTQUEUELENGTH-1)];
 
-		if (in_jrn_buf)
+		if (IN_Journal_Ready(&guard, mainthread))
 			IN_Journal_Event(ev);
 
+		/*Only relative dispatch is callback-free. Empty paste keeps the group;
+		  actual delivery releases it immediately before entering the recipient.*/
+		if (ev->type != IEV_MOUSEDELTA)
+			IN_Journal_GuardRelease(&guard);
 		switch(ev->type)
 		{
 		case IEV_KEYRELEASE:
@@ -2959,8 +3016,9 @@ static void IN_Commands_Internal(qboolean deliverpaste)
 		}
 		events_used++;
 		if (deliverpaste)
-			CL_Paste_Flush();	/*handler returned; real-key/VM capabilities are cleared*/
+			CL_Paste_FlushGuarded(IN_Journal_GuardRelease, &guard);
 	}
+	IN_Journal_GuardRelease(&guard);
 }
 void IN_Commands(void)
 {

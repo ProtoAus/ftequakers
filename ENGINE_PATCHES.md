@@ -1,5 +1,35 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1485 -- serialize ordinary main journal transactions (in_generic.c, pr_clcmd.c)
+
+**Problem:** Ordinary main Frame/Event/Note/Synth compounds could overlap the
+admitted physics producer. A whole input-drain lock would cross input/paste
+callbacks; releasing for every empty paste poll would instead lock every move.
+
+**Change:** Main-qualified activity hint avoids inactive buffer reads/acquisitions.
+Scoped tokens borrow or own existing exclusion and clear before releasing only
+their transition. Relative-only CPU groups share exclusion; other dispatch and
+actual paste recipients release it first, with fresh acquisition afterward.
+Frame/Event/annotation positions remain unchanged. Share actual paste body with
+a release-before-give hook; preserve the plain interface and all early returns.
+The shared editor route can enter off-main: never read the main hint or take its
+permission helper there. Main Note/Synth protect full compounds; no per-Raw lock.
+No header/VM/plugin layout, capture/consent/grammar or enforcement policy change.
+
+**Verified:** Actual producers/drain/paste/lifecycle/permission with explicit
+hosts and real OS mutex/threads: pinned bb3e control851 checks/754 failures vs
+subject857/0, including three admitted-worker arms, fresh post-paste worker,
+700-row growth/one relative group acquisition, inactive zero acquisitions,
+borrowed false, callback-owned false, replacement chronology and off-main hint
+trap. Most control failures are repeated row-ownership checks, NOT cheat cases.
+Three old extra signedness warnings remain visible ONLY in the exact pinned
+unchanged dispatch block; new journal/guard/host code stays Wall/Wextra/Werror.
+Lifecycle18/0, actual-crypto close136/0; byte-identical Raw/Line/End/context closure
+retains prior cap628/0 evidence. Independent frozen-diff review: no issues.
+Mutex call counts are not latency measurements. Status/cvar reads, backend/ring,
+clipboard/cvar and foreign-native races, fatal allocation paths and native
+editor/no-thread/runtime input acceptance remain unqualified.
+
 ## Patch 1484 -- own a closing journal through callbacks and host abort (in_generic.c)
 
 **Problem:** End finalized shared storage without excluding the independent

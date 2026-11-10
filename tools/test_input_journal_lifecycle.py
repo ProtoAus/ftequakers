@@ -216,6 +216,8 @@ def main():
     assert h.count('void (*process)(void *, const void *, size_t);') == 1
     h = h.replace('void (*process)(void *, const void *, size_t);', 'void (*process)(void *, const void *, size_t); size_t contextsize; void (*init)(void *);')
     h = h.replace('hash_sha2_256 = {hash_process};', 'hash_sha2_256 = {hash_process,1,hash_init};')
+    if 'in_jrn_mainactive' in text:
+        h += '\nstatic qboolean in_jrn_mainactive;\n'
     c = a.work_root / 'journal-lifecycle.c'
     exe = a.work_root / 'journal-lifecycle.exe'
     c.write_text(PRE + h + HOST + helper + close_support(text) + raw + drop + lifecycle + TEST)

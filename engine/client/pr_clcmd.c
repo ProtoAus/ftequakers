@@ -1095,8 +1095,9 @@ static unsigned int cl_paste_asked;
 static pastegive_t cl_paste_give;
 static unsigned int cl_paste_vm;
 
-/* After input dispatch returns and clears its capabilities, outside either VM. */
-void CL_Paste_Flush(void)
+/*After input dispatch, outside either VM. Empty/editor calls keep a caller's
+  CPU-only group; release its owner only when an answer actually enters code.*/
+void CL_Paste_FlushGuarded(void (*beforegive)(void *), void *ctx)
 {
 	pasteanswer_t answer, *p;
 
@@ -1110,8 +1111,14 @@ void CL_Paste_Flush(void)
 	answer = *p;
 	memset(p, 0, sizeof(*p));
 	Z_Free(p);
+	if (beforegive)
+		beforegive(ctx);
 	answer.give(answer.text, answer.chars, answer.vm);
 	memset(&answer, 0, sizeof(answer));
+}
+void CL_Paste_Flush(void)
+{
+	CL_Paste_FlushGuarded(NULL, NULL);
 }
 /* Existing render-tail fallback for asynchronous answers without further input. */
 void CL_Paste_DrawLast(void)

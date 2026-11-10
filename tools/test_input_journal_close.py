@@ -321,6 +321,8 @@ def main():
     for old,new in [('in_jrn_hashed, in_jrn_digestlen','in_jrn_hashed'),('in_jrn_rehash, in_jrn_digestok','in_jrn_rehash'),('in_jrn_base, in_jrn_digestms','in_jrn_base'),('digests, writes','writes'),('snapshot_len, written_len','written_len'),('last_kept, write_ok','write_ok')]:
         assert old in h
         h = h.replace(old,new)
+    if 'in_jrn_mainactive' in text:
+        h += '\nstatic qboolean in_jrn_mainactive;\n'
     h = h.replace('return 2.0;', 'return host_clock();').replace('return true; }\nstatic void *BZ_Realloc', 'return host_is_main(); }\nstatic void *BZ_Realloc')
     h = h.replace('void *q = realloc(p, n + 1);', 'thread_before_realloc();\n    void *q = host_realloc(p, n + 1);')
     pre = PRE.replace('static void hash_init(void *p);\n','')
