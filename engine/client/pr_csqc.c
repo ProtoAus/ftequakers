@@ -8368,6 +8368,16 @@ void CSQC_PrewarmGC(void)
 	if (csqcprogs && csqcprogs->PrewarmGC)
 		csqcprogs->PrewarmGC(csqcprogs);
 }
+const char *CSQC_BuiltinName(unsigned int num)	//DIAG lows2
+{
+	int i;
+	if (num >= sizeof(csqc_builtin)/sizeof(csqc_builtin[0]) || !csqc_builtin[num])
+		return "?";
+	for (i = 0; BuiltinList[i].name; i++)
+		if (BuiltinList[i].bifunc == csqc_builtin[num])
+			return BuiltinList[i].name;
+	return "?";
+}
 void CSQC_EnumProfile(void (*cb)(void *ctx, const char *func, const char *file, double selfus, double totalus), void *ctx)
 {
 	if (csqcprogs && csqcprogs->EnumProfile)
