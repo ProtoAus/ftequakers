@@ -7742,10 +7742,18 @@ static void GLBE_TurnVP(float *out)
 //frame renders one view rather than two; it renders next frame, when the other is not due.
 static unsigned int GLBE_CaptureKeep(const plane_t *p, entity_t *ent, unsigned int need, const shader_t *s)
 {
+	static double lastrt;	//realtime and frame of the last call: the frame interval a hold adds
+	static int lastframe = -1;
+	double dt = (lastframe == host_framecount - 1) ? realtime - lastrt : 1;
 	int seat = BE_Seat(), g, hold = -1, renders = 0;
 	unsigned int kept = 0, keep = 0, gk;
 	qboolean common, staggers;
 	vec3_t d;
+	if (lastframe != host_framecount)
+	{
+		lastrt = realtime;
+		lastframe = host_framecount;
+	}
 	if (!need || be_capkeep.ent != ent || be_capkeep.pv != r_refdef.playerview ||
 		!GLBE_WaterSamePlane(p, &be_capkeep.plane))
 		return 0;
@@ -7790,12 +7798,11 @@ static unsigned int GLBE_CaptureKeep(const plane_t *p, entity_t *ent, unsigned i
 			renders--;
 		}
 		else if (be_capkeep.g[g].heldframe != host_framecount - 1 &&
+			(r_capturerate.value <= 0 || (realtime - be_capkeep.g[g].rendered + dt) * max(r_capturerate.value, 20) < 1.25) &&
 			(hold < 0 || be_capkeep.g[g].rendered > be_capkeep.g[hold].rendered))
-			hold = g;
+			hold = g;	//a frame late, it still renders within 1.25 intervals (at 300 fps: 60 yes, 144 no)
 	}
-	//at a frame rate under twice r_capturerate a held group would capture at half the rate rather than a frame late
-	if (staggers && hold >= 0 && renders > 1 &&
-		(r_capturerate.value <= 0 || host_frametime * max(r_capturerate.value, 20) < 0.5))
+	if (staggers && hold >= 0 && renders > 1)
 		keep |= 1u<<hold;
 	else
 		hold = -1;
@@ -8257,6 +8264,9 @@ static qboolean GLBE_GenerateBatchTextures(batch_t *batch, shader_t *bs)
 			written &= ~SHADER_HASREFLECT;
 		if (!(r_refract_fboival || (cf & (SHADER_HASPORTAL|SHADER_HASREFRACTDEPTH))))
 			written &= ~SHADER_HASREFRACT;	//the screen copy writes no target
+		for (g = 0; g < BE_CAPGROUPS; g++)
+			if ((cf & be_capgroupkinds[g]) && !(written & be_capgroupkinds[g]))
+				be_capkeep.g[g].kinds = 0;	//drawn without a target (a screen-copy refraction): nothing of it to keep
 		for (g = 0; g < BE_CAPGROUPS; g++)
 			if (written && (cf & be_capgroupkinds[g]))	//a screen-copy refraction is this frame's too
 			{
