@@ -1,5 +1,25 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1487 -- keep vertical travel out of replay idle spans (QC only)
+
+**Problem:** replay idle classification discarded recorded vertical velocity.
+An upward or downward ladder climb with little horizontal speed therefore became
+an idle interval and was skipped when hud_watch_skipidle was enabled.
+
+**Change:** Watch_ScanRange uses the complete velocity vector already parsed from
+the sample. Speed/duration/padding thresholds, pause guards, failed-stage skips,
+recording bytes and import/evidence semantics are unchanged. No native source,
+commit/tag pin or QC Build change.
+
+**Verified:** qualified production three-VM build, zero warnings. Native unchanged
+CSQC control versus subject at 66.7 and 100 Hz: 961/1441 samples, four versus two
+idle stretches, genuine mid-run and terminal stationary periods both retained.
+The removed stretches are upward/downward travel separated by horizontal travel.
+Both arms complete without VM errors. Headless scans prove classification, not
+Watch_Frame playback/rendering; the small owner acceptance is pending in lextest.md.
+See FTESurf tools/p1487-idle.md. The Story allocation screenshot matches the exact
+P1417 error already guarded and shipped in 0.1.42; no new native crash fix claimed.
+
 ## Patch 1486 -- guard journal identity values before cvar publication
 
 **Problem:** ordinary drain guards start too late for the five diagnostic cvars:
