@@ -289,7 +289,6 @@ typedef struct shaderpass_s {
 		T_GEN_REFLECTION,	//reflection image (mirror-as-fbo)
 		T_GEN_REFRACTION,	//refraction image (portal-as-fbo)
 		T_GEN_REFRACTIONDEPTH,	//refraction image (portal-as-fbo)
-		T_GEN_REFLECTIONDEPTH,	//FTESurf Patch 1475: the main view's reflection depth (r_captureparallax)
 		T_GEN_RIPPLEMAP,	//ripplemap image (water surface distortions-as-fbo)
 
 		T_GEN_SOURCECUBE,	//used for render-to-texture targets
@@ -309,6 +308,7 @@ typedef struct shaderpass_s {
 		T_GEN_GBUFFER6,		//one of the gbuffer images (deferred lighting).
 		T_GEN_GBUFFER7,		//one of the gbuffer images (deferred lighting).
 		T_GEN_CURRENTDEPTH,	//FTESurf Patch 1020: the current framebuffer's depth, copied once per top-level view (appended: no value moves)
+		T_GEN_REFLECTIONDEPTH,	//FTESurf Patch 1475: the main view's reflection depth, r_captureparallax (appended)
 	} texgen;
 
 	enum {

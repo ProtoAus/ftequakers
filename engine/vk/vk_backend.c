@@ -1661,8 +1661,8 @@ static texid_t SelectPassTexture(const shaderpass_t *pass)
 		return shaderstate.tex_refraction;
 	case T_GEN_REFRACTIONDEPTH:	//refraction image (portal-as-fbo)
 		return &shaderstate.rt_refraction.q_depth;
-	case T_GEN_REFLECTIONDEPTH:	//FTESurf Patch 1475: never captured here
-		return &shaderstate.rt_reflection.q_depth;
+	case T_GEN_REFLECTIONDEPTH:	//FTESurf Patch 1475: never captured here; far, as GL's fallback
+		return r_whiteimage;
 	case T_GEN_RIPPLEMAP:	//ripplemap image (water surface distortions-as-fbo)
 		return shaderstate.tex_ripplemap;
 

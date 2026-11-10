@@ -68,7 +68,7 @@ cvar_t *hl2_water;
 static qboolean VMT_WaterParallax(int wmode, const char *progargs)
 {
 	static int engine = -1;
-	char v[16];
+	char v[64];	//Plug_Cvar_GetString refuses a buffer shorter than the cvar's NAME
 	if (engine < 0)
 		engine = cvarfuncs && cvarfuncs->GetString("r_captureparallax", v, sizeof(v)) && *v;
 	return engine && wmode >= 2 && wmode != 5 && !strstr(progargs, "#LQWATER");

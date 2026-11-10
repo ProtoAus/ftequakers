@@ -1841,6 +1841,14 @@ static void GLBE_ReflectMSAA_End(void)
 	MSAA_End(&be_reflmsaa);
 #endif
 }
+static qboolean GLBE_ReflectMSAA_Broken(void)	//FTESurf Patch 1475
+{
+#ifndef GL_STATIC
+	return be_reflmsaa.broken;
+#else
+	return false;
+#endif
+}
 static int GLBE_ReflectMSAA_Samples(void)
 {
 #ifndef GL_STATIC
@@ -7881,6 +7889,14 @@ static unsigned int GLBE_CaptureKeep(const plane_t *p, entity_t *ent, unsigned i
 }
 
 extern float r_portalproj[16];
+static qboolean BE_ShaderReadsReflectionDepth(const shader_t *s)
+{
+	int i;
+	for (i = 0; s && i < s->numpasses; i++)
+		if (s->passes[i].texgen == T_GEN_REFLECTIONDEPTH)
+			return true;
+	return false;
+}
 //FTESurf Patch 1475: level 0's reflection depth, resolved from its multisampled target under r_reflectmultisample
 static texid_t GLBE_ReflectionDepthTarget(int w, int h)
 {
@@ -8096,7 +8112,11 @@ static qboolean GLBE_GenerateBatchTextures(batch_t *batch, shader_t *bs)
 			qglTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
 			qglTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 		}
-		if (keepable && !r_refdef.recurse && BE_CAPTUREKEEPS && r_captureparallax.ival)
+		//P1475: made when a shader reads it (vmt/water #PARALLAX); once made, every level-0 reflection keeps it attached,
+		//so planes or glass in one frame do not rebuild the FBO and its multisampled targets between their captures
+		if (!r_refdef.recurse && BE_CAPTUREKEEPS && r_captureparallax.ival && !gl_config_gles &&
+			r_worldentity.model && (r_worldentity.model->engineflags & MDLF_SOURCEBSP) &&
+			(shaderstate.tex_reflectiondepth[0] || BE_ShaderReadsReflectionDepth(cs)))
 			refldepth = GLBE_ReflectionDepthTarget(shaderstate.tex_reflection[0]->width, shaderstate.tex_reflection[0]->height);
 		oldfbo = GLBE_FBO_Update(&shaderstate.fbo_reflectrefrac[r_refdef.recurse], FBO_RB_DEPTH, &shaderstate.tex_reflection[r_refdef.recurse], 1, refldepth, shaderstate.tex_reflection[r_refdef.recurse]->width, shaderstate.tex_reflection[r_refdef.recurse]->height, 0);
 		r_refdef.pxrect.maxheight = shaderstate.fbo_reflectrefrac[r_refdef.recurse].rb_size[1];
@@ -8120,6 +8140,8 @@ static qboolean GLBE_GenerateBatchTextures(batch_t *batch, shader_t *bs)
 		be_watercapture--;
 		if (reflmsaa)
 			GLBE_ReflectMSAA_End();	//resolved into tex_reflection, its FBO bound for the pop
+		if (reflmsaa && GLBE_ReflectMSAA_Broken())
+			refldepth = r_nulltex;	//P1475: a refused depth resolve left it unwritten
 		GLBE_FBO_Pop(oldfbo);
 		r_refdef.vrect = orect;
 		r_refdef.pxrect = oprect;
