@@ -7856,9 +7856,11 @@ static unsigned int GLBE_CaptureKeep(const plane_t *p, entity_t *ent, unsigned i
 		why[g] = beyond ? BE_CAPWHY_CAMERA : BE_CAPWHY_DUE;
 		//P1477: a forced group, inside 1.5x the limits, may wait a frame as a due one does: groups rendered together
 		//(after a jump, a plane change) trip the limits together, and would stay in step
+		//(a beyond one only above 100 fps, where its stale frame is short); a due group waits before a beyond one
 		if (be_capkeep.g[g].heldframe != host_framecount - 1 &&
-			(beyond || r_capturerate.value <= 0 || (realtime - be_capkeep.g[g].rendered + dt) * max(r_capturerate.value, 10) < 1.25) &&
-			(hold < 0 || be_capkeep.g[g].rendered > be_capkeep.g[hold].rendered))
+			(beyond ? dt < 0.01 : r_capturerate.value <= 0 || (realtime - be_capkeep.g[g].rendered + dt) * max(r_capturerate.value, 10) < 1.25) &&
+			(hold < 0 || (why[hold] == BE_CAPWHY_CAMERA && !beyond) ||
+			 (why[hold] == why[g] && be_capkeep.g[g].rendered > be_capkeep.g[hold].rendered)))
 			hold = g;	//a frame late, it still renders within 1.25 intervals (at 300 fps: 60 yes, 144 no)
 	}
 	if (staggers && hold >= 0 && renders > 1)
