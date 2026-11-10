@@ -1843,6 +1843,11 @@ static void PDECL PR_PrewarmGC(pubprogfuncs_t *ppf)
 		padded = 0;
 #endif
 	temps = prinst.maxtempstrings > PR_GC_MINTEMPS ? prinst.maxtempstrings : PR_GC_MINTEMPS;	//the floor the first finish sets
+#if defined(_WIN32) && !defined(WINRT)
+	if (!padded && prinst.tablewatch)	//FTESurf Patch 1481: the table is mirrored, not copied into the block
+		need = sizeof(*gc) - sizeof(gc->amem) + sizeof(*gc->dead)*temps;
+	else
+#endif
 	need = sizeof(*gc) - sizeof(gc->amem) + padded + (sizeof(*gc->tempstrings) + sizeof(*gc->dead))*temps;
 	if (!prinst.gcspare || prinst.gcspare->allocbytes < need)
 	{
@@ -1934,6 +1939,7 @@ void PR_RunGC (progfuncs_t *progfuncs)
 
 			gc->memsize = memsize;
 			gc->scan = NULL;
+#if defined(_WIN32) && !defined(WINRT)
 			if (mirrored)
 			{	//FTESurf Patch 1481: the worker reads the mirror at the segments; amem holds only the tables
 				gc->scan = prinst.gcmirror;
@@ -1942,6 +1948,7 @@ void PR_RunGC (progfuncs_t *progfuncs)
 				memcpy(gc->seglen, len, sizeof(*len) * n);
 			}
 			else
+#endif
 			{
 				for (dst = (char*)gc->amem, i = 0; i < n; dst += len[i++])
 					memcpy(dst, prinst.addressablehunk + ofs[i], len[i]);
@@ -1949,12 +1956,14 @@ void PR_RunGC (progfuncs_t *progfuncs)
 			}
 
 			gc->maxtemps = prinst.maxtempstrings;
+#if defined(_WIN32) && !defined(WINRT)
 			if (tabled)
 			{	//FTESurf Patch 1481: the worker and the finish read the table's mirror, which only the next start writes
 				gc->tempstrings = prinst.gctable;
 				gc->dead = (unsigned int*)((char*)gc->amem+padded);
 			}
 			else
+#endif
 			{
 				gc->tempstrings = (void*)((char*)gc->amem+padded);
 				gc->dead = (unsigned int*)(gc->tempstrings + gc->maxtemps);	//FTESurf Patch 1446: in the kept block, not a malloc per collection

@@ -3268,6 +3268,8 @@ void Sys_SendKeyEvents (void)
 				break;
 		}
 	}
+	if (r_spikes_on)
+		r_spikes_pipeus += (Sys_DoubleTime() - t0) * 1000000;
 	if (isDedicated)
 	{
 #ifndef CLIENTONLY
@@ -3289,7 +3291,6 @@ void Sys_SendKeyEvents (void)
 	if (r_spikes_on)
 	{
 		t1 = Sys_DoubleTime();
-		r_spikes_pipeus += (t1 - t0) * 1000000;
 		for (;;)
 		{
 			double m0 = Sys_DoubleTime(), us;

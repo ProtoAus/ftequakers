@@ -396,17 +396,17 @@ typedef struct
 } spike_t;
 qboolean r_spikes_on;				//sys_win.c and cl_main.c time the input bucket's steps
 double r_spikes_inus[3];			//cl_main.c: SendKeyEvents, INS_Move+IN_Commands, Cbuf_Execute
-extern double cmd_spikeus, cmd_spiketotalus;	//cmd.c
+extern double cmd_spikeus;	//cmd.c
 extern char cmd_spikeline[40];
-#ifdef _WIN32
+#if defined(_WIN32) && !defined(FTE_SDL) && !defined(FTE_SDL3) && !defined(WINRT)
 extern double r_spikes_pipeus, r_spikes_pumpus, r_spikes_msgus;	//sys_win.c
 extern unsigned int r_spikes_msgs, r_spikes_msgid;
 #endif
 static void R_Spikes_InputClear(void)
 {
 	memset(r_spikes_inus, 0, sizeof(r_spikes_inus));
-	cmd_spikeus = cmd_spiketotalus = 0, *cmd_spikeline = 0;
-#ifdef _WIN32
+	cmd_spikeus = 0, *cmd_spikeline = 0;
+#if defined(_WIN32) && !defined(FTE_SDL) && !defined(FTE_SDL3) && !defined(WINRT)
 	r_spikes_pipeus = r_spikes_pumpus = r_spikes_msgus = 0, r_spikes_msgs = r_spikes_msgid = 0;
 #endif
 }
@@ -554,7 +554,7 @@ static void R_Spikes_Sample(void)
 	if (qcprof)
 		CSQC_EnumProfile(R_Spikes_QCFunc, &f);
 #endif
-#ifdef _WIN32
+#if defined(_WIN32) && !defined(FTE_SDL) && !defined(FTE_SDL3) && !defined(WINRT)
 	f.inms[0] = r_spikes_pipeus / 1000, f.inms[1] = r_spikes_pumpus / 1000;
 	f.msgs = min(r_spikes_msgs, 65535), f.msgid = min(r_spikes_msgid, 65535), f.msgms = r_spikes_msgus / 1000;
 #else
@@ -621,7 +621,7 @@ static void R_Spikes_Append(char *out, size_t outsize)
 			Q_strncatz(out, va("          qc tempstring collector: %.2f ms on this thread (%u start, %u finish; snapshot %u KiB)\n",
 				spk.s[i].gcms, spk.s[i].gcstarts, spk.s[i].gcdones, spk.s[i].gcbytes / 1024), outsize);
 		if (spk.s[i].inms[0] + spk.s[i].inms[1] + spk.s[i].inms[2] + spk.s[i].inms[3] >= 1)
-			Q_strncatz(out, va("          input: stdin %.2f, messages %.2f (%u, slowest 0x%04x %.2f), INS_Move+IN_Commands %.2f, console %.2f (slowest line %.2f: %s)\n",
+			Q_strncatz(out, va("          input: stdin %.2f, messages %.2f (%u, slowest 0x%04x %.2f), INS_Move+IN_Commands %.2f, console %.2f (slowest command %.2f: %s)\n",
 				spk.s[i].inms[0], spk.s[i].inms[1], spk.s[i].msgs, spk.s[i].msgid, spk.s[i].msgms, spk.s[i].inms[2], spk.s[i].inms[3], spk.s[i].inms[4], spk.s[i].cmdline), outsize);
 		if (*spk.s[i].qcf[0])
 			Q_strncatz(out, va("          qc self: %s %.2f, %s %.2f, %s %.2f\n", spk.s[i].qcf[0], spk.s[i].qcms[0],
