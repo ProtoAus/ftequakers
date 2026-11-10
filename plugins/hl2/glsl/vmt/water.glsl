@@ -183,6 +183,13 @@ void main (void)
 #else
 	#define rstc stc
 #endif
+#if defined(FTE_CAPTUREFIX2) && !defined(SCREEN)
+	// FTESurf Patch 1474: the reflection may be from another frame than the refraction (r_capturestagger)
+	vec4 ltf = m_capturefixrefl * tf;
+	vec2 lstc = ltf.w > 0.5 ? (1.0 + ltf.xy / ltf.w) * 0.5 : rstc;
+#else
+	#define lstc stc
+#endif
 #ifdef ANIMBUMP
 	int bumplayers = textureSize(s_bumpanim, 0).z;
 	float bumplayer = bumplayers > 0 ? floor(mod(e_time * float(ANIMBUMP), float(bumplayers))) : 0.0;
@@ -343,7 +350,7 @@ void main (void)
 		refl = (huv.x >= 0.0 ? texture2D(s_refract, huv).rgb : vec3(FOGTINT)) * vec3(TINT_REFL);
 	}
 #else
-	refl = texture2D(s_reflect, clamp(stc - n.st * float(STRENGTH_REFL) * float(r_glsl_turbscale_reflect) * distortion, 0.0, 1.0)).rgb * vec3(TINT_REFL);
+	refl = texture2D(s_reflect, clamp(lstc - n.st * float(STRENGTH_REFL) * float(r_glsl_turbscale_reflect) * distortion, 0.0, 1.0)).rgb * vec3(TINT_REFL);
 #endif
 
 	if (cvar_hl2_waterdebug > 0.5)

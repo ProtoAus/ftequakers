@@ -1615,6 +1615,8 @@ static const char *glsl_hdrs[] =
 				"uniform mat3 m_invmodelview;"
 				"uniform mat4 m_capturefix;\n"	//FTESurf Patch 1245
 				"#define FTE_CAPTUREFIX 1\n"
+				"uniform mat4 m_capturefixrefl;\n"	//FTESurf Patch 1474
+				"#define FTE_CAPTUREFIX2 1\n"
 				"uniform float e_alphacoverage;\n"	//FTESurf Patch 1262
 				"#define FTE_ALPHACOVERAGE 1\n"
 
