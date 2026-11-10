@@ -1,5 +1,23 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1469 -- failed similarity collection stays unavailable in the tick summary (FTESurf surfd/sweep.py)
+
+Problem: the store-only similarity wrapper logged setup/collection exceptions to stderr but returned
+an empty note. The normal per-tick sweep summary therefore did not distinguish that unavailable
+attempt from an intentionally disabled or uneventful step. Stderr diagnostics were not absent.
+
+Change: retain the stderr diagnostic and return a fixed "sims unavailable: collection failed
+(coverage not measured)" note through the existing tuple/summary interface. Disabled collection
+still returns its existing empty note. No schema, evidence, metric, verdict, threshold, scheduling,
+resource limit, detector, native pin/tag or QC Build change; this is operator reporting only.
+
+Verified: existing test_simcheck.py, real SQLite authorizer refusal during owner setup, unchanged
+observations/verdicts, explicit-disable silence and actual same-connection pair collection after
+the refusal clears. Original source completes with the one predicted note-assertion failure;
+subject all79 checks pass on Windows and all79 on NanoPi Linux/Python3.11 at03:11:58 UTC10Nov2026,
+using an inspected source Git archive. Source/live provenance limits: FTESurf tools/p1469-sweep-unavailable.md.
+No whole-pass hard-resource, detector/calibration, upstream or live-deployment credit inferred.
+
 ## Patch 1465 -- r_blendsort 2 skips a sort whose stored failure still holds, and leaves out faces outside the clip volume (gl_backend.c, renderer.c, render.h)
 
 Problem: after Patches 1457/1463, surf_fairy's main view and its water refraction capture still spent ~0.6-0.75 ms each
