@@ -3423,10 +3423,6 @@ static LONG WINAPI GLMainWndProc (
 		case WM_ERASEBKGND:
 			lRet = TRUE;
 			break;
-		case WM_PAINT:	//FTESurf Patch 1482: the next frame repaints; DefWindowProc's BeginPaint/EndPaint took 4-6 ms (r_spikes, the rig)
-			ValidateRect(hWnd, NULL);
-			lRet = 0;
-			break;
 /*
 		case WM_ACTIVATE:
 //			fActive = LOWORD(wParam);
