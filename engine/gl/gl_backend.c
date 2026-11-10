@@ -7742,7 +7742,7 @@ static qboolean GLBE_CaptureDue(int g)
 		//carries each frame's lateness into the next), and a full interval kept every other one of them.
 		//A clock that went back (capture, the QC debugger) is due rather than never.
 		double age = realtime - be_capkeep.g[g].rendered;
-		return age < 0 || age * max(r_capturerate.value, 20) >= 0.75;
+		return age < 0 || age * max(r_capturerate.value, 10) >= 0.75;	//P1477: 10 (was 20)
 	}
 	return be_capkeep.g[g].reused >= r_capturehalfrate.ival;
 }
@@ -7777,14 +7777,23 @@ static void GLBE_TurnVP(float *out)
 //P1474: per group, for a shader that staggers (s); any other gets all of need or nothing. Where two groups would
 //render, a due one still inside its camera limits is served once more -- the more recently rendered -- so the
 //frame renders one view rather than two; it renders next frame, when the other is not due.
+//FTESurf Patch 1477: r_viewstats' cause for a keep that renders both groups; answers 0, as a refused keep does
+static unsigned int BE_CapWhy(unsigned int need, int why)
+{
+	if ((need & be_capgroupkinds[0]) && (need & be_capgroupkinds[1]))
+		r_vs_capwhy[why]++;
+	return 0;
+}
 static unsigned int GLBE_CaptureKeep(const plane_t *p, entity_t *ent, unsigned int need, const shader_t *s)
 {
 	static double lastrt;	//realtime and frame of the last call: the frame interval a hold adds
 	static int lastframe = -1;
 	double dt = (lastframe == host_framecount - 1) ? realtime - lastrt : 1;
 	int seat = BE_Seat(), g, hold = -1, renders = 0;
+	int why[BE_CAPGROUPS] = {BE_CAPWHY_N, BE_CAPWHY_N};	//P1477: why each rendering group renders (lower is the stronger cause)
 	unsigned int kept = 0, keep = 0, gk;
-	qboolean common, staggers;
+	qboolean common, staggers, beyond;
+	float dd, cosang;
 	vec3_t d;
 	if (lastframe != host_framecount)
 	{
@@ -7793,11 +7802,11 @@ static unsigned int GLBE_CaptureKeep(const plane_t *p, entity_t *ent, unsigned i
 	}
 	if (!need || be_capkeep.ent != ent || be_capkeep.pv != r_refdef.playerview ||
 		!GLBE_WaterSamePlane(p, &be_capkeep.plane))
-		return 0;
+		return BE_CapWhy(need, BE_CAPWHY_PLANE);
 	//a seat can draw several world views a frame (stereo eyes, r_projection's faces, renderscenes): a view reuses
 	//only what the same view of the last frame rendered, and a second view sharing this frame's keep renders afresh
 	if (be_capkeep.view != BE_SeatView(seat))
-		return 0;
+		return BE_CapWhy(need, BE_CAPWHY_PLANE);
 	staggers = GLBE_CaptureStaggers(s);
 	//vmt/water and vmt/lmreflect take m_capturefix; Quake's altwater does not
 	common = be_capkeep.frame == host_framecount - 1 && be_capkeep.views == 1 &&
@@ -7821,22 +7830,37 @@ static unsigned int GLBE_CaptureKeep(const plane_t *p, entity_t *ent, unsigned i
 			continue;
 		}
 		renders++;
-		VectorSubtract(r_refdef.vieworg, be_capkeep.g[g].eye, d);
 		if (!common || (gk & ~be_capkeep.g[g].kinds) ||
-			DotProduct(d, d) > 128*128 || DotProduct(vpn, be_capkeep.g[g].fwd) < 0.866f)	//past 128 units or 30 degrees
-			continue;
-		if (((gk & SHADER_HASREFLECT) && !TEXVALID(shaderstate.tex_reflection[0])) ||
+			((gk & SHADER_HASREFLECT) && !TEXVALID(shaderstate.tex_reflection[0])) ||
 			((gk & SHADER_HASREFRACT) && !TEXVALID(shaderstate.tex_refraction[0])) ||
 			((gk & SHADER_HASREFRACTDEPTH) && !TEXVALID(shaderstate.tex_refractiondepth[0])))
+		{
+			why[g] = common ? BE_CAPWHY_KINDS : BE_CAPWHY_RECORD;
 			continue;
-		if (!GLBE_CaptureDue(g))
+		}
+		VectorSubtract(r_refdef.vieworg, be_capkeep.g[g].eye, d);
+		dd = DotProduct(d, d);
+		cosang = DotProduct(vpn, be_capkeep.g[g].fwd);
+		beyond = dd > 128*128 || cosang < 0.866f;	//past 128 units or 30 degrees: due at once
+		if (beyond && (dd > 192*192 || cosang < 0.707f))
+		{	//P1477: and past half as far again (192, 45 degrees), now
+			why[g] = BE_CAPWHY_CAMERA;
+			continue;
+		}
+		if (!beyond && !GLBE_CaptureDue(g))
 		{
 			keep |= 1u<<g;
 			renders--;
+			continue;
 		}
-		else if (be_capkeep.g[g].heldframe != host_framecount - 1 &&
-			(r_capturerate.value <= 0 || (realtime - be_capkeep.g[g].rendered + dt) * max(r_capturerate.value, 20) < 1.25) &&
-			(hold < 0 || be_capkeep.g[g].rendered > be_capkeep.g[hold].rendered))
+		why[g] = beyond ? BE_CAPWHY_CAMERA : BE_CAPWHY_DUE;
+		//P1477: a forced group, inside 1.5x the limits, may wait a frame as a due one does: groups rendered together
+		//(after a jump, a plane change) trip the limits together, and would stay in step
+		//(a beyond one only above 100 fps, where its stale frame is short); a due group waits before a beyond one
+		if (be_capkeep.g[g].heldframe != host_framecount - 1 &&
+			(beyond ? dt < 0.01 : r_capturerate.value <= 0 || (realtime - be_capkeep.g[g].rendered + dt) * max(r_capturerate.value, 10) < 1.25) &&
+			(hold < 0 || (why[hold] == BE_CAPWHY_CAMERA && !beyond) ||
+			 (why[hold] == why[g] && be_capkeep.g[g].rendered > be_capkeep.g[hold].rendered)))
 			hold = g;	//a frame late, it still renders within 1.25 intervals (at 300 fps: 60 yes, 144 no)
 	}
 	if (staggers && hold >= 0 && renders > 1)
@@ -7844,7 +7868,9 @@ static unsigned int GLBE_CaptureKeep(const plane_t *p, entity_t *ent, unsigned i
 	else
 		hold = -1;
 	if (!staggers && renders && (keep || kept))
-		return 0;	//one camera for every kind: render them all
+		return BE_CapWhy(need, BE_CAPWHY_ONECAMERA);	//one camera for every kind: render them all
+	if (renders - (hold >= 0) >= 2)
+		BE_CapWhy(need, min(why[0], why[1]));
 	if (keep)
 	{
 		float vp[16], inv[16];

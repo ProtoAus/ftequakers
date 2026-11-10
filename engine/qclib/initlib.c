@@ -101,7 +101,11 @@ void *PRAddressableExtend(progfuncs_t *progfuncs, void *src, size_t srcsize, int
 			int oldtot = addressablesize;
 		#endif
 			int newsize = (prinst.addressableused + ammount + 4096) & ~(4096-1);
-			newblock = VirtualAlloc (NULL, prinst.addressablesize, MEM_RESERVE, PAGE_NOACCESS);
+			newblock = VirtualAlloc (NULL, prinst.addressablesize, MEM_RESERVE|MEM_WRITE_WATCH, PAGE_NOACCESS);	//FTESurf Patch 1481
+			prinst.hunkwatch = !!newblock;
+			if (!newblock)
+				newblock = VirtualAlloc (NULL, prinst.addressablesize, MEM_RESERVE, PAGE_NOACCESS);
+			prinst.gcmirrorused = 0;	//a new block: the collector's copy starts again
 			if (newblock)
 			{
 				VirtualAlloc (newblock, prinst.addressableused, MEM_COMMIT, PAGE_READWRITE);
@@ -602,7 +606,13 @@ void PRAddressableFlush(progfuncs_t *progfuncs, size_t totalammount)
 		prinst.addressablehunk = NULL;
 	}
 	if (!prinst.addressablehunk)
-		prinst.addressablehunk = VirtualAlloc (prinst.addressablehunk, totalammount, MEM_RESERVE, PAGE_NOACCESS);
+	{	//FTESurf Patch 1481: written pages tracked for the collector's copy (PR_QCGC_Snapshot)
+		prinst.addressablehunk = VirtualAlloc (NULL, totalammount, MEM_RESERVE|MEM_WRITE_WATCH, PAGE_NOACCESS);
+		prinst.hunkwatch = !!prinst.addressablehunk;
+		if (!prinst.addressablehunk)
+			prinst.addressablehunk = VirtualAlloc (NULL, totalammount, MEM_RESERVE, PAGE_NOACCESS);
+	}
+	prinst.gcmirrorused = 0;
 #else
 	if (prinst.addressablehunk && prinst.addressablesize != totalammount)
 	{
@@ -1447,6 +1457,9 @@ struct qcgccontext_s
 	size_t ndead;
 
 	size_t memsize;
+	const char *scan;		//FTESurf Patch 1481: the mirror, read at segofs/seglen; NULL: amem holds the segments packed
+	unsigned int nseg;
+	size_t segofs[NOSTR_MAX+1], seglen[NOSTR_MAX+1];
 	unsigned int amem[1];
 };
 //FTESurf Patch 1292: the dead strings' memory, freed on a worker once the main thread has cleared their slots.
@@ -1489,7 +1502,15 @@ void PR_QCGC_Thread(void *ctx, void *data, size_t a, size_t b)
 	double starttime, markedtime, endtime;
 	starttime = Sys_DoubleTime();
 #endif
-	marked = PR_QCGC_Mark(gc->amem, gc->memsize, gc->maxtemps);
+	if (gc->scan)
+	{	//FTESurf Patch 1481
+		unsigned int i;
+		marked = PR_QCGC_Mark(NULL, 0, gc->maxtemps);
+		for (i = 0; i < gc->nseg; i++)
+			PR_QCGC_MarkWords(marked, (void*)(gc->scan + gc->segofs[i]), gc->seglen[i], gc->maxtemps);
+	}
+	else
+		marked = PR_QCGC_Mark(gc->amem, gc->memsize, gc->maxtemps);
 #ifdef GCTIMINGS
 	markedtime = Sys_DoubleTime();
 #endif
@@ -1513,12 +1534,35 @@ void PR_QCGC_Thread(void *ctx, void *data, size_t a, size_t b)
 #endif
 static void PR_ExpandTempStrings(progfuncs_t *progfuncs, size_t newmax)
 {
-	tempstr_t **ntable = progfuncs->funcs.parms->memalloc(sizeof(*ntable) * newmax);
+	tempstr_t **ntable;
+#if defined(THREADEDGC) && defined(_WIN32) && !defined(WINRT)
+	//FTESurf Patch 1481: pages the OS tracks writes to (zeroed), so a collection's start copies only the written ones
+	pbool watch = true;
+	ntable = VirtualAlloc(NULL, sizeof(*ntable) * newmax, MEM_RESERVE|MEM_COMMIT|MEM_WRITE_WATCH, PAGE_READWRITE);
+	if (!ntable)
+	{
+		watch = false;
+		ntable = progfuncs->funcs.parms->memalloc(sizeof(*ntable) * newmax);
+		memset(ntable+prinst.maxtempstrings, 0, sizeof(*ntable) * (newmax-prinst.maxtempstrings));
+	}
+	memcpy(ntable, prinst.tempstrings, sizeof(*ntable) * prinst.maxtempstrings);
+	if (prinst.tempstrings)
+	{
+		if (prinst.tablewatch)
+			VirtualFree(prinst.tempstrings, 0, MEM_RELEASE);
+		else
+			progfuncs->funcs.parms->memfree(prinst.tempstrings);
+	}
+	prinst.tablewatch = watch;
+	prinst.gctablevalid = 0;
+#else
+	ntable = progfuncs->funcs.parms->memalloc(sizeof(*ntable) * newmax);
 	memcpy(ntable, prinst.tempstrings, sizeof(*ntable) * prinst.maxtempstrings);
 	memset(ntable+prinst.maxtempstrings, 0, sizeof(*ntable) * (newmax-prinst.maxtempstrings));
-	prinst.maxtempstrings = newmax;
 	if (prinst.tempstrings)
 		progfuncs->funcs.parms->memfree(prinst.tempstrings);
+#endif
+	prinst.maxtempstrings = newmax;
 	prinst.tempstrings = ntable;
 }
 static string_t PDECL PR_AllocTempStringLen			(pubprogfuncs_t *ppf, char **str, unsigned int len)
@@ -1606,6 +1650,9 @@ static void PR_QCGC_Finish(progfuncs_t *progfuncs)
 	free(prinst.gcspare);
 	prinst.gcspare = gc;	//kept for the next collection
 	prinst.gccontext = NULL;
+#if defined(_WIN32) && !defined(WINRT)
+	prinst.gclivebase = prinst.livetemps;	//FTESurf Patch 1481
+#endif
 
 	//if over half the (max)strings are still live, just increase the max so we are not spamming collections
 	//(review 2: on livetemps, as before, or a collection whose survivors sit just under half restarts at once)
@@ -1616,6 +1663,167 @@ static void PR_QCGC_Finish(progfuncs_t *progfuncs)
 	pr_gc_mainus += (Sys_DoubleTime() - t0) * 1e6;
 	pr_gc_dones++;
 }
+#if defined(THREADEDGC) && defined(_WIN32) && !defined(WINRT)
+size_t pr_gc_copied, pr_gc_mismatch;	//FTESurf Patch 1481: bytes the last start copied; differing bytes pr_gc_writewatch 2 found
+//[s, e) of the hunk into the mirror where it lies inside the GC's segments
+static void PR_QCGC_MirrorRange(progfuncs_t *progfuncs, size_t s, size_t e, const size_t *ofs, const size_t *len, unsigned int n)
+{
+	unsigned int i;
+	for (i = 0; i < n; i++)
+	{
+		size_t a = ofs[i], b = ofs[i] + len[i];
+		if (b <= s)
+			continue;
+		if (a >= e)
+			break;
+		if (a < s)
+			a = s;
+		if (b > e)
+			b = e;
+		memcpy(prinst.gcmirror + a, prinst.addressablehunk + a, b - a);
+		pr_gc_copied += b - a;
+	}
+}
+/*FTESurf Patch 1481: bring the mirror up to the hunk at the GC's segments -- the pages written since the last start
+  (GetWriteWatch, reset in the same call), or all of them the first time, after a relocation, or when memnostrings'
+  blocks changed (the mirror never held what they covered). Only the main thread writes the hunk and the mirror, and
+  the mirror only here, while no collection runs, so a page written after the reset is the next start's.
+  False: the mirror cannot be used, and the caller copies the segments packed, as before.*/
+static pbool PR_QCGC_Snapshot(progfuncs_t *progfuncs, const size_t *ofs, const size_t *len, unsigned int n)
+{
+	size_t used = prinst.addressableused, span = (used + 4095) & ~(size_t)4095, i;
+	ULONG_PTR count;
+	DWORD gran;
+	unsigned int k;
+	if (!prinst.hunkwatch || externs->gcwritewatch <= 0 || !used)
+		return false;
+	if (prinst.gcmirrorcap < span)
+	{	//sized for the whole hunk, so offsets match; only the segments' pages are ever touched
+		size_t cap = span + span/8 + 65536;
+		free(prinst.gcmirror);
+		free(prinst.gcpages);
+		prinst.gcmirror = malloc(cap);
+		prinst.gcpages = malloc(sizeof(*prinst.gcpages) * (cap/4096 + 1));
+		if (!prinst.gcmirror || !prinst.gcpages)
+		{
+			free(prinst.gcmirror), prinst.gcmirror = NULL;
+			free(prinst.gcpages), prinst.gcpages = NULL;
+			prinst.gcmirrorcap = prinst.gcpagescap = prinst.gcmirrorused = 0;
+			return false;
+		}
+		prinst.gcmirrorcap = cap;
+		prinst.gcpagescap = cap/4096 + 1;
+		prinst.gcmirrorused = 0;
+	}
+	if (prinst.gcnumnostr != prinst.numnostr || memcmp(prinst.gcnostr_start, prinst.nostr_start, sizeof(*prinst.nostr_start)*prinst.numnostr)
+		|| memcmp(prinst.gcnostr_end, prinst.nostr_end, sizeof(*prinst.nostr_end)*prinst.numnostr))
+	{
+		prinst.gcnumnostr = prinst.numnostr;
+		memcpy(prinst.gcnostr_start, prinst.nostr_start, sizeof(*prinst.nostr_start)*prinst.numnostr);
+		memcpy(prinst.gcnostr_end, prinst.nostr_end, sizeof(*prinst.nostr_end)*prinst.numnostr);
+		prinst.gcmirrorused = 0;
+	}
+	count = prinst.gcpagescap;
+	if (GetWriteWatch(WRITE_WATCH_FLAG_RESET, prinst.addressablehunk, span, prinst.gcpages, &count, &gran) || gran != 4096 || count >= prinst.gcpagescap)
+		prinst.gcmirrorused = 0;	//(a full list could have been cut short)
+	pr_gc_copied = 0;
+	if (!prinst.gcmirrorused)
+		PR_QCGC_MirrorRange(progfuncs, 0, used, ofs, len, n);
+	else
+	{
+		for (i = 0; i < count; i++)
+		{
+			size_t o = (char*)prinst.gcpages[i] - prinst.addressablehunk;
+			if (o < prinst.gcmirrorused)	//the grown part is copied whole below
+				PR_QCGC_MirrorRange(progfuncs, o, o + 4096 < prinst.gcmirrorused ? o + 4096 : prinst.gcmirrorused, ofs, len, n);
+		}
+		if (used > prinst.gcmirrorused)	//grown since: unwritten new pages hold what the block held, which the mirror never saw
+			PR_QCGC_MirrorRange(progfuncs, prinst.gcmirrorused, used, ofs, len, n);
+	}
+	prinst.gcmirrorused = used;
+	if (externs->gcwritewatch == 2)
+	{	//verify: at the segments the mirror must equal the hunk; if not, say so and copy them all
+		size_t bad = 0, c;
+		for (k = 0; k < n; k++)
+			for (i = ofs[k]; i < ofs[k] + len[k]; i += c)
+			{
+				c = ofs[k] + len[k] - i < 4096 ? ofs[k] + len[k] - i : 4096;
+				if (memcmp(prinst.gcmirror + i, prinst.addressablehunk + i, c))
+				{
+					size_t j;
+					for (j = 0; j < c; j++)
+						bad += prinst.gcmirror[i+j] != prinst.addressablehunk[i+j];
+				}
+			}
+		pr_gc_mismatch += bad;
+		externs->Printf("pr_gc_writewatch: copied %u of %u bytes (%u segments), %u differed from the hunk\n", (unsigned)pr_gc_copied, (unsigned)used, n, (unsigned)bad);
+		if (bad)
+		{
+			size_t copied = pr_gc_copied;
+			PR_QCGC_MirrorRange(progfuncs, 0, used, ofs, len, n);
+			pr_gc_copied = copied;
+		}
+	}
+	return true;
+}
+/*FTESurf Patch 1481: the slot table's mirror brought up to the table -- its written pages, or all of it after an
+  expansion (a new table) or the first time. False: the caller copies the table into the block, as before.*/
+static pbool PR_QCGC_TableSnapshot(progfuncs_t *progfuncs)
+{
+	size_t bytes = sizeof(*prinst.tempstrings) * prinst.maxtempstrings, span = (bytes + 4095) & ~(size_t)4095, i;
+	ULONG_PTR count;
+	DWORD gran;
+	if (!prinst.tablewatch || externs->gcwritewatch <= 0 || !prinst.maxtempstrings)
+		return false;
+	if (prinst.gctablecap < prinst.maxtempstrings)
+	{
+		free(prinst.gctable);
+		free(prinst.gctabpages);
+		prinst.gctable = malloc(span);
+		prinst.gctabpages = malloc(sizeof(*prinst.gctabpages) * (span/4096 + 1));
+		if (!prinst.gctable || !prinst.gctabpages)
+		{
+			free(prinst.gctable), prinst.gctable = NULL;
+			free(prinst.gctabpages), prinst.gctabpages = NULL;
+			prinst.gctablecap = prinst.gctabpagescap = prinst.gctablevalid = 0;
+			return false;
+		}
+		prinst.gctablecap = span / sizeof(*prinst.gctable);
+		prinst.gctabpagescap = span/4096 + 1;
+		prinst.gctablevalid = 0;
+	}
+	count = prinst.gctabpagescap;
+	if (GetWriteWatch(WRITE_WATCH_FLAG_RESET, prinst.tempstrings, span, prinst.gctabpages, &count, &gran) || gran != 4096 || count >= prinst.gctabpagescap)
+		prinst.gctablevalid = 0;
+	if (prinst.gctablevalid != prinst.maxtempstrings)
+	{
+		memcpy(prinst.gctable, prinst.tempstrings, bytes);
+		pr_gc_copied += bytes;
+	}
+	else for (i = 0; i < count; i++)
+	{
+		size_t o = (char*)prinst.gctabpages[i] - (char*)prinst.tempstrings, n = 4096;
+		if (o >= bytes)
+			continue;
+		if (o + n > bytes)
+			n = bytes - o;
+		memcpy((char*)prinst.gctable + o, prinst.gctabpages[i], n);
+		pr_gc_copied += n;
+	}
+	prinst.gctablevalid = prinst.maxtempstrings;
+	if (externs->gcwritewatch == 2)
+	{
+		size_t bad = 0;
+		for (i = 0; i < prinst.maxtempstrings; i++)
+			bad += prinst.gctable[i] != prinst.tempstrings[i];
+		pr_gc_mismatch += bad;
+		externs->Printf("pr_gc_writewatch: table %u slots, %u differed\n", prinst.maxtempstrings, (unsigned)bad);
+		if (bad)
+			memcpy(prinst.gctable, prinst.tempstrings, bytes);
+	}
+	return true;
+}
+#endif
 /*FTESurf Patch 1451: the collector's kept buffers (Patch 1446), allocated and touched now -- CL_MakeActive, behind
   the loading screen -- or the first collection in play faults ~25-30 MB of fresh pages in on the main thread.*/
 static void PDECL PR_PrewarmGC(pubprogfuncs_t *ppf)
@@ -1630,7 +1838,16 @@ static void PDECL PR_PrewarmGC(pubprogfuncs_t *ppf)
 	for (i = 0; i < n; i++)
 		memsize += len[i];
 	padded = (memsize + 7) & ~(size_t)7;
+#if defined(_WIN32) && !defined(WINRT)
+	if (PR_QCGC_Snapshot(progfuncs, ofs, len, n))	//FTESurf Patch 1481: the mirror's full copy now; the block needs no room for one
+		padded = 0;
+#endif
 	temps = prinst.maxtempstrings > PR_GC_MINTEMPS ? prinst.maxtempstrings : PR_GC_MINTEMPS;	//the floor the first finish sets
+#if defined(_WIN32) && !defined(WINRT)
+	if (!padded && prinst.tablewatch)	//FTESurf Patch 1481: the table is mirrored, not copied into the block
+		need = sizeof(*gc) - sizeof(gc->amem) + sizeof(*gc->dead)*temps;
+	else
+#endif
 	need = sizeof(*gc) - sizeof(gc->amem) + padded + (sizeof(*gc->tempstrings) + sizeof(*gc->dead))*temps;
 	if (!prinst.gcspare || prinst.gcspare->allocbytes < need)
 	{
@@ -1674,7 +1891,14 @@ void PR_RunGC (progfuncs_t *progfuncs)
 	{
 		if (prinst.livetemps < prinst.maxtempstrings/2 || prinst.nexttempstring < prinst.maxtempstrings/2)
 		{	//don't bother yet
-			return;
+#if defined(THREADEDGC) && defined(_WIN32) && !defined(WINRT)
+			//FTESurf Patch 1481: a table a burst grew (a replay loading: 2M slots, ~700 live after) would wait for a
+			//million new temps and clear them in one frame. With both copies incremental, collect every
+			//PR_GC_MINTEMPS/2 new ones instead.
+			if (!(prinst.maxtempstrings > PR_GC_MINTEMPS && prinst.livetemps >= prinst.gclivebase + PR_GC_MINTEMPS/2
+				&& externs->usethreadedgc == 1 && externs->gcwritewatch > 0 && prinst.hunkwatch && prinst.tablewatch))
+#endif
+				return;
 		}
 #ifdef THREADEDGC
 		if (externs->usethreadedgc)
@@ -1687,12 +1911,17 @@ void PR_RunGC (progfuncs_t *progfuncs)
 			unsigned int n = PR_QCGC_Segments(progfuncs, ofs, len), i;
 			char *dst;
 			struct qcgccontext_s *gc;
+			pbool mirrored = false, tabled = false;
 			for (i = 0; i < n; i++)
 				memsize += len[i];
-			padded = (memsize + 7) & ~(size_t)7;
+#if defined(_WIN32) && !defined(WINRT)
+			mirrored = PR_QCGC_Snapshot(progfuncs, ofs, len, n);	//FTESurf Patch 1481
+			tabled = mirrored && PR_QCGC_TableSnapshot(progfuncs);	//FTESurf Patch 1481
+#endif
+			padded = mirrored ? 0 : (memsize + 7) & ~(size_t)7;
 			{	//FTESurf Patch 1446: reuse the last block -- a fresh ~25 MB one faulted in every page during the copy
 				//below and was freed again at the finish, 5-8 ms of main thread each (surf_nuclear, the PC)
-				size_t need = sizeof(*gc) - sizeof(gc->amem) + padded + (sizeof(*gc->tempstrings) + sizeof(*gc->dead))*prinst.maxtempstrings;
+				size_t need = sizeof(*gc) - sizeof(gc->amem) + padded + ((tabled ? 0 : sizeof(*gc->tempstrings)) + sizeof(*gc->dead))*prinst.maxtempstrings;
 				gc = prinst.gcspare;
 				prinst.gcspare = NULL;
 				if (!gc || gc->allocbytes < need)
@@ -1709,19 +1938,46 @@ void PR_RunGC (progfuncs_t *progfuncs)
 			gc->ndead = 0;
 
 			gc->memsize = memsize;
-			for (dst = (char*)gc->amem, i = 0; i < n; dst += len[i++])
-				memcpy(dst, prinst.addressablehunk + ofs[i], len[i]);
-			memset(dst, 0, padded - memsize);
+			gc->scan = NULL;
+#if defined(_WIN32) && !defined(WINRT)
+			if (mirrored)
+			{	//FTESurf Patch 1481: the worker reads the mirror at the segments; amem holds only the tables
+				gc->scan = prinst.gcmirror;
+				gc->nseg = n;
+				memcpy(gc->segofs, ofs, sizeof(*ofs) * n);
+				memcpy(gc->seglen, len, sizeof(*len) * n);
+			}
+			else
+#endif
+			{
+				for (dst = (char*)gc->amem, i = 0; i < n; dst += len[i++])
+					memcpy(dst, prinst.addressablehunk + ofs[i], len[i]);
+				memset(dst, 0, padded - memsize);
+			}
 
 			gc->maxtemps = prinst.maxtempstrings;
-			gc->tempstrings = (void*)((char*)gc->amem+padded);
-			gc->dead = (unsigned int*)(gc->tempstrings + gc->maxtemps);	//FTESurf Patch 1446: in the kept block, not a malloc per collection
-			memcpy(gc->tempstrings, prinst.tempstrings, sizeof(*gc->tempstrings)*gc->maxtemps);
+#if defined(_WIN32) && !defined(WINRT)
+			if (tabled)
+			{	//FTESurf Patch 1481: the worker and the finish read the table's mirror, which only the next start writes
+				gc->tempstrings = prinst.gctable;
+				gc->dead = (unsigned int*)((char*)gc->amem+padded);
+			}
+			else
+#endif
+			{
+				gc->tempstrings = (void*)((char*)gc->amem+padded);
+				gc->dead = (unsigned int*)(gc->tempstrings + gc->maxtemps);	//FTESurf Patch 1446: in the kept block, not a malloc per collection
+				memcpy(gc->tempstrings, prinst.tempstrings, sizeof(*gc->tempstrings)*gc->maxtemps);
+			}
 
 			COM_InsertWork(WG_LOADER, PR_QCGC_Thread, gc, NULL, 0, 0);
 			pr_gc_mainus += (Sys_DoubleTime() - gc_t0) * 1e6;
 			pr_gc_starts++;
-			pr_gc_bytes = padded + sizeof(*gc->tempstrings)*gc->maxtemps;
+			pr_gc_bytes = padded + (tabled ? 0 : sizeof(*gc->tempstrings)*gc->maxtemps);
+#if defined(_WIN32) && !defined(WINRT)
+			if (mirrored)
+				pr_gc_bytes += pr_gc_copied;	//FTESurf Patch 1481: the pages refreshed
+#endif
 
 #ifdef GCTIMINGS
 			endtime = Sys_DoubleTime();
@@ -1771,6 +2027,15 @@ static void PR_FreeAllTemps			(progfuncs_t *progfuncs)
 	prinst.gcspare = NULL;
 	free(prinst.gcfree);
 	prinst.gcfree = NULL;
+#if defined(_WIN32) && !defined(WINRT)
+	free(prinst.gcmirror), prinst.gcmirror = NULL;	//FTESurf Patch 1481
+	free(prinst.gcpages), prinst.gcpages = NULL;
+	prinst.gcmirrorcap = prinst.gcpagescap = prinst.gcmirrorused = 0;
+	free(prinst.gctable), prinst.gctable = NULL;
+	free(prinst.gctabpages), prinst.gctabpages = NULL;
+	prinst.gctablecap = prinst.gctabpagescap = prinst.gctablevalid = 0;
+	prinst.gclivebase = 0;
+#endif
 #endif
 	for (i = 0; i < prinst.maxtempstrings; i++)
 	{
@@ -2137,7 +2402,14 @@ static void PDECL PR_Shutdown(pubprogfuncs_t *ppf)
 		f(inst->inst.allocedstrings);
 	inst->inst.allocedstrings = NULL;
 	if (inst->inst.tempstrings)
-		f(inst->inst.tempstrings);
+	{
+#if defined(THREADEDGC) && defined(_WIN32) && !defined(WINRT)
+		if (inst->inst.tablewatch)	//FTESurf Patch 1481
+			VirtualFree(inst->inst.tempstrings, 0, MEM_RELEASE);
+		else
+#endif
+			f(inst->inst.tempstrings);
+	}
 	inst->inst.tempstrings = NULL;
 
 	free(inst->inst.watch_name);

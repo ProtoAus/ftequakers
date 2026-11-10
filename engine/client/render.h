@@ -285,6 +285,8 @@ void R_ViewStatsEnter(int depth, double *t0, int *d0);
 void R_ViewStatsLeave(int depth, double t0, int d0, int kind);
 extern unsigned int r_vs_frames, r_vs_views[R_MAX_RECURSE], r_vs_skydrawn, r_vs_skyskipped, r_vs_entskipped;
 extern unsigned int r_vs_capviews, r_vs_caphist[4];	//FTESurf Patch 1474: water/glass captures in this top-level view; views with 0..3+
+enum {BE_CAPWHY_PLANE, BE_CAPWHY_RECORD, BE_CAPWHY_KINDS, BE_CAPWHY_CAMERA, BE_CAPWHY_DUE, BE_CAPWHY_ONECAMERA, BE_CAPWHY_N};
+extern unsigned int r_vs_capwhy[BE_CAPWHY_N];	//FTESurf Patch 1477: a plane's keep that rendered both groups, by cause
 #define RDFD_FOV 1
 typedef struct refdef_s
 {

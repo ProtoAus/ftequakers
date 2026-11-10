@@ -7517,6 +7517,7 @@ float CL_MaxFPSFloor(float fps)
 	return fps < tickfps ? tickfps : fps;
 }
 
+extern qboolean r_spikes_on;	//cl_screen.c
 double Host_Frame (double time)
 {
 	static double		time0 = 0;
@@ -7777,6 +7778,25 @@ double Host_Frame (double time)
 
 	// get new key events
 	RSpeedRemark();
+	if (r_spikes_on)
+	{	//r_spikes: the input bucket's four steps
+		extern double r_spikes_inus[3];
+		extern qboolean cmd_spikes;
+		double t0 = Sys_DoubleTime(), t1, t2;
+		Sys_SendKeyEvents ();	//from windowing system (sys_win.c splits pipe and pump)
+		t1 = Sys_DoubleTime();
+		INS_Move();
+		IN_Commands ();
+		t2 = Sys_DoubleTime();
+		cmd_spikes = true;
+		Cbuf_Execute ();
+		cmd_spikes = false;
+		r_spikes_inus[0] += (t1 - t0) * 1000000;
+		r_spikes_inus[1] += (t2 - t1) * 1000000;
+		r_spikes_inus[2] += (Sys_DoubleTime() - t2) * 1000000;
+	}
+	else
+	{
 	Sys_SendKeyEvents ();	//from windowing system
 	INS_Move();				//from things that need special polling
 
@@ -7785,6 +7805,7 @@ double Host_Frame (double time)
 
 	// process console commands from said click/button events
 	Cbuf_Execute ();
+	}
 	RSpeedEnd(RSPEED_INPUT);	//Patch 782
 	if (spike_enabled)
 		spike_input = Sys_DoubleTime();

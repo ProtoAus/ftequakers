@@ -861,6 +861,7 @@ void Q_SetProgsParms(qboolean forcompiler)
 	svprogparms.gametime = &sv.time;
 #ifdef MULTITHREAD
 	svprogparms.usethreadedgc = pr_gc_threaded.ival;
+	svprogparms.gcwritewatch = pr_gc_writewatch.ival;
 #endif
 
 	svprogparms.edicts = (edict_t**)&sv.world.edicts;

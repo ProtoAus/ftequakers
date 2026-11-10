@@ -3205,9 +3205,13 @@ void Sys_KeepAlive (void)
 }
 
 qboolean QCExternalDebuggerCommand(char *text);
+extern qboolean r_spikes_on;	//cl_screen.c: r_spikes is sampling
+double r_spikes_pipeus, r_spikes_pumpus, r_spikes_msgus;
+unsigned int r_spikes_msgs, r_spikes_msgid;
 void Sys_SendKeyEvents (void)
 {
     MSG        msg;
+	double t0 = r_spikes_on ? Sys_DoubleTime() : 0, t1;
 
 	if (isPlugin)
 	{
@@ -3264,6 +3268,8 @@ void Sys_SendKeyEvents (void)
 				break;
 		}
 	}
+	if (r_spikes_on)
+		r_spikes_pipeus += (Sys_DoubleTime() - t0) * 1000000;
 	if (isDedicated)
 	{
 #ifndef CLIENTONLY
@@ -3282,6 +3288,23 @@ void Sys_SendKeyEvents (void)
 		}
 	}
 
+	if (r_spikes_on)
+	{
+		t1 = Sys_DoubleTime();
+		for (;;)
+		{
+			double m0 = Sys_DoubleTime(), us;
+			if (!PeekMessage (&msg, NULL, 0, 0, PM_REMOVE))
+				break;
+			DispatchMessage (&msg);
+			us = (Sys_DoubleTime() - m0) * 1000000;
+			r_spikes_msgs++;
+			if (us > r_spikes_msgus)
+				r_spikes_msgus = us, r_spikes_msgid = msg.message;
+		}
+		r_spikes_pumpus += (Sys_DoubleTime() - t1) * 1000000;
+		return;
+	}
 	while (PeekMessage (&msg, NULL, 0, 0, PM_REMOVE))
 	{
 	// we always update if there are any event, even if we're paused

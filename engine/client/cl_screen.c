@@ -389,7 +389,27 @@ typedef struct
 	unsigned short entnew, entupd, physents, pmoves, qcpmoves;
 	char qcf[3][40];				//r_spikes 2: the frame's three busiest CSQC functions by self time
 	float qcms[3];
+	float inms[5];					//the input bucket: stdin pipe, message pump, INS_Move+IN_Commands, Cbuf, its slowest line
+	float msgms;					//...the slowest window message
+	unsigned short msgs, msgid;
+	char cmdline[40];				//...the slowest console line
 } spike_t;
+qboolean r_spikes_on;				//sys_win.c and cl_main.c time the input bucket's steps
+double r_spikes_inus[3];			//cl_main.c: SendKeyEvents, INS_Move+IN_Commands, Cbuf_Execute
+extern double cmd_spikeus;	//cmd.c
+extern char cmd_spikeline[40];
+#if defined(_WIN32) && !defined(FTE_SDL) && !defined(FTE_SDL3) && !defined(WINRT)
+extern double r_spikes_pipeus, r_spikes_pumpus, r_spikes_msgus;	//sys_win.c
+extern unsigned int r_spikes_msgs, r_spikes_msgid;
+#endif
+static void R_Spikes_InputClear(void)
+{
+	memset(r_spikes_inus, 0, sizeof(r_spikes_inus));
+	cmd_spikeus = 0, *cmd_spikeline = 0;
+#if defined(_WIN32) && !defined(FTE_SDL) && !defined(FTE_SDL3) && !defined(WINRT)
+	r_spikes_pipeus = r_spikes_pumpus = r_spikes_msgus = 0, r_spikes_msgs = r_spikes_msgid = 0;
+#endif
+}
 static qboolean spk_qcprof;			//r_spikes 2 turned the CSQC profiler on
 #ifdef CSQC_DAT
 extern unsigned int r_spikes_entnew, r_spikes_entupd, r_spikes_pmoves, r_spikes_qcpmoves;	//pr_csqc.c, FTESurf Patch 1446
@@ -456,6 +476,7 @@ static void R_Spikes_Sample(void)
 	unsigned int compiles = 0, images = 0, views = 0, i, j, c;
 	qboolean qcprof = R_Spikes_QCProfile();
 	spike_t f;
+	r_spikes_on = !!r_spikes.ival;
 	if (!r_spikes.ival)
 	{
 		spk.on = false;
@@ -480,6 +501,7 @@ static void R_Spikes_Sample(void)
 		r_spikes_pmoves = r_spikes_qcpmoves = 0, r_spikes_pmus = r_spikes_hookus = 0;
 		pr_gc_mainus = 0, pr_gc_starts = pr_gc_dones = 0;
 #endif
+		R_Spikes_InputClear();
 		if (!r_budget.ival)
 			memset(rspeeds_self, 0, sizeof(rspeeds_self));
 		return;
@@ -532,6 +554,15 @@ static void R_Spikes_Sample(void)
 	if (qcprof)
 		CSQC_EnumProfile(R_Spikes_QCFunc, &f);
 #endif
+#if defined(_WIN32) && !defined(FTE_SDL) && !defined(FTE_SDL3) && !defined(WINRT)
+	f.inms[0] = r_spikes_pipeus / 1000, f.inms[1] = r_spikes_pumpus / 1000;
+	f.msgs = min(r_spikes_msgs, 65535), f.msgid = min(r_spikes_msgid, 65535), f.msgms = r_spikes_msgus / 1000;
+#else
+	f.inms[1] = r_spikes_inus[0] / 1000;
+#endif
+	f.inms[2] = r_spikes_inus[1] / 1000, f.inms[3] = r_spikes_inus[2] / 1000, f.inms[4] = cmd_spikeus / 1000;
+	Q_strncpyz(f.cmdline, cmd_spikeline, sizeof(f.cmdline));
+	R_Spikes_InputClear();
 	if (!r_budget.ival)
 		memset(rspeeds_self, 0, sizeof(rspeeds_self));
 	if (f.ms <= spk.s[SPIKE_KEEP-1].ms)
@@ -589,6 +620,9 @@ static void R_Spikes_Append(char *out, size_t outsize)
 		if (spk.s[i].gcstarts || spk.s[i].gcdones)
 			Q_strncatz(out, va("          qc tempstring collector: %.2f ms on this thread (%u start, %u finish; snapshot %u KiB)\n",
 				spk.s[i].gcms, spk.s[i].gcstarts, spk.s[i].gcdones, spk.s[i].gcbytes / 1024), outsize);
+		if (spk.s[i].inms[0] + spk.s[i].inms[1] + spk.s[i].inms[2] + spk.s[i].inms[3] >= 1)
+			Q_strncatz(out, va("          input: stdin %.2f, messages %.2f (%u, slowest 0x%04x %.2f), INS_Move+IN_Commands %.2f, console %.2f (slowest command %.2f: %s)\n",
+				spk.s[i].inms[0], spk.s[i].inms[1], spk.s[i].msgs, spk.s[i].msgid, spk.s[i].msgms, spk.s[i].inms[2], spk.s[i].inms[3], spk.s[i].inms[4], spk.s[i].cmdline), outsize);
 		if (*spk.s[i].qcf[0])
 			Q_strncatz(out, va("          qc self: %s %.2f, %s %.2f, %s %.2f\n", spk.s[i].qcf[0], spk.s[i].qcms[0],
 				spk.s[i].qcf[1], spk.s[i].qcms[1], spk.s[i].qcf[2], spk.s[i].qcms[2]), outsize);

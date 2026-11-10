@@ -58,6 +58,58 @@ returning command callbacks are injected controls, not a claimed production
 command-dispatch exploit or post-callback VFS read. No physical-input, Android
 runtime, general thread safety or detector-calibration claim.
 
+## Patch 1482 -- r_spikes splits the input bucket (cl_main.c, cl_screen.c, sys_win.c, cmd.c)
+
+Problem: Lex's 0.1%-low survey (11 Nov) put 18 of the 80 slowest frames on its first six maps in r_spikes' "input,
+console" bucket, 5-15 ms each, and the bucket (window messages, stdin, INS_Move/IN_Commands, Cbuf_Execute) could not
+say which.
+
+Fix: with r_spikes on, a slow frame holding 1 ms or more of input prints the stdin pipe, the message pump (messages,
+the slowest one and its time), INS_Move+IN_Commands, and the console with its slowest command, named by its command
+word only (r_frametime_dump copies to the clipboard; an rcon or password line would carry its secret). Off, nothing
+is timed.
+
+Found: on the rig's windowed client, WM_PAINT's dispatch, 3.7-5.1 ms, often in the same moments as 7-15 ms
+swap/present stalls. Handling WM_PAINT in the window procedure (ValidateRect, no BeginPaint) was tried and left it
+unchanged (29 of 29 input rows still WM_PAINT at 3.7-5.1 ms, surf_nuclear), so the cost is outside the window
+procedure and nothing was changed there. One review (lifetimes/builds): the pump counters exist only where
+sys_win.c's body builds (SDL and WINRT builds would not have linked); gamma is not counted as stdin.
+
+Known: the pump counters also include other Sys_SendKeyEvents callers while r_spikes runs.
+
+## Patch 1481 -- tempstring collections copy only the QC memory and slot-table pages written since the last (initlib.c, progsint.h, progslib.h, pr_bgcmd.c, VM setups)
+
+Problem: every collection's start (Patch 1292's threaded collector) copied the VM's scanned memory and the whole slot
+table on the main thread, and its finish cleared the dead slots there too. A board replay's load burst (~1M temps live
+at once) grows CSQC's table to 2,094,080 slots, and it never shrinks: from then on each collection waited for about a
+million new temps, then paid a 16 MB table copy plus 9 MB of memory (start 1.5-4.3 ms) and a million-slot clear
+(finish 2.2-4.9 ms), each in one frame -- surf_nuclear's replay, the PC (i9-9900K / RTX 2080 SUPER).
+
+Fix (Windows): the hunk and the table are VirtualAlloc'd MEM_WRITE_WATCH. Each start refreshes two persistent mirrors
+-- the hunk's at the collector's segments, the table whole -- from the pages GetWriteWatch reports written since the
+last start (reset in the same call); a relocation, a flush, a new table, a changed memnostrings list or a failed call
+recopies everything once. The worker and the finish read the mirrors, which only the next start writes. Past the
+table floor (131072) a collection runs every 65536 new live temps instead of at half the table. pr_gc_writewatch 0
+copies as before (the allocations stay watched); 2 compares both mirrors with the real memory every start and prints
+the counts. Other platforms keep the old collector.
+
+Measured (lows2 rig, board replays, Lex's settings, uncapped): pr_gc_writewatch 2 on surf_nuclear and surf_tendies,
+125 checks over 63 collections, 0 differing bytes or slots; a mutant that skipped the written pages differed in 6 of
+11 starts (up to 31,802 bytes), so the check sees a stale mirror. A start copies 0.5-1.6 MB (was 25 MB). surf_nuclear,
+3 rotated rounds, warm pass, this build with 1 / with 0 / the installed patch-1476 exe: slowest collector phase
+0.48-0.49 / 2.27-2.87 / 2.34-2.71 ms, slowest frame holding one 2.8-4.2 / 4.3-4.7 / 4.2-4.6 ms; avg 604 / 607 / 603,
+1% 282 / 283 / 285, 0.1% 160 / 162 / 165 (within noise: on this map the collector's frames sit in the 1% tail).
+
+Two review lenses, one round (predicates/threads; lifetimes/builds): the mirrors' two reads in PR_RunGC sat under
+THREADEDGC only, so Linux builds broke (now under the Windows guard; Linux syntax-checked with server and client
+defines, the unfixed file failing at those two lines); prewarm no longer budgets a table copy when the table is
+mirrored. Found sound: every hunk and table writer is tracked; the worker reads only the mirrors, which change only at
+a start with no collection running.
+
+Known: the mirror is sized as the whole hunk (commit charge; only the segments' pages are touched); the first
+collection after a replay loads copies the segments once (9 MB); a failed mirror malloc with an oversized table falls
+back to full copies every 65536 temps.
+
 ## Patch 1480 -- exclude the physics worker during journal replacement/drop (in_generic.c)
 
 **Problem:** Main-side Begin/Drop could free, reset or publish journal storage
@@ -166,6 +218,21 @@ tools/p1478_courses.py):
 - Delivered 11 Nov ~05:30 local from FTESurf main 2360c4a9 (fteqcc 73f9a1a4): the 12 lobbies and both installs run
   csprogs 56522910 / qwprogs fdce20d0 (.prev 01d9d44e / 91ef42d5), menu unchanged; tasrevd codes.txt 117 -> 118.
   QC only: no engine commit, tag or pin change. FTESurf tools/p1443-path-planner.md has the rig runs.
+
+## Patch 1477 -- forced water captures staggered too; r_capturerate down to 10 (gl_backend.c, render.h, renderer.c)
+
+Problem: Lex, 10 Nov, after r_capturerate 10 looked the same as 20: the engine floored the rate at 20, and Patch 1474's
+stagger spaced only the clock's redraws -- groups rendered together (after a jump, a plane change) tripped the camera
+limits (128 units, 30 degrees) together and stayed in step.
+
+Fix: a group past the limits but inside 1.5 times them (192 units, 45 degrees) may wait one frame while the other
+renders, as a due group does (never two frames running), above 100 fps only; a due group waits before a beyond one.
+The floor is 10. r_viewstats counts the keeps that rendered both groups by cause (plane, record, kinds, camera, due,
+one camera).
+
+Measured (surf_nuclear replay at a 300 cap, 3 alternating windows): one-group capture frames a window 1715 (rate 60),
+567 (20), 430 (10); two-group frames 8-9 at every rate (a plane change 4, a record reset 4: unstaggerable); lows within
+noise. One review (control flow): the beyond hold above 100 fps only, a due group first.
 
 ## Patch 1476 -- tas_rollout's flight steering can weave wider: the AIMWIDE row bit (sv_tas_rollout.inc)
 
