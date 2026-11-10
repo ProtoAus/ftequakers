@@ -10,6 +10,7 @@
 !!samps =DEPTH refractdepth=2
 !!samps =REFLECTCUBEMASK reflectcube
 !!samps =ANIMBUMP bumpanim:2DArray=3
+!!samps =PARALLAX reflectdepth=4
 !!samps =FLOW upper lower
 !!permu FOG
 
@@ -176,12 +177,55 @@ void main (void)
 	// (identity when fresh; a point behind that camera keeps this frame's). The ripple map is this frame's.
 	vec2 rstc = stc;
 	vec4 ctf = m_capturefix * tf;
+	bool cseen = ctf.w > 0.5;	// P1475: that camera saw this point (else ctf falls back to this frame's)
 	if (ctf.w > 0.5)
 		stc = (1.0 + (ctf.xy / ctf.w)) * 0.5;
 	else
 		ctf = tf;
 #else
 	#define rstc stc
+#endif
+#if defined(FTE_CAPTUREFIX2) && !defined(SCREEN)
+	// FTESurf Patch 1474: the reflection may be from another frame than the refraction (r_capturestagger)
+	vec4 ltf = m_capturefixrefl * tf;
+	vec2 lstc = ltf.w > 0.5 ? (1.0 + ltf.xy / ltf.w) * 0.5 : rstc;
+#else
+	#define lstc stc
+#endif
+#if defined(FTE_CAPTUREPARALLAX) && !defined(SCREEN)
+	// FTESurf Patch 1475: a reused capture also moves by the eye's travel since it rendered (m_captureshift, in its
+	// clip space), scaled by surface depth over its content's depth there: c = t + s * t.w / (d - s.w). One step;
+	// content nearer than the surface (above-water geometry in the refraction's depth) is taken as at the surface.
+	vec2 pstc = stc;	// before the shift: P877's depth gradient wants a smooth coordinate
+#ifdef DEPTH
+	if (cseen && any(notEqual(m_captureshift, vec4(0.0))))
+	{
+		float pden = max(eyeDepth(texture2D(s_refractdepth, stc).r) - m_captureshift.w, ctf.w);
+		if (pden > 1.0)
+		{
+			vec4 pc = ctf + m_captureshift * (ctf.w / pden);
+			stc = (1.0 + pc.xy / pc.w) * 0.5;
+		}
+	}
+#endif
+#ifdef PARALLAX
+	if (ltf.w > 0.5 && any(notEqual(m_captureshiftrefl, vec4(0.0))))
+	{
+		float lz = texture2D(s_reflectdepth, lstc).r;	// 1: nothing drawn there, or sky -- far, no shift
+		vec4 lc = m_capturedepthrefl * vec4(lstc * 2.0 - 1.0, lz * 2.0 - 1.0, 1.0);
+		if (lz < 0.99999 && lc.w > 1e-6)	// w <= 0: decoded behind that camera (a turned sample off its edge)
+		{
+			float pden = max(-lc.z / lc.w - m_captureshiftrefl.w, ltf.w);
+			if (pden > 1.0)
+			{
+				vec4 pc = ltf + m_captureshiftrefl * (ltf.w / pden);
+				lstc = (1.0 + pc.xy / pc.w) * 0.5;
+			}
+		}
+	}
+#endif
+#else
+	#define pstc stc
 #endif
 #ifdef ANIMBUMP
 	int bumplayers = textureSize(s_bumpanim, 0).z;
@@ -231,11 +275,15 @@ void main (void)
 	float surfaceDepth = eyeDepth(gl_FragCoord.z);
 #if defined(FTE_CAPTUREFIX) && !defined(SCREEN)
 	surfaceDepth *= ctf.w / tf.w;	// along the capture's forward, as s_refractdepth is (exactly 1 when fresh)
+#ifdef FTE_CAPTUREPARALLAX
+	if (cseen)
+		surfaceDepth = max(surfaceDepth + m_captureshift.w, 1.0);	// P1475: and from where it rendered (0 fresh)
+#endif
 #endif
 	// P877: 1/depth is affine across the plane in screen space, so this gives the surface's depth
 	// on the refracted sample's own ray, the ray Source's alpha was computed for (water_ps2x_helper.h:161).
 	float invs = 1.0 / surfaceDepth;
-	vec2 dstc = vec2(dFdx(stc.x), dFdy(stc.y));
+	vec2 dstc = vec2(dFdx(pstc.x), dFdy(pstc.y));
 	vec2 invgrad = vec2(dFdx(invs), dFdy(invs)) * dstc / max(dstc * dstc, vec2(1e-12));
 	depth = waterDepth(stc, surfaceDepth);
 	// An underside drawn with this shader (Patch 233's stand-in for a missing $bottommaterial, or water
@@ -343,7 +391,7 @@ void main (void)
 		refl = (huv.x >= 0.0 ? texture2D(s_refract, huv).rgb : vec3(FOGTINT)) * vec3(TINT_REFL);
 	}
 #else
-	refl = texture2D(s_reflect, clamp(stc - n.st * float(STRENGTH_REFL) * float(r_glsl_turbscale_reflect) * distortion, 0.0, 1.0)).rgb * vec3(TINT_REFL);
+	refl = texture2D(s_reflect, clamp(lstc - n.st * float(STRENGTH_REFL) * float(r_glsl_turbscale_reflect) * distortion, 0.0, 1.0)).rgb * vec3(TINT_REFL);
 #endif
 
 	if (cvar_hl2_waterdebug > 0.5)

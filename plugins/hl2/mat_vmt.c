@@ -64,6 +64,15 @@ build 11, which needs a vid_reload, so setting them and reloading the map did
 nothing at all.  See the note beside MAPOPTIONS in mod_vbsp.c.)
 */
 cvar_t *hl2_water;
+//FTESurf Patch 1475: water that reads its reflection's depth for r_captureparallax (an engine without it answers "")
+static qboolean VMT_WaterParallax(int wmode, const char *progargs)
+{
+	static int engine = -1;
+	char v[64];	//an engine before 1475 checked this against the cvar's NAME (18 bytes here), later ones the value
+	if (engine < 0)
+		engine = cvarfuncs && cvarfuncs->GetString("r_captureparallax", v, sizeof(v)) && *v;
+	return engine && wmode >= 2 && wmode != 5 && !strstr(progargs, "#LQWATER");
+}
 cvar_t *hl2_refract;
 cvar_t *hl2_translucent;
 cvar_t *hl2_dither_alpha;	//FTESurf Build 13
@@ -4401,6 +4410,8 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 					e = strchr(a+1, '#');
 					memmove(a, e ? e : a+strlen(a), strlen(e ? e : a+strlen(a))+1);
 				}
+				if (VMT_WaterParallax(wmode, progargs))
+					Q_strlcat(wargs, "#PARALLAX", sizeof(wargs));
 				Q_strlcatfz(script, &offset, sizeof(script),
 					"\t{\n"
 						"\t\tprogram \"vmt/water%s%s%s\"\n"	//P867: vmt/wateranim is vmt/water under GLSL 130
@@ -4417,6 +4428,12 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 			if (strstr(progargs, "#ANIMBUMP"))	//FTESurf Patch 867: sampler 3, every frame of the normal map
 				Q_strlcatfz(script, &offset, sizeof(script), "\t\tmap \"$2darray:%s%s.vtf\"\n",
 					strcmp(st->normalmap, "materials/")?"materials/":"", st->normalmap);
+			if (VMT_WaterParallax(wmode, progargs))
+			{	//FTESurf Patch 1475: sampler 4, s_reflectdepth (3 is ANIMBUMP's)
+				if (!strstr(progargs, "#ANIMBUMP"))
+					Q_strlcatfz(script, &offset, sizeof(script), "\t\tmap $null\n");
+				Q_strlcatfz(script, &offset, sizeof(script), "\t\tmap $reflectiondepth\n");
+			}
 			Q_strlcatfz(script, &offset, sizeof(script), "\t}\n");
 			//After the opaque world, decals and see-through surfaces, before the unlit-decal and banner sorts
 			//that particles and Source fire smoke draw in without depth (underwater painted over them).

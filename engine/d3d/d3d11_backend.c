@@ -1155,6 +1155,7 @@ static void SelectPassTexture(unsigned int tu, const shaderpass_t *pass)
 	case T_GEN_REFLECTION:	//reflection image (mirror-as-fbo)
 	case T_GEN_REFRACTION:	//refraction image (portal-as-fbo)
 	case T_GEN_REFRACTIONDEPTH:	//refraction image (portal-as-fbo)
+	case T_GEN_REFLECTIONDEPTH:	//FTESurf Patch 1475: GL only
 	case T_GEN_RIPPLEMAP:	//ripplemap image (water surface distortions-as-fbo)
 
 	case T_GEN_SOURCECUBE:	//used for render-to-texture targets

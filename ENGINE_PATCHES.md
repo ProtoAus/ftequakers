@@ -16,6 +16,60 @@ Measured (FTESurf rig, surf_null from a placed state, the played line's strafe-s
 27, 46 (then stuck); with 5, 4, 23, 8, 1, and the stretches' energies as close to the replay's or closer. One review: the hold's
 threshold is capped at half the aim gain (the error reads back capped at the gain).
 
+## Patch 1475 -- parallax for reused water captures: a kept reflection or refraction moves with the eye (gl_backend.c, gl_rmain.c, gl_shader.c, gl_vidcommon.c, shader.h, renderer.c, plugin.c, d3d, vk; hl2 water.glsl, mat_vmt.c)
+
+Problem: Lex, 10 Nov: at lower capture rates the reflection "falls off the water edges" while moving -- "could a
+parallax capture adjustment work? ... doesn't need to be perfect". A kept capture (Patches 1245/1281/1474) was turned
+with the camera but not moved, so near things in it slid with the old view.
+
+Fix: each kept group also gets the eye's travel since it rendered, through its turned-only projection (m_captureshift,
+m_captureshiftrefl; 0 on fresh frames or at r_captureparallax 0). vmt/water moves each sample to c = t + s*t.w / (D -
+s.w): t the turned clip position, D the content's depth along that capture's forward read at t (one step; held at least
+at the surface's depth, so above-water geometry in the refraction's depth does not throw it). The refraction's D comes
+from its depth target (standard projection, as Patch 877's fog reads it); the reflection's from a new target,
+$reflectiondepth (tex_reflectiondepth[0]): made when a shader reads it on a Source map (not GLES), then attached for
+every level-0 reflection so mixed planes do not rebuild the FBO and its multisampled targets, resolved under
+r_reflectmultisample, read through the inverse of the oblique projection it rendered with (GLR_DrawPortal records
+r_portalproj; m_capturedepthrefl). Depth 1 (nothing drawn, sky) and a decode behind that camera are far: no shift. The
+refraction's fog depth gains the travel along the capture's forward (a P1245 known issue). The plugin emits #PARALLAX
+and the map only when the engine has the cvar. Plug_Cvar_GetString compared the cvar's NAME length with the buffer and
+then strcpy'd its value (the plugin's 16-byte probe was refused, and a long value overflowed the caller); it now checks
+the value and copies it truncated when it does not fit, answering false.
+
+Measured (artifacts/run_reproj.py + score_reproj.py in the lows2 root): a capture kept ~480 ms against a fresh one at
+the new pose, mean absolute difference (pixels off by more than 8/255), HUD masked, noise floor 0.001-0.028. surf_boreas
+pose 002: slide 24 units 0.684 (51435 px) -> 0.120 (1410), slide 64 0.985 -> 0.318, forward 48 0.882 -> 0.233;
+surf_garden 001: slide 24 0.100 -> 0.018, forward 48 0.056 -> 0.022; a 3 degree turn unchanged (0.19, 0.019). Cost,
+surf_nuclear board replay, 3 alternating windows a side: uncapped avg 603 -> 595, 1% 322 -> 301; at a 300 cap within
+noise. Two review lenses, three rounds (round 1: the plugin probe never passed, so only the refraction moved; the depth
+target was paid where unread; the foreground over-shift).
+
+Known: one step, so large moves keep some error (slide 64: a third); vmt/lmreflect glass is turned only; level-0
+reflections have no stencil once the depth target exists; it lives until the video mode changes.
+
+## Patch 1474 -- water and glass captures staggered: reflection and refraction render on different frames (gl_backend.c, gl_rmain.c, gl_shader.c, gl_vidcommon.c, shader.h, renderer.c, render.h, d3d; hl2 water.glsl, lmreflect.glsl)
+
+Problem: Lex, 10 Nov: "Doing over multiple frames?" A capture frame rendered the plane's reflection and refraction
+together -- one keep record and one m_capturefix for both -- so at r_capturerate 60 and 300 fps a quarter of frames
+carried two extra scene renders and the rest none.
+
+Fix: the keep is per group (refraction with its depth, the reflection), each with its own render time, reuse count, eye
+and forward, kinds and matrix; m_capturefixrefl turns the reflection (water.glsl, lmreflect.glsl). When both groups are
+due on one frame, the one rendered more recently is served once more -- never two frames running, and only if, a frame
+late, it still renders within 1.25 intervals (at 300 fps: r_capturerate 60 yes, 144 no), so the rate holds. Shaders
+without m_capturefixrefl keep or render both together, as before. A plane's other batches reuse what this view rendered
+this frame (glass with several batches rendered it twice). r_capturestagger 0 is the old behaviour. r_viewstats also
+counts top-level views by their captures (0/1/2/3+).
+
+Measured: r_viewstats on surf_garden pose 001, about 880 frames a window: at r_capturerate 60 frames rendering two
+captures 25% -> 0.1% (repeated), at 30 12.5% -> 0.1%, captures per frame unchanged (0.50, 0.25); on boreas the
+reflection is exactly a frame (3.3 ms) older than the refraction. surf_nuclear board replay, 3 alternating windows a
+side: uncapped avg 477 -> 530, 1% 160 -> 217, 0.1% 99 -> 135 (every pair); at a 300 cap no measurable change (1%
+227/227, 0.1% 149/165 -- capture frames already fit the cap). r_capturelog sampled one view at a time disturbs the
+frames it samples (37 of 40 rendered both with stagger off): use the histogram. r_capturerate 30 against 60 at the 300
+cap (nuclear, 3 + 3): 1% 257/269, 0.1% 169/212 -- no reason to lower it. Two review lenses; control flow three rounds
+(round 1: an unbounded hold, unrendered kinds served from the same-frame path, kinds growing stale), the last clean.
+
 ## Patch 1472 -- no frame cap below the Source mover's tick rate while playing (cl_main.c, sys_win.c, client.h)
 
 Problem: below the physics tick rate (1/pm_ticrate: 66.67 surf, 100 bhop) one usercmd covers two of pm_source.c's whole

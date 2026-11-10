@@ -2103,6 +2103,10 @@ static void BE_ApplyUniforms(program_t *prog, struct programpermu_s *perm)
 		case SP_M_INVMODELVIEW:
 		case SP_M_INVMODELVIEWPROJECTION:
 		case SP_M_CAPTUREFIX:	//FTESurf Patch 1245: GL-only (r_capturehalfrate)
+		case SP_M_CAPTUREFIXREFL:	//FTESurf Patch 1474: GL-only
+		case SP_M_CAPTURESHIFT:	//FTESurf Patch 1475: GL-only
+		case SP_M_CAPTURESHIFTREFL:
+		case SP_M_CAPTUREDEPTHREFL:
 		case SP_SOURCESIZE:
 		case SP_S_COLOUR:
 		case SP_LIGHTCOLOURSCALE:

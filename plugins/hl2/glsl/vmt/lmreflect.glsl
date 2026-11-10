@@ -66,6 +66,14 @@ void main()
 #else
 	vec2 sc = (1.0 + tf_c.xy / tf_c.w) * 0.5;
 #endif
+#ifdef FTE_CAPTUREFIX2
+	vec4 ltf = m_capturefixrefl * tf_c;	// FTESurf Patch 1474: the reflection may be from another frame (r_capturestagger)
+	if (ltf.w <= 0.5)
+		ltf = tf_c;
+	vec2 lsc = (1.0 + ltf.xy / ltf.w) * 0.5;
+#else
+	#define lsc sc
+#endif
 	float ndv = clamp(dot(normalize(-incident), wn), 0.0, 1.0);
 	float f = float(REFLECTANCE) + (1.0 - float(REFLECTANCE)) * pow(1.0 - ndv, 5.0);
 #if defined(CUBEREFL) && !defined(REFLECTCUBEMASK)
@@ -74,7 +82,7 @@ void main()
 #elif defined(CUBEREFL)
 	vec3 refl = textureCube(s_reflectcube, (m_model * vec4(reflect(incident, wn), 0.0)).xyz).rgb;
 #else
-	vec3 refl = texture2D(s_reflection, clamp(sc + tn.xy * (nrm.a * float(REFLAMOUNT)), 0.0, 1.0)).rgb;
+	vec3 refl = texture2D(s_reflection, clamp(lsc + tn.xy * (nrm.a * float(REFLAMOUNT)), 0.0, 1.0)).rgb;
 #endif
 	refl *= vec3(REFLTINT);
 #ifdef BLENDED

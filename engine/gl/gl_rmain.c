@@ -724,6 +724,9 @@ static void R_RenderScene_Internal(void)
 		r_refdef.visskipfrom = r_refdef.visskipto = 0;
 		r_refdef.capturekind = 0;
 		r_refdef.insideportal = false;
+		if (r_vs_frames)
+			r_vs_caphist[min(r_vs_capviews, 3)]++;	//the last top-level view's, now it is over
+		r_vs_capviews = 0;
 		r_vs_frames++;
 		r_topviews++;
 	}
@@ -747,6 +750,8 @@ static void R_RenderScene_Internal(void)
 	}
 	if (r_refdef.recurse < R_MAX_RECURSE)
 		r_vs_views[r_refdef.recurse]++;
+	if (r_refdef.recurse == 1 && r_refdef.capturekind >= 1 && r_refdef.capturekind <= 3)
+		r_vs_capviews++;	//a reflection or refraction capture of the top-level view
 	TRACE(("dbg: calling R_SetFrustrum\n"));
 	if (!r_refdef.recurse)
 		R_SetFrustum (r_refdef.m_projection_std, r_refdef.m_view);
@@ -1667,6 +1672,7 @@ static qboolean GLR_PortalScreenRectAt(batch_t *batch, int level, srect_t *out)
 	return false;
 }
 
+float r_portalproj[16];	//FTESurf Patch 1475: the projection the last portal view rendered with (a mirror's is oblique)
 qboolean GLR_DrawPortal(batch_t *batch, batch_t **blist, batch_t *depthmasklist[2], int portaltype)
 {
 	entity_t *view, *surfent;
@@ -2232,6 +2238,7 @@ qboolean GLR_DrawPortal(batch_t *batch, batch_t **blist, batch_t *depthmasklist[
 	}
 
 
+	memcpy(r_portalproj, r_refdef.m_projection_std, sizeof(r_portalproj));
 	r_refdef = oldrefdef;
 	/* FTESurf Patch 208: restore THEN resolve, in that order -- the restore is
 	   what puts the parent's clip (or none) back in r_refdef, and this call is

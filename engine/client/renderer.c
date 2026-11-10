@@ -177,6 +177,7 @@ cvar_t r_refract_fbo						= CVARD ("r_refract_fbo", "1", "Use an fbo for refract
 //FTESurf Patch 850: the entity list before the top-level view's world walk added its own props and
 //statics. A nested view sees those and its own walk's, not the outer views' ones again.
 int r_visdynamic;
+unsigned int r_vs_capviews, r_vs_caphist[4];
 unsigned int r_vs_frames, r_vs_views[R_MAX_RECURSE], r_vs_skydrawn, r_vs_skyskipped, r_vs_entskipped;
 unsigned int r_vs_skycam;	//FTESurf Patch 880: 3D skies drawn from the sky camera's vis (gl_warp.c)
 unsigned int r_vs_copies;	//FTESurf Patch 878: $currentrender screen copies in top-level views (gl_backend.c)
@@ -225,6 +226,8 @@ static void R_ViewStats_f(void)
 	Con_Printf("; 3D skies drawn %.2f skipped %.2f; nested entities passed over %.1f; 3D skies from the sky camera %.2f; screen copies %.2f (%.2f Mpx)\n",
 		r_vs_skydrawn / (double)f, r_vs_skyskipped / (double)f, r_vs_entskipped / (double)f, r_vs_skycam / (double)f, r_vs_copies / (double)f,
 		r_vs_copypixels / f / 1e6);
+	Con_Printf("r_viewstats: top-level views with 0/1/2/3+ water or glass captures: %u %u %u %u\n",
+		r_vs_caphist[0], r_vs_caphist[1], r_vs_caphist[2], r_vs_caphist[3]);
 	Con_Printf("r_viewstats: cpu self ms / draw calls:");
 	for (i = 0; i < R_VS_KINDS; i++)
 		Con_Printf(" %s %.3f/%.0f", r_vs_kindname[i], r_vs_ms[i] / f, r_vs_draws[i] / (double)f);
@@ -232,6 +235,7 @@ static void R_ViewStats_f(void)
 	r_vs_frames = r_vs_skydrawn = r_vs_skyskipped = r_vs_entskipped = r_vs_skycam = r_vs_copies = 0;
 	r_vs_copypixels = 0;
 	memset(r_vs_views, 0, sizeof(r_vs_views));
+	memset(r_vs_caphist, 0, sizeof(r_vs_caphist));
 	memset(r_vs_ms, 0, sizeof(r_vs_ms));
 	memset(r_vs_draws, 0, sizeof(r_vs_draws));
 }
@@ -249,6 +253,8 @@ cvar_t r_nearestsort						= CVARD ("r_nearestsort", "1", "FTESurf Patch 878: how
 cvar_t r_alphacoverage					= CVARFD ("r_alphacoverage", "1", CVAR_ARCHIVE, "FTESurf Patch 1262: under vid_multisample, surfaces cut out by an alpha test (leaves, fences, grates) spread the cut edge over the samples instead of cutting it (alpha-to-coverage), as MSAA smooths a polygon's edge. 0: cut, as without MSAA. Source maps' materials (the hl2 plugin's vmt shaders).");
 cvar_t r_reflectmultisample			= CVARFD ("r_reflectmultisample", "-1", CVAR_ARCHIVE, "FTESurf Patch 1276: MSAA samples for the main view's water and glass reflection captures (drawn at r_refractreflect_scale of the view). -1: as vid_multisample. 0: none.");
 cvar_t r_capturehalfrate				= CVARD ("r_capturehalfrate", "0", "FTESurf Patch 1245: the main view's water and glass reflection/refraction captures are reused for this many frames after each one rendered, turned with the camera in between (what they show is taken as distant: a turn lines up, a slide shows the frame-old view of nearby things). 0: every frame. 1: every second frame (surf_eternity's glass 201 -> 294 fps). Ignored while r_capturerate is set: both at 0 renders every capture.");
+cvar_t r_capturestagger			= CVARD ("r_capturestagger", "1", "FTESurf Patch 1474: when a water or glass plane's reflection and refraction captures are both due on one frame (r_capturerate), the one rendered more recently is reused once more if the camera is still within 128 units and 30 degrees of it, so each frame renders one of them rather than both and the frame that captures costs about half. Needs a shader that reads the reflection through m_capturefixrefl (the hl2 plugin's water and glass since 1474). 0: both together, as before.");
+cvar_t r_captureparallax			= CVARD ("r_captureparallax", "1", "FTESurf Patch 1475: a reused water capture (r_capturerate) is moved by how far the eye has travelled since it rendered, each pixel by its own depth (one parallax step), so near things in a reflection or under the surface stay put while you move instead of sliding with the old view. Turns are corrected either way. Costs a depth copy of the reflection and a texture read. 0: turned only, as before.");
 cvar_t r_capturerate				= CVARFD ("r_capturerate", "144", CVAR_ARCHIVE, "FTESurf Patch 1281: on Source maps, the main view's water and glass captures are redrawn about this many times a second (at least 20), whatever the frame rate; between, the last one is reused and turned with the camera (as r_capturehalfrate keeps it), and past 128 units or 30 degrees it is redrawn at once. At or below this frame rate every frame captures. 0: r_capturehalfrate's frame count instead.");
 cvar_t r_waterforcereflectentities			= CVARD ("r_waterforcereflectentities", "0", "Source's cvar. 0: a water reflection draws entities and props only if its material says $reflectentities, as Source does -- most Source water reflects only the world and the 2D sky. 1: every water reflection draws them, as before Patch 868.");
 cvar_t r_drawviewmodel						= CVARF  ("r_drawviewmodel", "1", CVAR_ARCHIVE);
@@ -1583,6 +1589,8 @@ void Renderer_Init(void)
 	Cvar_Register (&r_waterforcereflectentities, GRAPHICALNICETIES);
 	Cvar_Register (&r_capturehalfrate, GRAPHICALNICETIES);	//FTESurf Patch 1245
 	Cvar_Register (&r_capturerate, GRAPHICALNICETIES);	//FTESurf Patch 1281
+	Cvar_Register (&r_capturestagger, GRAPHICALNICETIES);	//FTESurf Patch 1474
+	Cvar_Register (&r_captureparallax, GRAPHICALNICETIES);	//FTESurf Patch 1475
 	Cvar_Register (&r_reflectmultisample, GRAPHICALNICETIES);	//FTESurf Patch 1276
 	Cvar_Register (&r_alphacoverage, GRAPHICALNICETIES);	//FTESurf Patch 1262
 	Cvar_Register (&r_capturelog, GRAPHICALNICETIES);	//FTESurf Patch 879
