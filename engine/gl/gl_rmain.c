@@ -2440,6 +2440,8 @@ qboolean R_RenderScene_Cubemap(void)
 	qboolean usefbo = true;		//this appears to be a 20% speedup in my tests.
 	qboolean fboreset = false;
 	int osm = r_refdef.stereomethod;
+	int ofbpwidth = vid.fbpwidth, ofbpheight = vid.fbpheight;	//FTESurf Patch 1470: the view's target
+	float dx, dy, dw, dh;
 
 	/*needs glsl*/
 	if (!gl_config.arb_shader_objects)
@@ -2630,8 +2632,13 @@ qboolean R_RenderScene_Cubemap(void)
 		}
 
 		GL_MTBind(0, GL_TEXTURE_CUBE_MAP_ARB, scenepp_postproc_cube);
+		//FTESurf Patch 1470: storage only. A copy reads the bound framebuffer, which is Patch 1260's multisampled
+		//scene target under vid_multisample: INVALID_OPERATION, no faces, every face's FBO incomplete.
 		for (i = 0; i < 6; i++)
-			qglCopyTexImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X_ARB + i, 0, GL_RGB, 0, 0, cmapsize, cmapsize, 0);
+			if (usefbo)
+				qglTexImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X_ARB + i, 0, GL_RGBA, cmapsize, cmapsize, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);	//unsized: GLES2 too
+			else
+				qglCopyTexImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X_ARB + i, 0, GL_RGB, 0, 0, cmapsize, cmapsize, 0);
 		qglTexParameteri(GL_TEXTURE_CUBE_MAP_ARB, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
 		qglTexParameteri(GL_TEXTURE_CUBE_MAP_ARB, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 		qglTexParameteri(GL_TEXTURE_CUBE_MAP_ARB, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
@@ -2697,6 +2704,9 @@ qboolean R_RenderScene_Cubemap(void)
 	if (usefbo)
 		GLBE_FBO_Pop(oldfbo);
 
+	//FTESurf Patch 1470: RDF_FISHEYE is in RDF_ALLPOSTPROC but no R_RenderPostProcess pass clears it, so left set it
+	//reads as a pass still to come to every pass after it.
+	r_refdef.flags &= ~RDF_FISHEYE;
 	r_refdef.vrect = vrect;
 	r_refdef.pxrect = prect;
 	VectorCopy(saveorg, r_refdef.vieworg);
@@ -2704,6 +2714,19 @@ qboolean R_RenderScene_Cubemap(void)
 
 	//GL_ViewportUpdate();
 	GL_Set2D(false);
+	//FTESurf Patch 1470: on the post-process path the target is the view's own (render scale included) with the view
+	//at its origin, where GL_Set2D set the window's viewport: fill the target, as R_RenderPostProcess does.
+	dx = vrect.x;
+	dy = vrect.y;
+	dw = vrect.width;
+	dh = vrect.height;
+	if (r_refdef.flags & RDF_RENDERSCALE)
+	{
+		qglViewport(0, 0, ofbpwidth, ofbpheight);
+		dx = dy = 0;
+		dw = vid.fbvwidth;
+		dh = vid.fbvheight;
+	}
 	// go 2d
 /*	qglMatrixMode(GL_PROJECTION);
 	qglPushMatrix();
@@ -2717,23 +2740,23 @@ qboolean R_RenderScene_Cubemap(void)
 	if (r_projection.ival == PROJ_EQUIRECTANGULAR)
 	{
 		//note vr screenshots have requirements here
-		R2D_Image(vrect.x, vrect.y, vrect.width, vrect.height, 0, 1, 1, 0, shader);
+		R2D_Image(dx, dy, dw, dh, 0, 1, 1, 0, shader);
 	}
 	else if (r_projection.ival == PROJ_PANORAMA)
 	{
 		float saspect = .5;
 		float taspect = vrect.height / vrect.width * ffov.value / 90;//(0.5 * vrect.width) / vrect.height;
-		R2D_Image(vrect.x, vrect.y, vrect.width, vrect.height, -saspect, taspect, saspect, -taspect, shader);
+		R2D_Image(dx, dy, dw, dh, -saspect, taspect, saspect, -taspect, shader);
 	}
 	else if (vrect.width > vrect.height)
 	{
 		float aspect = (0.5 * vrect.height) / vrect.width;
-		R2D_Image(vrect.x, vrect.y, vrect.width, vrect.height, -0.5, aspect, 0.5, -aspect, shader);
+		R2D_Image(dx, dy, dw, dh, -0.5, aspect, 0.5, -aspect, shader);
 	}
 	else
 	{
 		float aspect = (0.5 * vrect.width) / vrect.height;
-		R2D_Image(vrect.x, vrect.y, vrect.width, vrect.height, -aspect, 0.5, aspect, -0.5, shader);
+		R2D_Image(dx, dy, dw, dh, -aspect, 0.5, aspect, -0.5, shader);
 	}
 
 	if (R2D_Flush)

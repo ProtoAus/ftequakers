@@ -1,5 +1,91 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1472 -- no frame cap below the Source mover's tick rate while playing (cl_main.c, sys_win.c, client.h)
+
+Problem: below the physics tick rate (1/pm_ticrate: 66.67 surf, 100 bhop) one usercmd covers two of pm_source.c's whole
+ticks, which then share one input (angle and keys). Lex, 10 Nov: "People don't play below 66fps ... we could just cap
+the fps to 66.6667>fps".
+
+Fix: CL_MaxFPSFloor raises a positive cl_maxfps under 1/movevars.ticrate to it while connected and active with
+pm_physicsmode 1, not in a demo. Host_Frame's limiter and Sys_FramePacePresentHold (sys_framepacing 4's present grid)
+both use it, so the start and present grids agree. 0 (uncapped), loading, the minimised throttle and other physics modes
+are unchanged.
+
+Measured (surf_pantheon, rig, sys_framepacing 5): cl_maxfps 30 ran 15.26 ms frames (66 fps); cl_maxfps 100 ran 9.99 ms.
+One review (call sites agree; edge cases noted: the cl_netfps 0 path also floors a server-chosen rate, and CL_FilterTime
+then caps it at 72 on a 100-tick server; fractional caps under 1).
+
+## Patch 1470 -- r_projection draws again on the GL renderer (gl_rmain.c)
+
+Problem: Lex, 10 Nov: r_projection "would be fun but it just produces errors". Under vid_multisample (Patch 1260's
+multisampled scene target) every frame printed glCheckFramebufferStatus GL_FRAMEBUFFER_INCOMPLETE_ATTACHMENT with
+Colour0 "***fish***" 0*0*0 NOT LOADED (520-550 lines per projection in four seconds), the game ran ~7 fps and the screen
+held a stale normal view. R_RenderScene_Cubemap allocated its cube faces with glCopyTexImage2D from the bound
+framebuffer -- the multisampled target, which a copy cannot read (INVALID_OPERATION), so no face ever had storage.
+
+Fix: the faces get storage with glTexImage2D (unsized GL_RGBA, valid on GLES2 too); RDF_FISHEYE, which is in
+RDF_ALLPOSTPROC with no pass of its own, is cleared once the faces are drawn (left set, every post-process pass read it
+as one still to come); on the post-process path the final remap fills the view's own target (viewport at its pixel size,
+drawn over the virtual screen, as R_RenderPostProcess does) rather than GL_Set2D's window rectangle, which at
+r_renderscale 2 filled a quarter of it.
+
+Measured (surf_pantheon, vid_multisample 4, post-processing on): before, every projection 1-6 spammed the errors at ~7
+fps; after, none print and all six draw (fisheye, panini, panoramic, equirectangular screenshots), ~300 fps; at
+r_renderscale 2 fisheye and equirectangular fill the screen. Two review rounds (render scale / inset views, GLES2, a
+size restore with no effect).
+
+## Patch 1469 -- failed similarity collection stays unavailable in the tick summary (FTESurf surfd/sweep.py)
+
+Problem: the store-only similarity wrapper logged setup/collection exceptions to stderr but returned
+an empty note. The normal per-tick sweep summary therefore did not distinguish that unavailable
+attempt from an intentionally disabled or uneventful step. Stderr diagnostics were not absent.
+
+Change: retain the stderr diagnostic and return a fixed "sims unavailable: collection failed
+(coverage not measured)" note through the existing tuple/summary interface. Disabled collection
+still returns its existing empty note. No schema, evidence, metric, verdict, threshold, scheduling,
+resource limit, detector, native pin/tag or QC Build change; this is operator reporting only.
+
+Verified: existing test_simcheck.py, real SQLite authorizer refusal during owner setup, unchanged
+observations/verdicts, explicit-disable silence and actual same-connection pair collection after
+the refusal clears. Original source completes with the one predicted note-assertion failure;
+subject all79 checks pass on Windows and all79 on NanoPi Linux/Python3.11 at03:11:58 UTC10Nov2026,
+using an inspected source Git archive. Source/live provenance limits: FTESurf tools/p1469-sweep-unavailable.md.
+No whole-pass hard-resource, detector/calibration, upstream or live-deployment credit inferred.
+
+## Patch 1465 -- r_blendsort 2 skips a sort whose stored failure still holds, and leaves out faces outside the clip volume (gl_backend.c, renderer.c, render.h)
+
+Problem: after Patches 1457/1463, surf_fairy's main view and its water refraction capture still spent ~0.6-0.75 ms each
+in GLBE_BlendPlaneSort every frame, and every one of those sorts fails (status -2), so the faces keep their baseline
+order. A trace-only timer split the t=7.6 main view's 0.75 ms: plane-side proofs 0.22, pass-0 overlap verdicts 0.33
+(projection 0.14), lazy pass 1 0.11, pass 2 0.02. Counters showed pass 1 fails the barrier check, not on a cycle, in ~19
+of 20 of those sorts (an order that moves a face past an unadmitted slot).
+
+Fix 1, failure certificates (r_blendsort_cert, default 1): a failed sort keeps, for passes 1 and 2, why each failed -- a
+cycle of its graph (depth-first, cut short by chords, at most 16 faces), or a crossing: a strict edge from a face to one
+drawn before it with an unadmitted slot between, which any order keeping that edge carries past the slot. Pass 0's edges
+include pass 1's, so both holding means every pass fails. Up to four are kept (LRU) as mesh pointers; before each sort
+they are re-proved from scratch against the view's faces (admission, pair relation, direction, and for pass 1 the
+overlap verdict) and a hit returns status -2 with faces untouched. Pass-1 steps must survive a spent overlap budget,
+where a verdict becomes its hint: only strict edges, and unproved pairs' edges in baseline order, are kept.
+r_blendsort_cert 2 sorts anyway and counts a certified view where a pass did not fail.
+
+Fix 2, r_blendsort_clipcull (default 1): the gather drops a static-world or identity brush-entity face whose every
+vertex is beyond one plane of the clip volume (m_view x m_projection_std; a capture's near plane is its oblique
+water/mirror plane), with a margin of 1e-5 of each sum's magnitude for the GPU's float transform. It draws nothing;
+kept, it took plane proofs in passes 0 and 2. A view can now come under the 128-face cap or lose a cycle and sort where
+it gave up before, which changes that view's glass order (to a sorted one). Also: r_portaldebug 2 returned after
+enabling GL_DEPTH_CLAMP and left it on for the rest of the view; it returns first now.
+
+Measured (surf_fairy, paused replay views, same exe, cvar A/B): certified views sort in 0.01 ms instead of 0.44-0.75;
+transparent CPU at t=7.6 1.38/1.39 -> 0.54 (certificates) / 0.56 (with the cull), frame 6.55 -> 5.45 ms; at t=16.0
+1.31/1.29 -> 0.89 / 0.75. The cull alone (no certificates) cut the main view's sort 0.75 -> 0.61 ms but brought the
+reflection under the cap into a failing sort (+0.35 ms); certificates absorb that. Verify mode over a 30 s replay plus
+paused views: 2345 hits, 2187 proved by the full sort failing every pass, 0 wrong (158 stopped at a budget, status -1,
+before any Kahn); the same build without the pass-1 check: 1223 wrong of 4357. Replay lows (capped 300, alternating):
+off 1% 109/106, 0.1% 87/84; on 110/109/107, 95/90/88 -- the third off run failed to start (0xC0000142, the machine short
+of memory), so no lows delta is claimed. Five review rounds (certificate predicate, clip cull, and three fix rounds):
+trace counters, verify grading, the r_portaldebug leak, wording.
+
 ## Patch 1467 -- tas_rollout_batch: a generation of rollouts on worker threads (sv_tas_rollout.inc, pmove.c, pm_source.c, pmovetst.c, com_bih.c, world.c, sv_user.c, pr_cmds.c)
 
 Problem: the surf planner (FTESurf P1449) rolls ~20 candidates a generation one at a time on the server's thread,
