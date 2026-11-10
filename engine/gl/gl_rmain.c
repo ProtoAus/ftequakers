@@ -2763,9 +2763,11 @@ static void GLR_FrameWarp(void)
 	vec4_t rgba[4];
 	int gx, gy, k, x0, y0, w, h;
 	float nx, ny, vx, vy, ox, oy, oz;
-	GLint samples = 0;
+	int oldfbo;
 	texid_t tex;
 	static shader_t *sh;
+	static fbostate_t fbo_framewarp;
+	static qboolean checked, failed;
 	extern cvar_t r_projection;
 
 	if (!r_framewarp.ival || r_refdef.recurse || !r_refdef.useperspective || (r_refdef.flags & RDF_NOWORLDMODEL) ||
@@ -2794,22 +2796,38 @@ static void GLR_FrameWarp(void)
 	ang[YAW] += dyaw;
 	AngleVectors(ang, f1, r1, u1);
 
-	qglGetIntegerv(0x80A9 /*GL_SAMPLES*/, &samples);
-	if (samples > 1)
-		return;	//a multisampled default framebuffer cannot be copied from
 	x0 = r_refdef.pxrect.x;
 	w = r_refdef.pxrect.width;
 	h = r_refdef.pxrect.height;
 	y0 = r_refdef.pxrect.maxheight - (r_refdef.pxrect.y + h);
-	if (w <= 0 || h <= 0)
+	if (w <= 0 || h <= 0 || !qglBlitFramebufferEXT || failed)
 		return;
 	if (R2D_Flush)
 		R2D_Flush();
 	tex = R2D_RT_Configure("rt/$framewarp", w, h, PTI_RGBA8, RT_IMAGEFLAGS);
 	if (!TEXVALID(tex))
 		return;
-	GL_MTBind(0, GL_TEXTURE_2D, tex);
-	qglCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, x0, y0, w, h);
+	//a blit, not a copy: vid_multisample also gives the window samples (renderer.c), which only a blit can resolve
+	BE_Scissor(NULL);
+	oldfbo = GLBE_FBO_Update(&fbo_framewarp, 0, &tex, 1, r_nulltex, w, h, 0);
+	if (!checked)
+		while (qglGetError() != GL_NO_ERROR)
+			;
+	qglBindFramebufferEXT(GL_READ_FRAMEBUFFER, oldfbo);
+	qglBlitFramebufferEXT(x0, y0, x0+w, y0+h, 0, 0, w, h, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+	if (!checked)
+	{
+		GLenum e = qglGetError();
+		checked = true;
+		if (e != GL_NO_ERROR)
+		{
+			failed = true;
+			Con_Printf(CON_WARNING "r_framewarp: reading the screen failed (0x%x); no warp until restart\n", e);
+		}
+	}
+	GLBE_FBO_Pop(oldfbo);
+	if (failed)
+		return;
 	if (!sh)
 		sh = R_RegisterShader("framewarp", SUF_NONE,
 			"{\n"
