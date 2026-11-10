@@ -1,5 +1,39 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1472 -- no frame cap below the Source mover's tick rate while playing (cl_main.c, sys_win.c, client.h)
+
+Problem: below the physics tick rate (1/pm_ticrate: 66.67 surf, 100 bhop) one usercmd covers two of pm_source.c's whole
+ticks, which then share one input (angle and keys). Lex, 10 Nov: "People don't play below 66fps ... we could just cap
+the fps to 66.6667>fps".
+
+Fix: CL_MaxFPSFloor raises a positive cl_maxfps under 1/movevars.ticrate to it while connected and active with
+pm_physicsmode 1, not in a demo. Host_Frame's limiter and Sys_FramePacePresentHold (sys_framepacing 4's present grid)
+both use it, so the start and present grids agree. 0 (uncapped), loading, the minimised throttle and other physics modes
+are unchanged.
+
+Measured (surf_pantheon, rig, sys_framepacing 5): cl_maxfps 30 ran 15.26 ms frames (66 fps); cl_maxfps 100 ran 9.99 ms.
+One review (call sites agree; edge cases noted: the cl_netfps 0 path also floors a server-chosen rate, and CL_FilterTime
+then caps it at 72 on a 100-tick server; fractional caps under 1).
+
+## Patch 1470 -- r_projection draws again on the GL renderer (gl_rmain.c)
+
+Problem: Lex, 10 Nov: r_projection "would be fun but it just produces errors". Under vid_multisample (Patch 1260's
+multisampled scene target) every frame printed glCheckFramebufferStatus GL_FRAMEBUFFER_INCOMPLETE_ATTACHMENT with
+Colour0 "***fish***" 0*0*0 NOT LOADED (520-550 lines per projection in four seconds), the game ran ~7 fps and the screen
+held a stale normal view. R_RenderScene_Cubemap allocated its cube faces with glCopyTexImage2D from the bound
+framebuffer -- the multisampled target, which a copy cannot read (INVALID_OPERATION), so no face ever had storage.
+
+Fix: the faces get storage with glTexImage2D (unsized GL_RGBA, valid on GLES2 too); RDF_FISHEYE, which is in
+RDF_ALLPOSTPROC with no pass of its own, is cleared once the faces are drawn (left set, every post-process pass read it
+as one still to come); on the post-process path the final remap fills the view's own target (viewport at its pixel size,
+drawn over the virtual screen, as R_RenderPostProcess does) rather than GL_Set2D's window rectangle, which at
+r_renderscale 2 filled a quarter of it.
+
+Measured (surf_pantheon, vid_multisample 4, post-processing on): before, every projection 1-6 spammed the errors at ~7
+fps; after, none print and all six draw (fisheye, panini, panoramic, equirectangular screenshots), ~300 fps; at
+r_renderscale 2 fisheye and equirectangular fill the screen. Two review rounds (render scale / inset views, GLES2, a
+size restore with no effect).
+
 ## Patch 1469 -- failed similarity collection stays unavailable in the tick summary (FTESurf surfd/sweep.py)
 
 Problem: the store-only similarity wrapper logged setup/collection exceptions to stderr but returned
