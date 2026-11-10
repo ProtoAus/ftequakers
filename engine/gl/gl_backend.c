@@ -9466,7 +9466,6 @@ static int GLBE_BlendOverlapOrder(const mesh_t *a, glblendprojface_t *fa, const 
 // graph (pass 0's edges include pass 1's). A later view where both cycles still hold fails every pass, so it skips the
 // sort and keeps the baseline order. Pass-1 steps must survive a spent overlap budget, where a verdict becomes the
 // hint: a strict edge, or an unproved pair's edge in baseline order. On surf_fairy two views fail every frame.
-extern cvar_t r_blendsort_cert;	// WIP: moves to render.h
 #define GLBLEND_CERT_LEN 16
 #define GLBLEND_CERT_SLOTS 4
 typedef struct
