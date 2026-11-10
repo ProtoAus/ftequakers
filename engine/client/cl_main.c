@@ -64,7 +64,7 @@ cvar_t	cl_disconnectreason = CVARAFD("_cl_disconnectreason", "", /*q3*/"com_erro
 cvar_t	cl_pure		= CVARD("cl_pure", "0", "0=standard quake rules.\n1=clients should prefer files within packages present on the server.\n2=clients should use *only* files within packages present on the server.\nDue to quake 1.01/1.06 differences, a setting of 2 is only reliable with total conversions.\nIf sv_pure is set, the client will prefer the highest value set.");
 cvar_t	cl_sbar		= CVARFC("cl_sbar", "0", CVAR_ARCHIVE, CL_Sbar_Callback);
 cvar_t	cl_hudswap	= CVARF("cl_hudswap", "0", CVAR_ARCHIVE);
-cvar_t	cl_maxfps	= CVARFD("cl_maxfps", "250", CVAR_ARCHIVE, "Sets the maximum allowed framerate. If you're using vsync or want to uncap framerates entirely then you should probably set this to 0. Set cl_yieldcpu 0 if you're trying to benchmark.");
+cvar_t	cl_maxfps	= CVARFD("cl_maxfps", "250", CVAR_ARCHIVE, "Sets the maximum allowed framerate. If you're using vsync or want to uncap framerates entirely then you should probably set this to 0. Set cl_yieldcpu 0 if you're trying to benchmark. While playing with the Source movement module, a cap under its tick rate (1/pm_ticrate: 66.67 surf, 100 bhop) is raised to it (FTESurf Patch 1472).");
 //nettest: set to 1 by the engine when the user launched STRAIGHT into a game (+connect / +map / a demo) so
 //MenuQC's m_init can SKIP the menu backdrop (whose own `map` would otherwise clobber the launch command).
 //Must be a REGISTERED cvar (not a Cvar_Get/USERCREATED one) so it survives the post-CL_Init usercreated-cvar
@@ -7504,6 +7504,18 @@ extern double Sys_FramePacePredictDelay(double fps);
 #define FRAMEPACING_ANCHORDELAY(interval, now, ref) ((interval) - ((now) - (ref)))
 #endif
 
+//FTESurf Patch 1472: while playing with the Source mover, a frame cap under its tick rate is raised to it -- below
+//it one usercmd covers two of pm_source.c's whole ticks with one input. Lex, 10 Nov: nobody plays under 66 fps.
+float CL_MaxFPSFloor(float fps)
+{
+	float tickfps;
+	if (fps <= 0 || cls.state != ca_active || cls.demoplayback ||
+		movevars.physicsmode != PHYSMODE_SOURCE || movevars.ticrate <= 0)
+		return fps;
+	tickfps = 1.0f / movevars.ticrate;
+	return fps < tickfps ? tickfps : fps;
+}
+
 double Host_Frame (double time)
 {
 	static double		time0 = 0;
@@ -7669,12 +7681,12 @@ double Host_Frame (double time)
 		if ((cl_netfps.value>0 || cls.demoplayback || runningindepphys))
 	{	//limit the fps freely, and expect the netfps to cope.
 		maxfpsignoreserver = true;
-		maxfps = cl_maxfps.ival;
+		maxfps = CL_MaxFPSFloor(cl_maxfps.ival);
 	}
 	else
 	{
 		maxfpsignoreserver = false;
-		maxfps = (cl_maxfps.ival>0||cls.protocol!=CP_QUAKEWORLD)?cl_maxfps.value:((cl_netfps.value>0)?cl_netfps.value:cls.maxfps);
+		maxfps = CL_MaxFPSFloor((cl_maxfps.ival>0||cls.protocol!=CP_QUAKEWORLD)?cl_maxfps.value:((cl_netfps.value>0)?cl_netfps.value:cls.maxfps));
 		/*gets buggy at times longer than 250ms (and 0/negative, obviously)*/
 		if (maxfps < 4)
 			maxfps = 4;

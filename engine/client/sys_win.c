@@ -2300,7 +2300,7 @@ double Sys_FramePacePredictDelay(double fps)
  * next slot rather than bursting to catch up. */
 static void Sys_FramePacePresentHold(void)
 {
-	double fps = cl_maxfps.value;
+	double fps = CL_MaxFPSFloor(cl_maxfps.value);	//FTESurf Patch 1472: Host_Frame's cap
 	double now, slot, target, delay;
 	if (sys_framepacing.ival == 5)
 	{	/* FTESurf Patch 1413: record the render time of a frame mode 5 started, then hold it to its slot if early */
