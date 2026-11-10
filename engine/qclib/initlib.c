@@ -1612,18 +1612,15 @@ static void PR_QCGC_Finish(progfuncs_t *progfuncs)
 {
 	struct qcgccontext_s *gc = prinst.gccontext;
 	struct qcgcfree_s *f = prinst.gcfree;
-	double t0 = Sys_DoubleTime(), t1, t2, t3;	//DIAG: t1 list ready, t2 loop done, t3 expand done
+	double t0 = Sys_DoubleTime();
 	size_t i, cleared = 0;
-	int how = 0, expanded = 0;
 	if (f && f->busy)
 	{
-		how = 1;
 		f = malloc(sizeof(*f) - sizeof(f->ptr) + sizeof(f->ptr[0]) * (gc->ndead ? gc->ndead : 1));
 		f->oneoff = true;
 	}
 	else if (!f || f->cap < gc->ndead)
 	{
-		how = 2;
 		free(f);
 		f = prinst.gcfree = malloc(sizeof(*f) - sizeof(f->ptr) + sizeof(f->ptr[0]) * (gc->maxtemps + 1));
 		f->cap = gc->maxtemps + 1;
@@ -1631,7 +1628,6 @@ static void PR_QCGC_Finish(progfuncs_t *progfuncs)
 	}
 	f->busy = false;
 	f->memfree = externs->memfree;
-	t1 = Sys_DoubleTime();
 	for (i = 0; i < gc->ndead; i++)
 	{
 		unsigned int p = gc->dead[i];
@@ -1644,7 +1640,6 @@ static void PR_QCGC_Finish(progfuncs_t *progfuncs)
 	}
 	f->n = cleared;
 	prinst.livetemps -= cleared;
-	t2 = Sys_DoubleTime();
 	if (cleared)
 	{
 		f->busy = !f->oneoff;
@@ -1662,14 +1657,9 @@ static void PR_QCGC_Finish(progfuncs_t *progfuncs)
 	//if over half the (max)strings are still live, just increase the max so we are not spamming collections
 	//(review 2: on livetemps, as before, or a collection whose survivors sit just under half restarts at once)
 	if (prinst.livetemps >= prinst.maxtempstrings/2)
-		PR_ExpandTempStrings(progfuncs, prinst.maxtempstrings * 2), expanded = 1;
+		PR_ExpandTempStrings(progfuncs, prinst.maxtempstrings * 2);
 	if (prinst.maxtempstrings < PR_GC_MINTEMPS)	//FTESurf Patch 1292: each collection costs the main thread a copy
-		PR_ExpandTempStrings(progfuncs, PR_GC_MINTEMPS), expanded = 2;
-	t3 = Sys_DoubleTime();
-	if (externs->gcwritewatch >= 3)
-		externs->Printf("gc finish: list %.2f (%s), loop %.2f (%u dead, %u cleared), expand %.2f (%d); live %u of %u\n",
-			(t1-t0)*1000, how == 1 ? "one-off" : how == 2 ? "new" : "kept", (t2-t1)*1000, (unsigned)gc->ndead, (unsigned)cleared,
-			(t3-t2)*1000, expanded, prinst.livetemps, prinst.maxtempstrings);
+		PR_ExpandTempStrings(progfuncs, PR_GC_MINTEMPS);
 	pr_gc_mainus += (Sys_DoubleTime() - t0) * 1e6;
 	pr_gc_dones++;
 }
@@ -1911,7 +1901,7 @@ void PR_RunGC (progfuncs_t *progfuncs)
 #ifdef GCTIMINGS
 			double starttime = Sys_DoubleTime(), endtime;
 #endif
-			double gc_t0 = Sys_DoubleTime(); double gc_tm;
+			double gc_t0 = Sys_DoubleTime();
 			size_t ofs[NOSTR_MAX+1], len[NOSTR_MAX+1], memsize = 0, padded;	//FTESurf Patch 763: copy what is read
 			unsigned int n = PR_QCGC_Segments(progfuncs, ofs, len), i;
 			char *dst;
@@ -1924,7 +1914,6 @@ void PR_RunGC (progfuncs_t *progfuncs)
 			tabled = mirrored && PR_QCGC_TableSnapshot(progfuncs);	//FTESurf Patch 1481
 #endif
 			padded = mirrored ? 0 : (memsize + 7) & ~(size_t)7;
-			gc_tm = Sys_DoubleTime();	//DIAG
 			{	//FTESurf Patch 1446: reuse the last block -- a fresh ~25 MB one faulted in every page during the copy
 				//below and was freed again at the finish, 5-8 ms of main thread each (surf_nuclear, the PC)
 				size_t need = sizeof(*gc) - sizeof(gc->amem) + padded + ((tabled ? 0 : sizeof(*gc->tempstrings)) + sizeof(*gc->dead))*prinst.maxtempstrings;
@@ -1971,8 +1960,6 @@ void PR_RunGC (progfuncs_t *progfuncs)
 				gc->dead = (unsigned int*)(gc->tempstrings + gc->maxtemps);	//FTESurf Patch 1446: in the kept block, not a malloc per collection
 				memcpy(gc->tempstrings, prinst.tempstrings, sizeof(*gc->tempstrings)*gc->maxtemps);
 			}
-			if (externs->gcwritewatch >= 3)	//DIAG
-				externs->Printf("gc start: mirror+table %.2f (%u bytes%s), block %.2f (%u slots, live %u)\n", (gc_tm-gc_t0)*1000, mirrored ? (unsigned)pr_gc_copied : 0u, tabled ? ", table mirrored" : "", (Sys_DoubleTime()-gc_tm)*1000, (unsigned)gc->maxtemps, prinst.livetemps);
 
 			COM_InsertWork(WG_LOADER, PR_QCGC_Thread, gc, NULL, 0, 0);
 			pr_gc_mainus += (Sys_DoubleTime() - gc_t0) * 1e6;
