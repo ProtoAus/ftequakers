@@ -7792,7 +7792,7 @@ static unsigned int GLBE_CaptureKeep(const plane_t *p, entity_t *ent, unsigned i
 	int seat = BE_Seat(), g, hold = -1, renders = 0;
 	int why[BE_CAPGROUPS] = {BE_CAPWHY_N, BE_CAPWHY_N};	//P1477: why each rendering group renders (lower is the stronger cause)
 	unsigned int kept = 0, keep = 0, gk;
-	qboolean common, staggers, far;
+	qboolean common, staggers, beyond;
 	float dd, cosang;
 	vec3_t d;
 	if (lastframe != host_framecount)
@@ -7841,23 +7841,23 @@ static unsigned int GLBE_CaptureKeep(const plane_t *p, entity_t *ent, unsigned i
 		VectorSubtract(r_refdef.vieworg, be_capkeep.g[g].eye, d);
 		dd = DotProduct(d, d);
 		cosang = DotProduct(vpn, be_capkeep.g[g].fwd);
-		far = dd > 128*128 || cosang < 0.866f;	//past 128 units or 30 degrees: due at once
-		if (far && (dd > 192*192 || cosang < 0.707f))
+		beyond = dd > 128*128 || cosang < 0.866f;	//past 128 units or 30 degrees: due at once
+		if (beyond && (dd > 192*192 || cosang < 0.707f))
 		{	//P1477: and past half as far again (192, 45 degrees), now
 			why[g] = BE_CAPWHY_CAMERA;
 			continue;
 		}
-		if (!far && !GLBE_CaptureDue(g))
+		if (!beyond && !GLBE_CaptureDue(g))
 		{
 			keep |= 1u<<g;
 			renders--;
 			continue;
 		}
-		why[g] = far ? BE_CAPWHY_CAMERA : BE_CAPWHY_DUE;
+		why[g] = beyond ? BE_CAPWHY_CAMERA : BE_CAPWHY_DUE;
 		//P1477: a forced group, inside 1.5x the limits, may wait a frame as a due one does: groups rendered together
 		//(after a jump, a plane change) trip the limits together, and would stay in step
 		if (be_capkeep.g[g].heldframe != host_framecount - 1 &&
-			(far || r_capturerate.value <= 0 || (realtime - be_capkeep.g[g].rendered + dt) * max(r_capturerate.value, 10) < 1.25) &&
+			(beyond || r_capturerate.value <= 0 || (realtime - be_capkeep.g[g].rendered + dt) * max(r_capturerate.value, 10) < 1.25) &&
 			(hold < 0 || be_capkeep.g[g].rendered > be_capkeep.g[hold].rendered))
 			hold = g;	//a frame late, it still renders within 1.25 intervals (at 300 fps: 60 yes, 144 no)
 	}
