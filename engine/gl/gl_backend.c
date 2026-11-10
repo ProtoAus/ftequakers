@@ -7026,11 +7026,11 @@ static void GLBE_SubmitMeshesPortals(batch_t **worldlist, batch_t *dynamiclist)
 			}
 		}
 		//make sure the current scene doesn't draw over the portal where its not meant to. clamp depth so the near clip plane doesn't cause problems.
+		if (r_portaldebug.ival == 2)	//P206 bisect: no mask at all
+			return;	// FTESurf Patch 1465: before the clamp, which this return left on for the rest of the view
 		if (gl_config.arb_depth_clamp)
 			qglEnable(GL_DEPTH_CLAMP_ARB);
 		/*draw depth only, to mask it off*/
-		if (r_portaldebug.ival == 2)	//P206 bisect: no mask at all
-			return;
 		GLBE_SelectMode(BEM_DEPTHONLY);
 		for (i = 0; i < 2; i++)
 		{
@@ -9475,7 +9475,7 @@ typedef struct
 } glblendcert_t;
 static glblendcert_t glblend_cert[GLBLEND_CERT_SLOTS];
 static unsigned int glblend_certstamp;
-static unsigned int glblend_certchecked, glblend_certwrong;	// r_blendsort_cert 2
+static unsigned int glblend_certhits, glblend_certproved, glblend_certwrong;	// proved/wrong: r_blendsort_cert 2
 
 static qboolean GLBE_BlendPairUnseen(const glblendplane_t *a, const glblendplane_t *b)
 {
@@ -9634,7 +9634,7 @@ static void GLBE_BlendPlaneSort(glblendface_t *faces, size_t n, glblendplanestat
 	int ab;
 	glblendcert_t take;	// FTESurf Patch 1465
 	qboolean certify;
-	unsigned int c;
+	unsigned int c, kahnfail = 0;	// passes whose Kahn ended in a cycle
 	stats->admitted = stats->edges = stats->work = stats->moved = 0;
 	bov_verdicts[0] = bov_verdicts[1] = bov_disjoint = bov_facebox = 0;
 	stats->status = stats->pass = 0;
@@ -9649,17 +9649,18 @@ static void GLBE_BlendPlaneSort(glblendface_t *faces, size_t n, glblendplanestat
 		if (GLBE_BlendCertCycle(faces, n, &glblend_cert[c], 1) && GLBE_BlendCertCycle(faces, n, &glblend_cert[c], 0))
 		{
 			glblend_cert[c].stamp = ++glblend_certstamp;
+			glblend_certhits++;
 			stats->cert = c;
-			if (r_blendsort_cert.ival == 2)
-			{	// verify: sort anyway, and done: reports a certified view that sorted
-				glblend_certchecked++;
-				break;
-			}
-			stats->status = -2;
-			stats->pass = 2;
-			return;
+			break;
 		}
-	take.len[0] = take.len[1] = 0;
+	bov_facebox = 0;	// the certificate's own proofs are not this sort's
+	if (stats->cert >= 0 && r_blendsort_cert.ival != 2)
+	{
+		stats->status = -2;
+		stats->pass = 2;
+		return;
+	}
+	take.len[0] = take.len[1] = 0;	// verify (2) sorts anyway; done: grades the certificate's claim
 	planes = BZ_Malloc(GLBLEND_PLANE_FACES * sizeof(*planes));
 	for (f = 0; f < n; f++)
 	{
@@ -9798,11 +9799,12 @@ rebuild:
 		}
 		if (pick == stats->admitted)
 		{
+			kahnfail |= 1u << stats->pass;
 			if (certify && stats->pass)
 				take.len[stats->pass-1] = GLBE_BlendCertTake(&take, stats->pass-1, planes, edges, pair, degree, stats->admitted);
 			if (stats->pass < 2) { stats->pass++; goto rebuild; }
 			stats->status = -2;
-			if (take.len[0] && take.len[1])
+			if (take.len[0] && take.len[1] && stats->cert < 0)
 			{
 				for (c = 0, i = 1; i < GLBLEND_CERT_SLOTS; i++)
 					if (glblend_cert[i].stamp < glblend_cert[c].stamp) c = i;
@@ -9841,8 +9843,11 @@ rebuild:
 done:
 	stats->work += owork;
 	stats->overlapfull = owork >= GLBLEND_OVERLAP_WORK;
-	if (stats->cert >= 0 && stats->status == 1 && glblend_certwrong++ < 8)
-		Con_Printf("r_blendsort_cert: slot %d certified a view that sorts (pass %d, %u faces)\n", stats->cert, stats->pass, stats->admitted);
+	if (stats->cert >= 0 && kahnfail == 7)
+		glblend_certproved++;
+	else if (stats->cert >= 0 && (kahnfail || stats->status != -1) && glblend_certwrong++ < 8)	// -1 before Kahn: unchecked
+		Con_Printf("r_blendsort_cert: slot %d claimed cycles in every pass; Kahn's were %x (status %d, %u faces)\n",
+			stats->cert, kahnfail, stats->status, stats->admitted);
 	if (projcount) BZ_Free(projcount);
 	if (projbox) BZ_Free(projbox);
 	if (projverts) BZ_Free(projverts);
@@ -10006,8 +10011,8 @@ static void GLBE_SubmitBlendedFaces(batch_t *world, batch_t *dynamic)
 			(unsigned int)stats.edges, (unsigned int)stats.work, (unsigned int)stats.moved, stats.pass, stats.overlapfull, r_refdef.recurse);
 		Con_Printf("ALPHATRACE verdicts pass0 %u later %u disjoint %u (by face boxes %u)\n",	// FTESurf Patch 1457, last sort
 			bov_verdicts[0], bov_verdicts[1], bov_disjoint, bov_facebox);
-		Con_Printf("ALPHATRACE cert world %d entities %d checked %u wrong %u\n", stats.cert, combined ? bstats.cert : -1,
-			glblend_certchecked, glblend_certwrong);	// FTESurf Patch 1465
+		Con_Printf("ALPHATRACE cert world %d entities %d hits %u proved %u wrong %u\n", stats.cert, combined ? bstats.cert : -1,
+			glblend_certhits, glblend_certproved, glblend_certwrong);	// FTESurf Patch 1465
 		if (combined)
 			Con_Printf("ALPHATRACE entities admitted=%u status=%d edges=%u work=%u moved=%u pass=%d overlapfull=%d kept=%d\n",
 				(unsigned int)bstats.admitted, bstats.status, (unsigned int)bstats.edges, (unsigned int)bstats.work,
@@ -10136,7 +10141,8 @@ static qboolean GLBE_BlendWorldClipEmpty(const batch_t *batch, const mesh_t *mes
 	double e[4], eb[4], c[4], cb[4], p[3], m;
 	unsigned int out = 0x3f, bits;
 	int v, j, k;
-	// Portal shaders draw depth-clamped (no near/far clip); weapon and xflip entities use another projection.
+	// Defensive: GLBE_BlendFaceEligible already turns away portal shaders (drawn depth-clamped, no near/far clip)
+	// and depth-hack/xflip entities (another projection).
 	if (!r_blendsort_clipcull.ival || ((batch->shader->flags | batch->shader->remapto->flags) & SHADER_HASPORTAL) ||
 		(batch->ent->flags & (RF_DEPTHHACK | RF_XFLIP)) || !mesh || !mesh->xyz_array || mesh->numvertexes < 1)
 		return false;
