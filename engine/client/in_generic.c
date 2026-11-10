@@ -2412,11 +2412,12 @@ static void IN_JournalEnd_f(void)
 	  and such a file already says `truncated`, so the loss is announced.*/
 	INS_EnumerateDevices((void*)"devmap", IN_Journal_DeviceLine);
 
-	/*the trailer is written whether or not the cap was hit -- a truncated file
-	  still has to say how much it was missing.  in_jrn_max is lifted rather than
-	  in_jrn_full cleared, so a second truncated marker cannot appear.*/
+	/*Allow the trailer into a full journal's reserved space, but never lower
+	  the configured limit to the current allocation: an ordinary journal may
+	  need to grow here.  Body truncation remains recorded in the buffer.*/
 	in_jrn_full = false;
-	in_jrn_max = in_jrn_cap;
+	if (in_jrn_max < in_jrn_cap)
+		in_jrn_max = in_jrn_cap;
 	IN_Journal_Line(now, "end", tail);
 	in_jrn_full = true;	//Patch 1116: a threaded-physics line after `end` would make the file outrun its digest
 

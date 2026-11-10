@@ -1,5 +1,26 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1478 -- journal close preserves the configured growth limit (in_generic.c)
+
+**Problem:** Closing an input journal replaced its configured byte limit with its
+current allocation. An otherwise complete journal near a 64/128 KiB allocation
+boundary could therefore receive `truncated` instead of `end`, despite room under
+its configured limit. This is the allocation-lowering P1116 backlog item.
+
+**Change:** Only raise the terminal limit when the existing reserved allocation
+exceeds it; never lower it to an ordinary allocation. Existing append growth,
+body-cap enforcement, record fields, capture/consent policy and close lifecycle
+remain unchanged. This does not repair the separate threaded-physics race or
+promise an end record for every configured-cap/headroom relationship.
+
+**Verified:** `tools/test_input_journal_end.py` compiles actual Raw/Line and the
+whole close handler with explicit host/digest/filesystem stubs, strict C99
+Wall/Wextra/Werror. Prechange:628 checks/50 terminal/truncation failures;
+subject:628/0. Controls cover ordinary growth, actual body-cap truncation with
+reserved space, kept/discarded/refused/failed-write and stale-digest close.
+Independent source review: no issues. The digest stub checks bytes submitted by
+the handler, not SHA-256 correctness, real durability, capture or concurrency.
+
 ## Patch 1476 -- tas_rollout's flight steering can weave wider: the AIMWIDE row bit (sv_tas_rollout.inc)
 
 Problem: AIM (Patch 1449) sets each tick's strafe side from which side of the heading the aim bearing lies, so on the
