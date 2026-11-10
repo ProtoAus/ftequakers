@@ -221,6 +221,8 @@ typedef struct prinst_s
 	size_t gcmirrorcap, gcmirrorused;
 	void **gcpages;
 	size_t gcpagescap;
+	unsigned int gcnumnostr;		//...memnostrings' blocks when the mirror was made: it holds only what lay outside them
+	unsigned int gcnostr_start[NOSTR_MAX], gcnostr_end[NOSTR_MAX];
 #endif
 } prinst_t;
 
