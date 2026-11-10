@@ -9476,6 +9476,7 @@ typedef struct
 } glblendcert_t;
 static glblendcert_t glblend_cert[GLBLEND_CERT_SLOTS];
 static unsigned int glblend_certstamp;
+static unsigned int glblend_certchecked, glblend_certwrong;	// r_blendsort_cert 2
 
 static qboolean GLBE_BlendPairUnseen(const glblendplane_t *a, const glblendplane_t *b)
 {
@@ -9649,9 +9650,14 @@ static void GLBE_BlendPlaneSort(glblendface_t *faces, size_t n, glblendplanestat
 		if (GLBE_BlendCertCycle(faces, n, &glblend_cert[c], 1) && GLBE_BlendCertCycle(faces, n, &glblend_cert[c], 0))
 		{
 			glblend_cert[c].stamp = ++glblend_certstamp;
+			stats->cert = c;
+			if (r_blendsort_cert.ival == 2)
+			{	// verify: sort anyway, and done: reports a certified view that sorted
+				glblend_certchecked++;
+				break;
+			}
 			stats->status = -2;
 			stats->pass = 2;
-			stats->cert = c;
 			return;
 		}
 	take.len[0] = take.len[1] = 0;
@@ -9836,6 +9842,8 @@ rebuild:
 done:
 	stats->work += owork;
 	stats->overlapfull = owork >= GLBLEND_OVERLAP_WORK;
+	if (stats->cert >= 0 && stats->status == 1 && glblend_certwrong++ < 8)
+		Con_Printf("r_blendsort_cert: slot %d certified a view that sorts (pass %d, %u faces)\n", stats->cert, stats->pass, stats->admitted);
 	if (projcount) BZ_Free(projcount);
 	if (projbox) BZ_Free(projbox);
 	if (projverts) BZ_Free(projverts);
@@ -9999,7 +10007,8 @@ static void GLBE_SubmitBlendedFaces(batch_t *world, batch_t *dynamic)
 			(unsigned int)stats.edges, (unsigned int)stats.work, (unsigned int)stats.moved, stats.pass, stats.overlapfull, r_refdef.recurse);
 		Con_Printf("ALPHATRACE verdicts pass0 %u later %u disjoint %u (by face boxes %u)\n",	// FTESurf Patch 1457, last sort
 			bov_verdicts[0], bov_verdicts[1], bov_disjoint, bov_facebox);
-		Con_Printf("ALPHATRACE cert world %d entities %d\n", stats.cert, combined ? bstats.cert : -1);	// FTESurf Patch 1465
+		Con_Printf("ALPHATRACE cert world %d entities %d checked %u wrong %u\n", stats.cert, combined ? bstats.cert : -1,
+			glblend_certchecked, glblend_certwrong);	// FTESurf Patch 1465
 		if (combined)
 			Con_Printf("ALPHATRACE entities admitted=%u status=%d edges=%u work=%u moved=%u pass=%d overlapfull=%d kept=%d\n",
 				(unsigned int)bstats.admitted, bstats.status, (unsigned int)bstats.edges, (unsigned int)bstats.work,
