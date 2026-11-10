@@ -9462,15 +9462,18 @@ static int GLBE_BlendOverlapOrder(const mesh_t *a, glblendprojface_t *fa, const 
 	return positive ? 1 : negative ? -1 : 0;
 }
 
-// FTESurf Patch 1465: failure certificates. A failed sort keeps a cycle of its pass-1 graph and one of its pass-2
-// graph (pass 0's edges include pass 1's). A later view where both cycles still hold fails every pass, so it skips the
-// sort and keeps the baseline order. Pass-1 steps must survive a spent overlap budget, where a verdict becomes the
-// hint: a strict edge, or an unproved pair's edge in baseline order. On surf_fairy two views fail every frame.
+// FTESurf Patch 1465: failure certificates. A failed sort keeps, for passes 1 and 2, why each failed: a cycle of
+// its graph, or a crossing -- a strict edge from a face to one drawn before it with an unadmitted slot between,
+// which every order keeping that edge carries past the slot, so the barrier check refuses it (on surf_fairy pass 1
+// fails this way ~19 times in 20). Pass 0's edges include pass 1's. A later view where both still hold fails
+// every pass, so it skips the sort and keeps the baseline order. Pass-1 steps must survive a spent overlap budget,
+// where a verdict becomes the hint: a strict edge, or an unproved pair's edge in baseline order.
 #define GLBLEND_CERT_LEN 16
 #define GLBLEND_CERT_SLOTS 4
 typedef struct
 {
-	const mesh_t *mesh[2][GLBLEND_CERT_LEN];	// [0] pass 1, [1] pass 2: each face's edge goes to the next, the last's to the first
+	const mesh_t *mesh[2][GLBLEND_CERT_LEN];	// [0] pass 1, [1] pass 2: a cycle (each face's edge to the next, the
+											// last's to the first), or a crossing when len is 2 (mesh[0]'s edge to mesh[1])
 	unsigned int len[2], stamp;
 } glblendcert_t;
 static glblendcert_t glblend_cert[GLBLEND_CERT_SLOTS];
@@ -9492,16 +9495,16 @@ static int GLBE_BlendPairSide(const glblendplane_t *a, const glblendplane_t *b)
 // One stored cycle, re-proved from this view's faces: each face admitted, each step an edge of the pass's graph.
 static qboolean GLBE_BlendCertCycle(const glblendface_t *faces, size_t n, const glblendcert_t *cert, int pass)
 {
-	unsigned int len = cert->len[pass], k, a, b, i, j, tris = 0, work = 0;
+	unsigned int len = cert->len[pass], steps = len == 2 ? 1 : len, k, a, b, i, j, tris = 0, work = 0;
 	size_t pos[GLBLEND_CERT_LEN], f;
-	glblendplane_t plane[GLBLEND_CERT_LEN];
+	glblendplane_t plane[GLBLEND_CERT_LEN], gap;
 	glblendprojface_t proj[GLBLEND_CERT_LEN];
 	glblendproject_t *verts = NULL;
 	signed char *count = NULL;
 	double *box = NULL;
 	qboolean ok = false;
 	int rel, v;
-	if (len < 3 || len > GLBLEND_CERT_LEN)
+	if (len < 2 || len > GLBLEND_CERT_LEN)
 		return false;
 	for (k = 0; k < len; k++)
 	{
@@ -9511,6 +9514,15 @@ static qboolean GLBE_BlendCertCycle(const glblendface_t *faces, size_t n, const 
 			return false;
 		pos[k] = f;
 		tris += plane[k].mesh->numindexes/3;
+	}
+	if (len == 2)
+	{	// a crossing: drawn later, and an unadmitted slot between
+		if (pos[0] <= pos[1])
+			return false;
+		for (f = pos[1]+1; f < pos[0] && GLBE_BlendPlaneGeometry(&faces[f], &gap); f++)
+			;
+		if (f == pos[0])
+			return false;
 	}
 	if (!pass)
 	{
@@ -9526,7 +9538,7 @@ static qboolean GLBE_BlendCertCycle(const glblendface_t *faces, size_t n, const 
 			tris += plane[k].mesh->numindexes/3;
 		}
 	}
-	for (k = 0; k < len; k++)
+	for (k = 0; k < steps; k++)
 	{
 		a = k; b = (k+1) % len;
 		if (pos[a] == pos[b])
@@ -9617,6 +9629,40 @@ static unsigned int GLBE_BlendCertTake(glblendcert_t *take, int pass, const glbl
 	return len;
 }
 
+// A crossing after a pass's Kahn succeeded and its order failed the barrier check. Some edge must lead back
+// across a barrier (stable Kahn keeps every face within its barriers otherwise), but only a strict one is kept:
+// an unproved pair's would not survive a spent budget. Pass 1's needs its overlap verdict, taken on a budget of
+// its own so the sort's overlapfull is unchanged.
+static unsigned int GLBE_BlendCertCross(glblendcert_t *take, int pass, const glblendplane_t *planes,
+	glblendprojface_t *proj, const signed char *pair, signed char *verdict, unsigned int n)
+{
+	unsigned int i, j, idx, work = 0;
+	for (i = 0; i < n; i++)
+		for (j = i+1; j < n; j++)
+		{
+			idx = i*n + j;
+			if (pair[idx] != 1 || planes[j].slot - planes[i].slot == j - i)
+				continue;
+			if (!pass && verdict[idx] == GLBLEND_PAIR_PENDING)
+				verdict[idx] = GLBE_BlendOverlapOrder(planes[i].mesh, &proj[i], planes[j].mesh, &proj[j], 1, &work);
+			if (!pass && verdict[idx] == GLBLEND_ORDER_DISJOINT)
+				continue;
+			take->mesh[pass][0] = planes[j].mesh;
+			take->mesh[pass][1] = planes[i].mesh;
+			return 2;
+		}
+	return 0;
+}
+
+static void GLBE_BlendCertStore(const glblendcert_t *take)
+{
+	unsigned int c, i;
+	for (c = 0, i = 1; i < GLBLEND_CERT_SLOTS; i++)
+		if (glblend_cert[i].stamp < glblend_cert[c].stamp) c = i;
+	glblend_cert[c] = *take;
+	glblend_cert[c].stamp = ++glblend_certstamp;
+}
+
 static void GLBE_BlendPlaneSort(glblendface_t *faces, size_t n, glblendplanestats_t *stats)
 {
 	glblendplane_t *planes;
@@ -9634,7 +9680,7 @@ static void GLBE_BlendPlaneSort(glblendface_t *faces, size_t n, glblendplanestat
 	int ab;
 	glblendcert_t take;	// FTESurf Patch 1465
 	qboolean certify;
-	unsigned int c, kahnfail = 0;	// passes whose Kahn ended in a cycle
+	unsigned int c, passfail = 0;	// passes that ended in a cycle or failed the barrier check
 	stats->admitted = stats->edges = stats->work = stats->moved = 0;
 	bov_verdicts[0] = bov_verdicts[1] = bov_disjoint = bov_facebox = 0;
 	stats->status = stats->pass = 0;
@@ -9799,18 +9845,13 @@ rebuild:
 		}
 		if (pick == stats->admitted)
 		{
-			kahnfail |= 1u << stats->pass;
+			passfail |= 1u << stats->pass;
 			if (certify && stats->pass)
 				take.len[stats->pass-1] = GLBE_BlendCertTake(&take, stats->pass-1, planes, edges, pair, degree, stats->admitted);
 			if (stats->pass < 2) { stats->pass++; goto rebuild; }
 			stats->status = -2;
 			if (take.len[0] && take.len[1] && stats->cert < 0)
-			{
-				for (c = 0, i = 1; i < GLBLEND_CERT_SLOTS; i++)
-					if (glblend_cert[i].stamp < glblend_cert[c].stamp) c = i;
-				glblend_cert[c] = take;
-				glblend_cert[c].stamp = ++glblend_certstamp;
-			}
+				GLBE_BlendCertStore(&take);
 			goto done;
 		}
 		order[step] = pick;
@@ -9826,8 +9867,14 @@ rebuild:
 		to = i > order[i] ? i : order[i];
 		if (planes[to].slot - planes[from].slot != to - from)
 		{
+			passfail |= 1u << stats->pass;
+			if (certify && stats->pass)
+				take.len[stats->pass-1] = GLBE_BlendCertCross(&take, stats->pass-1, planes, proj, pair, verdict, stats->admitted);
 			if (stats->pass < 2) { stats->pass++; goto rebuild; }
-			stats->status = -3; goto done;
+			stats->status = -3;
+			if (take.len[0] && take.len[1] && stats->cert < 0)
+				GLBE_BlendCertStore(&take);
+			goto done;
 		}
 	}
 	ordered = BZ_Malloc(stats->admitted * sizeof(*ordered));
@@ -9843,11 +9890,11 @@ rebuild:
 done:
 	stats->work += owork;
 	stats->overlapfull = owork >= GLBLEND_OVERLAP_WORK;
-	if (stats->cert >= 0 && kahnfail == 7)
+	if (stats->cert >= 0 && passfail == 7)
 		glblend_certproved++;
-	else if (stats->cert >= 0 && (kahnfail || stats->status != -1) && glblend_certwrong++ < 8)	// -1 before Kahn: unchecked
-		Con_Printf("r_blendsort_cert: slot %d claimed cycles in every pass; Kahn's were %x (status %d, %u faces)\n",
-			stats->cert, kahnfail, stats->status, stats->admitted);
+	else if (stats->cert >= 0 && (passfail || stats->status != -1) && glblend_certwrong++ < 8)	// -1 before Kahn: unchecked
+		Con_Printf("r_blendsort_cert: slot %d claimed every pass fails; failed were %x (status %d, %u faces)\n",
+			stats->cert, passfail, stats->status, stats->admitted);
 	if (projcount) BZ_Free(projcount);
 	if (projbox) BZ_Free(projbox);
 	if (projverts) BZ_Free(projverts);
