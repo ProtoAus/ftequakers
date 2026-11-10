@@ -931,7 +931,7 @@ reeval:
 #ifndef QCGC
 					prinst.numtempstringsstack = prinst.numtempstrings;
 #endif
-					(*externs->globalbuiltins[i]) (&progfuncs->funcs, (struct globalvars_s *)current_progstate->globals);
+					PR_BUILTIN_CALL(i, (*externs->globalbuiltins[i]) (&progfuncs->funcs, (struct globalvars_s *)current_progstate->globals));
 
 					//in case ed_alloc was called
 					num_edicts = sv_num_edicts;

@@ -92,6 +92,22 @@
 	prclocks_t Sys_GetClockRate(void) { return 1; }
 #endif
 
+//DIAG lows2: inclusive time per builtin number while a VM profiles (r_spikes 2); cl_screen.c reads and clears
+#define PR_BTIME_MAX 1024
+double pr_btime_us[PR_BTIME_MAX];
+unsigned int pr_btime_calls[PR_BTIME_MAX];
+unsigned short pr_btime_touched[PR_BTIME_MAX];
+unsigned int pr_btime_ntouched;
+double Sys_DoubleTime(void);
+static void PR_BTimeAdd(unsigned int i, double dt)
+{
+	if (!pr_btime_calls[i] && pr_btime_ntouched < PR_BTIME_MAX)
+		pr_btime_touched[pr_btime_ntouched++] = i;
+	pr_btime_us[i] += dt * 1000000;
+	pr_btime_calls[i]++;
+}
+#define PR_BUILTIN_CALL(i, call) do { if (prinst.profiling && (unsigned int)(i) < PR_BTIME_MAX) { double bt0_ = Sys_DoubleTime(); call; PR_BTimeAdd((i), Sys_DoubleTime() - bt0_); } else { call; } } while (0)
+
 //=============================================================================
 
 /*
@@ -1906,7 +1922,7 @@ void PDECL PR_ExecuteProgram (pubprogfuncs_t *ppf, func_t fnum)
 		i = -f->first_statement;
 
 		if (i < externs->numglobalbuiltins)
-			(*externs->globalbuiltins[i]) (&progfuncs->funcs, (struct globalvars_s *)current_progstate->globals);
+			PR_BUILTIN_CALL(i, (*externs->globalbuiltins[i]) (&progfuncs->funcs, (struct globalvars_s *)current_progstate->globals));
 		else
 		{
 			externs->Printf ("Bad builtin call number %i (from exe)\n", -f->first_statement);
