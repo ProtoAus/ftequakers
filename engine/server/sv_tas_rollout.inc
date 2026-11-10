@@ -34,7 +34,8 @@
 /* P1466: the row's tick reports a wall or ceiling clipped (pm_source.c's pms_tas_wall) as bit 2 of out[7] beside
  * ducked (bit 1), on a ramp or the ground too -- contact kind 4 is only set with no ramp under the body, so a ride
  * rubbing a side wall said nothing (Lex, 10 Nov: the bot rubs walls and loses speed). Opt-in: a caller that does
- * not ask reads out[7] as ducked, as before. */
+ * not ask reads out[7] as ducked, as before. Like the bits above it is cleared from each row that runs (the row
+ * the loop stops on too; rows past it keep it), so a caller sets it again before rolling the same rows. */
 #define SV_TAS_ROLL_WALLBIT 2048
 
 static float SV_TASRollWord(double deg)
@@ -251,6 +252,7 @@ int SV_TASRollout(edict_t *e, float *in, int n, float *out, const float *aim, fl
 	airk = 0;
 	if (!(aimgain > 0)) aimgain = 10;	/* NaN too */
 	if (!(aimlead >= 0 && aimlead <= 1)) aimlead = 0.5;	/* P1466: P1449's set-back; NaN too */
+	if (aimlead > 0.9) aimlead = 0.9;	/* at 1 an approach along the face puts the lead point on the body (review) */
 	if (pmove.pm_type == PM_NORMAL && !pmove.waterjumptime)
 	for (k = 0; k < n; ++k)
 	{
