@@ -212,6 +212,16 @@ typedef struct prinst_s
 	unsigned int numnostr;
 	unsigned int nostr_start[NOSTR_MAX];
 	unsigned int nostr_end[NOSTR_MAX];
+
+#if defined(_WIN32) && !defined(WINRT)
+	//FTESurf Patch 1481: the hunk is reserved MEM_WRITE_WATCH; the collector keeps a copy of it page for page and
+	//refreshes only the pages written since its last start. gcmirrorused 0: the next start copies everything.
+	pbool hunkwatch;
+	char *gcmirror;
+	size_t gcmirrorcap, gcmirrorused;
+	void **gcpages;
+	size_t gcpagescap;
+#endif
 } prinst_t;
 
 typedef struct progfuncs_s
