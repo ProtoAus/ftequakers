@@ -423,24 +423,26 @@ typedef struct
 	int t;
 } sv_tasroll_thread_t;
 
+static const void *pms_snapshot;	/* the main thread's mover state, copied before the workers start */
 static int SV_TASRollWorker(void *arg)
 {
 	sv_tasroll_thread_t *th = arg;
 	sv_tasroll_batch_t *b = th->b;
-	float *rows = BZ_Malloc(b->n * SV_TAS_ROLL_IN * sizeof(float));
-	float *outs = BZ_Malloc(b->n * SV_TAS_ROLL_OUT * sizeof(float));
+	/* allowed to fail (BZ_Malloc would Sys_Error from a worker): then its candidates stay the main thread's */
+	float *rows = BZF_Malloc(b->n * SV_TAS_ROLL_IN * sizeof(float));
+	float *outs = BZF_Malloc(b->n * SV_TAS_ROLL_OUT * sizeof(float));
 	/* its own movement state: pmove, movevars, the mover's, the traces' box hulls and clip flags (pm_thread.h) */
-	playermove_t *pm = BZ_Malloc(sizeof(playermove_t));
-	movevars_t *mv = BZ_Malloc(sizeof(movevars_t));
-	void *pms = BZ_Malloc(PMSrc_ThreadStateSize()), *pmt = BZ_Malloc(PM_ThreadStateSize());
-	void *wbs = BZ_Malloc(World_ThreadStateSize()), *bs = BZ_Malloc(BIH_ThreadStateSize());
+	playermove_t *pm = BZF_Malloc(sizeof(playermove_t));
+	movevars_t *mv = BZF_Malloc(sizeof(movevars_t));
+	void *pms = BZF_Malloc(PMSrc_ThreadStateSize()), *pmt = BZF_Malloc(PM_ThreadStateSize());
+	void *wbs = BZF_Malloc(World_ThreadStateSize()), *bs = BZF_Malloc(BIH_ThreadStateSize());
 	int k, ran;
 	if (!rows || !outs || !pm || !mv || !pms || !pmt || !wbs || !bs)
 	{	/* its candidates stay -12: the main thread runs them */
 		BZ_Free(rows); BZ_Free(outs); BZ_Free(pm); BZ_Free(mv); BZ_Free(pms); BZ_Free(pmt); BZ_Free(wbs); BZ_Free(bs);
 		return 0;
 	}
-	memset(pms, 0, PMSrc_ThreadStateSize());
+	memcpy(pms, pms_snapshot, PMSrc_ThreadStateSize());	/* the main thread's latches (a one-time warning stays one) */
 	memset(pmt, 0, PM_ThreadStateSize());
 	memset(wbs, 0, World_ThreadStateSize());
 	memset(bs, 0, BIH_ThreadStateSize());
@@ -519,8 +521,8 @@ int SV_TASRolloutBatch(edict_t *e, float *in, int n, float *out, int count, floa
 	if (nthreads > count)
 		nthreads = count;
 	threads = nthreads > 1;
-#ifndef MULTITHREAD
-	threads = false;
+#if !defined(MULTITHREAD) || !defined(FTE_TLS_OK)
+	threads = false;		/* no threads, or no per-thread pointers to give them */
 #endif
 #ifdef USEAREAGRID
 	if (sv.world.portallist.l.next && sv.world.portallist.l.next != &sv.world.portallist.l)
@@ -533,6 +535,7 @@ int SV_TASRolloutBatch(edict_t *e, float *in, int n, float *out, int count, floa
 	if (threads)
 	{
 		PM_PrepareThreads();
+		pms_snapshot = PMSrc_MainState();
 		b.nthreads = nthreads;
 		for (t = 0; t < nthreads; ++t)
 		{

@@ -373,6 +373,7 @@ void PM_ThreadBind(playermove_t *pm, movevars_t *mv);	//NULL, NULL: the globals 
 size_t PM_ThreadStateSize(void);			//pmovetst.c's box hull and carve state
 void PM_ThreadState(void *state);			//NULL: the main one
 size_t PMSrc_ThreadStateSize(void);			//pm_source.c's per-command state
+const void *PMSrc_MainState(void);
 void PMSrc_ThreadState(void *state);
 
 /* Optional pre-input edits. Unselected fields retain their baseline values.

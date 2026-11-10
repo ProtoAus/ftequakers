@@ -62,9 +62,10 @@ can just be stored out and get a proper hull_t structure.
 */
 void PM_InitBoxHull (void)
 {
-	pm_carveexit_frac = -1;	//Patch 1467: a worker's state starts zeroed
 	int		i;
 	int		side;
+
+	pm_carveexit_frac = -1;	//Patch 1467: a worker's state starts zeroed
 
 	box_hull.clipnodes = box_clipnodes;
 	box_hull.planes = box_planes;

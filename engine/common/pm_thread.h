@@ -4,6 +4,6 @@
  * the main thread's -- and Quake 2's player state has members named pmove, so no header may carry this.
  * Pointers, not thread-local objects: GCC 16's native TLS took the address of a thread-local pmove through its
  * plain symbol (.refptr) for indexed writes, and a worker's velocity changes landed in the TLS template. A
- * thread-local pointer is only ever loaded whole (tools/check_tls_refptr.py checks the objects). */
+ * thread-local pointer is only ever loaded whole (engine/tools/check_tls_refptr.py checks the objects). */
 #define pmove (*pm_ctx)
 #define movevars (*mv_ctx)

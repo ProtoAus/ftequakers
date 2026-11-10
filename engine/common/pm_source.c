@@ -107,6 +107,7 @@ typedef struct
 static pms_state_t pms_main;
 static FTE_TLS pms_state_t *pms_ctx = &pms_main;
 size_t PMSrc_ThreadStateSize(void) { return sizeof(pms_state_t); }
+const void *PMSrc_MainState(void) { return &pms_main; }	//a worker starts from a copy (its latches)
 void PMSrc_ThreadState(void *state) { pms_ctx = state ? state : &pms_main; }
 #define pms_frametime				(pms_ctx->frametime)
 #define pms_bankgravity_observe		(pms_ctx->bankgravity_observe)
@@ -1383,7 +1384,7 @@ static int PMSrc_TryPlayerMoveCore (vec3_t firstdest, trace_t *firsttrace, qbool
 		   those lines are the ones that bury the interesting one.  A wall is a
 		   fraction at or near zero, or a startsolid.  Filtering to those turned a
 		   210 KB log with 190 contacts into the four lines that mattered. */
-		if (pm_dispprobe.ival && pm.fraction < 1 &&
+		if (pm_dispprobe.ival && pm.fraction < 1 && Sys_IsMainThread() &&	/* Patch 1467: its latches are the main thread's */
 		    (pmove.onground || pm_dispprobe.ival >= 2) &&
 		    (pm_dispprobe.ival != 4 || pm.fraction < 0.05 || pm.startsolid))
 		{
@@ -4146,6 +4147,8 @@ static void PMSrc_LadderProbe (void)
 	vec3_t flatforward, fwd;
 	char names[128];
 	float len;
+	if (!Sys_IsMainThread())
+		return;		/* Patch 1467: its accumulator is the main thread's */
 	int extra;
 
 	acc += pms_frametime;

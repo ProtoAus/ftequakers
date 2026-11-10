@@ -153,13 +153,15 @@ qboolean Sys_IsThread(void *thread);
 /* FTESurf Patch 1467: per-thread storage for tas_rollout_batch's workers -- POINTERS and plain flags only. GCC 16's
  * native TLS on mingw took a thread-local array's or struct's plain address (.refptr: the TLS template) for indexed
  * writes, so a thread-local pmove lost a worker's velocity changes; state lives in plain structs reached through
- * a thread-local pointer (pm_thread.h, com_bih_ts.h). tools/check_tls_refptr.py checks built objects. */
+ * a thread-local pointer (pm_thread.h, com_bih_ts.h). engine/tools/check_tls_refptr.py checks built objects. */
 #if defined(__GNUC__) || defined(__clang__)
 #define FTE_TLS __thread
+#define FTE_TLS_OK
 #elif defined(_MSC_VER)
 #define FTE_TLS __declspec(thread)
+#define FTE_TLS_OK
 #else
-#define FTE_TLS
+#define FTE_TLS		/* no per-thread storage: tas_rollout_batch keeps to one thread */
 #endif
 void *Sys_CreateThread(char *name, int (*func)(void *), void *args, int priority, int stacksize);
 void Sys_WaitOnThread(void *thread);

@@ -1,5 +1,31 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1467 -- tas_rollout_batch: a generation of rollouts on worker threads (sv_tas_rollout.inc, pmove.c, pm_source.c, pmovetst.c, com_bih.c, world.c, sv_user.c, pr_cmds.c)
+
+Problem: the surf planner (FTESurf P1449) rolls ~20 candidates a generation one at a time on the server's thread,
+about 12 ms a 500-tick candidate; Lex asked for the searches on all cores.
+
+Fix: tas_rollout_batch(player, rows, ticks, out, count, params, aimgain, aimface) validates and sets up on the main
+thread once, snapshots pmove and movevars, then runs the candidates on sv_tas_threads worker threads (6), each
+from the snapshot with its own aim point and lead (params). The movement code's state is a plain struct a thread
+reached through a thread-local POINTER (pm_thread.h: pmove and movevars, included last by pmove.c, pm_source.c,
+pmovetst.c and sv_user.c only, since Quake 2 structs have members named pmove; pm_source.c's per-command state,
+pmovetst.c's and world.c's box hulls, com_bih.c's clip flags and probe record via com_bih_ts.h); the main
+thread's pointers are the old globals, so nothing else changes. A worker binds its own, queries nearby entities and
+triggers with its own visit list (the shared edict stamps are the main thread's) and passes its own box; a
+candidate it cannot finish -- a model to load, a portal, a full visit list -- is rerun on the main thread as
+tas_rollout runs it. No threads with portals, Q2/Q3 BSP (CM_NativeTrace's statics), or without MULTITHREAD.
+
+Thread-local objects first: GCC 16's native TLS on mingw took a thread-local struct's plain .refptr address (the
+TLS template) for indexed writes, so air acceleration was lost on every thread -- the batch matched one-at-a-time
+exactly and both were wrong; a comparison with Patch 1466 and an in-function print found it.
+engine/tools/check_tls_refptr.py checks built objects: thread-local pointers and scalars only, no .refptr use.
+
+Measured (FTESurf rigs, surf_null, 60 candidates of 500 ticks from a placed state): 6 threads 3.76x against one at
+a time with the trace cache (4.20x without, 8 threads 4.35x), every output value and written-back row equal; the
+planner reached surf_null's ramps 9 and 10 on worker batches as on Patch 1466. Reviews: races (bih_probe_surf,
+the input thread's movevars), equivalence (the worker's out scratch), the pointer rework (low items only).
+
 ## Patch 1466 -- tas_rollout reports walls clipped on rides too, and its face aim takes a lead (sv_tas_rollout.inc, pr_cmds.c, server.h)
 
 Problem: P1449's contact kind 4 (a wall or ceiling clipped) was only set with no ramp under the body, so a ride
