@@ -1797,6 +1797,10 @@ void Renderer_Init(void)
 	Cvar_Register (&r_glsl_precache, GLRENDEREROPTIONS);
 	Cvar_Register (&r_glsl_warm, GLRENDEREROPTIONS);
 	Cvar_Register (&r_mapready_budget, GLRENDEREROPTIONS);
+	{
+		extern cvar_t gl_debugperf;
+		Cvar_Register (&gl_debugperf, GLRENDEREROPTIONS);
+	}
 	Cvar_Register (&r_halfrate, GRAPHICALNICETIES);
 #ifdef HAVE_LEGACY
 	Cvar_Register (&dpcompat_nopremulpics, GLRENDEREROPTIONS);
