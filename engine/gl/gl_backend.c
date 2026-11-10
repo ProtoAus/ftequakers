@@ -9636,7 +9636,7 @@ static unsigned int GLBE_BlendCertTake(glblendcert_t *take, int pass, const glbl
 static unsigned int GLBE_BlendCertCross(glblendcert_t *take, int pass, const glblendplane_t *planes,
 	glblendprojface_t *proj, const signed char *pair, signed char *verdict, unsigned int n)
 {
-	unsigned int i, j, idx, work = 0;
+	unsigned int i, j, idx, work = 0, facebox = bov_facebox;	// r_blendtrace counts the sort's proofs only
 	for (i = 0; i < n; i++)
 		for (j = i+1; j < n; j++)
 		{
@@ -9644,7 +9644,12 @@ static unsigned int GLBE_BlendCertCross(glblendcert_t *take, int pass, const glb
 			if (pair[idx] != 1 || planes[j].slot - planes[i].slot == j - i)
 				continue;
 			if (!pass && verdict[idx] == GLBLEND_PAIR_PENDING)
+			{
 				verdict[idx] = GLBE_BlendOverlapOrder(planes[i].mesh, &proj[i], planes[j].mesh, &proj[j], 1, &work);
+				bov_facebox = facebox;
+				if (work >= GLBLEND_OVERLAP_WORK)
+					return 0;	// the hint, not a proof
+			}
 			if (!pass && verdict[idx] == GLBLEND_ORDER_DISJOINT)
 				continue;
 			take->mesh[pass][0] = planes[j].mesh;
@@ -9846,7 +9851,7 @@ rebuild:
 		if (pick == stats->admitted)
 		{
 			passfail |= 1u << stats->pass;
-			if (certify && stats->pass)
+			if (certify && stats->pass && stats->cert < 0)
 				take.len[stats->pass-1] = GLBE_BlendCertTake(&take, stats->pass-1, planes, edges, pair, degree, stats->admitted);
 			if (stats->pass < 2) { stats->pass++; goto rebuild; }
 			stats->status = -2;
@@ -9868,7 +9873,7 @@ rebuild:
 		if (planes[to].slot - planes[from].slot != to - from)
 		{
 			passfail |= 1u << stats->pass;
-			if (certify && stats->pass)
+			if (certify && stats->pass && stats->cert < 0)
 				take.len[stats->pass-1] = GLBE_BlendCertCross(&take, stats->pass-1, planes, proj, pair, verdict, stats->admitted);
 			if (stats->pass < 2) { stats->pass++; goto rebuild; }
 			stats->status = -3;
