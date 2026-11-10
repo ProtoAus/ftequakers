@@ -289,6 +289,7 @@ typedef struct shaderpass_s {
 		T_GEN_REFLECTION,	//reflection image (mirror-as-fbo)
 		T_GEN_REFRACTION,	//refraction image (portal-as-fbo)
 		T_GEN_REFRACTIONDEPTH,	//refraction image (portal-as-fbo)
+		T_GEN_REFLECTIONDEPTH,	//FTESurf Patch 1475: the main view's reflection depth (r_captureparallax)
 		T_GEN_RIPPLEMAP,	//ripplemap image (water surface distortions-as-fbo)
 
 		T_GEN_SOURCECUBE,	//used for render-to-texture targets
@@ -479,6 +480,9 @@ typedef struct {
 		SP_M_INVMODELVIEW,
 		SP_M_CAPTUREFIX,	//FTESurf Patch 1245: this view's clip space to a reused capture's (identity when fresh)
 		SP_M_CAPTUREFIXREFL,	//FTESurf Patch 1474: the same for the reflection, which may be a frame apart
+		SP_M_CAPTURESHIFT,		//FTESurf Patch 1475: the eye's travel since the reused refraction rendered, in its clip space (0 fresh)
+		SP_M_CAPTURESHIFTREFL,	//and since the reused reflection did
+		SP_M_CAPTUREDEPTHREFL,	//the inverse of the projection the reflection rendered with (oblique), to read its depth
 
 		SP_RENDERTEXTURESCALE,	/*multiplier for currentrender->texcoord*/
 		SP_SOURCESIZE,			/*size of $sourcecolour*/

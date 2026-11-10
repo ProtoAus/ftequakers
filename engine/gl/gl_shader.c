@@ -3257,6 +3257,9 @@ struct shader_field_names_s shader_unif_names[] =
 	{"m_invmodelview",			SP_M_INVMODELVIEW},//inverted mv matrix.
 	{"m_capturefix",			SP_M_CAPTUREFIX},//FTESurf Patch 1245: clip space to a reused capture's
 	{"m_capturefixrefl",		SP_M_CAPTUREFIXREFL},//FTESurf Patch 1474: the reflection's
+	{"m_captureshift",		SP_M_CAPTURESHIFT},//FTESurf Patch 1475
+	{"m_captureshiftrefl",		SP_M_CAPTURESHIFTREFL},
+	{"m_capturedepthrefl",		SP_M_CAPTUREDEPTHREFL},
 /**///m_modelinv
 
 	/*viewer properties*/
@@ -4154,6 +4157,11 @@ static qboolean Shaderpass_MapGen (parsestate_t *ps, shaderpass_t *pass, char *t
 	{
 		shader->flags |= SHADER_HASREFRACT|SHADER_HASREFRACTDEPTH;
 		pass->texgen = T_GEN_REFRACTIONDEPTH;
+	}
+	else if (!Q_stricmp (tname, "$reflectiondepth"))	//FTESurf Patch 1475
+	{
+		shader->flags |= SHADER_HASREFLECT;
+		pass->texgen = T_GEN_REFLECTIONDEPTH;
 	}
 	else if (!Q_stricmp (tname, "$ripplemap"))
 	{
@@ -9554,6 +9562,7 @@ static char *Shader_DecomposeSubPass(char *o, shader_t *s, shaderpass_t *p, qboo
 	case T_GEN_REFLECTION:		sprintf(o, "map $reflection"); break;
 	case T_GEN_REFRACTION:		sprintf(o, "map $refraction"); break;
 	case T_GEN_REFRACTIONDEPTH:	sprintf(o, "map $refractiondepth"); break;
+	case T_GEN_REFLECTIONDEPTH:	sprintf(o, "map $reflectiondepth"); break;
 	case T_GEN_RIPPLEMAP:		sprintf(o, "map $ripplemap"); break;
 	case T_GEN_SOURCECUBE:		sprintf(o, "map $sourcecube"); break;
 	case T_GEN_GBUFFERCASE:		sprintf(o, "map $gbuffer%i ",p->texgen-T_GEN_GBUFFER0); break;

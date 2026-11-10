@@ -1667,6 +1667,7 @@ static qboolean GLR_PortalScreenRectAt(batch_t *batch, int level, srect_t *out)
 	return false;
 }
 
+float r_portalproj[16];	//FTESurf Patch 1475: the projection the last portal view rendered with (a mirror's is oblique)
 qboolean GLR_DrawPortal(batch_t *batch, batch_t **blist, batch_t *depthmasklist[2], int portaltype)
 {
 	entity_t *view, *surfent;
@@ -2232,6 +2233,7 @@ qboolean GLR_DrawPortal(batch_t *batch, batch_t **blist, batch_t *depthmasklist[
 	}
 
 
+	memcpy(r_portalproj, r_refdef.m_projection_std, sizeof(r_portalproj));
 	r_refdef = oldrefdef;
 	/* FTESurf Patch 208: restore THEN resolve, in that order -- the restore is
 	   what puts the parent's clip (or none) back in r_refdef, and this call is

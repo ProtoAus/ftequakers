@@ -10,6 +10,7 @@
 !!samps =DEPTH refractdepth=2
 !!samps =REFLECTCUBEMASK reflectcube
 !!samps =ANIMBUMP bumpanim:2DArray=3
+!!samps =PARALLAX reflectdepth=4
 !!samps =FLOW upper lower
 !!permu FOG
 
@@ -190,6 +191,37 @@ void main (void)
 #else
 	#define lstc stc
 #endif
+#if defined(FTE_CAPTUREPARALLAX) && !defined(SCREEN)
+	// FTESurf Patch 1475: a reused capture also moves by the eye's travel since it rendered (m_captureshift, in its
+	// clip space), scaled by surface depth over its content's depth there: c = t + s * t.w / (d - s.w). One step.
+#ifdef DEPTH
+	if (ctf.w > 0.5 && any(notEqual(m_captureshift, vec4(0.0))))
+	{
+		float pden = eyeDepth(texture2D(s_refractdepth, stc).r) - m_captureshift.w;
+		if (pden > 1.0)
+		{
+			vec4 pc = ctf + m_captureshift * (ctf.w / pden);
+			stc = (1.0 + pc.xy / pc.w) * 0.5;
+		}
+	}
+#endif
+#ifdef PARALLAX
+	if (ltf.w > 0.5 && any(notEqual(m_captureshiftrefl, vec4(0.0))))
+	{
+		float lz = texture2D(s_reflectdepth, lstc).r;	// 1: nothing drawn there, or sky -- far, no shift
+		vec4 lc = m_capturedepthrefl * vec4(lstc * 2.0 - 1.0, lz * 2.0 - 1.0, 1.0);
+		if (lz < 0.99999 && abs(lc.w) > 1e-6)
+		{
+			float pden = -lc.z / lc.w - m_captureshiftrefl.w;
+			if (pden > 1.0)
+			{
+				vec4 pc = ltf + m_captureshiftrefl * (ltf.w / pden);
+				lstc = (1.0 + pc.xy / pc.w) * 0.5;
+			}
+		}
+	}
+#endif
+#endif
 #ifdef ANIMBUMP
 	int bumplayers = textureSize(s_bumpanim, 0).z;
 	float bumplayer = bumplayers > 0 ? floor(mod(e_time * float(ANIMBUMP), float(bumplayers))) : 0.0;
@@ -238,6 +270,9 @@ void main (void)
 	float surfaceDepth = eyeDepth(gl_FragCoord.z);
 #if defined(FTE_CAPTUREFIX) && !defined(SCREEN)
 	surfaceDepth *= ctf.w / tf.w;	// along the capture's forward, as s_refractdepth is (exactly 1 when fresh)
+#ifdef FTE_CAPTUREPARALLAX
+	surfaceDepth += m_captureshift.w;	// P1475: and from where it rendered (0 fresh, or r_captureparallax 0)
+#endif
 #endif
 	// P877: 1/depth is affine across the plane in screen space, so this gives the surface's depth
 	// on the refracted sample's own ray, the ray Source's alpha was computed for (water_ps2x_helper.h:161).

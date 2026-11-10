@@ -1617,6 +1617,9 @@ static const char *glsl_hdrs[] =
 				"#define FTE_CAPTUREFIX 1\n"
 				"uniform mat4 m_capturefixrefl;\n"	//FTESurf Patch 1474
 				"#define FTE_CAPTUREFIX2 1\n"
+				"uniform vec4 m_captureshift, m_captureshiftrefl;\n"	//FTESurf Patch 1475
+				"uniform mat4 m_capturedepthrefl;\n"
+				"#define FTE_CAPTUREPARALLAX 1\n"
 				"uniform float e_alphacoverage;\n"	//FTESurf Patch 1262
 				"#define FTE_ALPHACOVERAGE 1\n"
 
