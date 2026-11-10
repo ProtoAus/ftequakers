@@ -3395,4 +3395,13 @@ int INS_AppCommand(LPARAM lParam)
 	}
 	return false;
 }
+//FTESurf Patch 1473: r_framewarp's late look at the mouse -- dispatch only the queued WM_INPUT messages, through the
+//window procedure as the frame's own pump would; keys and window messages wait for that pump.
+void INS_PumpRawMouse(void)
+{
+	MSG msg;
+	int n;
+	for (n = 0; n < 256 && PeekMessage(&msg, NULL, WM_INPUT, WM_INPUT, PM_REMOVE); n++)
+		DispatchMessage(&msg);
+}
 #endif

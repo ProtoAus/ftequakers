@@ -440,6 +440,8 @@ cvar_t r_blendsort_boxes = CVARD ("r_blendsort_boxes", "1", "FTESurf Patch 1457:
 cvar_t r_blendsort_lazy = CVARD ("r_blendsort_lazy", "1", "FTESurf Patch 1463: r_blendsort 2's second pass asks a strictly ordered pair whether the faces overlap only when the sort needs that edge to choose the next face, not for every pair up front; the order is the same unless the proof budget runs out during that pass. 0: every pair up front.");
 cvar_t r_blendsort_clipcull = CVARD ("r_blendsort_clipcull", "1", "FTESurf Patch 1465: r_blendsort 2 leaves out a translucent static-world (or identity brush entity) face whose every vertex is beyond one plane of the clip volume: off screen, or past a water capture's clip plane. It draws nothing; kept, it joins the plane graph. 0: keep them.");
 cvar_t r_blendsort_cert = CVARD ("r_blendsort_cert", "1", "FTESurf Patch 1465: when r_blendsort 2's sort fails it keeps why passes 1 and 2 failed (a cycle, or an edge that must cross an unsorted draw); while both still hold in a later view the sort is skipped, as it would end in the same unsorted order. 0: sort every view; 2: sort anyway and report a certified view where a pass did not fail.");
+cvar_t r_framewarp = CVARFD ("r_framewarp", "0", CVAR_ARCHIVE, "FTESurf Patch 1473 (test): just before the HUD, turn the drawn view by the mouse movement that arrived while it was being drawn, like Reflex 2's frame warp but rotation only. Visual only: the angles sent to the server are unchanged. The screen's edges smear on fast turns. Needs m_filter 0 and m_accel 0. 0 off, 1 on.");
+cvar_t r_framewarp_test = CVARFD ("r_framewarp_test", "0", 0, "FTESurf Patch 1473: with r_framewarp 1, warp every frame by this many degrees of yaw instead of the mouse's, to compare against a real turn.");
 cvar_t r_blendsort = CVARFD ("r_blendsort", "1", CVAR_ARCHIVE,
 	"Blended surface ordering.\n"
 	"0: emit order.\n"
@@ -1448,6 +1450,8 @@ void Renderer_Init(void)
 	Cvar_Register (&r_blendsort_lazy, GLRENDEREROPTIONS);	//FTESurf Patch 1463
 	Cvar_Register (&r_blendsort_clipcull, GLRENDEREROPTIONS);	//FTESurf Patch 1465
 	Cvar_Register (&r_blendsort_cert, GLRENDEREROPTIONS);	//FTESurf Patch 1465
+	Cvar_Register (&r_framewarp, GLRENDEREROPTIONS);	//FTESurf Patch 1473
+	Cvar_Register (&r_framewarp_test, GLRENDEREROPTIONS);
 #ifdef GLQUAKE
 	Cmd_AddCommandD("r_blendtrace", GLBE_BlendTrace_f, "Prints anonymous view/command/plane diagnostics for the next main-view r_blendsort 2 pass. One-shot; does not change rendering.");
 #endif

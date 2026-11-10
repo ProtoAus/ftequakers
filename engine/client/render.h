@@ -840,6 +840,7 @@ extern	cvar_t	r_blendsort_boxes;	//FTESurf Patch 1457
 extern	cvar_t	r_blendsort_lazy;	//FTESurf Patch 1463
 extern	cvar_t	r_blendsort_clipcull;	//FTESurf Patch 1465
 extern	cvar_t	r_blendsort_cert;	//FTESurf Patch 1465
+extern	cvar_t	r_framewarp, r_framewarp_test;	//FTESurf Patch 1473
 void GLBE_BlendCentresFlush(void);	//FTESurf Patch 1409
 extern	qboolean r_voidview;
 /*

@@ -1429,6 +1429,8 @@ void Key_SetBindMap(int *bindmaps);
 
 void CL_UseIndepPhysics(qboolean allow);
 float CL_MaxFPSFloor(float fps);	//FTESurf Patch 1472
+qboolean IN_PendingMouseTurn(int pnum, float *dyaw, float *dpitch);	//FTESurf Patch 1473
+void INS_PumpRawMouse(void);	//FTESurf Patch 1473, in_win.c only
 extern qboolean runningindepphys;
 qboolean CL_AllowIndependantSendCmd(qboolean allow);	//returns previous state.
 

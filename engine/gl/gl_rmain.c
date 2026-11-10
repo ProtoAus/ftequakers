@@ -2749,6 +2749,110 @@ qboolean R_RenderScene_Cubemap(void)
 }
 #endif
 
+//FTESurf Patch 1473: r_framewarp. A turn about the eye maps every view ray to a ray, so the turn the queued mouse
+//events will make is one projective map of the drawn view: a new-view ray (x+p8)/p0, (y+p9)/p5, forward 1, into the
+//drawn view's axes and back through p0/p5/p8/p9. Drawn as a grid of quads, linear inside each (exact at the corners).
+#define FRAMEWARP_GX 32
+#define FRAMEWARP_GY 20
+static void GLR_FrameWarp(void)
+{
+	float dyaw = 0, dpitch = 0;
+	const float *p = r_refdef.m_projection_std;
+	vec3_t ang, f0, r0, u0, f1, r1, u1, d;
+	vec2_t pts[FRAMEWARP_GX+1][FRAMEWARP_GY+1], tc[FRAMEWARP_GX+1][FRAMEWARP_GY+1], qp[4], qt[4];
+	vec4_t rgba[4];
+	int gx, gy, k, x0, y0, w, h;
+	float nx, ny, vx, vy, ox, oy, oz;
+	GLint samples = 0;
+	texid_t tex;
+	static shader_t *sh;
+	extern cvar_t r_projection;
+
+	if (!r_framewarp.ival || r_refdef.recurse || !r_refdef.useperspective || (r_refdef.flags & RDF_NOWORLDMODEL) ||
+		*r_refdef.rt_destcolour[0].texname || *r_refdef.rt_depth.texname || r_refdef.stereomethod != STEREO_OFF ||
+		r_projection.ival || !p[0] || !p[5] || cls.demoplayback || cls.state != ca_active)
+		return;
+	if (r_framewarp_test.value)
+		dyaw = r_framewarp_test.value;
+	else
+	{
+#ifdef _WIN32
+		INS_PumpRawMouse();
+#endif
+		if (!IN_PendingMouseTurn(0, &dyaw, &dpitch))
+			return;
+	}
+	VectorCopy(r_refdef.viewangles, ang);
+	if (dpitch)
+	{	//the clamp the next frame applies (IN_Journal_CheckIdentity's abstention, CL_ClampPitch)
+		dpitch = bound(cl.minpitch - ang[PITCH], dpitch, cl.maxpitch - ang[PITCH]);
+	}
+	if (fabs(dyaw) < 0.0005 && fabs(dpitch) < 0.0005)
+		return;
+	AngleVectors(ang, f0, r0, u0);
+	ang[PITCH] += dpitch;
+	ang[YAW] += dyaw;
+	AngleVectors(ang, f1, r1, u1);
+
+	qglGetIntegerv(0x80A9 /*GL_SAMPLES*/, &samples);
+	if (samples > 1)
+		return;	//a multisampled default framebuffer cannot be copied from
+	x0 = r_refdef.pxrect.x;
+	w = r_refdef.pxrect.width;
+	h = r_refdef.pxrect.height;
+	y0 = r_refdef.pxrect.maxheight - (r_refdef.pxrect.y + h);
+	if (w <= 0 || h <= 0)
+		return;
+	if (R2D_Flush)
+		R2D_Flush();
+	tex = R2D_RT_Configure("rt/$framewarp", w, h, PTI_RGBA8, RT_IMAGEFLAGS);
+	if (!TEXVALID(tex))
+		return;
+	GL_MTBind(0, GL_TEXTURE_2D, tex);
+	qglCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, x0, y0, w, h);
+	if (!sh)
+		sh = R_RegisterShader("framewarp", SUF_NONE,
+			"{\n"
+				"program default2d\n"
+				"{\n"
+					"map $rt:rt/$framewarp\n"
+				"}\n"
+			"}\n");
+
+	for (gx = 0; gx <= FRAMEWARP_GX; gx++)
+		for (gy = 0; gy <= FRAMEWARP_GY; gy++)
+		{
+			nx = -1 + 2.0f*gx/FRAMEWARP_GX;
+			ny = 1 - 2.0f*gy/FRAMEWARP_GY;	//screen top first
+			pts[gx][gy][0] = r_refdef.vrect.x + r_refdef.vrect.width * gx / (float)FRAMEWARP_GX;
+			pts[gx][gy][1] = r_refdef.vrect.y + r_refdef.vrect.height * gy / (float)FRAMEWARP_GY;
+			vx = (nx + p[8]) / p[0];
+			vy = (ny + p[9]) / p[5];
+			for (k = 0; k < 3; k++)
+				d[k] = vx*r1[k] + vy*u1[k] + f1[k];
+			ox = DotProduct(d, r0);
+			oy = DotProduct(d, u0);
+			oz = DotProduct(d, f0);
+			if (oz < 0.001f)
+				oz = 0.001f;	//behind the drawn view: the clamp smears the edge
+			tc[gx][gy][0] = (p[0]*ox/oz - p[8] + 1) * 0.5f;
+			tc[gx][gy][1] = (p[5]*oy/oz - p[9] + 1) * 0.5f;
+		}
+	for (k = 0; k < 4; k++)
+		Vector4Set(rgba[k], 1, 1, 1, 1);
+	for (gx = 0; gx < FRAMEWARP_GX; gx++)
+		for (gy = 0; gy < FRAMEWARP_GY; gy++)
+		{
+			Vector2Copy(pts[gx][gy], qp[0]);	Vector2Copy(tc[gx][gy], qt[0]);
+			Vector2Copy(pts[gx+1][gy], qp[1]);	Vector2Copy(tc[gx+1][gy], qt[1]);
+			Vector2Copy(pts[gx+1][gy+1], qp[2]);	Vector2Copy(tc[gx+1][gy+1], qt[2]);
+			Vector2Copy(pts[gx][gy+1], qp[3]);	Vector2Copy(tc[gx][gy+1], qt[3]);
+			R2D_Image2dQuad((const vec2_t*)qp, (const vec2_t*)qt, (const vec4_t*)rgba, sh);
+		}
+	if (R2D_Flush)
+		R2D_Flush();
+}
+
 texid_t R_RenderPostProcess (texid_t sourcetex, texid_t sourcedepth, int type, shader_t *shader, char *restexname)
 {
 	if (r_refdef.flags & type)
@@ -3325,6 +3429,7 @@ void GLR_RenderView (void)
 
 	if (gl_motionblur.value>0 && gl_motionblur.value < 1 && qglCopyTexImage2D)
 		R_RenderMotionBlur();
+	GLR_FrameWarp();	//FTESurf Patch 1473
 
 	if (gl_screenangle.value)
 		GL_Set2D (false);	//make sure any hud stuff is rotated properly.

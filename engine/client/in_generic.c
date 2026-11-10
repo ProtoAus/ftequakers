@@ -1752,6 +1752,26 @@ static unsigned int in_jrn_vskip;		/*frames governed by nothing: see the abstent
 static unsigned int in_jrn_vbad;		/*frames where at least one axis broke -- the number a gate wants, since a whole-angle event breaks both*/
 static qboolean in_jrn_ran;			/*a journal has been opened in this process, so the counters below are measurements rather than unknowns*/
 
+//FTESurf Patch 1473: the turn the mouse events queued since the last drain will make, by P293's identity (below);
+//false where it does not hold. Reads the queue and drains nothing, so the journal and the angles are untouched.
+qboolean IN_PendingMouseTurn(int pnum, float *dyaw, float *dpitch)
+{
+	double dx = 0, dy = 0;
+	float sens = sensitivity.value * in_sensitivityscale;
+	int i;
+	if (pnum != 0 || cl.splitclients > 1 || m_filter.value || m_accel.value || !sens || Key_MouseShouldBeFree())
+		return false;
+	for (i = events_used; i != events_avail; i++)
+		if (eventlist[i & (EVENTQUEUELENGTH-1)].type == IEV_MOUSEDELTA)
+		{
+			dx += eventlist[i & (EVENTQUEUELENGTH-1)].mouse.x;
+			dy += eventlist[i & (EVENTQUEUELENGTH-1)].mouse.y;
+		}
+	*dyaw = -m_yaw.value * sens * (r_xflip.ival ? -dx : dx);
+	*dpitch = m_pitch.value * sens * dy;
+	return true;
+}
+
 static void IN_Journal_CheckIdentity(const float *viewangles)
 {
 	float sens, pred, got, eps;
