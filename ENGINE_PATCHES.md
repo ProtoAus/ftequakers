@@ -1,5 +1,21 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1476 -- tas_rollout's flight steering can weave wider: the AIMWIDE row bit (sv_tas_rollout.inc)
+
+Problem: AIM (Patch 1449) sets each tick's strafe side from which side of the heading the aim bearing lies, so on the
+bearing the side flips every tick -- the TAS planner's flights strafed left-right a frame at a time; Lex: it reads
+badly, "more realistic to be a bit wider, slightly less accuracy for visuals".
+
+Fix: an opt-in row bit, AIMWIDE (4096), with AIM: the side holds until the bearing is SV_TAS_AIMWIDE_DEG (3) past the
+other way and the side has been held SV_TAS_AIMWIDE_TICKS (8); held against the error the command is 30, the most
+speed. The error is read back from SV_TASRollAim's command (|q| = 30 + 30 min(1, |err| / gain)). The hold is per
+rollout (locals of SV_TASRollRun, so worker threads keep their own); off AIM it resets. AIMWIDE without AIM is refused
+like AIM without FOLLOW. Without the bit nothing changes.
+
+Measured (FTESurf rig, surf_null from a placed state, the played line's strafe-side flips a stretch): without 1, 12,
+27, 46 (then stuck); with 5, 4, 23, 8, 1, and the stretches' energies as close to the replay's or closer. One review: the hold's
+threshold is capped at half the aim gain (the error reads back capped at the gain).
+
 ## Patch 1472 -- no frame cap below the Source mover's tick rate while playing (cl_main.c, sys_win.c, client.h)
 
 Problem: below the physics tick rate (1/pm_ticrate: 66.67 surf, 100 bhop) one usercmd covers two of pm_source.c's whole
