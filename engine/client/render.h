@@ -284,6 +284,7 @@ int R_ViewStatsKind(void);
 void R_ViewStatsEnter(int depth, double *t0, int *d0);
 void R_ViewStatsLeave(int depth, double t0, int d0, int kind);
 extern unsigned int r_vs_frames, r_vs_views[R_MAX_RECURSE], r_vs_skydrawn, r_vs_skyskipped, r_vs_entskipped;
+extern unsigned int r_vs_capviews, r_vs_caphist[4];	//FTESurf Patch 1474: water/glass captures in this top-level view; views with 0..3+
 #define RDFD_FOV 1
 typedef struct refdef_s
 {

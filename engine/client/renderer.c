@@ -177,6 +177,7 @@ cvar_t r_refract_fbo						= CVARD ("r_refract_fbo", "1", "Use an fbo for refract
 //FTESurf Patch 850: the entity list before the top-level view's world walk added its own props and
 //statics. A nested view sees those and its own walk's, not the outer views' ones again.
 int r_visdynamic;
+unsigned int r_vs_capviews, r_vs_caphist[4];
 unsigned int r_vs_frames, r_vs_views[R_MAX_RECURSE], r_vs_skydrawn, r_vs_skyskipped, r_vs_entskipped;
 unsigned int r_vs_skycam;	//FTESurf Patch 880: 3D skies drawn from the sky camera's vis (gl_warp.c)
 unsigned int r_vs_copies;	//FTESurf Patch 878: $currentrender screen copies in top-level views (gl_backend.c)
@@ -225,6 +226,8 @@ static void R_ViewStats_f(void)
 	Con_Printf("; 3D skies drawn %.2f skipped %.2f; nested entities passed over %.1f; 3D skies from the sky camera %.2f; screen copies %.2f (%.2f Mpx)\n",
 		r_vs_skydrawn / (double)f, r_vs_skyskipped / (double)f, r_vs_entskipped / (double)f, r_vs_skycam / (double)f, r_vs_copies / (double)f,
 		r_vs_copypixels / f / 1e6);
+	Con_Printf("r_viewstats: top-level views with 0/1/2/3+ water or glass captures: %u %u %u %u\n",
+		r_vs_caphist[0], r_vs_caphist[1], r_vs_caphist[2], r_vs_caphist[3]);
 	Con_Printf("r_viewstats: cpu self ms / draw calls:");
 	for (i = 0; i < R_VS_KINDS; i++)
 		Con_Printf(" %s %.3f/%.0f", r_vs_kindname[i], r_vs_ms[i] / f, r_vs_draws[i] / (double)f);
@@ -232,6 +235,7 @@ static void R_ViewStats_f(void)
 	r_vs_frames = r_vs_skydrawn = r_vs_skyskipped = r_vs_entskipped = r_vs_skycam = r_vs_copies = 0;
 	r_vs_copypixels = 0;
 	memset(r_vs_views, 0, sizeof(r_vs_views));
+	memset(r_vs_caphist, 0, sizeof(r_vs_caphist));
 	memset(r_vs_ms, 0, sizeof(r_vs_ms));
 	memset(r_vs_draws, 0, sizeof(r_vs_draws));
 }

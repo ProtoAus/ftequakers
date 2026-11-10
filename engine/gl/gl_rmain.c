@@ -724,6 +724,9 @@ static void R_RenderScene_Internal(void)
 		r_refdef.visskipfrom = r_refdef.visskipto = 0;
 		r_refdef.capturekind = 0;
 		r_refdef.insideportal = false;
+		if (r_vs_frames)
+			r_vs_caphist[min(r_vs_capviews, 3)]++;	//the last top-level view's, now it is over
+		r_vs_capviews = 0;
 		r_vs_frames++;
 		r_topviews++;
 	}
@@ -747,6 +750,8 @@ static void R_RenderScene_Internal(void)
 	}
 	if (r_refdef.recurse < R_MAX_RECURSE)
 		r_vs_views[r_refdef.recurse]++;
+	if (r_refdef.recurse == 1 && r_refdef.capturekind >= 1 && r_refdef.capturekind <= 3)
+		r_vs_capviews++;	//a reflection or refraction capture of the top-level view
 	TRACE(("dbg: calling R_SetFrustrum\n"));
 	if (!r_refdef.recurse)
 		R_SetFrustum (r_refdef.m_projection_std, r_refdef.m_view);
