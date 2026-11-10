@@ -26,6 +26,8 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include "pr_common.h"
 #include "sv_held_session.h"
 #include "sv_tas.h"
+#include "pm_thread.h"	//Patch 1467: last -- pmove and movevars are this thread's
+#include "com_bih_ts.h"	//Patch 1467: the BIH clip flags and probe record, a worker binds its own
 
 #define Q2EDICT_NUM(i) (q2edict_t*)((char *)ge->edicts+i*ge->edict_size)
 #define Q2NUM_FOR_EDICT(ent) (((char *)ent - (char *)ge->edicts) / ge->edict_size)
@@ -7840,7 +7842,7 @@ float V_CalcRoll (vec3_t angles, vec3_t velocity)
 
 //============================================================================
 
-FTE_TLS vec3_t	pmove_mins, pmove_maxs;	//Patch 1467: per thread
+vec3_t	pmove_mins, pmove_maxs;
 
 static qboolean AddEntityToPmove(world_t *w, wedict_t *player, wedict_t *check)
 {
@@ -8164,7 +8166,7 @@ void AddAllLinksToPmove (world_t *w, wedict_t *player)
  * in its own list instead of the shared stamp gridareasequence; no portals (a batch refuses maps with any). More
  * visits than the list holds leaves the candidate to the main thread. */
 #define PMLOCAL_SEEN 1024
-static void AddLinksToPmoveLocal (world_t *w, wedict_t *player, areagridlink_t *node, wedict_t **seen, int *nseen)
+static void AddLinksToPmoveLocal (world_t *w, wedict_t *player, areagridlink_t *node, wedict_t **seen, int *nseen, const vec3_t mins, const vec3_t maxs)
 {
 	link_t		*l, *next;
 	wedict_t	*check;
@@ -8202,8 +8204,8 @@ static void AddLinksToPmoveLocal (world_t *w, wedict_t *player, areagridlink_t *
 			)
 		{
 			for (i=0 ; i<3 ; i++)
-				if (check->v->absmin[i] > pmove_maxs[i]
-				|| check->v->absmax[i] < pmove_mins[i])
+				if (check->v->absmin[i] > maxs[i]
+				|| check->v->absmax[i] < mins[i])
 					break;
 			if (i != 3)
 				continue;
@@ -8213,16 +8215,16 @@ static void AddLinksToPmoveLocal (world_t *w, wedict_t *player, areagridlink_t *
 		}
 	}
 }
-void AddAllLinksToPmoveLocal (world_t *w, wedict_t *player)
+void AddAllLinksToPmoveLocal (world_t *w, wedict_t *player, const vec3_t mins, const vec3_t maxs)
 {
 	wedict_t *seen[PMLOCAL_SEEN];
 	int nseen = 0;
 	int ming[2], maxg[2], g[2];
-	CALCAREAGRIDBOUNDS(w, pmove_mins, pmove_maxs);
-	AddLinksToPmoveLocal(w, player, &w->jumboarea, seen, &nseen);
+	CALCAREAGRIDBOUNDS(w, mins, maxs);
+	AddLinksToPmoveLocal(w, player, &w->jumboarea, seen, &nseen, mins, maxs);
 	for (g[0] = ming[0]; g[0] < maxg[0]; g[0]++)
 		for (g[1] = ming[1]; g[1] < maxg[1]; g[1]++)
-			AddLinksToPmoveLocal(w, player, &w->gridareas[g[0] + g[1]*w->gridsize[0]], seen, &nseen);
+			AddLinksToPmoveLocal(w, player, &w->gridareas[g[0] + g[1]*w->gridsize[0]], seen, &nseen, mins, maxs);
 }
 #else
 /*

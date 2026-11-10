@@ -95,9 +95,20 @@ HULL BOXES
 */
 
 
-static	FTE_TLS hull_t		box_hull;		//Patch 1467: per thread, World_InitBoxHull on each
-static	FTE_TLS mclipnode_t	box_clipnodes[6];
-static	FTE_TLS mplane_t	box_planes[6];
+//Patch 1467: one a thread (a tas_rollout_batch worker binds its own; World_InitBoxHull on each)
+typedef struct
+{
+	hull_t		box_hull;
+	mclipnode_t	box_clipnodes[6];
+	mplane_t	box_planes[6];
+} wbox_state_t;
+static wbox_state_t wbox_main;
+static FTE_TLS wbox_state_t *wbox_ctx = &wbox_main;
+size_t World_ThreadStateSize(void) { return sizeof(wbox_state_t); }
+void World_ThreadState(void *state) { wbox_ctx = state ? state : &wbox_main; }
+#define box_hull		(wbox_ctx->box_hull)
+#define box_clipnodes	(wbox_ctx->box_clipnodes)
+#define box_planes		(wbox_ctx->box_planes)
 
 /*
 ===================

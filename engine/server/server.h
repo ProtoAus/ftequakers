@@ -1501,7 +1501,7 @@ void SV_TASInput(edict_t *e, unsigned int slot, unsigned int token, unsigned int
 float SV_TASTape(edict_t *e, unsigned int op, float a, float b, const vec3_t moves, const vec3_t angles, float buttons);
 int SV_TASRollout(edict_t *e, float *in, int n, float *out, const float *aim, float aimgain, const float *aimn, float aimlead);
 int SV_TASRolloutBatch(edict_t *e, float *in, int n, float *out, int count, float *params, float aimgain, const float *aimn);	//FTESurf Patch 1467
-void AddAllLinksToPmoveLocal (world_t *w, wedict_t *player);	//FTESurf Patch 1467	//FTESurf Patch 1443 (P1449: FOLLOW/PITCHV/AIM rows are written back; P1466: WALLBIT rows too, the bit cleared)
+void AddAllLinksToPmoveLocal (world_t *w, wedict_t *player, const vec3_t mins, const vec3_t maxs);	//FTESurf Patch 1467	//FTESurf Patch 1443 (P1449: FOLLOW/PITCHV/AIM rows are written back; P1466: WALLBIT rows too, the bit cleared)
 void SV_FS_ResetFieldCaches(void);	//FTESurf P139: drop the board/ramp evalc_t caches; MUST run on every progs load
 //FTESurf Patch 346: the pin -- one name table, one fill order, one text form.
 extern const char *sv_pmpin_names[SV_PMPIN_COUNT];
@@ -1820,7 +1820,7 @@ void SV_CheckTimer(void);
 
 void SV_LogPlayer(client_t *cl, char *msg);
 
-extern FTE_TLS vec3_t pmove_mins, pmove_maxs;	//abs min/max extents (Patch 1467: per thread)
+extern vec3_t pmove_mins, pmove_maxs;	//abs min/max extents (a tas_rollout_batch worker passes its own box)
 #ifdef USEAREAGRID
 void AddAllLinksToPmove (world_t *w, wedict_t *player);
 #else

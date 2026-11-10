@@ -12,7 +12,7 @@ static int Held_TrajectoryContext(const held_record_t *file, const held_record_t
 #include <errno.h>
 
 static held_physical_t *held_physical_owner;
-extern FTE_TLS int bih_sourceclip, bih_phybrushes, bih_phyfix;	//Patch 1467: per thread
+#include "com_bih_ts.h"	//bih_sourceclip, bih_phybrushes, bih_phyfix (Patch 1467: a thread's)
 static int Held_InputWhite(unsigned char c)
 {
 	return c == ' ' || (c >= '\t' && c <= '\r');

@@ -360,11 +360,20 @@ float PMSrc_ClipRenderEye(float rawheight, float worldlimit, float renderfeet);	
 #define MOVEFLAG_QWEDGEBOX						0x00010000	//calculate edgefriction using tracebox and a buggy start pos
 #define MOVEFLAG_QWCOMPAT						(MOVEFLAG_NOGRAVITYONGROUND|MOVEFLAG_QWEDGEBOX)
 
-extern	FTE_TLS movevars_t		movevars;	//Patch 1467: per thread
-extern	FTE_TLS playermove_t	pmove;
-extern	FTE_TLS int				pm_threadabort;	//Patch 1467: a worker met something only the main thread may do (a model load)
-void PM_PrepareThreads(void);				//Patch 1467: main thread, before workers move: lazy lookups done
+extern	movevars_t		movevars;
+extern	playermove_t	pmove;
+//Patch 1467: the movement code reads pmove and movevars through these (pm_thread.h): the globals above unless
+//a tas_rollout_batch worker bound its own
+extern	FTE_TLS playermove_t	*pm_ctx;
+extern	FTE_TLS movevars_t		*mv_ctx;
+extern	FTE_TLS int				pm_threadabort;	//a worker met something only the main thread may do (a model load)
+void PM_PrepareThreads(void);				//main thread, before workers move: lazy lookups done
 void PM_InitBoxHull(void);
+void PM_ThreadBind(playermove_t *pm, movevars_t *mv);	//NULL, NULL: the globals again
+size_t PM_ThreadStateSize(void);			//pmovetst.c's box hull and carve state
+void PM_ThreadState(void *state);			//NULL: the main one
+size_t PMSrc_ThreadStateSize(void);			//pm_source.c's per-command state
+void PMSrc_ThreadState(void *state);
 
 /* Optional pre-input edits. Unselected fields retain their baseline values.
    This is a mover boundary, not an acknowledgement or a full-state restore. */

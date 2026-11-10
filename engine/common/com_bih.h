@@ -145,6 +145,7 @@ unsigned int BIH_HeldAirBoxTest(unsigned int *checks);
 #endif
 void BIH_CollisionChanged(void);	//Patch 1266: a tree or a model it may nest was built or freed
 void BIH_TraceStats_f(void);		//Patch 1266: print and reset the trace cache's counters
+#include "com_bih_ts.h"	//Patch 1467: the probe record, a thread's
 extern int bih_probe_readers;		//Patch 1266: nonzero while a caller reads the probe record; traces skip the cache
 void BIH_BuildAlias (model_t *mod, struct galiasinfo_s *meshes);
 
@@ -158,15 +159,6 @@ void BIH_ProbeReport (const trace_t *t, const char *tag);
 //print every tick (pm_dispprobe 2 does; a surfer clips every single tick).
 //Patch 258 declared these as bare externs inside pm_source.c; they are here now
 //so the two readers cannot drift apart.
-extern FTE_TLS int			bih_probe_plane;	/*0 face, 1 back slab, 2-4 in-plane edge, 5-13 bevel, 100-105 axial, -1 not a triangle*/
-extern FTE_TLS int			bih_probe_kind;		/*0 nothing, 1 BIH_TRIANGLE, 2 BIH_BRUSH, 3 BIH_PATCHBRUSH*/
-extern FTE_TLS index_t		bih_probe_idx[3];
-extern FTE_TLS model_t	   *bih_probe_model;	/*NULL = world/top level, else the submodel (the prop)*/
-extern FTE_TLS vec3_t		bih_probe_norm;
-extern FTE_TLS vec3_t		bih_probe_tri[3];
-extern FTE_TLS vec3_t		bih_probe_modelorg;
-extern FTE_TLS unsigned int	bih_probe_contents;
-extern FTE_TLS unsigned int	bih_probe_seq;
 
 /* Native artifact ownership. Epochs are volatile, never recording fields.
  * Module NULL selects the running engine; code is then NULL. Main thread only. */

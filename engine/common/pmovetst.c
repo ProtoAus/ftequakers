@@ -18,14 +18,32 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 */
 #include "quakedef.h"
+#include "pm_thread.h"
 
 static qboolean PM_TransformedHullCheck (model_t *model, framestate_t *framestate, vec3_t start, vec3_t end, vec3_t mins, vec3_t maxs, trace_t *trace, vec3_t origin, vec3_t angles, float scale);
 extern cvar_t pm_portalcsg_scanall;	//FTESurf Patch 283, defined in common.c
 extern cvar_t pm_skipent_portals;	//FTESurf Patch 283, defined in common.c
 int Q1BSP_HullPointContents(hull_t *hull, vec3_t p);
-static	FTE_TLS hull_t		box_hull;		//Patch 1467: per thread, PM_InitBoxHull on each
-static	FTE_TLS mclipnode_t	box_clipnodes[6];
-static	FTE_TLS mplane_t	box_planes[6];
+//Patch 1467: one a thread (a tas_rollout_batch worker binds its own; PM_InitBoxHull on each)
+typedef struct
+{
+	hull_t		box_hull;
+	mclipnode_t	box_clipnodes[6];
+	mplane_t	box_planes[6];
+	float		carveexit_frac;		// Patch 758: where PM_PortalCSG stopped at plane 0, see PM_CarveExitRest
+	vec3_t		carveexit_dir;		// ...and the door's forward, which the rest starts 1/16 along
+	int			carveexit_depth;
+} pmt_state_t;
+static pmt_state_t pmt_main;
+static FTE_TLS pmt_state_t *pmt_ctx = &pmt_main;
+size_t PM_ThreadStateSize(void) { return sizeof(pmt_state_t); }
+void PM_ThreadState(void *state) { pmt_ctx = state ? state : &pmt_main; }
+#define box_hull			(pmt_ctx->box_hull)
+#define box_clipnodes		(pmt_ctx->box_clipnodes)
+#define box_planes			(pmt_ctx->box_planes)
+#define pm_carveexit_frac	(pmt_ctx->carveexit_frac)
+#define pm_carveexit_dir	(pmt_ctx->carveexit_dir)
+#define pm_carveexit_depth	(pmt_ctx->carveexit_depth)
 FTE_TLS int pm_threadabort;
 static cvar_t *pm_propcol;	//sv_prop_collision, looked up on the main thread (PM_PrepareThreads or the first trace)
 void PM_PrepareThreads(void)
@@ -44,6 +62,7 @@ can just be stored out and get a proper hull_t structure.
 */
 void PM_InitBoxHull (void)
 {
+	pm_carveexit_frac = -1;	//Patch 1467: a worker's state starts zeroed
 	int		i;
 	int		side;
 
@@ -566,9 +585,6 @@ static void PM_PortalCSGReport(int entnum, int plane, float miss)
 		entnum, edge[plane], -miss);
 }
 
-static FTE_TLS float pm_carveexit_frac = -1;	// Patch 758: where PM_PortalCSG stopped at plane 0, see PM_CarveExitRest
-static FTE_TLS vec3_t pm_carveexit_dir;		// ...and the door's forward, which the rest starts 1/16 along
-static FTE_TLS int pm_carveexit_depth;
 
 static void PM_PortalCSG(physent_t *portal, int entnum, float *trmin, float *trmax, vec3_t start, vec3_t end, trace_t *trace)
 {

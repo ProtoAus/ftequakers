@@ -309,21 +309,30 @@ static int SV_TASRollRun(edict_t *e, float *in, int n, float *out, const float *
 		pmove.jump_msec = 0;
 		pmove.numphysent = 1;
 		pmove.physents[0].model = sv.world.worldmodel;
-		for (i = 0; i < 3; ++i)
-		{
-			pmove_mins[i] = pmove.origin[i] - 256;
-			pmove_maxs[i] = pmove.origin[i] + 256;
-		}
 		if (sv_tasroll_worker)
-		{	/* Patch 1467: the shared visit stamps are the main thread's; and a portal's trace runs QC */
-			AddAllLinksToPmoveLocal(&sv.world, (wedict_t*)e);
+		{	/* Patch 1467: its own box (pmove_mins/maxs are the main thread's), its own visit list (the shared
+			 * stamps are too); and a portal's trace runs QC */
+			vec3_t bmins, bmaxs;
+			for (i = 0; i < 3; ++i)
+			{
+				bmins[i] = pmove.origin[i] - 256;
+				bmaxs[i] = pmove.origin[i] + 256;
+			}
+			AddAllLinksToPmoveLocal(&sv.world, (wedict_t*)e, bmins, bmaxs);
 			if (PM_AnyPortals())
 				pm_threadabort = true;
 			if (pm_threadabort)
 				break;
 		}
 		else
+		{
+			for (i = 0; i < 3; ++i)
+			{
+				pmove_mins[i] = pmove.origin[i] - 256;
+				pmove_maxs[i] = pmove.origin[i] + 256;
+			}
 			AddAllLinksToPmove(&sv.world, (wedict_t*)e);
+		}
 		PMSrc_TASContactBegin(true);
 		PMSrc_BankGravityBegin(false);
 		PM_PlayerMove(sv.gamespeed);
@@ -419,10 +428,29 @@ static int SV_TASRollWorker(void *arg)
 	sv_tasroll_thread_t *th = arg;
 	sv_tasroll_batch_t *b = th->b;
 	float *rows = BZ_Malloc(b->n * SV_TAS_ROLL_IN * sizeof(float));
+	float *outs = BZ_Malloc(b->n * SV_TAS_ROLL_OUT * sizeof(float));
+	/* its own movement state: pmove, movevars, the mover's, the traces' box hulls and clip flags (pm_thread.h) */
+	playermove_t *pm = BZ_Malloc(sizeof(playermove_t));
+	movevars_t *mv = BZ_Malloc(sizeof(movevars_t));
+	void *pms = BZ_Malloc(PMSrc_ThreadStateSize()), *pmt = BZ_Malloc(PM_ThreadStateSize());
+	void *wbs = BZ_Malloc(World_ThreadStateSize()), *bs = BZ_Malloc(BIH_ThreadStateSize());
 	int k, ran;
-	if (!rows)
+	if (!rows || !outs || !pm || !mv || !pms || !pmt || !wbs || !bs)
+	{	/* its candidates stay -12: the main thread runs them */
+		BZ_Free(rows); BZ_Free(outs); BZ_Free(pm); BZ_Free(mv); BZ_Free(pms); BZ_Free(pmt); BZ_Free(wbs); BZ_Free(bs);
 		return 0;
+	}
+	memset(pms, 0, PMSrc_ThreadStateSize());
+	memset(pmt, 0, PM_ThreadStateSize());
+	memset(wbs, 0, World_ThreadStateSize());
+	memset(bs, 0, BIH_ThreadStateSize());
 	sv_tasroll_worker = true;
+	PM_ThreadBind(pm, mv);
+	PMSrc_ThreadState(pms);
+	PM_ThreadState(pmt);
+	World_ThreadState(wbs);
+	BIH_ThreadState(bs);
+	bih_probe_plane = -1;
 	PM_InitBoxHull();
 	World_InitThreadBoxHull();
 	for (k = th->t; k < b->count; k += b->nthreads)
@@ -432,15 +460,20 @@ static int SV_TASRollWorker(void *arg)
 		memcpy(&pmove, b->pm0, sizeof(pmove));
 		movevars = b->mv0;
 		pm_threadabort = false;
-		memcpy(rows, in, b->n * SV_TAS_ROLL_IN * sizeof(float));		/* the written-back rows land only if it finishes */
-		ran = SV_TASRollRun(b->e, rows, b->n, b->out + (size_t)k * b->n * SV_TAS_ROLL_OUT, (b->aimgain > 0) ? p : NULL,
-			b->aimgain, b->aimn, p[3], b->msec, b->startrep);
+		memcpy(rows, in, b->n * SV_TAS_ROLL_IN * sizeof(float));		/* rows and outputs land only if it finishes */
+		ran = SV_TASRollRun(b->e, rows, b->n, outs, (b->aimgain > 0) ? p : NULL, b->aimgain, b->aimn, p[3], b->msec, b->startrep);
 		if (pm_threadabort)
 			continue;		/* p[4] stays -12: the main thread runs it */
 		memcpy(in, rows, b->n * SV_TAS_ROLL_IN * sizeof(float));
+		memcpy(b->out + (size_t)k * b->n * SV_TAS_ROLL_OUT, outs, (size_t)(ran > 0 ? ran : 0) * SV_TAS_ROLL_OUT * sizeof(float));
 		p[4] = ran;
 	}
-	BZ_Free(rows);
+	PM_ThreadBind(NULL, NULL);
+	PMSrc_ThreadState(NULL);
+	PM_ThreadState(NULL);
+	World_ThreadState(NULL);
+	BIH_ThreadState(NULL);
+	BZ_Free(rows); BZ_Free(outs); BZ_Free(pm); BZ_Free(mv); BZ_Free(pms); BZ_Free(pmt); BZ_Free(wbs); BZ_Free(bs);
 	return 0;
 }
 

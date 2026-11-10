@@ -363,6 +363,8 @@ wedict_t *World_TriggerAt (world_t *w, wedict_t *ent, vec3_t org, vec3_t mins, v
 int World_AreaEdictsLocal (world_t *w, vec3_t mins, vec3_t maxs, wedict_t **list, int maxcount, int areatype);	//FTESurf Patch 1467
 wedict_t *World_TriggerAtLocal (world_t *w, wedict_t *ent, vec3_t org, vec3_t mins, vec3_t maxs, qboolean anytrigger, qboolean (*loaded)(world_t *w, int modelindex));	//FTESurf Patch 1467
 void World_InitThreadBoxHull (void);	//FTESurf Patch 1467
+size_t World_ThreadStateSize (void);	//FTESurf Patch 1467: world.c's box hull, for a worker's own
+void World_ThreadState (void *state);	//NULL: the main one
 extern size_t areagridsequence;
 #else
 void World_TouchLinks (world_t *w, wedict_t *ent, areanode_t *node);
