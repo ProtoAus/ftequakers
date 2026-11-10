@@ -223,6 +223,12 @@ typedef struct prinst_s
 	size_t gcpagescap;
 	unsigned int gcnumnostr;		//...memnostrings' blocks when the mirror was made: it holds only what lay outside them
 	unsigned int gcnostr_start[NOSTR_MAX], gcnostr_end[NOSTR_MAX];
+	pbool tablewatch;				//...tempstrings is VirtualAlloc'd MEM_WRITE_WATCH (else the host's memalloc)
+	tempstr_t **gctable;			//...the slot table as the last start copied it
+	size_t gctablecap, gctablevalid;	//...slots allocated / valid (0: the next start copies all)
+	void **gctabpages;
+	size_t gctabpagescap;
+	unsigned int gclivebase;		//...live temps after the last finish (the budget trigger counts from here)
 #endif
 } prinst_t;
 

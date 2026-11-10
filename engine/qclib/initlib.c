@@ -1534,12 +1534,35 @@ void PR_QCGC_Thread(void *ctx, void *data, size_t a, size_t b)
 #endif
 static void PR_ExpandTempStrings(progfuncs_t *progfuncs, size_t newmax)
 {
-	tempstr_t **ntable = progfuncs->funcs.parms->memalloc(sizeof(*ntable) * newmax);
+	tempstr_t **ntable;
+#if defined(THREADEDGC) && defined(_WIN32) && !defined(WINRT)
+	//FTESurf Patch 1481: pages the OS tracks writes to (zeroed), so a collection's start copies only the written ones
+	pbool watch = true;
+	ntable = VirtualAlloc(NULL, sizeof(*ntable) * newmax, MEM_RESERVE|MEM_COMMIT|MEM_WRITE_WATCH, PAGE_READWRITE);
+	if (!ntable)
+	{
+		watch = false;
+		ntable = progfuncs->funcs.parms->memalloc(sizeof(*ntable) * newmax);
+		memset(ntable+prinst.maxtempstrings, 0, sizeof(*ntable) * (newmax-prinst.maxtempstrings));
+	}
+	memcpy(ntable, prinst.tempstrings, sizeof(*ntable) * prinst.maxtempstrings);
+	if (prinst.tempstrings)
+	{
+		if (prinst.tablewatch)
+			VirtualFree(prinst.tempstrings, 0, MEM_RELEASE);
+		else
+			progfuncs->funcs.parms->memfree(prinst.tempstrings);
+	}
+	prinst.tablewatch = watch;
+	prinst.gctablevalid = 0;
+#else
+	ntable = progfuncs->funcs.parms->memalloc(sizeof(*ntable) * newmax);
 	memcpy(ntable, prinst.tempstrings, sizeof(*ntable) * prinst.maxtempstrings);
 	memset(ntable+prinst.maxtempstrings, 0, sizeof(*ntable) * (newmax-prinst.maxtempstrings));
-	prinst.maxtempstrings = newmax;
 	if (prinst.tempstrings)
 		progfuncs->funcs.parms->memfree(prinst.tempstrings);
+#endif
+	prinst.maxtempstrings = newmax;
 	prinst.tempstrings = ntable;
 }
 static string_t PDECL PR_AllocTempStringLen			(pubprogfuncs_t *ppf, char **str, unsigned int len)
@@ -1589,15 +1612,18 @@ static void PR_QCGC_Finish(progfuncs_t *progfuncs)
 {
 	struct qcgccontext_s *gc = prinst.gccontext;
 	struct qcgcfree_s *f = prinst.gcfree;
-	double t0 = Sys_DoubleTime();
+	double t0 = Sys_DoubleTime(), t1, t2, t3;	//DIAG: t1 list ready, t2 loop done, t3 expand done
 	size_t i, cleared = 0;
+	int how = 0, expanded = 0;
 	if (f && f->busy)
 	{
+		how = 1;
 		f = malloc(sizeof(*f) - sizeof(f->ptr) + sizeof(f->ptr[0]) * (gc->ndead ? gc->ndead : 1));
 		f->oneoff = true;
 	}
 	else if (!f || f->cap < gc->ndead)
 	{
+		how = 2;
 		free(f);
 		f = prinst.gcfree = malloc(sizeof(*f) - sizeof(f->ptr) + sizeof(f->ptr[0]) * (gc->maxtemps + 1));
 		f->cap = gc->maxtemps + 1;
@@ -1605,6 +1631,7 @@ static void PR_QCGC_Finish(progfuncs_t *progfuncs)
 	}
 	f->busy = false;
 	f->memfree = externs->memfree;
+	t1 = Sys_DoubleTime();
 	for (i = 0; i < gc->ndead; i++)
 	{
 		unsigned int p = gc->dead[i];
@@ -1617,6 +1644,7 @@ static void PR_QCGC_Finish(progfuncs_t *progfuncs)
 	}
 	f->n = cleared;
 	prinst.livetemps -= cleared;
+	t2 = Sys_DoubleTime();
 	if (cleared)
 	{
 		f->busy = !f->oneoff;
@@ -1627,13 +1655,21 @@ static void PR_QCGC_Finish(progfuncs_t *progfuncs)
 	free(prinst.gcspare);
 	prinst.gcspare = gc;	//kept for the next collection
 	prinst.gccontext = NULL;
+#if defined(_WIN32) && !defined(WINRT)
+	prinst.gclivebase = prinst.livetemps;	//FTESurf Patch 1481
+#endif
 
 	//if over half the (max)strings are still live, just increase the max so we are not spamming collections
 	//(review 2: on livetemps, as before, or a collection whose survivors sit just under half restarts at once)
 	if (prinst.livetemps >= prinst.maxtempstrings/2)
-		PR_ExpandTempStrings(progfuncs, prinst.maxtempstrings * 2);
+		PR_ExpandTempStrings(progfuncs, prinst.maxtempstrings * 2), expanded = 1;
 	if (prinst.maxtempstrings < PR_GC_MINTEMPS)	//FTESurf Patch 1292: each collection costs the main thread a copy
-		PR_ExpandTempStrings(progfuncs, PR_GC_MINTEMPS);
+		PR_ExpandTempStrings(progfuncs, PR_GC_MINTEMPS), expanded = 2;
+	t3 = Sys_DoubleTime();
+	if (externs->gcwritewatch >= 3)
+		externs->Printf("gc finish: list %.2f (%s), loop %.2f (%u dead, %u cleared), expand %.2f (%d); live %u of %u\n",
+			(t1-t0)*1000, how == 1 ? "one-off" : how == 2 ? "new" : "kept", (t2-t1)*1000, (unsigned)gc->ndead, (unsigned)cleared,
+			(t3-t2)*1000, expanded, prinst.livetemps, prinst.maxtempstrings);
 	pr_gc_mainus += (Sys_DoubleTime() - t0) * 1e6;
 	pr_gc_dones++;
 }
@@ -1715,7 +1751,7 @@ static pbool PR_QCGC_Snapshot(progfuncs_t *progfuncs, const size_t *ofs, const s
 			PR_QCGC_MirrorRange(progfuncs, prinst.gcmirrorused, used, ofs, len, n);
 	}
 	prinst.gcmirrorused = used;
-	if (externs->gcwritewatch >= 2)
+	if (externs->gcwritewatch == 2)
 	{	//verify: at the segments the mirror must equal the hunk; if not, say so and copy them all
 		size_t bad = 0, c;
 		for (k = 0; k < n; k++)
@@ -1737,6 +1773,63 @@ static pbool PR_QCGC_Snapshot(progfuncs_t *progfuncs, const size_t *ofs, const s
 			PR_QCGC_MirrorRange(progfuncs, 0, used, ofs, len, n);
 			pr_gc_copied = copied;
 		}
+	}
+	return true;
+}
+/*FTESurf Patch 1481: the slot table's mirror brought up to the table -- its written pages, or all of it after an
+  expansion (a new table) or the first time. False: the caller copies the table into the block, as before.*/
+static pbool PR_QCGC_TableSnapshot(progfuncs_t *progfuncs)
+{
+	size_t bytes = sizeof(*prinst.tempstrings) * prinst.maxtempstrings, span = (bytes + 4095) & ~(size_t)4095, i;
+	ULONG_PTR count;
+	DWORD gran;
+	if (!prinst.tablewatch || externs->gcwritewatch <= 0 || !prinst.maxtempstrings)
+		return false;
+	if (prinst.gctablecap < prinst.maxtempstrings)
+	{
+		free(prinst.gctable);
+		free(prinst.gctabpages);
+		prinst.gctable = malloc(span);
+		prinst.gctabpages = malloc(sizeof(*prinst.gctabpages) * (span/4096 + 1));
+		if (!prinst.gctable || !prinst.gctabpages)
+		{
+			free(prinst.gctable), prinst.gctable = NULL;
+			free(prinst.gctabpages), prinst.gctabpages = NULL;
+			prinst.gctablecap = prinst.gctabpagescap = prinst.gctablevalid = 0;
+			return false;
+		}
+		prinst.gctablecap = span / sizeof(*prinst.gctable);
+		prinst.gctabpagescap = span/4096 + 1;
+		prinst.gctablevalid = 0;
+	}
+	count = prinst.gctabpagescap;
+	if (GetWriteWatch(WRITE_WATCH_FLAG_RESET, prinst.tempstrings, span, prinst.gctabpages, &count, &gran) || gran != 4096 || count >= prinst.gctabpagescap)
+		prinst.gctablevalid = 0;
+	if (prinst.gctablevalid != prinst.maxtempstrings)
+	{
+		memcpy(prinst.gctable, prinst.tempstrings, bytes);
+		pr_gc_copied += bytes;
+	}
+	else for (i = 0; i < count; i++)
+	{
+		size_t o = (char*)prinst.gctabpages[i] - (char*)prinst.tempstrings, n = 4096;
+		if (o >= bytes)
+			continue;
+		if (o + n > bytes)
+			n = bytes - o;
+		memcpy((char*)prinst.gctable + o, prinst.gctabpages[i], n);
+		pr_gc_copied += n;
+	}
+	prinst.gctablevalid = prinst.maxtempstrings;
+	if (externs->gcwritewatch == 2)
+	{
+		size_t bad = 0;
+		for (i = 0; i < prinst.maxtempstrings; i++)
+			bad += prinst.gctable[i] != prinst.tempstrings[i];
+		pr_gc_mismatch += bad;
+		externs->Printf("pr_gc_writewatch: table %u slots, %u differed\n", prinst.maxtempstrings, (unsigned)bad);
+		if (bad)
+			memcpy(prinst.gctable, prinst.tempstrings, bytes);
 	}
 	return true;
 }
@@ -1803,7 +1896,14 @@ void PR_RunGC (progfuncs_t *progfuncs)
 	{
 		if (prinst.livetemps < prinst.maxtempstrings/2 || prinst.nexttempstring < prinst.maxtempstrings/2)
 		{	//don't bother yet
-			return;
+#if defined(THREADEDGC) && defined(_WIN32) && !defined(WINRT)
+			//FTESurf Patch 1481: a table a burst grew (a replay loading: 2M slots, ~700 live after) would wait for a
+			//million new temps and clear them in one frame. With both copies incremental, collect every
+			//PR_GC_MINTEMPS/2 new ones instead.
+			if (!(prinst.maxtempstrings > PR_GC_MINTEMPS && prinst.livetemps >= prinst.gclivebase + PR_GC_MINTEMPS/2
+				&& externs->usethreadedgc == 1 && externs->gcwritewatch > 0 && prinst.hunkwatch && prinst.tablewatch))
+#endif
+				return;
 		}
 #ifdef THREADEDGC
 		if (externs->usethreadedgc)
@@ -1811,21 +1911,23 @@ void PR_RunGC (progfuncs_t *progfuncs)
 #ifdef GCTIMINGS
 			double starttime = Sys_DoubleTime(), endtime;
 #endif
-			double gc_t0 = Sys_DoubleTime();
+			double gc_t0 = Sys_DoubleTime(); double gc_tm;
 			size_t ofs[NOSTR_MAX+1], len[NOSTR_MAX+1], memsize = 0, padded;	//FTESurf Patch 763: copy what is read
 			unsigned int n = PR_QCGC_Segments(progfuncs, ofs, len), i;
 			char *dst;
 			struct qcgccontext_s *gc;
-			pbool mirrored = false;
+			pbool mirrored = false, tabled = false;
 			for (i = 0; i < n; i++)
 				memsize += len[i];
 #if defined(_WIN32) && !defined(WINRT)
 			mirrored = PR_QCGC_Snapshot(progfuncs, ofs, len, n);	//FTESurf Patch 1481
+			tabled = mirrored && PR_QCGC_TableSnapshot(progfuncs);	//FTESurf Patch 1481
 #endif
 			padded = mirrored ? 0 : (memsize + 7) & ~(size_t)7;
+			gc_tm = Sys_DoubleTime();	//DIAG
 			{	//FTESurf Patch 1446: reuse the last block -- a fresh ~25 MB one faulted in every page during the copy
 				//below and was freed again at the finish, 5-8 ms of main thread each (surf_nuclear, the PC)
-				size_t need = sizeof(*gc) - sizeof(gc->amem) + padded + (sizeof(*gc->tempstrings) + sizeof(*gc->dead))*prinst.maxtempstrings;
+				size_t need = sizeof(*gc) - sizeof(gc->amem) + padded + ((tabled ? 0 : sizeof(*gc->tempstrings)) + sizeof(*gc->dead))*prinst.maxtempstrings;
 				gc = prinst.gcspare;
 				prinst.gcspare = NULL;
 				if (!gc || gc->allocbytes < need)
@@ -1858,14 +1960,24 @@ void PR_RunGC (progfuncs_t *progfuncs)
 			}
 
 			gc->maxtemps = prinst.maxtempstrings;
-			gc->tempstrings = (void*)((char*)gc->amem+padded);
-			gc->dead = (unsigned int*)(gc->tempstrings + gc->maxtemps);	//FTESurf Patch 1446: in the kept block, not a malloc per collection
-			memcpy(gc->tempstrings, prinst.tempstrings, sizeof(*gc->tempstrings)*gc->maxtemps);
+			if (tabled)
+			{	//FTESurf Patch 1481: the worker and the finish read the table's mirror, which only the next start writes
+				gc->tempstrings = prinst.gctable;
+				gc->dead = (unsigned int*)((char*)gc->amem+padded);
+			}
+			else
+			{
+				gc->tempstrings = (void*)((char*)gc->amem+padded);
+				gc->dead = (unsigned int*)(gc->tempstrings + gc->maxtemps);	//FTESurf Patch 1446: in the kept block, not a malloc per collection
+				memcpy(gc->tempstrings, prinst.tempstrings, sizeof(*gc->tempstrings)*gc->maxtemps);
+			}
+			if (externs->gcwritewatch >= 3)	//DIAG
+				externs->Printf("gc start: mirror+table %.2f (%u bytes%s), block %.2f (%u slots, live %u)\n", (gc_tm-gc_t0)*1000, mirrored ? (unsigned)pr_gc_copied : 0u, tabled ? ", table mirrored" : "", (Sys_DoubleTime()-gc_tm)*1000, (unsigned)gc->maxtemps, prinst.livetemps);
 
 			COM_InsertWork(WG_LOADER, PR_QCGC_Thread, gc, NULL, 0, 0);
 			pr_gc_mainus += (Sys_DoubleTime() - gc_t0) * 1e6;
 			pr_gc_starts++;
-			pr_gc_bytes = padded + sizeof(*gc->tempstrings)*gc->maxtemps;
+			pr_gc_bytes = padded + (tabled ? 0 : sizeof(*gc->tempstrings)*gc->maxtemps);
 #if defined(_WIN32) && !defined(WINRT)
 			if (mirrored)
 				pr_gc_bytes += pr_gc_copied;	//FTESurf Patch 1481: the pages refreshed
@@ -1923,6 +2035,10 @@ static void PR_FreeAllTemps			(progfuncs_t *progfuncs)
 	free(prinst.gcmirror), prinst.gcmirror = NULL;	//FTESurf Patch 1481
 	free(prinst.gcpages), prinst.gcpages = NULL;
 	prinst.gcmirrorcap = prinst.gcpagescap = prinst.gcmirrorused = 0;
+	free(prinst.gctable), prinst.gctable = NULL;
+	free(prinst.gctabpages), prinst.gctabpages = NULL;
+	prinst.gctablecap = prinst.gctabpagescap = prinst.gctablevalid = 0;
+	prinst.gclivebase = 0;
 #endif
 #endif
 	for (i = 0; i < prinst.maxtempstrings; i++)
@@ -2290,7 +2406,14 @@ static void PDECL PR_Shutdown(pubprogfuncs_t *ppf)
 		f(inst->inst.allocedstrings);
 	inst->inst.allocedstrings = NULL;
 	if (inst->inst.tempstrings)
-		f(inst->inst.tempstrings);
+	{
+#if defined(THREADEDGC) && defined(_WIN32) && !defined(WINRT)
+		if (inst->inst.tablewatch)	//FTESurf Patch 1481
+			VirtualFree(inst->inst.tempstrings, 0, MEM_RELEASE);
+		else
+#endif
+			f(inst->inst.tempstrings);
+	}
 	inst->inst.tempstrings = NULL;
 
 	free(inst->inst.watch_name);
