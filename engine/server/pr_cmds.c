@@ -11678,7 +11678,7 @@ static void QCBUILTIN PF_tas_rollout(pubprogfuncs_t *prinst, struct globalvars_s
 	int n;
 	char *in, *out;
 	G_FLOAT(OFS_RETURN) = -1;
-	if (prinst != svprogfuncs || (prinst->callargc != 4 && prinst->callargc != 6 && prinst->callargc != 7)) return;	// P1449: 6 = an aim point and gain, 7 = and the face
+	if (prinst != svprogfuncs || (prinst->callargc != 4 && prinst->callargc != 6 && prinst->callargc != 7 && prinst->callargc != 8)) return;	// P1449: 6 = an aim point and gain, 7 = and the face; P1466: 8 = and the lead
 	if (!(nf >= 1 && nf <= 2048 && floorf(nf) == nf)) return;
 	n = (int)nf;
 	in = PR_PointerToNative_MoInvalidate(prinst, G_INT(OFS_PARM1), 0, (size_t)n*7*sizeof(float));
@@ -11686,13 +11686,13 @@ static void QCBUILTIN PF_tas_rollout(pubprogfuncs_t *prinst, struct globalvars_s
 	if (!in || !out || (in < out + (size_t)n*13*sizeof(float) && out < in + (size_t)n*7*sizeof(float))) return;
 	G_FLOAT(OFS_RETURN) = SV_TASRollout(G_EDICT(prinst, OFS_PARM0), (float*)in, n, (float*)out,
 		(prinst->callargc >= 6) ? G_VECTOR(OFS_PARM4) : NULL, (prinst->callargc >= 6) ? G_FLOAT(OFS_PARM5) : 0,
-		(prinst->callargc == 7) ? G_VECTOR(OFS_PARM6) : NULL);
+		(prinst->callargc >= 7) ? G_VECTOR(OFS_PARM6) : NULL, (prinst->callargc == 8) ? G_FLOAT(OFS_PARM7) : 0.5);
 }
 
 static BuiltinList_t BuiltinList[] = {				//nq	qw		h2		ebfs
 	{"sourcepractice_reset", PF_sourcepractice_reset, 0, 0, 0, 0, D("float(entity player)", "Trusted server VM: reset this current player's complete Source carry and jump latch at a neutral zero-duration decoded QW command. No world/transport/counter reset or eligibility grant; unsupported contexts return0.")},
 	{"tas_input", PF_tas_input, 0, 0, 0, 0, D("vector(entity player, float slot, float token, float field)", "TAS checkpoint input: availability0, moves1, signed angle words2, compact jump/duck/walk mask3, editor mode/amount/follow4. Not hardware evidence or file import.")},
-	{"tas_rollout", PF_tas_rollout, 0, 0, 0, 0, D("float(entity player, float *rows, float ticks, float *out, optional vector aim, optional float aimgain, optional vector aimface)", "P1443: what ticks rows of tas_tape words (fwd side up, pitch yaw roll, buttons; 7 floats a row) would do from the paused TAS body, nothing kept but the buffers (P1449 FOLLOW/PITCHV/AIM row bits 256/512/1024 write their computed words back; aim, aimgain and aimface steer AIM rows): 13 floats a tick (origin, velocity, onground, ducked, contact kind, contact normal, the first entity per-command QC could act on, negated when before the tick). Returns the ticks run, or a negative reason it cannot start.")},
+	{"tas_rollout", PF_tas_rollout, 0, 0, 0, 0, D("float(entity player, float *rows, float ticks, float *out, optional vector aim, optional float aimgain, optional vector aimface, optional float aimlead)", "P1443: what ticks rows of tas_tape words (fwd side up, pitch yaw roll, buttons; 7 floats a row) would do from the paused TAS body, nothing kept but the buffers (P1449 FOLLOW/PITCHV/AIM row bits 256/512/1024 write their computed words back; aim, aimgain, aimface and P1466's aimlead, 0..1 of the distance set back along the face, 0.5 unset, steer AIM rows; P1466 row bit 2048 adds a wall clipped on any tick as out[7] bit 2): 13 floats a tick (origin, velocity, onground, ducked, contact kind, contact normal, the first entity per-command QC could act on, negated when before the tick). Returns the ticks run, or a negative reason it cannot start.")},
 	{"tas_tape", PF_tas_tape, 0, 0, 0, 0, D("float(entity player, float op, float a, float b, vector moves, vector angles, float buttons)", "TAS-only movement authoring: cancel0, validate1, preflight2, begin3, put4, arm5, status6, plan-cap8, plan-set9, controller-set10(mode,turn amount). No transport/world restore or human eligibility.")},
 	{"tas_rewind", PF_tas_rewind, 0, 0, 0, 0, D("float(entity player, float slot, float token, float op)", "Bounded native movement checkpoints: TAS capture0/probe1/apply2; loopback-only live-base capture3 at slot4000. Apply still requires paused TAS. Transient map/connection-bound handles; no world/counter or human-proof restore.")},
 	{"bank_gravity_source", PF_bank_gravity_source, 0, 0, 0, 0, D("void(entity player, entity source, int attempt, float bad)", "Server VM runtime gravity provenance. No entity fields, file persistence or evidence transport.")},

@@ -31,6 +31,11 @@
  * degrees off. On the bearing the side flips as the heading crosses it -- the strafe zigzag that flies
  * straight while gaining. The ramp ride keeps the row's own command. */
 #define SV_TAS_ROLL_AIM 1024
+/* P1466: the row's tick reports a wall or ceiling clipped (pm_source.c's pms_tas_wall) as bit 2 of out[7] beside
+ * ducked (bit 1), on a ramp or the ground too -- contact kind 4 is only set with no ramp under the body, so a ride
+ * rubbing a side wall said nothing (Lex, 10 Nov: the bot rubs walls and loses speed). Opt-in: a caller that does
+ * not ask reads out[7] as ducked, as before. */
+#define SV_TAS_ROLL_WALLBIT 2048
 
 static float SV_TASRollWord(double deg)
 {
@@ -67,8 +72,9 @@ static void SV_TASRollFollow(float *r, int fl)
  * lead point set back from the aim along the heading that meets the face parallel -- along the ramp's
  * horizontal run (signed by the heading now), tilted out from the face so the horizontal motion cancels
  * the fall into it (v.n = 0 at this vertical speed) -- so the flight curves in along the ramp, not onto
- * its top or into its side (Lex, 9 Nov). */
-static float SV_TASRollAim(const float *aim, float gain, const float *n)
+ * its top or into its side (Lex, 9 Nov). P1466: set back lead x the distance (0.5 before; 0 flies straight
+ * at the aim and boards with a snap -- a long launch past geometry wants that, taken wide it was lost: Lex). */
+static float SV_TASRollAim(const float *aim, float gain, const float *n, float lead)
 {
 	double tx = aim[0], ty = aim[1];
 	double err, mag;
@@ -83,7 +89,7 @@ static float SV_TASRollAim(const float *aim, float gain, const float *n)
 		if (s < -0.9) s = -0.9;
 		c = sqrt(1 - s * s);
 		dx = rx * c + ux * s; dy = ry * c + uy * s;
-		tx -= dx * 0.5 * dist; ty -= dy * 0.5 * dist;
+		tx -= dx * lead * dist; ty -= dy * lead * dist;
 	}
 	err = atan2(ty - pmove.origin[1], tx - pmove.origin[0]) - atan2(pmove.velocity[1], pmove.velocity[0]);
 	err *= 180.0 / M_PI;
@@ -97,14 +103,14 @@ static float SV_TASRollAim(const float *aim, float gain, const float *n)
 static int SV_TASRollFlags(const float *r)
 {
 	int b;
-	if (!(r[6] >= 0 && r[6] <= 7 + SV_TAS_ROLL_FOLLOW + SV_TAS_ROLL_PITCHV + SV_TAS_ROLL_AIM && floor(r[6]) == r[6]))
+	if (!(r[6] >= 0 && r[6] <= 7 + SV_TAS_ROLL_FOLLOW + SV_TAS_ROLL_PITCHV + SV_TAS_ROLL_AIM + SV_TAS_ROLL_WALLBIT && floor(r[6]) == r[6]))
 		return -1;
 	b = (int)r[6];
 	if ((b & SV_TAS_ROLL_FOLLOW) && !(r[4] >= -180 && r[4] <= 180))
 		return -1;
 	if ((b & SV_TAS_ROLL_AIM) && !(b & SV_TAS_ROLL_FOLLOW))
 		return -1;
-	return b & (SV_TAS_ROLL_FOLLOW | SV_TAS_ROLL_PITCHV | SV_TAS_ROLL_AIM);
+	return b & (SV_TAS_ROLL_FOLLOW | SV_TAS_ROLL_PITCHV | SV_TAS_ROLL_AIM | SV_TAS_ROLL_WALLBIT);
 }
 
 /* The first entity per-command QC could act on after this tick (0 none): SV_RunCmd's touch loop
@@ -147,7 +153,7 @@ static int SV_TASRolloutActor(edict_t *e, int *kind)
  * -6 water/ladder/duck transition, -7 non-default gravity (bank gravity would observe it),
  * -8 the TAS clock, -9 a carrier (QC's run_basevel, or standing on a non-world entity),
  * -10 a row that does not decode. A trigger volume the body starts in is named, negated, on the first tick. */
-int SV_TASRollout(edict_t *e, float *in, int n, float *out, const float *aim, float aimgain, const float *aimn)
+int SV_TASRollout(edict_t *e, float *in, int n, float *out, const float *aim, float aimgain, const float *aimn, float aimlead)
 {
 	static playermove_t saved;
 	extern float frametime;
@@ -159,7 +165,7 @@ int SV_TASRollout(edict_t *e, float *in, int n, float *out, const float *aim, fl
 	eval_t *ev;
 	wedict_t *start;
 	extern cvar_t pm_physicsmode;
-	int i, k, msec, kind, rep, startrep, ran, airk, wall;
+	int i, k, msec, kind, rep, startrep, ran, airk, wall, wallbit;
 	cl = SV_TASRewindClient(e);
 	if (!cl || !SV_TASInputPool(cl) || n < 1 || n > SV_TAS_ROLL_MAX || !in || !out)
 		return -1;
@@ -244,14 +250,16 @@ int SV_TASRollout(edict_t *e, float *in, int n, float *out, const float *aim, fl
 	ran = 0;
 	airk = 0;
 	if (!(aimgain > 0)) aimgain = 10;	/* NaN too */
+	if (!(aimlead >= 0 && aimlead <= 1)) aimlead = 0.5;	/* P1466: P1449's set-back; NaN too */
 	if (pmove.pm_type == PM_NORMAL && !pmove.waterjumptime)
 	for (k = 0; k < n; ++k)
 	{
 		float *r = in + k*SV_TAS_ROLL_IN;
 		float *o = out + k*SV_TAS_ROLL_OUT;
 		int fl = SV_TASRollFlags(r);
+		wallbit = (fl & SV_TAS_ROLL_WALLBIT) != 0;	/* SV_TASRollFollow clears every flag from r[6] */
 		if ((fl & SV_TAS_ROLL_AIM) && airk >= 3)
-			r[4] = SV_TASRollAim(aim, aimgain, aimn);	/* P1449: a flight steers to the aim point */
+			r[4] = SV_TASRollAim(aim, aimgain, aimn, aimlead);	/* P1449: a flight steers to the aim point */
 		if (fl > 0)
 			SV_TASRollFollow(r, fl & ~SV_TAS_ROLL_AIM);	/* P1449: from the velocity this tick starts with */
 		if (fl & SV_TAS_ROLL_AIM)
@@ -293,7 +301,7 @@ int SV_TASRollout(edict_t *e, float *in, int n, float *out, const float *aim, fl
 		VectorCopy(pmove.origin, o);
 		VectorCopy(pmove.velocity, o + 3);
 		o[6] = pmove.onground;
-		o[7] = pmove.ducked;
+		o[7] = pmove.ducked + ((wallbit && wall) ? 2 : 0);	/* P1466 */
 		o[8] = kind;
 		if (kind == 1)
 			VectorCopy(normal, o + 9);
