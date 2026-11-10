@@ -1880,6 +1880,7 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 // (identity when fresh; a point behind that camera keeps this frame's). The ripple map is this frame's.
 "vec2 rstc = stc;\n"
 "vec4 ctf = m_capturefix * tf;\n"
+"bool cseen = ctf.w > 0.5; // P1475: that camera saw this point (else ctf falls back to this frame's)\n"
 "if (ctf.w > 0.5)\n"
 "stc = (1.0 + (ctf.xy / ctf.w)) * 0.5;\n"
 "else\n"
@@ -1896,11 +1897,13 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "#endif\n"
 "#if defined(FTE_CAPTUREPARALLAX) && !defined(SCREEN)\n"
 // FTESurf Patch 1475: a reused capture also moves by the eye's travel since it rendered (m_captureshift, in its
-// clip space), scaled by surface depth over its content's depth there: c = t + s * t.w / (d - s.w). One step.
+// clip space), scaled by surface depth over its content's depth there: c = t + s * t.w / (d - s.w). One step;
+// content nearer than the surface (above-water geometry in the refraction's depth) is taken as at the surface.
+"vec2 pstc = stc; // before the shift: P877's depth gradient wants a smooth coordinate\n"
 "#ifdef DEPTH\n"
-"if (ctf.w > 0.5 && any(notEqual(m_captureshift, vec4(0.0))))\n"
+"if (cseen && any(notEqual(m_captureshift, vec4(0.0))))\n"
 "{\n"
-"float pden = eyeDepth(texture2D(s_refractdepth, stc).r) - m_captureshift.w;\n"
+"float pden = max(eyeDepth(texture2D(s_refractdepth, stc).r) - m_captureshift.w, ctf.w);\n"
 "if (pden > 1.0)\n"
 "{\n"
 "vec4 pc = ctf + m_captureshift * (ctf.w / pden);\n"
@@ -1915,7 +1918,7 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "vec4 lc = m_capturedepthrefl * vec4(lstc * 2.0 - 1.0, lz * 2.0 - 1.0, 1.0);\n"
 "if (lz < 0.99999 && abs(lc.w) > 1e-6)\n"
 "{\n"
-"float pden = -lc.z / lc.w - m_captureshiftrefl.w;\n"
+"float pden = max(-lc.z / lc.w - m_captureshiftrefl.w, ltf.w);\n"
 "if (pden > 1.0)\n"
 "{\n"
 "vec4 pc = ltf + m_captureshiftrefl * (ltf.w / pden);\n"
@@ -1924,6 +1927,8 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "}\n"
 "}\n"
 "#endif\n"
+"#else\n"
+"#define pstc stc\n"
 "#endif\n"
 "#ifdef ANIMBUMP\n"
 "int bumplayers = textureSize(s_bumpanim, 0).z;\n"
@@ -1974,13 +1979,14 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "#if defined(FTE_CAPTUREFIX) && !defined(SCREEN)\n"
 "surfaceDepth *= ctf.w / tf.w; // along the capture's forward, as s_refractdepth is (exactly 1 when fresh)\n"
 "#ifdef FTE_CAPTUREPARALLAX\n"
-"surfaceDepth += m_captureshift.w; // P1475: and from where it rendered (0 fresh, or r_captureparallax 0)\n"
+"if (cseen)\n"
+"surfaceDepth = max(surfaceDepth + m_captureshift.w, 1.0); // P1475: and from where it rendered (0 fresh)\n"
 "#endif\n"
 "#endif\n"
 // P877: 1/depth is affine across the plane in screen space, so this gives the surface's depth
 // on the refracted sample's own ray, the ray Source's alpha was computed for (water_ps2x_helper.h:161).
 "float invs = 1.0 / surfaceDepth;\n"
-"vec2 dstc = vec2(dFdx(stc.x), dFdy(stc.y));\n"
+"vec2 dstc = vec2(dFdx(pstc.x), dFdy(pstc.y));\n"
 "vec2 invgrad = vec2(dFdx(invs), dFdy(invs)) * dstc / max(dstc * dstc, vec2(1e-12));\n"
 "depth = waterDepth(stc, surfaceDepth);\n"
 // An underside drawn with this shader (Patch 233's stand-in for a missing $bottommaterial, or water
@@ -3764,6 +3770,7 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 // (identity when fresh; a point behind that camera keeps this frame's). The ripple map is this frame's.
 "vec2 rstc = stc;\n"
 "vec4 ctf = m_capturefix * tf;\n"
+"bool cseen = ctf.w > 0.5; // P1475: that camera saw this point (else ctf falls back to this frame's)\n"
 "if (ctf.w > 0.5)\n"
 "stc = (1.0 + (ctf.xy / ctf.w)) * 0.5;\n"
 "else\n"
@@ -3780,11 +3787,13 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "#endif\n"
 "#if defined(FTE_CAPTUREPARALLAX) && !defined(SCREEN)\n"
 // FTESurf Patch 1475: a reused capture also moves by the eye's travel since it rendered (m_captureshift, in its
-// clip space), scaled by surface depth over its content's depth there: c = t + s * t.w / (d - s.w). One step.
+// clip space), scaled by surface depth over its content's depth there: c = t + s * t.w / (d - s.w). One step;
+// content nearer than the surface (above-water geometry in the refraction's depth) is taken as at the surface.
+"vec2 pstc = stc; // before the shift: P877's depth gradient wants a smooth coordinate\n"
 "#ifdef DEPTH\n"
-"if (ctf.w > 0.5 && any(notEqual(m_captureshift, vec4(0.0))))\n"
+"if (cseen && any(notEqual(m_captureshift, vec4(0.0))))\n"
 "{\n"
-"float pden = eyeDepth(texture2D(s_refractdepth, stc).r) - m_captureshift.w;\n"
+"float pden = max(eyeDepth(texture2D(s_refractdepth, stc).r) - m_captureshift.w, ctf.w);\n"
 "if (pden > 1.0)\n"
 "{\n"
 "vec4 pc = ctf + m_captureshift * (ctf.w / pden);\n"
@@ -3799,7 +3808,7 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "vec4 lc = m_capturedepthrefl * vec4(lstc * 2.0 - 1.0, lz * 2.0 - 1.0, 1.0);\n"
 "if (lz < 0.99999 && abs(lc.w) > 1e-6)\n"
 "{\n"
-"float pden = -lc.z / lc.w - m_captureshiftrefl.w;\n"
+"float pden = max(-lc.z / lc.w - m_captureshiftrefl.w, ltf.w);\n"
 "if (pden > 1.0)\n"
 "{\n"
 "vec4 pc = ltf + m_captureshiftrefl * (ltf.w / pden);\n"
@@ -3808,6 +3817,8 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "}\n"
 "}\n"
 "#endif\n"
+"#else\n"
+"#define pstc stc\n"
 "#endif\n"
 "#ifdef ANIMBUMP\n"
 "int bumplayers = textureSize(s_bumpanim, 0).z;\n"
@@ -3858,13 +3869,14 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "#if defined(FTE_CAPTUREFIX) && !defined(SCREEN)\n"
 "surfaceDepth *= ctf.w / tf.w; // along the capture's forward, as s_refractdepth is (exactly 1 when fresh)\n"
 "#ifdef FTE_CAPTUREPARALLAX\n"
-"surfaceDepth += m_captureshift.w; // P1475: and from where it rendered (0 fresh, or r_captureparallax 0)\n"
+"if (cseen)\n"
+"surfaceDepth = max(surfaceDepth + m_captureshift.w, 1.0); // P1475: and from where it rendered (0 fresh)\n"
 "#endif\n"
 "#endif\n"
 // P877: 1/depth is affine across the plane in screen space, so this gives the surface's depth
 // on the refracted sample's own ray, the ray Source's alpha was computed for (water_ps2x_helper.h:161).
 "float invs = 1.0 / surfaceDepth;\n"
-"vec2 dstc = vec2(dFdx(stc.x), dFdy(stc.y));\n"
+"vec2 dstc = vec2(dFdx(pstc.x), dFdy(pstc.y));\n"
 "vec2 invgrad = vec2(dFdx(invs), dFdy(invs)) * dstc / max(dstc * dstc, vec2(1e-12));\n"
 "depth = waterDepth(stc, surfaceDepth);\n"
 // An underside drawn with this shader (Patch 233's stand-in for a missing $bottommaterial, or water
