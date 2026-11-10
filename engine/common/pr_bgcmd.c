@@ -7704,7 +7704,15 @@ void QCBUILTIN PF_gettimed (pubprogfuncs_t *prinst, struct globalvars_s *pr_glob
 	case 1:		//actual time, ish. we round to milliseconds to reduce spectre exposure
 		G_DOUBLE(OFS_RETURN) = (qint64_t)Sys_Milliseconds()/1000.0;
 		break;
-	//case 2:	//highres.. looks like time into the frame
+	case 2:		//FTESurf Patch 1488: seconds since this frame's first gettime(2), 0.1 ms steps -- small, so a float keeps them
+		{	//(gettime(1) is whole ms and loses even those past ~2.3 h as a float); for per-frame time budgets
+			static double base, baseframe = -1;
+			double now = Sys_DoubleTime();
+			if (realtime != baseframe)
+				baseframe = realtime, base = now;
+			G_DOUBLE(OFS_RETURN) = floor((now - base) * 10000) / 10000;
+		}
+		break;
 	//case 3:	//uptime
 	//case 4:	//cd track
 #ifndef SERVERONLY
