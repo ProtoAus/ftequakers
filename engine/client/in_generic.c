@@ -1274,6 +1274,10 @@ qboolean IN_Journal_LastDigest(qbyte digest[32], size_t *len, qboolean *kept)
 
 void IN_Journal_Drop(void)
 {
+	/*Main-side lifecycle: the worker already owns indeplock while appending.
+	  Nested Begin/End callers retain their existing ownership.*/
+	qboolean allowed = CL_AllowIndependantSendCmd(false);
+
 	if (in_jrn_buf)
 		BZ_Free(in_jrn_buf);
 	in_jrn_buf = NULL;
@@ -1286,6 +1290,7 @@ void IN_Journal_Drop(void)
 	in_jrn_full = in_jrn_synth = false;
 	in_jrn_events = in_jrn_frames = in_jrn_hidden = 0;
 	memset(in_jrn_haveabs, 0, sizeof(in_jrn_haveabs));
+	CL_AllowIndependantSendCmd(allowed);
 }
 
 static void IN_Journal_Event(struct eventlist_s *ev)
@@ -2171,7 +2176,10 @@ static void IN_JournalBegin_f(void)
 	cvar_t *rawkbd = Cvar_FindVar("in_rawinput_keyboard");
 	cvar_t *nolegacy = Cvar_FindVar("in_rawinput_nolegacy");	/*Patch 307*/
 	char head[1024];
+	qboolean allowed;
 
+	/*Publish/reset the whole replacement only while the worker is excluded.*/
+	allowed = CL_AllowIndependantSendCmd(false);
 	IN_Journal_Drop();
 
 	/*Patch 417: the last journal's digest belongs to the last run.  A receipt
@@ -2327,6 +2335,7 @@ static void IN_JournalBegin_f(void)
 	}
 
 	IN_Journal_Raw("begin\n");
+	CL_AllowIndependantSendCmd(allowed);
 }
 
 static void IN_JournalEnd_f(void)

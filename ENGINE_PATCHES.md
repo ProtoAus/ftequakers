@@ -1,5 +1,29 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1480 -- exclude the physics worker during journal replacement/drop (in_generic.c)
+
+**Problem:** Main-side Begin/Drop could free, reset or publish journal storage
+while the independent-physics worker still owned it for an append. The existing
+worker lock alone did not exclude these main-side lifecycle transitions.
+
+**Change:** Save/disable/restore the existing independent-send permission around
+whole Begin and whole Drop. An already-held main-side guard stays held across
+nested Drop; the worker and per-event append paths are unchanged. Never extend
+this guard over callback-capable End filesystem writing: normal append/counter
+and End/hash/write synchronization remain open. No new API, capture, consent,
+record grammar, detector or enforcement policy.
+
+**Verified:** `tools/test_input_journal_lifecycle.py` compiles actual Begin/Drop,
+Raw/Line and the permission helper with real nonrecursive OS mutex/thread hosts.
+Pinned prechange:12 checks/4 unsafe-admission failures, stopped BEFORE free/UAF;
+subject:18/0, including completed worker bytes before free, replacement header or
+storage reset, nested-owner preservation and disabled-worker controls. Extra
+post-release assertions run only after safe admission. Strict Wall/Wextra/Werror;
+independent source review approved this bounded main-side change.
+Clock/cvar/device/hash/filesystem calls and worker ownership interval are explicit
+host stubs/model: not actual input, actual worker-loop coverage, a concurrency-
+free journal or a detector calibration claim.
+
 ## Patch 1479 -- journal close preserves the configured growth limit (in_generic.c)
 
 Numbering correction: the independently published game-repo P1478 claim arrived
