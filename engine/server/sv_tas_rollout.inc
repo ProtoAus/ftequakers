@@ -37,6 +37,12 @@
  * not ask reads out[7] as ducked, as before. Like the bits above it is cleared from each row that runs (the row
  * the loop stops on too; rows past it keep it), so a caller sets it again before rolling the same rows. */
 #define SV_TAS_ROLL_WALLBIT 2048
+/* P1476: with AIM, the strafe side holds until the bearing is SV_TAS_AIMWIDE_DEG past the other way and the side has been
+ * held SV_TAS_AIMWIDE_TICKS: wider weaves instead of a flip each tick the heading crosses the bearing (Lex, 10 Nov: the
+ * "hyper wiggle" reads badly; a little accuracy for the look). Held against the error, the command is 30, the most speed. */
+#define SV_TAS_ROLL_AIMWIDE 4096
+#define SV_TAS_AIMWIDE_DEG 3
+#define SV_TAS_AIMWIDE_TICKS 8
 
 static float SV_TASRollWord(double deg)
 {
@@ -104,14 +110,16 @@ static float SV_TASRollAim(const float *aim, float gain, const float *n, float l
 static int SV_TASRollFlags(const float *r)
 {
 	int b;
-	if (!(r[6] >= 0 && r[6] <= 7 + SV_TAS_ROLL_FOLLOW + SV_TAS_ROLL_PITCHV + SV_TAS_ROLL_AIM + SV_TAS_ROLL_WALLBIT && floor(r[6]) == r[6]))
+	if (!(r[6] >= 0 && r[6] <= 7 + SV_TAS_ROLL_FOLLOW + SV_TAS_ROLL_PITCHV + SV_TAS_ROLL_AIM + SV_TAS_ROLL_WALLBIT + SV_TAS_ROLL_AIMWIDE && floor(r[6]) == r[6]))
 		return -1;
 	b = (int)r[6];
 	if ((b & SV_TAS_ROLL_FOLLOW) && !(r[4] >= -180 && r[4] <= 180))
 		return -1;
 	if ((b & SV_TAS_ROLL_AIM) && !(b & SV_TAS_ROLL_FOLLOW))
 		return -1;
-	return b & (SV_TAS_ROLL_FOLLOW | SV_TAS_ROLL_PITCHV | SV_TAS_ROLL_AIM | SV_TAS_ROLL_WALLBIT);
+	if ((b & SV_TAS_ROLL_AIMWIDE) && !(b & SV_TAS_ROLL_AIM))
+		return -1;
+	return b & (SV_TAS_ROLL_FOLLOW | SV_TAS_ROLL_PITCHV | SV_TAS_ROLL_AIM | SV_TAS_ROLL_WALLBIT | SV_TAS_ROLL_AIMWIDE);
 }
 
 /* Patch 1467: this thread is a tas_rollout_batch worker: per-tick entity and trigger queries use their own visit
@@ -276,9 +284,11 @@ static int SV_TASRollRun(edict_t *e, float *in, int n, float *out, const float *
 	vec3_t normal, point;
 	float distance;
 	sv_tas_input_t row;
-	int i, k, kind, rep, ran, airk, wall, wallbit;
+	int i, k, kind, rep, ran, airk, wall, wallbit, aimheld;
+	float aimside;
 	ran = 0;
 	airk = 0;
+	aimside = 0; aimheld = 0;
 	if (!(aimgain > 0)) aimgain = 10;	/* NaN too */
 	if (!(aimlead >= 0 && aimlead <= 1)) aimlead = 0.5;	/* P1466: P1449's set-back; NaN too */
 	if (aimlead > 0.9) aimlead = 0.9;	/* at 1 an approach along the face puts the lead point on the body (review) */
@@ -290,7 +300,26 @@ static int SV_TASRollRun(edict_t *e, float *in, int n, float *out, const float *
 		int fl = SV_TASRollFlags(r);
 		wallbit = (fl & SV_TAS_ROLL_WALLBIT) != 0;	/* SV_TASRollFollow clears every flag from r[6] */
 		if ((fl & SV_TAS_ROLL_AIM) && airk >= 3)
+		{
 			r[4] = SV_TASRollAim(aim, aimgain, aimn, aimlead);	/* P1449: a flight steers to the aim point */
+			if (fl & SV_TAS_ROLL_AIMWIDE)
+			{	/* P1476: |q| = 30 + 30 min(1, |err| / gain), so the error is read back from the command */
+				float side = r[4] >= 0 ? 1 : -1, err = (fabs(r[4]) - 30) / 30 * aimgain;
+				if (aimside != 0 && side != aimside && (err < SV_TAS_AIMWIDE_DEG || aimheld < SV_TAS_AIMWIDE_TICKS))
+					r[4] = aimside * 30;
+				else if (side != aimside)
+				{
+					aimside = side;
+					aimheld = 0;
+				}
+				aimheld++;
+			}
+		}
+		else
+		{
+			aimside = 0;
+			aimheld = 0;
+		}
 		if (fl > 0)
 			SV_TASRollFollow(r, fl & ~SV_TAS_ROLL_AIM);	/* P1449: from the velocity this tick starts with */
 		if (fl & SV_TAS_ROLL_AIM)
