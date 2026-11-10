@@ -393,7 +393,16 @@ typedef struct
 	float msgms;					//...the slowest window message
 	unsigned short msgs, msgid;
 	char cmdline[40];				//...the slowest console line
+	char bif[3][24];				//DIAG lows2: r_spikes 2, the frame's three most expensive builtins (inclusive)
+	float bims[3];
+	unsigned short bicalls[3];
 } spike_t;
+#define PR_BTIME_MAX 1024
+extern double pr_btime_us[PR_BTIME_MAX];
+extern unsigned int pr_btime_calls[PR_BTIME_MAX];
+extern unsigned short pr_btime_touched[PR_BTIME_MAX];
+extern unsigned int pr_btime_ntouched;
+const char *CSQC_BuiltinName(unsigned int num);
 qboolean r_spikes_on;				//sys_win.c and cl_main.c time the input bucket's steps
 double r_spikes_inus[3];			//cl_main.c: SendKeyEvents, INS_Move+IN_Commands, Cbuf_Execute
 extern double cmd_spikeus;	//cmd.c
@@ -553,6 +562,27 @@ static void R_Spikes_Sample(void)
 	r_spikes_pmoves = r_spikes_qcpmoves = 0, r_spikes_pmus = r_spikes_hookus = 0;
 	if (qcprof)
 		CSQC_EnumProfile(R_Spikes_QCFunc, &f);
+	{	//DIAG lows2: top three builtins this frame, then clear what was touched
+		unsigned int t, k;
+		for (t = 0; t < pr_btime_ntouched; t++)
+		{
+			unsigned int b = pr_btime_touched[t];
+			float ms = pr_btime_us[b] / 1000;
+			for (k = 0; k < 3 && ms <= f.bims[k]; k++)
+				;
+			if (k < 3)
+			{
+				memmove(&f.bims[k+1], &f.bims[k], sizeof(f.bims[0]) * (2 - k));
+				memmove(f.bif[k+1], f.bif[k], sizeof(f.bif[0]) * (2 - k));
+				memmove(&f.bicalls[k+1], &f.bicalls[k], sizeof(f.bicalls[0]) * (2 - k));
+				f.bims[k] = ms;
+				f.bicalls[k] = min(pr_btime_calls[b], 65535);
+				Q_strncpyz(f.bif[k], CSQC_BuiltinName(b), sizeof(f.bif[k]));
+			}
+			pr_btime_us[b] = 0, pr_btime_calls[b] = 0;
+		}
+		pr_btime_ntouched = 0;
+	}
 #endif
 #if defined(_WIN32) && !defined(FTE_SDL) && !defined(FTE_SDL3) && !defined(WINRT)
 	f.inms[0] = r_spikes_pipeus / 1000, f.inms[1] = r_spikes_pumpus / 1000;
@@ -623,6 +653,9 @@ static void R_Spikes_Append(char *out, size_t outsize)
 		if (spk.s[i].inms[0] + spk.s[i].inms[1] + spk.s[i].inms[2] + spk.s[i].inms[3] >= 1)
 			Q_strncatz(out, va("          input: stdin %.2f, messages %.2f (%u, slowest 0x%04x %.2f), INS_Move+IN_Commands %.2f, console %.2f (slowest command %.2f: %s)\n",
 				spk.s[i].inms[0], spk.s[i].inms[1], spk.s[i].msgs, spk.s[i].msgid, spk.s[i].msgms, spk.s[i].inms[2], spk.s[i].inms[3], spk.s[i].inms[4], spk.s[i].cmdline), outsize);
+		if (*spk.s[i].bif[0])
+			Q_strncatz(out, va("          qc builtins: %s %.2f (%u), %s %.2f (%u), %s %.2f (%u)\n", spk.s[i].bif[0], spk.s[i].bims[0], spk.s[i].bicalls[0],
+				spk.s[i].bif[1], spk.s[i].bims[1], spk.s[i].bicalls[1], spk.s[i].bif[2], spk.s[i].bims[2], spk.s[i].bicalls[2]), outsize);
 		if (*spk.s[i].qcf[0])
 			Q_strncatz(out, va("          qc self: %s %.2f, %s %.2f, %s %.2f\n", spk.s[i].qcf[0], spk.s[i].qcms[0],
 				spk.s[i].qcf[1], spk.s[i].qcms[1], spk.s[i].qcf[2], spk.s[i].qcms[2]), outsize);
