@@ -1,6 +1,11 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
-## Patch 1478 -- journal close preserves the configured growth limit (in_generic.c)
+## Patch 1479 -- journal close preserves the configured growth limit (in_generic.c)
+
+Numbering correction: the independently published game-repo P1478 claim arrived
+while this fix was qualifying. Preserve that claim. The provisional engine
+commit0e22be20c/tag patch-1478 remain immutable history; this is the same product
+change, renamed forward-only with no C/test changes. Current pin is patch-1479.
 
 **Problem:** Closing an input journal replaced its configured byte limit with its
 current allocation. An otherwise complete journal near a 64/128 KiB allocation
