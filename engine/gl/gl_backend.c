@@ -9719,6 +9719,12 @@ typedef struct
 static glblendcert_t glblend_cert[GLBLEND_CERT_SLOTS];
 static unsigned int glblend_certstamp;
 static unsigned int glblend_certhits, glblend_certproved, glblend_certwrong;	// proved/wrong: r_blendsort_cert 2
+// FTESurf Patch 1490: failures no certificate can keep -- pass 1 crossed a barrier through an unproved pair (no strict
+// edge), so only a re-run can see it pass. Each keeps the failure's pass-2 cycle; while that cycle re-proves the view
+// keeps the unsorted order and re-sorts every r_blendsort_retry frames (surf_fairy's worst spot: ~34k work a view).
+#define GLBLEND_MEMO_SLOTS 4
+static struct { glblendcert_t c; int skips; } glblend_memo[GLBLEND_MEMO_SLOTS];
+static unsigned int glblend_memostamp, glblend_memohits;
 
 static qboolean GLBE_BlendPairUnseen(const glblendplane_t *a, const glblendplane_t *b)
 {
@@ -9908,6 +9914,25 @@ static void GLBE_BlendCertStore(const glblendcert_t *take)
 	glblend_cert[c].stamp = ++glblend_certstamp;
 }
 
+// FTESurf Patch 1490: keep (or refresh) the failure's pass-2 cycle; a full re-run that failed again starts its count
+static void GLBE_BlendMemoStore(const glblendcert_t *take)
+{
+	unsigned int i, c = 0;
+	for (i = 0; i < GLBLEND_MEMO_SLOTS; i++)
+		if (glblend_memo[i].c.len[1] == take->len[1] && !memcmp(glblend_memo[i].c.mesh[1], take->mesh[1], take->len[1] * sizeof(take->mesh[1][0])))
+		{
+			glblend_memo[i].skips = 0;
+			glblend_memo[i].c.stamp = ++glblend_memostamp;
+			return;
+		}
+	for (i = 1; i < GLBLEND_MEMO_SLOTS; i++)
+		if (glblend_memo[i].c.stamp < glblend_memo[c].c.stamp) c = i;
+	memset(&glblend_memo[c], 0, sizeof(glblend_memo[c]));
+	glblend_memo[c].c.len[1] = take->len[1];
+	memcpy(glblend_memo[c].c.mesh[1], take->mesh[1], take->len[1] * sizeof(take->mesh[1][0]));
+	glblend_memo[c].c.stamp = ++glblend_memostamp;
+}
+
 static void GLBE_BlendPlaneSort(glblendface_t *faces, size_t n, glblendplanestats_t *stats)
 {
 	glblendplane_t *planes;
@@ -9951,6 +9976,17 @@ static void GLBE_BlendPlaneSort(glblendface_t *faces, size_t n, glblendplanestat
 		stats->pass = 2;
 		return;
 	}
+	if (certify && r_blendsort_cert.ival != 2 && r_blendsort_retry.ival > 1)	// FTESurf Patch 1490
+		for (c = 0; c < GLBLEND_MEMO_SLOTS; c++)
+			if (glblend_memo[c].c.len[1] && glblend_memo[c].skips < r_blendsort_retry.ival - 1
+				&& GLBE_BlendCertCycle(faces, n, &glblend_memo[c].c, 1))
+			{
+				glblend_memo[c].skips++;
+				glblend_memohits++;
+				stats->status = -2;
+				stats->pass = 2;
+				return;
+			}
 	take.len[0] = take.len[1] = 0;	// verify (2) sorts anyway; done: grades the certificate's claim
 	planes = BZ_Malloc(GLBLEND_PLANE_FACES * sizeof(*planes));
 	for (f = 0; f < n; f++)
@@ -10097,6 +10133,8 @@ rebuild:
 			stats->status = -2;
 			if (take.len[0] && take.len[1] && stats->cert < 0)
 				GLBE_BlendCertStore(&take);
+			else if (take.len[1] && stats->cert < 0)
+				GLBE_BlendMemoStore(&take);	// FTESurf Patch 1490
 			goto done;
 		}
 		order[step] = pick;
@@ -10119,6 +10157,8 @@ rebuild:
 			stats->status = -3;
 			if (take.len[0] && take.len[1] && stats->cert < 0)
 				GLBE_BlendCertStore(&take);
+			else if (take.len[1] && stats->cert < 0)
+				GLBE_BlendMemoStore(&take);	// FTESurf Patch 1490
 			goto done;
 		}
 	}
@@ -10132,6 +10172,9 @@ rebuild:
 		faces[planes[i].slot] = ordered[i];
 	BZ_Free(ordered);
 	stats->status = 1;
+	for (c = 0; c < GLBLEND_MEMO_SLOTS; c++)	// FTESurf Patch 1490: this view sorts again
+		if (glblend_memo[c].c.len[1] && GLBE_BlendCertCycle(faces, n, &glblend_memo[c].c, 1))
+			glblend_memo[c].c.len[1] = 0;
 done:
 	stats->work += owork;
 	stats->overlapfull = owork >= GLBLEND_OVERLAP_WORK;
@@ -10303,6 +10346,7 @@ static void GLBE_SubmitBlendedFaces(batch_t *world, batch_t *dynamic)
 			(unsigned int)stats.edges, (unsigned int)stats.work, (unsigned int)stats.moved, stats.pass, stats.overlapfull, r_refdef.recurse);
 		Con_Printf("ALPHATRACE verdicts pass0 %u later %u disjoint %u (by face boxes %u)\n",	// FTESurf Patch 1457, last sort
 			bov_verdicts[0], bov_verdicts[1], bov_disjoint, bov_facebox);
+		Con_Printf("ALPHATRACE memo hits %u (r_blendsort_retry %d)\n", glblend_memohits, r_blendsort_retry.ival);	// FTESurf Patch 1490
 		Con_Printf("ALPHATRACE cert world %d entities %d hits %u proved %u wrong %u\n", stats.cert, combined ? bstats.cert : -1,
 			glblend_certhits, glblend_certproved, glblend_certwrong);	// FTESurf Patch 1465
 		if (combined)
