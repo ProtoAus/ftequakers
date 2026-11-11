@@ -2342,9 +2342,116 @@ static qboolean SV_WritePendingStringStat(client_t *client, int pnum, sizebuf_t 
 	return true;
 }
 
-void SV_UpdateClientStats (client_t *client, int pnum, sizebuf_t *msg, client_frame_t *frame)
+static void SV_DiffReplacementStats(client_t *client, unsigned int m, int *statsi, float *statsf, const char **statss)
+{
+	unsigned int i;
+	//diff numerical stats first
+	for (i=0 ; i<m ; i++)
+	{
+		if (client->statsi[i] != statsi[i] || client->statsf[i] != statsf[i])
+		{
+			client->statsi[i] = statsi[i];
+			client->statsf[i] = statsf[i];
+			client->pendingstats[i>>5u] |= 1u<<(i&0x1f);
+		}
+	}
+	//diff string stats.
+	for (i=0 ; i<m ; i++)
+	{
+		const char *o=client->statss[i], *n=statss[i];
+		if (o != n)
+		{
+			if (!o)
+				o = "";
+			if (!n)
+				n = "";
+			if (strcmp(o, n))
+				client->pendingstats[(i+MAX_CL_STATS)>>5u] |= 1u<<((i+MAX_CL_STATS)&0x1f);
+			//FIXME: we could always just run the QCGC on the player's string stats too. wouldn't need string compares that way
+			if (client->statss[i])
+				Z_Free((void*)client->statss[i]);
+			client->statss[i] = (statss[i]&&*statss[i])?Z_StrDup(statss[i]):NULL;
+		}
+	}
+}
+
+static void SV_WritePendingStats(client_t *client, int pnum, sizebuf_t *msg, client_frame_t *frame, unsigned int m)
 {
 	extern cvar_t pm_physicsmode;
+	unsigned int i;
+
+	// A phase tag superseded before transmission cannot seed that old ACK later.
+	// Priority is opportunistic: retain the shared byte/slot/seat limits.
+	if (m > STAT_FS_SOURCEPHASE && pm_physicsmode.ival == PHYSMODE_SOURCE &&
+		!strcmp(InfoBuf_ValueForKey(&svs.info, "fs_sourcephase"), "1"))
+		SV_WritePendingStringStat(client, pnum, msg, frame, STAT_FS_SOURCEPHASE);
+
+	for (i=0 ; i<m ; i++)
+	{
+		if (client->pendingstats[i>>5u] & (1u<<(i&0x1f)))
+		{
+			float fval = client->statsf[i];
+			int ival = client->statsi[i];
+
+			//would overflow
+			if (msg->cursize+8 >= msg->maxsize)
+				break;
+			//can't track it
+			if (frame->numresendstats >= sizeof(frame->resendstats)/sizeof(frame->resendstats[0]))
+				break;
+			//we're going for it.
+			client->pendingstats[i>>5u] &= ~(1u<<(i&0x1f));	//doesn't need resending any more
+			frame->resendstats[frame->numresendstats++] = i | (pnum<<12);
+			if (fval && fval != (float)(int)fval && !dpcompat_stats.ival)
+			{
+				if (pnum)
+				{
+					MSG_WriteByte(msg, svcfte_choosesplitclient);
+					MSG_WriteByte(msg, pnum);
+				}
+				MSG_WriteByte(msg, svcfte_updatestatfloat);
+				MSG_WriteByte(msg, i);
+				MSG_WriteFloat(msg, fval);
+			}
+			else
+			{
+				if (fval)
+					ival = fval;
+				if (ival >= 0 && ival <= 255)
+				{
+					if (pnum)
+					{
+						MSG_WriteByte(msg, svcfte_choosesplitclient);
+						MSG_WriteByte(msg, pnum);
+					}
+					MSG_WriteByte(msg, ISNQCLIENT(client)?svcdp_updatestatbyte:svcqw_updatestatbyte);
+					MSG_WriteByte(msg, i);
+					MSG_WriteByte(msg, ival);
+				}
+				else
+				{
+					if (pnum)
+					{
+						MSG_WriteByte(msg, svcfte_choosesplitclient);
+						MSG_WriteByte(msg, pnum);
+					}
+					MSG_WriteByte(msg, ISNQCLIENT(client)?svcnq_updatestatlong:svcqw_updatestatlong);
+					MSG_WriteByte(msg, i);
+					MSG_WriteLong(msg, ival);
+				}
+			}
+		}
+	}
+
+	for (i=0 ; i<m ; i++)
+	{
+		if (!SV_WritePendingStringStat(client, pnum, msg, frame, i))
+			break;
+	}
+}
+
+void SV_UpdateClientStats (client_t *client, int pnum, sizebuf_t *msg, client_frame_t *frame)
+{
 	int		statsi[MAX_CL_STATS];
 	float	statsf[MAX_CL_STATS];
 	const char	*statss[MAX_CL_STATS];
@@ -2359,103 +2466,8 @@ void SV_UpdateClientStats (client_t *client, int pnum, sizebuf_t *msg, client_fr
 
 	if (client->fteprotocolextensions2 & PEXT2_REPLACEMENTDELTAS)
 	{
-		//diff numerical stats first
-		for (i=0 ; i<m ; i++)
-		{
-			if (client->statsi[i] != statsi[i] || client->statsf[i] != statsf[i])
-			{
-				client->statsi[i] = statsi[i];
-				client->statsf[i] = statsf[i];
-				client->pendingstats[i>>5u] |= 1u<<(i&0x1f);
-			}
-		}
-		//diff string stats.
-		for (i=0 ; i<m ; i++)
-		{
-			const char *o=client->statss[i], *n=statss[i];
-			if (o != n)
-			{
-				if (!o)
-					o = "";
-				if (!n)
-					n = "";
-				if (strcmp(o, n))
-					client->pendingstats[(i+MAX_CL_STATS)>>5u] |= 1u<<((i+MAX_CL_STATS)&0x1f);
-				//FIXME: we could always just run the QCGC on the player's string stats too. wouldn't need string compares that way
-				if (client->statss[i])
-					Z_Free((void*)client->statss[i]);
-				client->statss[i] = (statss[i]&&*statss[i])?Z_StrDup(statss[i]):NULL;
-			}
-		}
-
-		// A phase tag superseded before transmission cannot seed that old ACK later.
-		// Priority is opportunistic: retain the shared byte/slot/seat limits.
-		if (m > STAT_FS_SOURCEPHASE && pm_physicsmode.ival == PHYSMODE_SOURCE &&
-			!strcmp(InfoBuf_ValueForKey(&svs.info, "fs_sourcephase"), "1"))
-			SV_WritePendingStringStat(client, pnum, msg, frame, STAT_FS_SOURCEPHASE);
-
-		for (i=0 ; i<m ; i++)
-		{
-			if (client->pendingstats[i>>5u] & (1u<<(i&0x1f)))
-			{
-				float fval = client->statsf[i];
-				int ival = client->statsi[i];
-
-				//would overflow
-				if (msg->cursize+8 >= msg->maxsize)
-					break;
-				//can't track it
-				if (frame->numresendstats >= sizeof(frame->resendstats)/sizeof(frame->resendstats[0]))
-					break;
-				//we're going for it.
-				client->pendingstats[i>>5u] &= ~(1u<<(i&0x1f));	//doesn't need resending any more
-				frame->resendstats[frame->numresendstats++] = i | (pnum<<12);
-				if (fval && fval != (float)(int)fval && !dpcompat_stats.ival)
-				{
-					if (pnum)
-					{
-						MSG_WriteByte(msg, svcfte_choosesplitclient);
-						MSG_WriteByte(msg, pnum);
-					}
-					MSG_WriteByte(msg, svcfte_updatestatfloat);
-					MSG_WriteByte(msg, i);
-					MSG_WriteFloat(msg, fval);
-				}
-				else
-				{
-					if (fval)
-						ival = fval;
-					if (ival >= 0 && ival <= 255)
-					{
-						if (pnum)
-						{
-							MSG_WriteByte(msg, svcfte_choosesplitclient);
-							MSG_WriteByte(msg, pnum);
-						}
-						MSG_WriteByte(msg, ISNQCLIENT(client)?svcdp_updatestatbyte:svcqw_updatestatbyte);
-						MSG_WriteByte(msg, i);
-						MSG_WriteByte(msg, ival);
-					}
-					else
-					{
-						if (pnum)
-						{
-							MSG_WriteByte(msg, svcfte_choosesplitclient);
-							MSG_WriteByte(msg, pnum);
-						}
-						MSG_WriteByte(msg, ISNQCLIENT(client)?svcnq_updatestatlong:svcqw_updatestatlong);
-						MSG_WriteByte(msg, i);
-						MSG_WriteLong(msg, ival);
-					}
-				}
-			}
-		}
-
-		for (i=0 ; i<m ; i++)
-		{
-			if (!SV_WritePendingStringStat(client, pnum, msg, frame, i))
-				break;
-		}
+		SV_DiffReplacementStats(client, m, statsi, statsf, statss);
+		SV_WritePendingStats(client, pnum, msg, frame, m);
 	}
 	else
 
@@ -2625,6 +2637,23 @@ void SV_UpdateClientStats (client_t *client, int pnum, sizebuf_t *msg, client_fr
 	}
 }
 
+static unsigned int SV_PrepareReplacementStats(client_t *client)
+{
+	int statsi[MAX_CL_STATS];
+	float statsf[MAX_CL_STATS];
+	const char *statss[MAX_CL_STATS];
+	unsigned int m;
+	/*figure out what the stat values should be*/
+	m = SV_CalcClientStats(client, statsi, statsf, statss);
+	if ((client->fteprotocolextensions & (PEXT_HEXEN2|PEXT_CSQC)) || client->protocol == SCP_DARKPLACES6 || client->protocol == SCP_DARKPLACES7)
+		m = min(m,256);
+	else
+		m = min(m,MAX_QW_STATS);
+
+	SV_DiffReplacementStats(client, m, statsi, statsf, statss);
+	return m;
+}
+
 qboolean SV_CanTrack(client_t *client, int entity)
 {
 	if (entity <= 0 || entity > sv.allocated_client_slots)
@@ -2641,10 +2670,43 @@ qboolean SV_CanTrack(client_t *client, int entity)
 SV_SendClientDatagram
 =======================
 */
+static void SV_WriteMandatoryClientdata(client_t *client, sizebuf_t *msg)
+{
+	/*FTESurf Patch 1211: entity gravity with every frame, so it arrives with the state
+	  it belongs to (a predicting client starts each replay from it). Reliably it could
+	  queue behind any other reliable message for a round trip.*/
+	if (ISQWCLIENT(client) && movevars.gravity &&
+		(svs.gametype == GT_PROGS || svs.gametype == GT_Q1QVM))
+	{
+		int pnum = 0;
+		client_t *c;
+		for (c = client; c; c = c->controlled, pnum++)
+		{
+			if (!c->edict)
+				continue;
+			if (pnum)
+			{	//one message only: the client resets its destination per message
+				MSG_WriteByte(msg, svcfte_choosesplitclient);
+				MSG_WriteByte(msg, pnum);
+			}
+			MSG_WriteByte(msg, svc_entgravity);
+			MSG_WriteFloat(msg, SV_ClientCurGravity(c)/movevars.gravity);
+		}
+	}
+
+	// add the client specific data to the datagram
+	SV_WriteClientdataToMessage (client, msg);
+}
+
 qboolean SV_SendClientDatagram (client_t *client)
 {
 	qbyte		buf[MAX_OVERALLMSGLEN-64/*play safe*/];
 	sizebuf_t	msg;
+	qbyte mandatorybuf[sizeof(buf)];
+	sizebuf_t mandatory;
+	qboolean qwreplacement = ISQWCLIENT(client) && (client->fteprotocolextensions2 & PEXT2_REPLACEMENTDELTAS);
+	unsigned int statlimits[MAX_SPLITS];
+	int snapshotlimit = 0;
 	size_t		clientlimit;
 	unsigned int sentbytes;
 	unsigned int outframeseq = client->netchan.incoming_sequence;	//this is so weird... but at least covers nq/qw sequence vs unreliables weirdness...
@@ -2652,6 +2714,14 @@ qboolean SV_SendClientDatagram (client_t *client)
 	if (ISQWCLIENT(client) || ISNQCLIENT(client))
 	{
 		client_frame_t *frame = &client->frameunion.frames[outframeseq & UPDATE_MASK];
+		if (qwreplacement)
+		{
+			// Retire the old slot before assigning any records to this attempt.
+			if (frame->sequence > client->lastsequence_acknowledged)
+				SV_RequeueFrame(client, frame);
+			frame->numresend = 0;
+			frame->sequence = outframeseq;
+		}
 		frame->numresendstats = 0;
 	}
 
@@ -2696,40 +2766,51 @@ qboolean SV_SendClientDatagram (client_t *client)
 #endif
 		{
 
+			if (qwreplacement)
+			{
+				client_t *c;
+				unsigned int seat = 0;
+				int reserve;
+				// All seats must be diffed before clientdata consumes damage/fixangle state.
+				for (c = client; c; c = c->controlled)
+					statlimits[seat++] = SV_PrepareReplacementStats(c);
+				mandatory = msg;
+				mandatory.data = mandatorybuf;
+				mandatory.maxsize = sizeof(mandatorybuf);
+				SV_WriteMandatoryClientdata(client, &mandatory);
+				reserve = mandatory.cursize + SV_ReplacementEntityReserve(client);
+				if (msg.maxsize < reserve)
+					msg.maxsize = clientlimit; // favor the snapshot over optional datagram bytes
+				snapshotlimit = msg.maxsize;
+				msg.maxsize = max(0, snapshotlimit - reserve);
+			}
+
 			if (!ISQ2CLIENT(client) && ((client->fteprotocolextensions2 & PEXT2_REPLACEMENTDELTAS) || Netchan_CanReliable (&client->netchan, SV_RateForClient(client))))
 			{
 				int pnum=1;
 				client_t *c;
 				client_frame_t *frame = &client->frameunion.frames[outframeseq & UPDATE_MASK];
-				SV_UpdateClientStats (client, 0, &msg, frame);
+				if (qwreplacement)
+					SV_WritePendingStats(client, 0, &msg, frame, statlimits[0]);
+				else
+					SV_UpdateClientStats (client, 0, &msg, frame);
 
 				for (c = client->controlled; c; c = c->controlled,pnum++)
-					SV_UpdateClientStats(c, pnum, &msg, frame);
-			}
-			/*FTESurf Patch 1211: entity gravity with every frame, so it arrives with the state
-			  it belongs to (a predicting client starts each replay from it). Reliably it could
-			  queue behind any other reliable message for a round trip.*/
-			if (ISQWCLIENT(client) && movevars.gravity &&
-				(svs.gametype == GT_PROGS || svs.gametype == GT_Q1QVM))
-			{
-				int pnum = 0;
-				client_t *c;
-				for (c = client; c; c = c->controlled, pnum++)
 				{
-					if (!c->edict)
-						continue;
-					if (pnum)
-					{	//one message only: the client resets its destination per message
-						MSG_WriteByte(&msg, svcfte_choosesplitclient);
-						MSG_WriteByte(&msg, pnum);
-					}
-					MSG_WriteByte(&msg, svc_entgravity);
-					MSG_WriteFloat(&msg, SV_ClientCurGravity(c)/movevars.gravity);
+					if (qwreplacement)
+						SV_WritePendingStats(c, pnum, &msg, frame, statlimits[pnum]);
+					else
+						SV_UpdateClientStats(c, pnum, &msg, frame);
 				}
 			}
-
-			// add the client specific data to the datagram
-			SV_WriteClientdataToMessage (client, &msg);
+			if (qwreplacement)
+			{
+				msg.maxsize = snapshotlimit;
+				SZ_Write(&msg, mandatory.data, mandatory.cursize);
+				msg.overflowed |= mandatory.overflowed;
+			}
+			else
+				SV_WriteMandatoryClientdata(client, &msg);
 
 			// send over all the objects that are in the PVS
 			// this will include clients, a packetentities, and
@@ -2753,6 +2834,8 @@ qboolean SV_SendClientDatagram (client_t *client)
 	if (msg.overflowed)
 	{
 		Con_Printf ("WARNING: msg overflowed for %s\n", client->name);
+		if (qwreplacement)
+			SV_RequeueFrame(client, &client->frameunion.frames[outframeseq & UPDATE_MASK]);
 		SZ_Clear (&msg);
 	}
 

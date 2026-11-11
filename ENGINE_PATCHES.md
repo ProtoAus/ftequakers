@@ -5,6 +5,19 @@ all12lobbies verified,217recorder/resume payload+captured metadata rows unchange
 full public provenance/limits in FTESurf tools/playerfix-20261111-delivery.md.
 No new native build by that QC delivery; P1498 native/compiler delivery is separate.
 
+## Patch 1508 -- bounded QuakeWorld snapshot delivery (CANDIDATE)
+
+Problem: replacement stats can starve mandatory output; locally discarded QW
+snapshots can retire unsent resend records. Voice admission misses one header byte.
+Change: prepare every seat's stats before measuring clientdata once; reserve its
+bytes plus shared entity/VR admission, preserving wire order and resend limits.
+Recover explicit discarded/stale frames; retain sequence checks for network loss.
+NQ/legacy flow unchanged; correct voice's six-byte header budget.
+Verified: existing CPU seam 44/44; production datagram/drop/ACK/budget controls
+15/15 versus baseline's nine expected failures, zero compiler warnings. Independent
+source review clear with bounded fixture limits. Full native builds, compatibility
+and deployment remain pending. No player-cause or crash-fixed claim.
+
 ## Patch 1507 -- stable sprite draw lists (QuakeC only)
 
 Problem: material-major sprite drawing scanned every slot once per material and

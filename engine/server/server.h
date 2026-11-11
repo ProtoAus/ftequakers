@@ -1563,6 +1563,10 @@ void SV_GibFilterPurge(void);
 void SV_CleanupEnts(void);
 void SV_ProcessSendFlags(client_t *c);
 
+// Entry/header admission, not a maximum variable-length entity payload.
+#define SV_REPLACEMENT_ENTITY_ADMISSION 52
+int SV_ReplacementEntityReserve(client_t *client);
+void SV_RequeueFrame(client_t *client, client_frame_t *frame);
 void SV_AckEntityFrame(client_t *cl, int framenum);
 void SV_ReplaceEntityFrame(client_t *cl, int framenum);
 
