@@ -63,7 +63,14 @@ nine expected failures, zero fixture warnings; independent source review clear.
 Full Windows client/server/five plugins74 and ARM server16/HL2one warning payloads
 match actual baselines: zero new. Old/new Windows and ARM each pass1608 numeric
 checks; all90 full-content physics rows agree, plus approved historical controls.
-Deployment/human acceptance are separate; no player-cause or crash-fixed claim.
+Delivered11Nov2026UTC: BOTH Windows/default10 at18:12Z, exact native/prev hashes,
+all20 preimages archived before writes and protected16430 entries unchanged.
+Minimal patch-1508-arm pair at19:03-19:09Z: ALL12 fresh native actors/plugins and
+prev hashes verified, protected58271 entries unchanged, native UID/GID retained.
+Complete native4/parts9/resume207 preimages verified off-box before staging;
+initial live-writer and inherited-group guard refusals preserved, no data waiver,
+Root action, ownership change or verifier downgrade. Progs/configs/backend stay.
+Human save/load acceptance remains pending; no player-cause or crash-fixed claim.
 Scope: transport/clientdata/entity PVS fixture services remain bounded doubles.
 Public provenance/limits: FTESurf tools/p1508-snapshot-delivery.md.
 
