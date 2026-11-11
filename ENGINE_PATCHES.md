@@ -5,6 +5,30 @@ all12lobbies verified,217recorder/resume payload+captured metadata rows unchange
 full public provenance/limits in FTESurf tools/playerfix-20261111-delivery.md.
 No new native build by that QC delivery; P1498 native/compiler delivery is separate.
 
+## Patch 1501 -- static prop models load behind the loading screen, so their shaders warm (gl_shader.c; plugin mod_vbsp.c)
+
+Problem: on Source maps the hl2 plugin requested only solid static props at load (collision); the rest loaded in the
+first frame that drew them (P1364's light warm waits for all of them there) and registered their materials then. A
+program first created by such a material was never warmed -- P1277's activation compiles remembered permutations only
+for shaders in use, and a new program's base permutation compiles at creation. surf_fairy, Lex's warm list and render
+settings: ~120 prop shaders registered in the first rendered frame, 4 late compiles a play (2 of them remembered in
+the warm list), 66 late texture uploads. Lex's fullscreen dump had a 52.83 ms frame with 1 compile, two ~15 ms with 2.
+
+Fix: VBSP_BuildBIHMain (main thread, queued before the world finishes, so before activation) requests every prop
+model when hl2_lt_prewarm is on and the plugin has an image interface; r_mapready's first drain also waits for every
+model in mod_known still MLS_LOADING, for at most half of r_mapready_budget so the compiles keep the rest;
+ready-closure needs none pending.
+
+Measured (lows2 rig, a diag build logging each late compile and late shader registration; Lex's warm list and render
+settings): fairy late prop shaders ~120 -> 0, late compiles 4 -> 0, late uploads 66 -> 1; bhop_orgrimmar 15 -> 0,
+2 -> 0, 31 -> 1; surf_tendies unchanged (its one late compile is the CSQC sun glare's material, registered on first
+sight). Load time unchanged (fairy 31 s, orgrimmar 10 s, two launches each); fairy's activation 0.05 -> 0.13 s, 97
+programs warmed (95). One review: the prop wait shared the compile deadline (now half), ready-closure ignored props,
+a HAVE_CLIENT guard did nothing (the plugin's own qrenderer is the test).
+
+Known: fairy's first frame after spawn is still ~2 s (network 1.2 s, hl2 props 0.6 s); a headless client now loads
+every prop; the sun glare's material still registers on first sight.
+
 ## Patch 1502 -- scoped public map admission (backend only)
 
 Problem: importing one qualified set through the global map watcher also touched
