@@ -5,6 +5,26 @@ all12lobbies verified,217recorder/resume payload+captured metadata rows unchange
 full public provenance/limits in FTESurf tools/playerfix-20261111-delivery.md.
 No new native build by that QC delivery; P1498 native/compiler delivery is separate.
 
+## Patch 1502 -- scoped public map admission (backend only)
+
+Problem: importing one qualified set through the global map watcher also touched
+unrelated approvals, variants, ports and catalogue/download entries, and repeated
+network body downloads despite an already verified operator stage.
+Change: optional exact public name/ID/build/zone scope reuses stable regular
+staged bodies through existing archive/copy/quiet/data gates. Retain full source
+censuses, floors and locks; preserve unselected catalogue/download/track rows.
+Normalize confinement before containment checks; merge download rows using the
+reader's case-insensitive identity and whitespace grammar without rewriting
+unselected row text. Default unscoped operation is unchanged.
+Verified: staged replacement and predecessor retention act; malformed/private/
+unproved identity and bad or changed source refuse without fetch fallback.
+Discriminating review regressions: prerepair3 failures, repaired0; full Windows
+suite0 failures with platform skips; Linux0 failures plus completed missing-tool
+catalogue-merge arm0 failures/no skips. Independent initial and repair reviews
+clear. Earlier fixture/reader/launcher refusals retained. Source only, no canonical
+map admission or privileged runtime promotion claimed; see FTESurf
+ tools/p1502-scoped-map-admission.md. No native pin/tag, mover or QC Build change.
+
 ## Patch 1500 -- bound compiler string separator appends
 
 Problem: one compatibility-dialect string append skipped the existing token
