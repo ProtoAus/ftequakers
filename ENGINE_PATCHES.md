@@ -5,6 +5,29 @@ all12lobbies verified,217recorder/resume payload+captured metadata rows unchange
 full public provenance/limits in FTESurf tools/playerfix-20261111-delivery.md.
 No new native build by that QC delivery; P1498 native/compiler delivery is separate.
 
+## Patch 1509 -- contained cron similarity phase (backend only)
+
+Problem: cooperative comparison deadlines do not bound an in-flight load/compare
+inside the cron process before badge verification. A new child also must not
+rerun account-policy migrations or wait five seconds before its lock budget.
+Change: the existing sweep entrypoint runs only similarity under pre-bootstrap
+Linux address-space/CPU limits, bounded IPC and a finite parent kill/reap wait.
+Missing containment abstains. Existing-only exact-schema admission skips runtime
+initialization and uses the requested native lock wait from its first RO probe;
+normal callers retain their default. Historical committed rows/source recovery
+survive interruption; final counters are unknown, not measured zero.
+Verified: actual ARM16/16 process/admission controls, original cooperative acting
+control overruns the same three-second test wait, and existing ARM schema/CLI/
+similarity/sweep controls pass. Windows37-entrypoint campaign has zero new
+failures; two admin UDP assertions reproduce on untouched source. Reader949/0;
+all568REC/183VIEW bytes and fault lists unchanged, including349/7existing faulty
+files. An initial real tier-migration failure was corrected, not accepted.
+Independent clean-source review and guarded-generation/live rollout remain
+PENDING; source publication is not deployment. No new capture/schema/threshold,
+verdict/ranking/physics, native source/pin/tag or QCBuild change. Address-space/
+CPU/wait containment is not total RSS, scheduler fairness or an unconditional
+kernel-uninterruptible reap/startup deadline. FTESurf tools/p1509-simcheck-process.md.
+
 ## Patch 1508 -- bounded QuakeWorld snapshot delivery
 
 Problem: replacement stats can starve mandatory output; locally discarded QW
