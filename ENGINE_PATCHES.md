@@ -1,6 +1,6 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
-## Patch 1508 -- bounded QuakeWorld snapshot delivery (ARM backport candidate)
+## Patch 1508 -- bounded QuakeWorld snapshot delivery (minimal ARM backport)
 
 Problem: replacement stats could consume mandatory snapshot capacity, and local
 snapshot discard could retire updates without delivery.
@@ -13,9 +13,17 @@ ARM source; canonical source/git blobs match reviewed main for send/entities/tes
 The main baseline control acts with nine intended delivery failures. Full ARM
 server/HL2 builds pass; actual old-source control matches16+one warning payloads,
 zero new. Old/new ARM and Windows1608 numeric checks and90 physics rows agree;
-approved historical compatibility controls pass on both platforms. Native rollout
-and human acceptance remain separate. No reported jitter/crash-fixed claim.
-Public provenance/limits: FTESurf tools/p1508-snapshot-delivery.md.
+approved historical compatibility controls pass on both platforms.
+Delivered11Nov2026UTC19:03-19:09: qualified ARM dedicated/HL2 pair only, ALL12
+fresh native actors and actual plugin inodes verified; both current/prev hashes
+and original UID/GID preserved, protected58271 entries unchanged. Complete
+native4/parts9/resume207 preimages verified off-box before staging. Real active
+recording refused preparation until actual closed/complete data matched again;
+inherited-group correction demonstrated without Root or ownership changes.
+No progs/config/backend change, historical restore or verifier downgrade. BOTH
+Windows/default10 also verified at18:12Z. Human save/load acceptance remains
+pending; no reported jitter/crash-fixed claim. Public provenance/limits:
+FTESurf tools/p1508-snapshot-delivery.md.
 
 ## Patch 1353 -- reported prediction, line labels, editor and texture fixes
 
