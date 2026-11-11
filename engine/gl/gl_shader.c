@@ -5777,13 +5777,13 @@ static void MapReady_KeepAlive(void)
 #endif
 }
 
-static void MapReady_Drain(double deadline)
+static void MapReady_Drain(double deadline, double otherdeadline)	//Patch 1501: other models wait to otherdeadline
 {
 	for (;;)
 	{
 		MapReady_KeepAlive();
 		MapReady_Resources();
-		if (!mapready.modelpending && !mapready.imagepending && !mapready.otherpending)
+		if (!mapready.modelpending && !mapready.imagepending && (!mapready.otherpending || Sys_DoubleTime() >= otherdeadline))
 			break;
 		if (Sys_DoubleTime() >= deadline)
 		{
@@ -5844,7 +5844,7 @@ void GLSLWarm_MapActive(void)
 	else
 	{
 		GLSLWarm_Load();
-		MapReady_Drain(deadline);
+		MapReady_Drain(deadline, start + (deadline - start) * 0.5);	//Patch 1501: props get half; the rest stays the compiles'
 		capacity = min(r_numshaders, 32768) * (SHADER_PASS_MAX + 1);
 		programs = malloc(max(1, capacity) * sizeof(*programs));
 		if (!programs || !glslwarm_mem)
@@ -5923,8 +5923,8 @@ void GLSLWarm_MapActive(void)
 			}
 		}
 		free(programs);
-		MapReady_Drain(deadline);
-		if (!mapready.overflow && !mapready.unavailable && !mapready.failed && !mapready.pending &&
+		MapReady_Drain(deadline, 0);	//a prop finishing now is past the shader walk anyway
+		if (!mapready.overflow && !mapready.unavailable && !mapready.failed && !mapready.pending && !mapready.otherpending &&
 			!mapready.modelpending && !mapready.modelfailed && !mapready.modelunrequested &&
 			!mapready.imagepending && !mapready.imagefailed && !mapready.imageunrequested)
 			mapready.state = "ready-closure";

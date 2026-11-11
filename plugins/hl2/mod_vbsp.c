@@ -8296,7 +8296,8 @@ static void VBSP_BuildVisualBIH(model_t *mod)
 			continue;	//in the movement tree, which VBSP_TraceVisual traces first
 		if (!ent->model)
 			continue;
-		//non-solid props are never requested by the movement build; they load when first drawn
+		//non-solid props are not requested by the movement build: P1501's request in VBSP_BuildBIHMain loads them, or
+		//(hl2_lt_prewarm 0, no renderer) they load when first drawn
 		if (ent->model->loadstate == MLS_NOTLOADED)
 			modfuncs->GetModel(ent->model->publicname, MLV_WARN);
 		while (ent->model->loadstate == MLS_LOADING)
@@ -8388,6 +8389,7 @@ static qboolean VBSP_TraceVisual(struct model_s *model, int hulloverride, const 
 	return hit;
 }
 
+static cvar_t *hl2_lt_prewarm;	//Patch 1364's, defined with its warm below; read by Patch 1501 here
 static void VBSP_BuildBIHMain(void *ctx, void *unusedp, size_t unuseda, size_t unusedb)
 {	//NOTE: must be on main thread because we're waiting for submodels for their size.
 	model_t		*mod = ctx;
@@ -8402,14 +8404,13 @@ static void VBSP_BuildBIHMain(void *ctx, void *unusedp, size_t unuseda, size_t u
 	size_t phypieces = 0;
 
 	//FTESurf Patch 1501: every prop model, not only the solid ones below, starts loading now, while the map does,
-	//so r_mapready waits for them and warms their shaders; before, the rest loaded in the frame that first drew them.
-	//A server (no renderer) still loads only the solid ones.
-#ifdef HAVE_CLIENT
-	if (qrenderer != QR_NONE)
+	//so r_mapready waits for them and warms their shaders; before, the rest loaded in the frame that first drew them,
+	//where P1364's light warm waits for all of them. Only when that warm is on (hl2_lt_prewarm 0 keeps props lazy);
+	//a dedicated server (no image interface: qrenderer QR_NONE) still loads only the solid ones, a headless client all.
+	if (qrenderer != QR_NONE && hl2_lt_prewarm && hl2_lt_prewarm->value > 0)
 	for (i = 0; i < prv->numstaticprops; i++)
 		if (prv->staticprops[i].ent.model && prv->staticprops[i].ent.model->loadstate == MLS_NOTLOADED)
 			modfuncs->GetModel(prv->staticprops[i].ent.model->publicname, MLV_WARN);
-#endif
 
 	/*
 	FTESurf Build 7: hl2_propcollision 0 drops every prop out of the collision
