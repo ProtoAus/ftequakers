@@ -4597,6 +4597,11 @@ static void Mod_GenerateMeshVBO(model_t *mod, galiasinfo_t *galias)
 	//don't fail on dedicated servers
 	if (!BE_VBO_Begin || !galias->numverts)
 		return;
+	{	//DIAG lows2: name each model whose mesh VBO is built, with a timestamp to match r_spikes 3's slow frames
+		extern cvar_t r_spikes;
+		if (r_spikes.ival >= 3)
+			Con_Printf("meshvbo %.4f %s (%d verts)\n", Sys_DoubleTime(), mod->name, galias->numverts);
+	}
 
 	//determine the amount of space we need for our vbos.
 	if (galias->ofs_st_array)
