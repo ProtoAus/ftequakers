@@ -96,6 +96,38 @@ fleet fairness, calibration, or a hard total time/RSS/I/O/UDF/write bound. Sourc
 only: no live backend/native/progs/lobby deployment. FTESurf
 `tools/p1491-simcheck-peer-window.md` records qualification and delivery limits.
 
+## Patch 1490 -- r_blendsort 2 remembers a failure no certificate can keep (gl_backend.c, renderer.c, render.h)
+
+Problem: surf_fairy, the worst 0.1%-low map after P1488, spends its slowest frames at one place ~33 s into its board
+replay, where r_blendsort 2's sort fails every frame in the main view and the water reflection: 66 of 128 faces
+admitted, ~34k work, status -2. Patch 1465's certificate needs passes 1 and 2 to fail for a reason it can re-prove;
+here pass 2 has a 3-face cycle but pass 1 crosses a barrier only through an unproved pair (no strict crossing edge),
+so nothing was certified and the doomed sort repeated, also on a paused camera.
+
+Fix: such a failure keeps its pass-2 cycle (or crossing) in one of 16 slots, owned by the sort that stored it: its
+key (sort site -- world-only or combined --, view depth, capture kind) and the exact face set it gathered (an
+order-free fingerprint and the count). While a slot of that sort re-proves (GLBE_BlendCertCycle), the sort is
+skipped -- the baseline order, as the failure gave -- except on every r_blendsort_retry'th frame (default 4) of its
+key, decided by the key's first sort in the frame. A full run that fails again refreshes the slot; a success forgets
+the slots it holds, tested on the baseline order. A certificate still wins; r_blendsort_cert 0 or 2 and
+r_blendsort_retry 1 sort every view as before. r_blendtrace prints the memo's hits.
+
+Measured (lows2 rig, the PC, paused at fairy's spot, A/B/A in one session, beside a peer's headless runs; final
+code): at Lex's settings (glows and sprites off) frame 4.34 -> 3.80 ms, transparent CPU 1.11 -> 0.65 ms, control
+4.34; every effect on, transparent 1.21 -> 0.65. In motion (the board replay, retry 1 against 4, two pairs beside the
+peer) the lows moved within that noise -- not claimed: a memo holds only while the gathered face set is identical.
+
+Six review rounds (control flow, failure modes): 1, the skip count was per slot and shared by a view's two sorts
+(one could skip forever) -> frames per key; 2, an alternate-frame capture could never get a run frame under a (site,
+depth) key -> capture kind in the key, and the success-clear ran after the reorder (it never fired: a sortable view
+would flicker 1 frame in 4) -> asked of the baseline order; 3 and 4, memos leaked between sorts and same-key views ->
+owned by key, then by the view's place; 5, that place drifted -> the face set is the identity; 6, no defect.
+
+Known: a view that becomes sortable again keeps the unsorted order for up to three frames of its key (~10 ms at 300
+fps); stereo eyes or split-screen seats gathering identical faces still share memos; the fingerprint is a plain sum
+(colliding swaps ~2% within one allocation run -- only those shared views care); a face set seen only on non-run
+frames is not re-tested until it changes (not constructed).
+
 ## Patch 1488 -- gettime(2): seconds since the frame's first gettime(2), for per-frame time budgets (pr_bgcmd.c; QC cl_sprites.qc, cl_main.qc)
 
 Problem: surf_fairy and surf_jumble, the two worst 0.1%-low maps of Lex's 11 Nov survey, spent their slowest frames

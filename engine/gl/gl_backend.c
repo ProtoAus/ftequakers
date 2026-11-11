@@ -9719,6 +9719,21 @@ typedef struct
 static glblendcert_t glblend_cert[GLBLEND_CERT_SLOTS];
 static unsigned int glblend_certstamp;
 static unsigned int glblend_certhits, glblend_certproved, glblend_certwrong;	// proved/wrong: r_blendsort_cert 2
+// FTESurf Patch 1490: failures no certificate can keep -- pass 1 crossed a barrier through an unproved pair (no strict
+// edge), so only a re-run can see it pass. Each keeps the failure's pass-2 cycle; while that cycle re-proves the view
+// keeps the unsorted order and re-sorts every r_blendsort_retry frames (surf_fairy's worst spot: ~34k work a view).
+// The retry is counted in frames per view -- sort site (world-only, combined), depth and capture kind: the first
+// sort of a key in a frame decides it for the frame, and a view rendered every other frame (staggered captures)
+// counts its own frames. Review 1: two sorts sharing a per-slot counter took turns skipping, one forever; review 2:
+// a (site, depth) key let an every-frame view keep the run frames from an alternate-frame capture.
+// A memo belongs to the sort that stored it: its key (site, depth, capture kind) AND the exact set of faces it gathered
+// (an order-free fingerprint and the count). Reviews 3-5: keys alone, or keys with the view's place in the frame,
+// let one view's memo skip another's sort; the face set is the identity that does not drift.
+#define GLBLEND_MEMO_SLOTS 16
+#define GLBLEND_MEMO_KINDS 8
+static struct { glblendcert_t c; int key; unsigned int fp; size_t n; } glblend_memo[GLBLEND_MEMO_SLOTS];
+static struct { int frame, lastrun; qboolean run; } glblend_memogate[2][R_MAX_RECURSE][GLBLEND_MEMO_KINDS];
+static unsigned int glblend_memostamp, glblend_memohits;
 
 static qboolean GLBE_BlendPairUnseen(const glblendplane_t *a, const glblendplane_t *b)
 {
@@ -9908,7 +9923,28 @@ static void GLBE_BlendCertStore(const glblendcert_t *take)
 	glblend_cert[c].stamp = ++glblend_certstamp;
 }
 
-static void GLBE_BlendPlaneSort(glblendface_t *faces, size_t n, glblendplanestats_t *stats)
+// FTESurf Patch 1490: keep (or refresh) the failure's pass-2 cycle
+static void GLBE_BlendMemoStore(const glblendcert_t *take, int key, unsigned int fp, size_t n)
+{
+	unsigned int i, c = 0;
+	for (i = 0; i < GLBLEND_MEMO_SLOTS; i++)
+		if (glblend_memo[i].key == key && glblend_memo[i].fp == fp && glblend_memo[i].n == n && glblend_memo[i].c.len[1] == take->len[1] && !memcmp(glblend_memo[i].c.mesh[1], take->mesh[1], take->len[1] * sizeof(take->mesh[1][0])))
+		{
+			glblend_memo[i].c.stamp = ++glblend_memostamp;
+			return;
+		}
+	for (i = 1; i < GLBLEND_MEMO_SLOTS; i++)
+		if ((glblend_memo[i].c.len[1] ? glblend_memo[i].c.stamp : 0) < (glblend_memo[c].c.len[1] ? glblend_memo[c].c.stamp : 0)) c = i;
+	memset(&glblend_memo[c], 0, sizeof(glblend_memo[c]));
+	glblend_memo[c].key = key;
+	glblend_memo[c].fp = fp;
+	glblend_memo[c].n = n;
+	glblend_memo[c].c.len[1] = take->len[1];
+	memcpy(glblend_memo[c].c.mesh[1], take->mesh[1], take->len[1] * sizeof(take->mesh[1][0]));
+	glblend_memo[c].c.stamp = ++glblend_memostamp;
+}
+
+static void GLBE_BlendPlaneSort(glblendface_t *faces, size_t n, glblendplanestats_t *stats, int site)
 {
 	glblendplane_t *planes;
 	glblendface_t *ordered;
@@ -9926,6 +9962,8 @@ static void GLBE_BlendPlaneSort(glblendface_t *faces, size_t n, glblendplanestat
 	glblendcert_t take;	// FTESurf Patch 1465
 	qboolean certify;
 	unsigned int c, passfail = 0;	// passes that ended in a cycle or failed the barrier check
+	int depth, kind, memokey;	// FTESurf Patch 1490
+	unsigned int memofp = 0;
 	stats->admitted = stats->edges = stats->work = stats->moved = 0;
 	bov_verdicts[0] = bov_verdicts[1] = bov_disjoint = bov_facebox = 0;
 	stats->status = stats->pass = 0;
@@ -9950,6 +9988,32 @@ static void GLBE_BlendPlaneSort(glblendface_t *faces, size_t n, glblendplanestat
 		stats->status = -2;
 		stats->pass = 2;
 		return;
+	}
+	depth = bound(0, r_refdef.recurse, R_MAX_RECURSE-1), kind = bound(0, r_refdef.capturekind, GLBLEND_MEMO_KINDS-1);
+	site = site ? 1 : 0;
+	if (glblend_memogate[site][depth][kind].frame != host_framecount)	// FTESurf Patch 1490: the frame's decision
+	{
+		glblend_memogate[site][depth][kind].frame = host_framecount;
+		glblend_memogate[site][depth][kind].run = host_framecount - glblend_memogate[site][depth][kind].lastrun >= r_blendsort_retry.ival
+			|| host_framecount < glblend_memogate[site][depth][kind].lastrun;
+		if (glblend_memogate[site][depth][kind].run)
+			glblend_memogate[site][depth][kind].lastrun = host_framecount;
+	}
+	memokey = site + 2 * (depth + R_MAX_RECURSE * kind);
+	for (f = 0; f < n; f++)	// the faces this sort gathered, in any order
+		memofp += (unsigned int)(((size_t)faces[f].mesh >> 4) * 2654435761u) ^ (unsigned int)((size_t)faces[f].mesh >> 20);
+	if (certify && r_blendsort_cert.ival != 2 && r_blendsort_retry.ival > 1)	// FTESurf Patch 1490
+	{
+		for (c = 0; !glblend_memogate[site][depth][kind].run && c < GLBLEND_MEMO_SLOTS; c++)
+			if (glblend_memo[c].key == memokey && glblend_memo[c].fp == memofp && glblend_memo[c].n == n
+				&& glblend_memo[c].c.len[1] && GLBE_BlendCertCycle(faces, n, &glblend_memo[c].c, 1))
+			{
+				glblend_memo[c].c.stamp = ++glblend_memostamp;
+				glblend_memohits++;
+				stats->status = -2;
+				stats->pass = 2;
+				return;
+			}
 	}
 	take.len[0] = take.len[1] = 0;	// verify (2) sorts anyway; done: grades the certificate's claim
 	planes = BZ_Malloc(GLBLEND_PLANE_FACES * sizeof(*planes));
@@ -10097,6 +10161,8 @@ rebuild:
 			stats->status = -2;
 			if (take.len[0] && take.len[1] && stats->cert < 0)
 				GLBE_BlendCertStore(&take);
+			else if (take.len[1] && stats->cert < 0)
+				GLBE_BlendMemoStore(&take, memokey, memofp, n);	// FTESurf Patch 1490
 			goto done;
 		}
 		order[step] = pick;
@@ -10119,6 +10185,8 @@ rebuild:
 			stats->status = -3;
 			if (take.len[0] && take.len[1] && stats->cert < 0)
 				GLBE_BlendCertStore(&take);
+			else if (take.len[1] && stats->cert < 0)
+				GLBE_BlendMemoStore(&take, memokey, memofp, n);	// FTESurf Patch 1490
 			goto done;
 		}
 	}
@@ -10128,6 +10196,10 @@ rebuild:
 		ordered[i] = faces[planes[order[i]].slot];
 		stats->moved += order[i] != i;
 	}
+	for (c = 0; certify && c < GLBLEND_MEMO_SLOTS; c++)	// FTESurf Patch 1490: this view sorts again; asked of the
+		if (glblend_memo[c].key == memokey && glblend_memo[c].fp == memofp && glblend_memo[c].n == n
+			&& glblend_memo[c].c.len[1] && GLBE_BlendCertCycle(faces, n, &glblend_memo[c].c, 1))	// baseline order, as
+			glblend_memo[c].c.len[1] = 0;	// the next view's skip test asks it (review 2)
 	for (i = 0; i < stats->admitted; i++)
 		faces[planes[i].slot] = ordered[i];
 	BZ_Free(ordered);
@@ -10285,10 +10357,10 @@ static void GLBE_SubmitBlendedFaces(batch_t *world, batch_t *dynamic)
 				if (!both) { both = BZ_Malloc(n * sizeof(*both)); memcpy(both, faces, n * sizeof(*both)); }
 				faces[f].planar = 2;
 			}
-		GLBE_BlendPlaneSort(faces, n, &stats);
+		GLBE_BlendPlaneSort(faces, n, &stats, 0);
 		if (both)
 		{
-			GLBE_BlendPlaneSort(both, n, &bstats);
+			GLBE_BlendPlaneSort(both, n, &bstats, 1);
 			combined = true;
 			kept = GLBE_BlendKeepCombined(&stats, &bstats);
 			if (kept) memcpy(faces, both, n * sizeof(*faces));
@@ -10303,6 +10375,7 @@ static void GLBE_SubmitBlendedFaces(batch_t *world, batch_t *dynamic)
 			(unsigned int)stats.edges, (unsigned int)stats.work, (unsigned int)stats.moved, stats.pass, stats.overlapfull, r_refdef.recurse);
 		Con_Printf("ALPHATRACE verdicts pass0 %u later %u disjoint %u (by face boxes %u)\n",	// FTESurf Patch 1457, last sort
 			bov_verdicts[0], bov_verdicts[1], bov_disjoint, bov_facebox);
+		Con_Printf("ALPHATRACE memo hits %u (r_blendsort_retry %d)\n", glblend_memohits, r_blendsort_retry.ival);	// FTESurf Patch 1490
 		Con_Printf("ALPHATRACE cert world %d entities %d hits %u proved %u wrong %u\n", stats.cert, combined ? bstats.cert : -1,
 			glblend_certhits, glblend_certproved, glblend_certwrong);	// FTESurf Patch 1465
 		if (combined)
@@ -10519,7 +10592,7 @@ static void GLBE_SubmitBlendedWorld(batch_t *world)
 			continue;
 		}
 		memset(&stats, 0, sizeof(stats));
-		if (!overflow) GLBE_BlendPlaneSort(faces, count, &stats);
+		if (!overflow) GLBE_BlendPlaneSort(faces, count, &stats, 0);
 		if (stats.moved)
 			for (f = 0; f < count; f++)
 			{
