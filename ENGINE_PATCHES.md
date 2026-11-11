@@ -5,6 +5,24 @@ all12lobbies verified,217recorder/resume payload+captured metadata rows unchange
 full public provenance/limits in FTESurf tools/playerfix-20261111-delivery.md.
 No new native build by that QC delivery; P1498 native/compiler delivery is separate.
 
+## Patch 1507 -- stable sprite draw lists (QuakeC only)
+
+Problem: material-major sprite drawing scanned every slot once per material and
+again for light glows; QC's eager hide test also read mismatched slots.
+Change: lazy, stable material/glow index chains retain ascending slot order,
+original sprite identities and all existing fade/trace/cull/geometry work.
+Every successful add and map-table reload invalidates the lists, including
+same-count template reuse. Cold FX-only frames initialize empty lists safely.
+Verified: all three QC programs compile with zero warnings; exact builder in a
+native dedicated-server QC VM passes 12,824 synthetic ordering/lifetime checks.
+Independent corrected-source review has no blockers. Fairy full-replay quiet
+A/B old/new/new/old: first paired 0.1% lows 90/111 -> 96/116 FPS; reverse pair
+86/124 new vs 82/93 old. Final control slowed broadly, so no stable pooled
+percentage or every-map gain is claimed. Screenshots show no obvious difference;
+owner visual acceptance remains pending. tools/p1507-sprite-drawlists.md retains
+all measurements, limits and failed diagnostic evidence. No native pin/tag,
+mover, recorder/evidence format, sort policy or QCBuild change. Delivery separate.
+
 ## Patch 1506 -- defensive raw preprocessor and include extents
 
 Problem: raw include and pragma acquisition bypassed ordinary token bounds,
