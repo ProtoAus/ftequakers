@@ -11,6 +11,24 @@ control lacked the new field; subject published0.1.44(dev) without overwriting a
 local0.1.42 release fixture. Menu-only evidence, not a CSQC/framebuffer pass;
 owner visual check pending. FTESurf tools/p1493-mapinfo-version.md.
 
+## Patch 1492 -- real bunnyrace doors and retained bhop landing reset (QC only)
+
+Problem: bhop_bunnyrace Open inputs changed state but not either glass brush.
+Non-lobby bhop counters forgot the previous platform during airborne frames,
+so ResetOnOtherBlock could not clear its count on the next landing.
+Change: map+CRC+complete-entity guarded real solid pushers for the two authored
+bunnyrace doors; preserve speed/travel/wait/IO. Retain then consume previous
+resettable bhop handle across air/ordinary ground; preserve reset-false and
+lobby behavior. No native/evidence format change. No teleport/checkpoint patch.
+Verified: native dedicated22checks/0 versus named baseline7expectedfailures;
+Open input acted in both, only subject moved solid brushes/opened passage,
+waited3seconds/closed. Wrong-map/CRC/entity and stale-handle/ordinary-ground
+negative cases pass. Exclusive manifest refusal preserved an existing file.
+Combined three-VM build zero warnings; independent review clear. Empty-world
+traces are not real-player/obstruction/camera acceptance; see lextest.md and
+FTESurf tools/p1492-bhop-entities.md. Claimed before parallel1493; keep combined
+ENGINE patch marker at the already-higher number rather than decrement it.
+
 ## Patch 1491 -- size collector peer prefetch by its remaining pair allowance (backend only)
 
 **Problem:** the store-only similarity collector could select up to 200 peers
