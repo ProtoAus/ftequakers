@@ -5,6 +5,36 @@ all12lobbies verified,217recorder/resume payload+captured metadata rows unchange
 full public provenance/limits in FTESurf tools/playerfix-20261111-delivery.md.
 No new native build by that QC delivery; P1498 native/compiler delivery is separate.
 
+## Patch 1513 -- optional signed-run journal admission budget (backend only)
+
+Problem: the uploader has an absolute64MiB body ceiling but no operator-configured
+run-length allowance. Missing rate/floor policy blocks choosing a default, not
+implementing a separately opt-in mechanism.
+Change: require both explicit base-byte and per-signed-counted-tick integer
+settings via existing environment-first/surfd.env configuration. Neither present
+keeps legacy behavior; invalid/partial policy fails registration. After existing
+signature/receipt/run/nonce/hash/size joins, apply min(64MiB,base+ticks*rate)
+before body consumption or temporary creation. Unknown clock503 is operational,
+not a player fault; excess413 preserves existing evidence. No coefficient guessed
+or enabled. Rate/absolute/hash/no-replace checks remain.
+Verified: untouched correctly signed/authorized short-run upload actually stored200
+and failed the new413 assertion. Fixed Windows17/17 and ARM17/17 (no skips) cover
+boundary/excess, duration growth, exact capped arithmetic, clock unavailable,
+config validation/snapshot, auth ordering, header-only WSGI read/no temporary,
+existing-file preservation and legacy multi-MiB positive. Actual-app config-file
+and environment-precedence arms ACT. Original ARM Flask2.2 fixture-name failure
+retained, corrected without runtime change. Receipt snapshot checks pass both
+platforms; directory controls pass Windows with explicit mode skip. Separate
+Linux directory test's unchanged FakeClock/monotonic fixture failure reproduces
+on correctly bound subject and prior control with identical keeper code; retained,
+not repaired or called a whole-suite pass. Python syntax/LSP/diff checks pass.
+No reader/recorder/evidence schema/capture/verdict/score/history, native source/
+binary pin/tag or QCBuild change. Source publication is not review/deployment or
+policy activation. Two independent clean-source reviews and existing guarded
+current-source/DATA/fallback/live path pending. Counted ticks are not wall time;
+no calibrated policy, proxy-buffer/aggregate-storage/retention/wall-time claim.
+FTESurf tools/p1513-hid-run-budget.md.
+
 ## Patch 1510 -- retain the contained worker's lifetime lease (backend only)
 
 Problem: the new contained Popen used close_fds=True by default, dropping the
