@@ -1,5 +1,21 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1495 -- remembered knife equip and guarded cold-model retry (QC only)
+
+Problem: linked combo did not remember equip across maps; late account/content
+callbacks could override a newer Drop/gun choice, and readiness-only mounting
+left a missing model's failed presentation cache permanently latched.
+Change: local archived unset/Drop/equip intent, migrate only applied saved enabled
+account row, ACK before restore, own live stats/capability gate and retry cadence.
+Explicit-choice epochs guard deferred completions. Readiness completion reopens
+only the same failed current knife model cache when its file actually exists;
+ordinary Frame reloads it. No cosmetic protocol/visibility/lighting/native change.
+Verified: sourcebound helper C controls, four causal guard-disabled red controls,
+still-missing20ordinaryframes without added probes/mounts, three VMs0warnings;
+final independent review clear. These are NOT full QC VM/socket/render/performance
+acceptance. Black-skin cause remains unproven; no all-combo visual claim or per-frame
+lightmap work. See FTESurf tools/knife-map-default.md, BACKLOG.md and lextest.md.
+
 ## Patch 1494 -- ordered held reset/load and terminal hold ownership (QC only)
 
 Problem: resetting during a held save load fell back to a different reliable
