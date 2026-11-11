@@ -10434,13 +10434,14 @@ static void GLBE_SubmitBlendedFaces(batch_t *world, batch_t *dynamic)
 				!!b->vbo, (unsigned int)b->flags, !!b->fog, !!b->buildmeshes, b->buildmeshes == R_DB_Poly,
 				GLBE_BlendWorldBatchEligible(b), GLBE_BlendPlaneGeometry(&faces[f], &plane), faces[f].depth, v[0], v[1], v[2],
 				faces[f].facedepth, b->ent == &r_worldentity ? 0 : b->ent->keynum, faces[f].planar);
-			Con_Printf("ALPHATRACE shader=%u flags=%x/%x prog=%d/%d passes=%d/%d deforms=%d/%d passprog=%d/%d bits=%x/%x\n",
+			Con_Printf("ALPHATRACE shader=%u flags=%x/%x prog=%d/%d passes=%d/%d deforms=%d/%d passprog=%d/%d bits=%x/%x name=%s model=%s\n",
 				(unsigned int)f, sh ? (unsigned int)sh->flags : 0, rs ? (unsigned int)rs->flags : 0,
 				sh && sh->prog, rs && rs->prog, sh ? sh->numpasses : 0, rs ? rs->numpasses : 0,
 				sh ? sh->numdeforms : 0, rs ? rs->numdeforms : 0,
 				sh && sh->numpasses && sh->passes[0].prog, rs && rs->numpasses && rs->passes[0].prog,
 				sh && sh->numpasses ? (unsigned int)sh->passes[0].shaderbits : 0,
-				rs && rs->numpasses ? (unsigned int)rs->passes[0].shaderbits : 0);
+				rs && rs->numpasses ? (unsigned int)rs->passes[0].shaderbits : 0,
+				sh ? sh->name : "-", (b->ent && b->ent->model) ? b->ent->model->name : "-");	//DIAG
 		}
 		if (f < n) Con_Printf("ALPHATRACE remaining commands omitted (bounded to %u)\n", GLBLEND_PLANE_FACES);
 		Con_Printf("ALPHATRACE end\n");
