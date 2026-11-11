@@ -1,5 +1,21 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1494 -- ordered held reset/load and terminal hold ownership (QC only)
+
+Problem: resetting during a held save load fell back to a different reliable
+channel, allowing an older WOP load to run later and revive hold/camera ownership.
+Change: keep admitted held resets in the existing ordered queue, cancel local
+preview/angle/hold state only after admission, and suppress held-key repeats.
+Retain reset-specific terminal release obligation for lost/refused resets; delay
+recovery until server progression and settled coherent HOLD. New load ownership
+or successful rewind adoption cancels it; unresolved rewind fences it, refusal
+retains recovery. No immediate cross-channel release or server/evidence change.
+Verified: production-QC normal100/0, rewind36/0; reset omission100/11 and handoff
+omission36/4 acting red controls, original17/8 retained. Three VMs zero warnings,
+independent final review clear after two ownership findings fixed. Service/event
+publication doubles are explicit, NOT actual latency/UpdateView/camera acceptance.
+No native pin/tag/Build change. See FTESurf tools/p1494-reset-order.md/lextest.md.
+
 ## Patch 1493 -- show local game version in map-info HUD (QC only)
 
 Problem: the in-game World of Surf title did not identify the player's release.
