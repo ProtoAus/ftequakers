@@ -8401,6 +8401,16 @@ static void VBSP_BuildBIHMain(void *ctx, void *unusedp, size_t unuseda, size_t u
 	struct vbsp_phypieces_s *phypiece = NULL;	//FTESurf Patch 764
 	size_t phypieces = 0;
 
+	//FTESurf Patch 1501: every prop model, not only the solid ones below, starts loading now, while the map does,
+	//so r_mapready waits for them and warms their shaders; before, the rest loaded in the frame that first drew them.
+	//A server (no renderer) still loads only the solid ones.
+#ifdef HAVE_CLIENT
+	if (qrenderer != QR_NONE)
+	for (i = 0; i < prv->numstaticprops; i++)
+		if (prv->staticprops[i].ent.model && prv->staticprops[i].ent.model->loadstate == MLS_NOTLOADED)
+			modfuncs->GetModel(prv->staticprops[i].ent.model->publicname, MLV_WARN);
+#endif
+
 	/*
 	FTESurf Build 7: hl2_propcollision 0 drops every prop out of the collision
 	tree, so a route that is blocked by a prop can be told apart from a route

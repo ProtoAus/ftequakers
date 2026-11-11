@@ -105,16 +105,21 @@ static struct
 	int models, modelpending, modelfailed, modelunrequested;
 	int images, imagepending, imagefailed, imageunrequested;
 	unsigned int latecompiles, latefailed, lateimages, lateimagefailed;
+	int otherpending;	//FTESurf Patch 1501: requested models outside the precache lists (static props), still loading
 	double seconds, lateseconds, lateimageseconds;
 	char lastprogram[MAX_QPATH], lastimage[MAX_QPATH];
 	unsigned int lastperm;
 	const char *state;
 } mapready;
 
+static program_t **latediag_progs;	//DIAG: activation's programs, sorted
+static int latediag_count;
+static void LateDiag_Log(program_t *prog, unsigned int perm, double start, qboolean failed);
 static void MapReady_Compiled(program_t *prog, unsigned int perm, double start, qboolean failed)
 {
 	if (!mapready.observing || mapready.warming)
 		return;
+	LateDiag_Log(prog, perm, start, failed);
 	mapready.latecompiles++;
 	mapready.latefailed += failed;
 	mapready.lateseconds += Sys_DoubleTime() - start;
@@ -232,6 +237,19 @@ static void GLSLWarm_Read(const char *name, const char *fallback)
 		}
 	}
 	BZ_Free(buf);
+}
+static int QDECL LateDiag_Cmp(const void *a, const void *b)
+{
+	quintptr_t x = (quintptr_t)*(program_t *const *)a, y = (quintptr_t)*(program_t *const *)b;
+	return (x > y) - (x < y);
+}
+static void LateDiag_Log(program_t *prog, unsigned int perm, double start, qboolean failed)
+{
+	qboolean atact = latediag_progs && bsearch(&prog, latediag_progs, latediag_count, sizeof(*latediag_progs), LateDiag_Cmp);
+	glslwarm_t *w = (glslwarm_mem && prog->name) ? Hash_Get(&glslwarm_hash, prog->name) : NULL;
+	qboolean inlist = w && (w->bits[perm >> 5] & (1u << (perm & 31)));
+	Con_Printf("LATECOMPILE %s perm %x ms %.2f at-activation %i in-list %i program-in-list %i failed %i realtime %.2f\n",
+		prog->name ? prog->name : "<unnamed>", perm, (Sys_DoubleTime() - start) * 1000, atact, inlist, w != NULL, failed, realtime);
 }
 static void GLSLWarm_Load(void)
 {
@@ -5743,6 +5761,7 @@ static void MapReady_Model(model_t *mod, const char *name)
 		mapready.modelpending++;
 }
 
+extern int mod_numknown;	//gl_model.c; mod_known is in merged.h
 static void MapReady_Resources(void)
 {
 	int i;
@@ -5753,6 +5772,12 @@ static void MapReady_Resources(void)
 		MapReady_Model(cl.model_csqcprecache[i], cl.model_csqcname[i]);
 	for (i = 0; i < MAX_VWEP_MODELS; i++)
 		MapReady_Model(cl.model_precache_vwep[i], cl.model_name_vwep[i]);
+	//FTESurf Patch 1501: and any other model already asked for -- the hl2 plugin's static props, which register
+	//their materials when they finish; first drawn after activation, their programs were never warmed
+	mapready.otherpending = 0;
+	for (i = 0; i < mod_numknown; i++)
+		if (mod_known[i].loadstate == MLS_LOADING)
+			mapready.otherpending++;
 	Image_Readiness(&mapready.images, &mapready.imagepending, &mapready.imagefailed, &mapready.imageunrequested);
 }
 
@@ -5775,7 +5800,7 @@ static void MapReady_Drain(double deadline)
 	{
 		MapReady_KeepAlive();
 		MapReady_Resources();
-		if (!mapready.modelpending && !mapready.imagepending)
+		if (!mapready.modelpending && !mapready.imagepending && !mapready.otherpending)
 			break;
 		if (Sys_DoubleTime() >= deadline)
 		{
@@ -5805,6 +5830,7 @@ void R_MapReadyInfo_f(void)
 		mapready.seconds, mapready.budgethit, mapready.overflow);
 	Con_Printf("mapready: programs %i unavailable %i eligible %i available %i compiled %i failed %i pending %i\n",
 		mapready.programs, mapready.unavailable, mapready.eligible, mapready.available, mapready.compiled, mapready.failed, mapready.pending);
+	Con_Printf("mapready: other requested models still loading %i\n", mapready.otherpending);	//FTESurf Patch 1501
 	Con_Printf("mapready: activation models %i pending %i failed %i unrequested %i images %i pending %i failed %i unrequested %i\n",
 		mapready.models, mapready.modelpending, mapready.modelfailed, mapready.modelunrequested,
 		mapready.images, mapready.imagepending, mapready.imagefailed, mapready.imageunrequested);
@@ -5863,6 +5889,11 @@ void GLSLWarm_MapActive(void)
 					break;
 			}
 			qsort(programs, count, sizeof(*programs), MapReady_ComparePrograms);
+			free(latediag_progs);	//DIAG
+			latediag_progs = malloc(max(1, count) * sizeof(*programs));
+			if (latediag_progs)
+				memcpy(latediag_progs, programs, count * sizeof(*programs));
+			latediag_count = latediag_progs ? count : 0;
 			for (i = 0; i < (unsigned int)count; i++)
 			{
 				prog = programs[i];
@@ -9275,6 +9306,8 @@ static shader_t *R_LoadShader (model_t *mod, const char *name, unsigned int usag
 		s->width = 0;
 		s->height = 0;
 		s->uses = 1;
+		if (mapready.observing && !mapready.warming)	//DIAG
+			Con_Printf("LATESHADER %s usage %x model %s realtime %.2f\n", cleanname, usageflags, mod ? mod->name : "-", realtime);
 		if (genargs)
 			s->genargs = strdup(genargs);
 		else
