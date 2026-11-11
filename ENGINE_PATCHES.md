@@ -5,6 +5,24 @@ all12lobbies verified,217recorder/resume payload+captured metadata rows unchange
 full public provenance/limits in FTESurf tools/playerfix-20261111-delivery.md.
 No new native build by that QC delivery; P1498 native/compiler delivery is separate.
 
+## Patch 1503 -- defensive numeric token extents
+
+Problem: compiler numeric scanning did not consistently enforce the destination
+extent before appending token bytes.
+Change: one private append guard reserves the final terminator across the numeric
+scanners and uses the existing compile-fatal error path. Accepted syntax, value
+conversion, suffix/type selection and caller dispatch are unchanged. No compiler
+API, gameplay, evidence format, policy or default change.
+Verified: production compiler controls include 33 accepted counterparts and 31
+clean refusals, with decoded values/vectors/CRC and accepted diagnostic parity;
+four additional function-body/source-list controls prove fatal error contexts.
+Source-bound helper controls distinguish removed and overly strict guards before
+an invalid store, with unchanged canaries. Independent source review is clear
+following an error-path correction. Full Windows native/plugin and three-VM build
+passes with no new warning payloads (74 native, six clean standalone compiler,
+matching predecessor); runtime installation provenance is recorded separately.
+No remote-exploitability or complete security/anti-cheat acceptance claim.
+
 ## Patch 1483 -- Jargon search: the finish's reach, repeatable searches, fixes (QC only)
 
 **Problem:** Jargon (`tas autosurf`) gave up a course's finish after one short search, because a 400 u reach near the
