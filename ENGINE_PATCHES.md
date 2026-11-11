@@ -1,5 +1,40 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1491 -- size collector peer prefetch by its remaining pair allowance (backend only)
+
+**Problem:** the store-only similarity collector could select up to 200 peers
+when its shared remaining pair-attempt allowance was one. Selected-read work on
+peers that could not be admitted could exhaust a supported SQL allowance before
+any useful comparison, without proving coverage or a measured zero.
+
+**Change:** only the owned collector callsite supplies the lesser of its existing
+200-peer window and remaining pair allowance. Generic direct comparison windows,
+including late-overlap lookahead, remain unchanged. No new setting/default,
+schema, capture, metric, threshold, badge, ranking or enforcement policy. No
+native source, engine commit/tag pin or QC Build change.
+
+**Verified:** actual sweep/real-reader synthetic 201-replay control at the same
+20000 selected-read allowance: predecessor selects LIMIT 200 and stores nothing
+with SQL-unavailable; subject selects LIMIT 1 and stores the same real 80-move
+comparison, match and captured sources as the predecessor's normal positive.
+Windows 281 tests/0 failures/6 known skips; ARM Python 3.11 same 281/0/0, plus
+legacy real-reader/badge/independent-writer controls on both. Initial 15000 arms
+both abstain, not a successful discriminator. Existing direct late-overlap
+regression exposed an initially broader cap; retained and fixed at the collector
+callsite, not by weakening the test. ARM exposed a test wrapper's duplicate peer
+keyword; preserving its one-peer cap fixes the adapter and real contention and
+recovery controls pass. Supported isolated production three-VM QC build passes
+with zero warnings. All six reader/parser/crypto sources and all 568 corpus-member
+hashes remain unchanged: prior 949/0 reader qualification and 356 pre-existing
+faulted records remain applicable, not a fresh sweep or a clean-corpus claim.
+
+A smaller collector window may provide less same-pass lookahead when a candidate
+becomes stored after selection; no fake attempt, skip, observation or cursor
+advance replaces it. This is not full allowance utilization, exhaustive coverage,
+fleet fairness, calibration, or a hard total time/RSS/I/O/UDF/write bound. Source
+only: no live backend/native/progs/lobby deployment. FTESurf
+`tools/p1491-simcheck-peer-window.md` records qualification and delivery limits.
+
 ## Patch 1488 -- gettime(2): seconds since the frame's first gettime(2), for per-frame time budgets (pr_bgcmd.c; QC cl_sprites.qc, cl_main.qc)
 
 Problem: surf_fairy and surf_jumble, the two worst 0.1%-low maps of Lex's 11 Nov survey, spent their slowest frames
