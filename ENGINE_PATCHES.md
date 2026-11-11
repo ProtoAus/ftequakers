@@ -1,5 +1,24 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1498 -- bound compiler include-path entry operations
+
+Problem: include-path insertion supplied an aggregate destination extent to
+operations writing one entry, bypassing its existing truncation refusal.
+Change: use the selected entry's capacity for both copy and optional separator
+append. Preserve the existing entry limit, include search and warning/clear path.
+Verified: 106 source-bound controls using the production function/helpers; unsafe
+old operations suppressed before writing, both omission mutants discriminated,
+exact supported boundaries and subsequent valid insertion retained. Five actual
+standalone compiler controls prove include use, missing-include refusal and
+corrected rejection while a valid include remains effective. Untreated malformed
+old compiler inputs were not executed; no measured exploit or remote-dispatch
+claim. Full client/server/five default plugins build: 74 existing warning payloads
+exactly match the prior qualified full-build baseline, zero new; three QC VMs
+zero warnings. Independent frozen review CLEAR for the exact two-expression
+repair; final clean source/deployment provenance remains a separate state tracked
+in FTESurf tools/p1498-compiler-includes.md. No recorder/reader format,
+capture, scoring, settings or enforcement change.
+
 ## Patch 1496 -- public native bhop asset acquisition (backend/tools only)
 
 Problem: prefix-only acquisition missed native mode3 bhop maps; isolated gzip

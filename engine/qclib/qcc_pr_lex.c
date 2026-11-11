@@ -146,9 +146,9 @@ void QCC_PR_AddIncludePath(const char *newinc)
 		{
 			pbool trunc;
 			const char *e = newinc + strlen(newinc)-1;
-			trunc = !QC_strlcpy(qccincludedir[i], newinc, sizeof(qccincludedir));
+			trunc = !QC_strlcpy(qccincludedir[i], newinc, sizeof(qccincludedir[i]));
 			if (*e != '/' && *e != '\\')
-				trunc |= !QC_strlcat(qccincludedir[i], "/", sizeof(qccincludedir));
+				trunc |= !QC_strlcat(qccincludedir[i], "/", sizeof(qccincludedir[i]));
 			if (trunc)
 			{
 				QCC_PR_ParseWarning(WARN_STRINGTOOLONG, "Include path too long.");
