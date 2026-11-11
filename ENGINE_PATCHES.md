@@ -35,6 +35,34 @@ current-source/DATA/fallback/live path pending. Counted ticks are not wall time;
 no calibrated policy, proxy-buffer/aggregate-storage/retention/wall-time claim.
 FTESurf tools/p1513-hid-run-budget.md.
 
+## Patch 1512 -- ordinary save-load preview owns its sent acknowledgement
+
+Problem: the ordinary registered sl_load console path predicted the saved view
+but did not bind its preview to that load's acknowledgement. An old zero ACK could
+start refusal settling and expire the preview before the actual load reply. The
+fallback key path alone assigned the target after its load/hold calls, which was
+not actual deferred-send ownership.
+
+Change: the actual sender binds an immediate load preview to its own counter only
+after context cleanup and in send order. Busy requests do not arm a new preview;
+the existing FIFO still dispatches the real load, without borrowing a newer
+preview. The fallback no longer assigns an ACK after returning from send admission.
+Existing charge, clean-return, hold-release and modern WarpOp paths remain intact.
+Client render preview only: no server/body physics, recording or evidence protocol
+change, native rebuild, engine pin/tag or QC build bump.
+
+Verified: extracted production console/sender/FIFO/camera CPU controls pass71/71
+with an injected300ms ACK. Actual pre-patch helpers from QC abc8caf and the old-ACK
+mutation each act and fail nine checks over eight labels (56checks), including
+pre-reply preview expiry. Existing normal100/100 and rewind36/36 controls pass;
+all fixture compiles have zero warnings. Independent final source/acting-artifact
+review clear. After binding the qualified published P1505 compiler1f2efd06,
+subject71/0, actual prepatch56/9, normal100/0 and rewind36/0 confirmed; all three
+production VMs build with zero warnings via build.ps1 -NoDeploy and all six
+existing Windows program hashes remain unchanged. Not real network, framebuffer,
+body or Mark's reported-jitter acceptance; owner check pending. Public commands,
+source hashes, delivery status and limits: FTESurf tools/p1512-save-preview.md.
+
 ## Patch 1510 -- retain the contained worker's lifetime lease (backend only)
 
 Problem: the new contained Popen used close_fds=True by default, dropping the
