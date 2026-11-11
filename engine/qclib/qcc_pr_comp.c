@@ -21364,7 +21364,8 @@ pbool QCC_Include(const char *filename, pbool newunit)
 	opr_file_p = pr_file_p;
 	oldcurrentchunk = currentchunk;
 
-	strcpy(fname, filename);
+	if (!QC_strlcpy(fname, filename, sizeof(fname)))
+		QCC_Error(ERR_NAMETOOLONG, "Include path exceeds %u bytes", (unsigned)sizeof(fname)-1);
 	QCC_LoadFile(fname, (void*)&newfile);
 
 	if (!newunit)

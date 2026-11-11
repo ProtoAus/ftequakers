@@ -5,6 +5,29 @@ all12lobbies verified,217recorder/resume payload+captured metadata rows unchange
 full public provenance/limits in FTESurf tools/playerfix-20261111-delivery.md.
 No new native build by that QC delivery; P1498 native/compiler delivery is separate.
 
+## Patch 1506 -- defensive raw preprocessor and include extents
+
+Problem: raw include and pragma acquisition bypassed ordinary token bounds,
+include parsing did not stop on a raw source terminator, empty pragma trimming
+formed a before-object pointer, and core include loading copied a resolved name
+into a smaller fixed destination without a complete-copy check.
+Change: reserve acquisition terminators before append, reject raw include EOF,
+trim from a bounded one-past endpoint, and require a complete bounded core-name
+copy before loading. Existing fitting operands, pragmas, syntax/diagnostics,
+include search and both compilation-unit paths are unchanged.
+Verified: actual compiler controls include short quote/angle includes with decoded
+values, supported pragma output-CRC changes, fitting-argument boundaries, empty
+pragmas and acting refusals; seven fitting predecessor counterparts agree.
+Sixty-three exact acquisition-fragment and 30 exact core-include observations
+intercept original invalid accesses/pointer formation before execution, preserve
+canaries, and distinguish over-strict guards. Core boundaries are source-bound
+with a stubbed loader, not maximum OS-path acceptance. Ordinary file loading
+appends a newline, so its existing line-boundary refusal is distinct from the
+raw-NUL EOF guard. Two bounded independent source reviews are clear. Full native/
+plugin build matches 74 prior warning payloads and three QC programs have none.
+Final tagged/installed provenance is separate; no remote exploit, full parser
+or anti-cheat closure claim.
+
 ## Patch 1505 -- defensive identifier token extents
 
 Problem: identifier scanning and its malformed-text diagnostic copied bytes

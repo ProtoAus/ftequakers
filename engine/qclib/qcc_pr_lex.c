@@ -1019,11 +1019,15 @@ static pbool QCC_PR_Precompiler(void)
 			a=0;
 			while(*pr_file_p != sm)
 			{
+				if (!*pr_file_p)
+					QCC_Error(ERR_EOF, "Unterminated #include");
 				if (*pr_file_p == '\n')
 				{
 					QCC_PR_ParseError(0, "#include continued over line boundry\n");
 					break;
 				}
+				if ((unsigned)a >= sizeof(msg)-1)
+					QCC_Error(ERR_NAMETOOLONG, "Include name exceeds %u bytes", (unsigned)sizeof(msg)-1);
 				msg[a++] = *pr_file_p;
 				pr_file_p++;
 			}
@@ -1096,14 +1100,16 @@ static pbool QCC_PR_Precompiler(void)
 					if (*pr_file_p != '(')
 						continue;
 				}
+				if ((unsigned)a >= sizeof(msg)-1)
+					QCC_Error(ERR_NAMETOOLONG, "Pragma token exceeds %u bytes", (unsigned)sizeof(msg)-1);
 				msg[a++] = *pr_file_p;
 			}
 
 			msg[a] = '\0';
 			{
 				char *end;
-				for (end = msg + a-1; end>=msg && qcc_iswhite(*end); end--)
-					*end = '\0';
+				for (end = msg + a; end>msg && qcc_iswhite(end[-1]); )
+					*--end = '\0';
 			}
 
 			if (!*qcc_token)
@@ -1114,8 +1120,8 @@ static pbool QCC_PR_Precompiler(void)
 
 			{
 				char *end;
-				for (end = msg + a-1; end>=msg && qcc_iswhite(*end); end--)
-					*end = '\0';
+				for (end = msg + a; end>msg && qcc_iswhite(end[-1]); )
+					*--end = '\0';
 			}
 
 			if (!QC_strcasecmp(qcc_token, "DONT_COMPILE_THIS_FILE"))
