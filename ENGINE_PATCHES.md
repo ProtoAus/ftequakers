@@ -1,5 +1,24 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1496 -- public native bhop asset acquisition (backend/tools only)
+
+Problem: prefix-only acquisition missed native mode3 bhop maps; isolated gzip
+cron could not import its sibling. New native admission initially lacked a
+publication-status check, caught by independent review before bulk publication.
+Change: validated mode3 census floor38, preserve mode1/2 floor150/precedence;
+optional exact sidecar native identity and strict byte/zone gates. Shared exact
+integer public-status0/3 check covers acquisition and all cached/live/retained/
+offline media projections and new aliases. Preserve archived/predecessor bytes.
+Restore only resolved trusted script siblings for isolated gzip imports; digest
+both compressed/decompressed bodies, main publisher ledger remains read-only.
+Verified: Windows/Linux media20/0 and projection controls, full Linux watcher
+0failed/no skips, gzip12/0 plus isolated hostile-path regression. Parent integrated
+all11accepted files,33Windows tests pass and actual isolated CLI starts. Final
+independent review clear. Known eligible589 != full fresh authenticated Beta
+census or complete2470image gallery. Source is NOT a publication receipt. No
+mover/default/native pin/tag, evidence format or QC Build change. See FTESurf
+tools/p1496-public-bhop-import.md for staging/provenance/remaining gates.
+
 ## Patch 1495 -- remembered knife equip and guarded cold-model retry (QC only)
 
 Problem: linked combo did not remember equip across maps; late account/content
