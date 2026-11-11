@@ -9722,12 +9722,14 @@ static unsigned int glblend_certhits, glblend_certproved, glblend_certwrong;	// 
 // FTESurf Patch 1490: failures no certificate can keep -- pass 1 crossed a barrier through an unproved pair (no strict
 // edge), so only a re-run can see it pass. Each keeps the failure's pass-2 cycle; while that cycle re-proves the view
 // keeps the unsorted order and re-sorts every r_blendsort_retry frames (surf_fairy's worst spot: ~34k work a view).
-// The retry is counted in FRAMES per sort site (world-only, combined) and view depth: the first sort of a key in a
-// frame decides it for the frame, so two sorts sharing a memo cannot take turns skipping (review 1: the combined
-// sort ran every third view and the world-only one never).
+// The retry is counted in frames per view -- sort site (world-only, combined), depth and capture kind: the first
+// sort of a key in a frame decides it for the frame, and a view rendered every other frame (staggered captures)
+// counts its own frames. Review 1: two sorts sharing a per-slot counter took turns skipping, one forever; review 2:
+// a (site, depth) key let an every-frame view keep the run frames from an alternate-frame capture.
 #define GLBLEND_MEMO_SLOTS 4
+#define GLBLEND_MEMO_KINDS 8
 static struct { glblendcert_t c; } glblend_memo[GLBLEND_MEMO_SLOTS];
-static struct { int frame, lastrun; qboolean run; } glblend_memogate[2][R_MAX_RECURSE];
+static struct { int frame, lastrun; qboolean run; } glblend_memogate[2][R_MAX_RECURSE][GLBLEND_MEMO_KINDS];
 static unsigned int glblend_memostamp, glblend_memohits;
 
 static qboolean GLBE_BlendPairUnseen(const glblendplane_t *a, const glblendplane_t *b)
@@ -9981,17 +9983,17 @@ static void GLBE_BlendPlaneSort(glblendface_t *faces, size_t n, glblendplanestat
 	}
 	if (certify && r_blendsort_cert.ival != 2 && r_blendsort_retry.ival > 1)	// FTESurf Patch 1490
 	{
-		int depth = bound(0, r_refdef.recurse, R_MAX_RECURSE-1);
+		int depth = bound(0, r_refdef.recurse, R_MAX_RECURSE-1), kind = bound(0, r_refdef.capturekind, GLBLEND_MEMO_KINDS-1);
 		site = site ? 1 : 0;
-		if (glblend_memogate[site][depth].frame != host_framecount)
+		if (glblend_memogate[site][depth][kind].frame != host_framecount)
 		{
-			glblend_memogate[site][depth].frame = host_framecount;
-			glblend_memogate[site][depth].run = host_framecount - glblend_memogate[site][depth].lastrun >= r_blendsort_retry.ival
-				|| host_framecount < glblend_memogate[site][depth].lastrun;
-			if (glblend_memogate[site][depth].run)
-				glblend_memogate[site][depth].lastrun = host_framecount;
+			glblend_memogate[site][depth][kind].frame = host_framecount;
+			glblend_memogate[site][depth][kind].run = host_framecount - glblend_memogate[site][depth][kind].lastrun >= r_blendsort_retry.ival
+				|| host_framecount < glblend_memogate[site][depth][kind].lastrun;
+			if (glblend_memogate[site][depth][kind].run)
+				glblend_memogate[site][depth][kind].lastrun = host_framecount;
 		}
-		for (c = 0; !glblend_memogate[site][depth].run && c < GLBLEND_MEMO_SLOTS; c++)
+		for (c = 0; !glblend_memogate[site][depth][kind].run && c < GLBLEND_MEMO_SLOTS; c++)
 			if (glblend_memo[c].c.len[1] && GLBE_BlendCertCycle(faces, n, &glblend_memo[c].c, 1))
 			{
 				glblend_memo[c].c.stamp = ++glblend_memostamp;
@@ -10182,13 +10184,13 @@ rebuild:
 		ordered[i] = faces[planes[order[i]].slot];
 		stats->moved += order[i] != i;
 	}
+	for (c = 0; certify && c < GLBLEND_MEMO_SLOTS; c++)	// FTESurf Patch 1490: this view sorts again; asked of the
+		if (glblend_memo[c].c.len[1] && GLBE_BlendCertCycle(faces, n, &glblend_memo[c].c, 1))	// baseline order, as
+			glblend_memo[c].c.len[1] = 0;	// the next view's skip test asks it (review 2)
 	for (i = 0; i < stats->admitted; i++)
 		faces[planes[i].slot] = ordered[i];
 	BZ_Free(ordered);
 	stats->status = 1;
-	for (c = 0; c < GLBLEND_MEMO_SLOTS; c++)	// FTESurf Patch 1490: this view sorts again
-		if (glblend_memo[c].c.len[1] && GLBE_BlendCertCycle(faces, n, &glblend_memo[c].c, 1))
-			glblend_memo[c].c.len[1] = 0;
 done:
 	stats->work += owork;
 	stats->overlapfull = owork >= GLBLEND_OVERLAP_WORK;
