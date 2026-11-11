@@ -5,6 +5,25 @@ all12lobbies verified,217recorder/resume payload+captured metadata rows unchange
 full public provenance/limits in FTESurf tools/playerfix-20261111-delivery.md.
 No new native build by that QC delivery; P1498 native/compiler delivery is separate.
 
+## Patch 1505 -- defensive identifier token extents
+
+Problem: identifier scanning and its malformed-text diagnostic copied bytes
+without consistently enforcing the shared token destination extent.
+Change: one private append guard reserves the final terminator in both paths,
+using the existing name-length category and compile-fatal handler. Accepted
+identifier syntax, UTF8 decoding, diagnostics within capacity and the smaller
+language-level declaration-name limit are unchanged.
+Verified: production compiler controls preserve emitted scalar values for eight
+ordinary ASCII/UTF8 and declaration-boundary counterparts, preserve the existing
+syntax-limit refusals, and cleanly refuse excessive token/diagnostic data.
+Forty-two source-bound observations use the exact scanner and UTF8 decoder,
+intercept original invalid stores before access, distinguish an over-strict
+guard and preserve canaries. Independent source review is clear for this bounded
+change and its qualified scalar-declaration test route. Full Windows native and
+plugin build matches all 74 predecessor warning payloads; three QC programs
+compile without warnings. Final installed provenance is recorded separately.
+No remote-exploitability, full parser audit or anti-cheat completion claim.
+
 ## Patch 1503 -- defensive numeric token extents
 
 Problem: compiler numeric scanning did not consistently enforce the destination

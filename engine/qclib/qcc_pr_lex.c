@@ -2411,6 +2411,14 @@ PR_LexName
 Parses an identifier
 ==============
 */
+// Both identifier bytes and diagnostic text leave room for the final NUL.
+static void QCC_PR_NameChar (int *len, int c)
+{
+	if ((unsigned)*len >= sizeof(pr_token)-1)
+		QCC_Error(ERR_NAMETOOLONG, "Name token exceeds %u bytes", (unsigned)sizeof(pr_token)-1);
+	pr_token[(*len)++] = c;
+}
+
 static void QCC_PR_LexName (void)
 {
 	unsigned int		c;
@@ -2439,7 +2447,7 @@ static void QCC_PR_LexName (void)
 			{
 				len = 0;
 				while (*pr_file_p && !qcc_iswhite(*pr_file_p))
-					pr_token[len++] = *pr_file_p++;
+					QCC_PR_NameChar(&len, *pr_file_p++);
 				pr_token[len++] = 0;
 				pr_file_p = o;
 				QCC_PR_ParseError(ERR_NOTANAME, "Invalid UTF-8 code sequence before %s. Lead byte was %#2x", pr_token, lead);
@@ -2447,10 +2455,7 @@ static void QCC_PR_LexName (void)
 			return;
 		}
 		while(b-->0)
-		{
-			pr_token[len] = *pr_file_p++;
-			len++;
-		}
+			QCC_PR_NameChar(&len, *pr_file_p++);
 		c = *pr_file_p;
 	} while ( (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_'
 	|| (c >= '0' && c <= '9') || (c & 0x80));
