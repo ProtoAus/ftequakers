@@ -5,6 +5,22 @@ all12lobbies verified,217recorder/resume payload+captured metadata rows unchange
 full public provenance/limits in FTESurf tools/playerfix-20261111-delivery.md.
 No new native build by that QC delivery; P1498 native/compiler delivery is separate.
 
+## Patch 1500 -- bound compiler string separator appends
+
+Problem: one compatibility-dialect string append skipped the existing token
+capacity check and could consume space reserved for the final terminator.
+Change: apply the same destination-capacity refusal before that append. Valid
+strings, embedded-NUL payloads, dialect selection and diagnostics are unchanged.
+Verified: actual standalone compiler preserves six full produced string payloads
+and refuses three boundary violations; safely intercepted omitted-guard and
+one-byte-too-strict controls distinguish the correction. Independent frozen
+source review clear. Supported full Windows client/server/five-default-plugin
+build:74 existing warning payloads match the prior baseline exactly, zero new;
+three QC VMs zero warnings. Initial private fixture/environment failures retained.
+No untreated old unsafe execution, measured exploit or remote-reachability claim.
+Final clean tag-linked build/delivery provenance: FTESurf tools/p1500-compiler-strings.md.
+No capture, evidence grammar, scoring, enforcement, mover or QC Build change.
+
 ## Patch 1498 -- bound compiler include-path entry operations
 
 Problem: include-path insertion supplied an aggregate destination extent to

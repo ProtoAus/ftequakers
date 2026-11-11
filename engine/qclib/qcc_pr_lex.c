@@ -1694,6 +1694,8 @@ void QCC_PR_LexString (void)
 
 		if (flag_qccx && *pr_file_p == ':')
 		{
+			if (len >= sizeof(pr_token)-1)
+				QCC_Error(ERR_INVALIDSTRINGIMMEDIATE, "String length exceeds %u", (unsigned)sizeof(pr_token)-1);
 			pr_file_p++;
 			pr_token[len++] = 0;
 			continue;
