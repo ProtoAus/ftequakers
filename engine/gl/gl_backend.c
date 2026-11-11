@@ -9460,6 +9460,9 @@ static int GLBE_BlendPlaneSide(const glblendplane_t *a, const glblendplane_t *b)
 			side += b->normal[j] * ((double)a->mesh->xyz_array[v][j] - b->origin[j]);
 		if (!v || side < lo) lo = side;
 		if (!v || side > hi) hi = side;
+		// Later vertices cannot restore either strict half-space proof.
+		if (lo <= 2*GLBLEND_PLANE_EPS && hi >= -2*GLBLEND_PLANE_EPS)
+			return 0;
 	}
 	if (lo > 2*GLBLEND_PLANE_EPS) return b->eye > 0 ? 1 : -1;
 	if (hi < -2*GLBLEND_PLANE_EPS) return b->eye < 0 ? 1 : -1;

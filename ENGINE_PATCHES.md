@@ -33,6 +33,32 @@ existing Windows program hashes remain unchanged. Not real network, framebuffer,
 body or Mark's reported-jitter acceptance; owner check pending. Public commands,
 source hashes, delivery status and limits: FTESurf tools/p1512-save-preview.md.
 
+## Patch 1511 -- stop ambiguous plane-side scans conservatively
+
+Problem: transparent plane ordering visits every mesh vertex even after the
+running extrema have disproved both strict half-space results. Ambiguous pairs
+cannot gain an ordering proof from the remaining vertices.
+Change: return unknown once the running minimum is at most +2EPS and maximum
+at least -2EPS. Epsilon, eye mapping, admission, face order, graph/memo keys and
+full-vertex work-budget charges are unchanged. The explicit --side-only CPU
+mode checks this helper without claiming the unrelated legacy sort suite.
+Verified: exact extracted C against an independent frozen full-scan reference,
+1,312 cases in each normal/fast-math strict warning-free build; return counts
+375/562/375 agree. Untouched helper's acted work control fails64/64; candidate
+passes2/64. Independent source/oracle review clear. Controlled working-tree Full
+native baseline and C-only incremental candidate both build, all3QCVMs0warnings,
+zero new native warning payloads against the affected baseline translation units;
+only gl_backend.o changes. Same headers/flags/owned JPEG9c cache in both arms.
+Initial compiler PATH/header-line-ending/reader refusals retained, not regraded.
+Real Fairy33811 render/replay advances through39s both arms; alpha-sort trace
+acted and paused15s decoded pixels match exactly. Numerical native FPS gain
+UNMEASURED: bounded quiet gate refused peer games/lock, no arm ran. This is a
+semantics/acted-work optimization, not a measured gameplay FPS claim. Final
+clean-tag Full build/deployment pending; owner feel acceptance pending. Default
+legacy CPU suite still stops at its stale three-argument sort-call assertion;
+neither it nor its reported historical cycle failure is qualified here.
+No recorder/physics/protocol/QC Build change. FTESurf tools/p1511-plane-side.md.
+
 ## Patch 1510 -- retain the contained worker's lifetime lease (backend only)
 
 Problem: the new contained Popen used close_fds=True by default, dropping the

@@ -5,6 +5,7 @@ This is not a pixel or performance oracle; see native validation separately.
 """
 import argparse
 import os
+import re
 from pathlib import Path
 import shlex
 import subprocess
@@ -16,6 +17,7 @@ if not __debug__:
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--cc', default=os.environ.get('CC', 'gcc'))
 parser.add_argument('--output', type=Path, help='retain generated C, binaries and control logs')
+parser.add_argument('--side-only', action='store_true', help='isolated plane-side equivalence/work control; NOT the full memo/geometry suite')
 args = parser.parse_args()
 HERE = Path(__file__).resolve().parent
 engine = HERE.parent / 'engine'
@@ -41,6 +43,7 @@ pre=r'''
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include <float.h>
 typedef int qboolean;
 #define true 1
 #define false 0
@@ -64,6 +67,35 @@ static float r_origin[3],vpn[3]={0,0,1},vright[3]={1,0,0},vup[3]={0,1,0};
 '''.replace('__SHADER__','typedef struct { unsigned tess,geom; const char *name; } program_t; typedef struct { unsigned shaderbits; program_t *prog; } shaderpass_t; typedef struct realshader_s { int numdeforms; struct realshader_s *remapto; int numpasses; program_t *prog; shaderpass_t passes[SHADER_PASS_MAX]; } realshader_t; typedef realshader_t shader_t;').replace('typedef struct { int numdeforms; struct shader_s_unused *unused; void *remapto; } shader_t;', '')
 # C fragment is inserted after the mesh/shader stubs, not parsed as a standalone header.
 fixtures = (HERE / 'blend_plane_fixtures.inc').read_text()
+# Freeze the pre-early-exit full scan independently of the extracted candidate.
+side_reference=r'''
+static int frozen_plane_side(const glblendplane_t *a, const glblendplane_t *b)
+{
+ double side, lo = 0, hi = 0;
+ int v, j;
+ for (v = 0; v < a->mesh->numvertexes; v++)
+ {
+  side = 0;
+  for (j = 0; j < 3; j++)
+   side += b->normal[j] * ((double)a->mesh->xyz_array[v][j] - b->origin[j]);
+  if (!v || side < lo) lo = side;
+  if (!v || side > hi) hi = side;
+ }
+ if (lo > 2*0.125) return (b->eye > 0) ? 1 : -1;
+ if (hi < -2*0.125) return (b->eye < 0) ? 1 : -1;
+ return 0;
+}
+'''
+side_candidate=code[code.index('static int GLBE_BlendPlaneSide('):code.index('#define GLBLEND_CLIP_VERTS')]
+def counted_side(source, name, counter):
+    # Count at the actual vertex evaluation, without adding a candidate exit.
+    source=source.replace(source[source.index('static int '):source.index('(')], 'static int '+name, 1)
+    source, count=re.subn(r'(?m)^(\s*)side = 0;', rf'\1++{counter};\n\1side = 0;', source)
+    assert count==1
+    return source
+side_instrumented=('static unsigned candidate_visits, frozen_visits;\n'
+                   +counted_side(side_candidate,'counted_plane_side','candidate_visits')
+                   +counted_side(side_reference,'counted_frozen_plane_side','frozen_visits'))
 tests=r'''
 static unsigned quadidx[6]={0,1,2,0,2,3};
 static void procedural(void) { assert(0); }
@@ -85,7 +117,53 @@ static glblendface_t face(batch_t *b,mesh_t *m,size_t seq) {
 static void quad(float xyz[4][3],float x,float z) {
  for(int v=0;v<4;v++) { xyz[v][0]=x+(v==1||v==2?2:-2);xyz[v][1]=v>=2?2:-2;xyz[v][2]=z; }
 }
+static void check_plane_side(glblendplane_t *a, glblendplane_t *b, unsigned seen[3]) {
+ int expected=frozen_plane_side(a,b), actual=GLBE_BlendPlaneSide(a,b);
+ assert(expected>=-1&&expected<=1&&actual==expected);
+ seen[expected+1]++;
+}
+static void plane_side_equivalence(void) {
+ float xyz[64][3];mesh_t mesh={.numvertexes=64,.xyz_array=xyz};
+ glblendplane_t a={.mesh=&mesh},b={0};unsigned seen[3]={0},state=0x51de1234u;
+ const double normals[][3]={{1,0,0},{-1,0,0},{0,1,0},{0,0,-1},{.6,.8,0},{1.0/3,2.0/3,2.0/3}};
+ const float scales[]={1e-30f,.125f,1,32768,FLT_MAX};
+ // Exact threshold, its adjacent float values, signed zero and finite extremes.
+ float boundary[]={-FLT_MAX,-1,-nextafterf(.25f,1),-.25f,-nextafterf(.25f,0),-0.0f,
+                   0,nextafterf(.25f,0),.25f,nextafterf(.25f,1),1,FLT_MAX};
+ b.normal[0]=1;
+ for(unsigned i=0;i<sizeof(boundary)/sizeof(*boundary);i++)
+  for(unsigned k=0;k<sizeof(boundary)/sizeof(*boundary);k++) {
+   for(int v=0;v<64;v++) {xyz[v][0]=v==63?boundary[k]:boundary[i];xyz[v][1]=xyz[v][2]=0;}
+   for(int eye=-1;eye<=1;eye+=2) {b.eye=eye;check_plane_side(&a,&b,seen);}
+  }
+ // Finite deterministic meshes, unit normals, translated origins and both eye signs.
+ for(int sample=0;sample<512;sample++) {
+  mesh.numvertexes=1+sample%64;
+  memcpy(b.normal,normals[sample%6],sizeof(b.normal));
+  for(int j=0;j<3;j++) b.origin[j]=(sample%7-3)*32768.0;
+  for(int v=0;v<mesh.numvertexes;v++) for(int j=0;j<3;j++) {
+   state=state*1664525u+1013904223u;
+   xyz[v][j]=((int)(state>>16)-32768)/32768.0f*scales[sample%5];
+  }
+  for(int eye=-1;eye<=1;eye+=2) {b.eye=eye;check_plane_side(&a,&b,seen);}
+ }
+ assert(seen[0]&&seen[1]&&seen[2]);
+ printf("PASS plane-side frozen full-scan equivalence: -1=%u 0=%u +1=%u\n",seen[0],seen[1],seen[2]);
+ fflush(stdout);
+}
+static void plane_side_work_control(void) {
+ float xyz[64][3]={{0}};mesh_t mesh={.numvertexes=64,.xyz_array=xyz};
+ glblendplane_t a={.mesh=&mesh},b={.normal={1,0,0},.eye=1};
+ for(int v=0;v<64;v++) xyz[v][0]=v%2?1:-1;
+ candidate_visits=frozen_visits=0;
+ int actual=counted_plane_side(&a,&b),expected=counted_frozen_plane_side(&a,&b);
+ assert(actual==expected&&expected==0&&GLBE_BlendPlaneSide(&a,&b)==actual);
+ printf("plane-side work control: candidate=%u frozen=%u vertices\n",candidate_visits,frozen_visits);
+ fflush(stdout);
+ assert(frozen_visits==64&&candidate_visits>0&&candidate_visits<frozen_visits);
+}
 int main(void) {
+ plane_side_equivalence();
  realshader_t sh={0};sh.remapto=&sh;
  batch_t b={.ent=&r_worldentity,.shader=&sh};
  mesh_t *frozen[3]={&mesh1235,&mesh1236,&mesh1228};
@@ -254,10 +332,28 @@ int main(void) {
  for(int i=0;i<3;i++) { cyclic[i]=(mesh_t){.numvertexes=3,.numindexes=3,.xyz_array=cyclexyz[i],.indexes=triidx};cf[i]=face(&b,&cyclic[i],i); }
  memcpy(saved,cf,sizeof(cf));GLBE_BlendPlaneSort(cf,3,&st);
  assert(st.status==-2&&st.edges==3&&st.moved==0&&!memcmp(cf,saved,sizeof(cf)));
+ plane_side_work_control();
  puts("PASS actual plane code: six frozen-yaw wrong-rank controls/correction, contiguous static slots, ACTED dynamic barrier and three-world intersection fallback, disjoint/coplanar/intersection/invalid/deform/dynamic gates, atomic face/vertex/work budgets and legacy coarse triangle cycle, ACTED ortho/material-program counterexamples, raw/remap/pass/PN/geom/external-projection/nonstandard gates");
 }
 '''
-base=pre+nan+'\n'+struct+compare+code+fixtures+tests
+base=pre+nan+'\n'+struct+compare+code+side_reference+side_instrumented+fixtures+tests
+if args.side_only:
+ # The legacy full suite predates the sorter's four-argument memo interface.
+ # Keep its existing failure visible; this mode tests only the unchanged pure
+ # helper interface with typed mesh stubs and the exact production plane type.
+ end=s.index('} glblendplane_t;')+len('} glblendplane_t;')
+ plane_type=s[s.rfind('typedef struct',0,end):end]
+ epsilon=next(line for line in s.splitlines() if line.startswith('#define GLBLEND_PLANE_EPS '))
+ minimal='''#include <assert.h>
+#include <stdio.h>
+#include <stdint.h>
+#include <string.h>
+#include <math.h>
+#include <float.h>
+typedef struct { int numvertexes; float (*xyz_array)[3]; } mesh_t;
+'''
+ side_tests=tests[tests.index('static void check_plane_side('):tests.index('int main(void)')]
+ base=minimal+plane_type+'\n'+epsilon+'\n'+side_candidate+side_reference+side_instrumented+side_tests+'\nint main(void) { plane_side_equivalence(); plane_side_work_control(); return 0; }\n'
 flags=['-std=c99','-Wall','-Wextra','-Werror','-O2','-fno-strict-aliasing']
 mutants = {
  'actual': base,
@@ -270,10 +366,15 @@ mutants = {
  'lost_vertex_guard': base.replace('shader->numdeforms || shader->prog ||', 'shader->numdeforms || (shader->prog && (shader->prog->tess || shader->prog->geom)) ||').replace('|| shader->passes[p].prog)', '|| (shader->passes[p].prog && (shader->passes[p].prog->tess || shader->passes[p].prog->geom)))'),
  'lost_projection_guard': base.replace('return p[0] != 0 && p[5] != 0 && p[1] == 0 && p[4] == 0 &&\n\t\tp[3] == 0 && p[7] == 0 && p[11] == -1 && p[15] == 0 &&\n\t\tp[12] == 0 && p[13] == 0;', 'return true;'),
 }
-assert 'GLBE_BlendPlaneSort(faces, n, &stats);' in s
+if args.side_only:
+ mutants={'actual':base}
+ assert s.count('GLBE_BlendPlaneSide(')>=3  # Definition plus actual pair-proof calls.
+else:
+ assert 'GLBE_BlendPlaneSort(faces, n, &stats);' in s
 for name,mutant in mutants.items():
  assert mutant!=base or name=='actual'
  source=root/f'plane-{name}.c';source.write_text(mutant)
+ actual_failures=[]
  for variant in ([],['-ffast-math']):
   suffix='fast' if variant else 'normal';exe=root/(f'plane-{name}-{suffix}'+('.exe' if os.name=='nt' else ''))
   built=subprocess.run([*shlex.split(args.cc),*flags,*variant,str(source),'-o',str(exe),'-lm'],capture_output=True,text=True,cwd=root)
@@ -281,6 +382,10 @@ for name,mutant in mutants.items():
   assert built.returncode==0,built.stderr
   ran=subprocess.run([str(exe)],capture_output=True,text=True,cwd=root)
   (root/f'plane-{name}-{suffix}-run.txt').write_text(ran.stdout+ran.stderr)
-  assert (ran.returncode==0) if name=='actual' else (ran.returncode!=0 and 'assert' in ran.stderr.lower()),ran
+  if name=='actual':
+   if ran.returncode!=0: actual_failures.append((suffix,ran))
+  else:
+   assert ran.returncode!=0 and 'assert' in ran.stderr.lower(),ran
   print(name,suffix,'exit',ran.returncode,ran.stdout.strip())
-print('PASS: material programs and external projections preserve baseline; no artifact inputs')
+ assert not actual_failures,actual_failures  # Retain both default/fast baseline failures.
+print('PASS: plane-side-only frozen equivalence/work control; full memo/geometry NOT tested' if args.side_only else 'PASS: material programs and external projections preserve baseline; no artifact inputs')
