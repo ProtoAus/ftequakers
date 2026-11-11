@@ -5,6 +5,28 @@ all12lobbies verified,217recorder/resume payload+captured metadata rows unchange
 full public provenance/limits in FTESurf tools/playerfix-20261111-delivery.md.
 No new native build by that QC delivery; P1498 native/compiler delivery is separate.
 
+## Patch 1510 -- retain the contained worker's lifetime lease (backend only)
+
+Problem: the new contained Popen used close_fds=True by default, dropping the
+transition guard's explicitly inheritable lease. Loss of the parent's descriptor
+could therefore permit a premature drain while its comparison was still alive.
+Change: preserve already inheritable descriptors across prlimit/Python exec;
+ordinary CLOEXEC handles remain private. No new descriptor is made inheritable.
+Existing resource limits, bounded IPC, comparison/observation/ranking behavior,
+database admission and owned timeout/reap remain unchanged.
+Verified: actual untouched P1509 control comparison ACTED; after the parent
+released its own shared lease, the exclusive probe succeeded during blocked
+work and the new assertion failed. Fixed ARM17/17: child retains original lease
+inode/inheritability, child-only lock contends, ordinary private FD inode stays
+excluded, and drain succeeds after exit. Windows11pass/6actual-Linuxskips;
+Python parsing/diff checks pass. Unchanged P1509 reader/corpus evidence reused,
+not remeasured or regraded. Two independent clean-source reviews and existing
+guarded-generation/live rollout PENDING. No native source/binary pin/tag,
+evidence/capture/schema/threshold/verdict or QCBuild change. This is not a
+whole-generation promotion, parent-death recovery or bounded orphan-reap proof;
+parent loss may leave a lease holder and closure must fail closed.
+FTESurf tools/p1510-simcheck-lease.md.
+
 ## Patch 1509 -- contained cron similarity phase (backend only)
 
 Problem: cooperative comparison deadlines do not bound an in-flight load/compare
