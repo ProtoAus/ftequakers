@@ -595,6 +595,8 @@ static void R_Spikes_Sample(void)
 	R_Spikes_InputClear();
 	if (!r_budget.ival)
 		memset(rspeeds_self, 0, sizeof(rspeeds_self));
+	if (r_spikes.ival >= 3 && f.ms > 20)	//DIAG: a timestamp to match driver messages against
+		Con_Printf("slowframe %.4f %.2f ms (compiles %u images %u)\n", now, f.ms, f.compiles, f.images);
 	if (f.ms <= spk.s[SPIKE_KEEP-1].ms)
 		return;
 	for (c = 0; f.ms <= spk.s[c].ms; c++)

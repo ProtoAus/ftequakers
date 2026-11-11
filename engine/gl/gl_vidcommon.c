@@ -3503,11 +3503,23 @@ cvar_t gl_debugperf = CVARD("gl_debugperf", "0", "DIAGNOSTIC: at context creatio
 static void APIENTRY GL_DebugPerfProc(GLenum source, GLenum type, GLuint id, GLenum severity, GLsizei length, const GLchar *message, const GLvoid *userParam)
 {
 	static double second;
-	static int lines;
+	static int lines, enums, streams;
 	double now = Sys_DoubleTime();
+	if (id == 1280 && type == 0x824c)
+	{	//GL_LazyBind's glEnable of array targets: counted
+		if (!(++enums & 4095))
+			Con_Printf("gldebug %.4f: %d INVALID_ENUM so far\n", now, enums);
+		return;
+	}
+	if (strstr(message, "GL_STREAM_DRAW"))
+	{	//the instancing ring's orphans: counted
+		if (!(++streams & 1023))
+			Con_Printf("gldebug %.4f: %d stream-buffer notes so far\n", now, streams);
+		return;
+	}
 	if (now - second > 1)
 		second = now, lines = 0;
-	if (++lines > 60)
+	if (++lines > 400)
 		return;
 	Con_Printf("gldebug %.4f src %x type %x id %u sev %x: %s\n", now, source, type, id, severity, message);
 }
