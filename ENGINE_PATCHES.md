@@ -9,10 +9,13 @@ recovery and six-byte voice-header admission onto the actual p1383-arm base
 90979d61c. Keep its existing physics, verifier, recorder, noclip and wire formats;
 do not upgrade the fleet to unrelated engine-main changes.
 Verified: native CPU scheduling44/0 and actual datagram seam15/0 on the selected
-ARM source; normalized source/git blobs match main for send/entities/test. The
-main baseline control acts with nine intended delivery failures. Full ARM build,
-mandatory native/physics gates, independent review and deployment are PENDING.
-No claim that the reported user's load jitter or client crashes are fixed.
+ARM source; canonical source/git blobs match reviewed main for send/entities/test.
+The main baseline control acts with nine intended delivery failures. Full ARM
+server/HL2 builds pass; actual old-source control matches16+one warning payloads,
+zero new. Old/new ARM and Windows1608 numeric checks and90 physics rows agree;
+approved historical compatibility controls pass on both platforms. Native rollout
+and human acceptance remain separate. No reported jitter/crash-fixed claim.
+Public provenance/limits: FTESurf tools/p1508-snapshot-delivery.md.
 
 ## Patch 1353 -- reported prediction, line labels, editor and texture fixes
 
