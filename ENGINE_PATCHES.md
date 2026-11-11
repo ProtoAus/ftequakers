@@ -5,6 +5,31 @@ all12lobbies verified,217recorder/resume payload+captured metadata rows unchange
 full public provenance/limits in FTESurf tools/playerfix-20261111-delivery.md.
 No new native build by that QC delivery; P1498 native/compiler delivery is separate.
 
+## Patch 1483 -- Jargon search: the finish's reach, repeatable searches, fixes (QC only)
+
+**Problem:** Jargon (`tas autosurf`) gave up a course's finish after one short search, because a 400 u reach near the
+end tied every line on energy and its coast fell into a fail teleport, and a chain-wide coast counter cut every later
+visit to one 30-generation search. The search used random(), so no result could be repeated or compared. Old saves
+could be replaced by a new Start that got less far, and reviews found a server crash, an effort step that stopped a
+run, and editor handles that changed nothing.
+
+**Change (FTESurf QC: sv_tasoptimize.qc, sv_tasautosurf.qc, cl_jargon.qc, cl_tasoptui.qc, cl_main.qc):** a seeded
+search RNG (`seed`; fresh per Start/Continue unless tas_jargon_seed is set); a course's end as the finish's reach
+(`endz`/`endtrack`: entering the end box, swept, or the teleport into it outranks any reach; a near-end reach is ranked
+by and played to its nearest approach); each visit to the finish its tries; falls diagnosed only into the course's own
+start/stage box (`startz`/`startz2`); an archive of a search's distinct reaching lines, `play K` and autosurf `beam`;
+per-ramp priors (data/jargon/<map>/<leg>.prior); switches for the older repair rules (tas_jargon_off); opt-in turn
+points (`turns`) and an air point's heading (`airdir`); the lookahead weight as an option (`lookw`). No engine change.
+
+**Verified:** a seeded benchmark (FTESurf tools/p1483_bench.py; pinned client 7930cc92, server a801824e, plugin
+8204a248; three courses, two runs each, 25 min a run): surf_tensor2 stage 2 finished 2 of 2 (0:12.825, 0:12.330; the
+replay 12.570), was 1 of 2; stage 5 and surf_shape bonus 1 no further than before. Measured and not kept: turn points
+(stage 5 one board earlier), launch points, a 240 turn clamp (stage 5 less far, reverted), a 10x lookahead weight (no
+change). Reviews D-K (lenses, then one per fix); the crash (a `||` guard read topt_arco[-3]) was found by the bench.
+Delivered 11 Nov from FTESurf main 46264909 (record 563833bc), compiler b4741193: 12 lobbies and both installs
+cs 9b89f51e / qw dc411980; tasrevd codes.txt 119. Open: FTESurf BACKLOG "Jargon" (stage 5's S of hard air strafes;
+the bonus's ramp-1 board).
+
 ## Patch 1502 -- scoped public map admission (backend only)
 
 Problem: importing one qualified set through the global map watcher also touched
