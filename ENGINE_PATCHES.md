@@ -1,5 +1,10 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+QC P1492–P1495 combined development delivery (11 Nov): both Windows installs and
+all12lobbies verified,217recorder/resume payload+captured metadata rows unchanged;
+full public provenance/limits in FTESurf tools/playerfix-20261111-delivery.md.
+No new native build by that QC delivery; P1498 native/compiler delivery is separate.
+
 ## Patch 1498 -- bound compiler include-path entry operations
 
 Problem: include-path insertion supplied an aggregate destination extent to
