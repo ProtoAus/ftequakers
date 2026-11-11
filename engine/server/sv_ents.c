@@ -563,27 +563,34 @@ void SV_EmitCSQCUpdate(client_t *client, sizebuf_t *msg, qbyte svcnumber)
 #endif
 }
 
-void SV_CSQC_DroppedPacket(client_t *client, int sequence)
+int SV_ReplacementEntityReserve(client_t *client)
+{
+	int bytes = SV_REPLACEMENT_ENTITY_ADMISSION;
+	if (client->fteprotocolextensions2 & PEXT2_VRINPUTS)
+	{
+		client_frame_t *acked = &client->frameunion.frames[client->delta_sequence & UPDATE_MASK];
+		client_t *seat;
+		int i, j;
+		for (i = 0, seat = client; i < MAX_SPLITS && seat; i++, seat = seat->controlled)
+		{
+			if (acked->baseanglelocked[i] != seat->baseanglelock ||
+				acked->baseangles[i][0] != seat->baseangles[0] ||
+				acked->baseangles[i][1] != seat->baseangles[1] ||
+				acked->baseangles[i][2] != seat->baseangles[2])
+			{
+				bytes += 2 + (seat->seat ? 2 : 0);
+				for (j = 0; j < 3; j++)
+					if (seat->baseangles[j])
+						bytes += 2;
+			}
+		}
+	}
+	return bytes;
+}
+
+void SV_RequeueFrame(client_t *client, client_frame_t *frame)
 {
 	int i;
-	client_frame_t *frame;
-	if (!ISQWCLIENT(client) && !ISNQCLIENT(client))
-		return;
-
-	if (!client->frameunion.frames)
-	{
-		Con_Printf("Server bug: No frames!\n");
-		return;
-	}
-	frame = &client->frameunion.frames[sequence & UPDATE_MASK];
-
-	//skip it if we never generated that frame, to avoid pulling in stale data
-	if (frame->sequence != sequence)
-	{
-//		Con_Printf("SV: Stale %i\n", sequence);
-		return;
-	}
-
 	//lost entities need flagging for a resend
 	if (frame->numresend)
 	{
@@ -622,6 +629,29 @@ void SV_CSQC_DroppedPacket(client_t *client, int sequence)
 		}
 		frame->numresendstats = 0;
 	}
+}
+
+void SV_CSQC_DroppedPacket(client_t *client, int sequence)
+{
+	client_frame_t *frame;
+	if (!ISQWCLIENT(client) && !ISNQCLIENT(client))
+		return;
+
+	if (!client->frameunion.frames)
+	{
+		Con_Printf("Server bug: No frames!\n");
+		return;
+	}
+	frame = &client->frameunion.frames[sequence & UPDATE_MASK];
+
+	//skip it if we never generated that frame, to avoid pulling in stale data
+	if (frame->sequence != sequence)
+	{
+//		Con_Printf("SV: Stale %i\n", sequence);
+		return;
+	}
+
+	SV_RequeueFrame(client, frame);
 }
 
 void SV_AckEntityFrame(client_t *cl, int framenum)
@@ -1760,7 +1790,7 @@ qboolean SVFTE_EmitPacketEntities(client_t *client, packet_entities_t *to, sizeb
 		}
 	}
 
-	if (msg->cursize + 52 <= msg->maxsize)
+	if (msg->cursize + SV_REPLACEMENT_ENTITY_ADMISSION <= msg->maxsize)
 	{
 		/*start writing the packet*/
 		MSG_WriteByte (msg, svcfte_updateentities);
@@ -1785,7 +1815,7 @@ qboolean SVFTE_EmitPacketEntities(client_t *client, packet_entities_t *to, sizeb
 			bits = client->pendingdeltabits[j];
 			if (!(bits & ~UF_SV_RESET2))	//skip while there's nothing to send (skip reset2 if there's no other changes, its only to reduce chances of the client getting 'new' entities containing just an origin)*/
 				continue;
-			if (msg->cursize + 52 > msg->maxsize)
+			if (msg->cursize + SV_REPLACEMENT_ENTITY_ADMISSION > msg->maxsize)
 			{
 				overflow = true;
 				break; /*give up if it gets full. FIXME: bone data is HUGE.*/

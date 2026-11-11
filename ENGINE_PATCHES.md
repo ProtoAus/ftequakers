@@ -1,5 +1,19 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1508 -- bounded QuakeWorld snapshot delivery (ARM backport candidate)
+
+Problem: replacement stats could consume mandatory snapshot capacity, and local
+snapshot discard could retire updates without delivery.
+Change: backport only P1508's snapshot budgeting, explicit stat/entity/CSQC resend
+recovery and six-byte voice-header admission onto the actual p1383-arm base
+90979d61c. Keep its existing physics, verifier, recorder, noclip and wire formats;
+do not upgrade the fleet to unrelated engine-main changes.
+Verified: native CPU scheduling44/0 and actual datagram seam15/0 on the selected
+ARM source; normalized source/git blobs match main for send/entities/test. The
+main baseline control acts with nine intended delivery failures. Full ARM build,
+mandatory native/physics gates, independent review and deployment are PENDING.
+No claim that the reported user's load jitter or client crashes are fixed.
+
 ## Patch 1353 -- reported prediction, line labels, editor and texture fixes
 
 **Problem.** The NanoPi's Q1 snapshot converted negative float skins directly to
