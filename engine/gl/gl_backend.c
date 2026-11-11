@@ -9944,8 +9944,31 @@ static void GLBE_BlendMemoStore(const glblendcert_t *take, int key, unsigned int
 	glblend_memo[c].c.stamp = ++glblend_memostamp;
 }
 
+//DIAG blendmotion: full sorts, outcomes and time; skips; memos rejected only by the face-set key
+static unsigned int bsd_fpok, bsd_fpfail;
+static unsigned int bsd_sorts, bsd_ok, bsd_fail, bsd_fpmiss, bsd_d0, bsd_memo0, bsd_cert0, bsd_frame0;
+static double bsd_ms, bsd_t0;
+static cvar_t *bsd_cv;
+static void BSD_Report(void)
+{
+	if (!bsd_cv)
+		bsd_cv = Cvar_Get("r_blendstats", "0", 0, "diag");
+	if (!bsd_cv || !bsd_cv->ival || realtime - bsd_t0 < 2)
+		return;
+	Con_Printf("BLENDSTATS frames %u sorts %u (main %u) ok %u fail %u ms %.1f (%.3f a sort) memohits %u certhits %u fpmiss %u (then ok %u fail %u)\n",
+		host_framecount - bsd_frame0, bsd_sorts, bsd_d0, bsd_ok, bsd_fail, bsd_ms, bsd_sorts ? bsd_ms / bsd_sorts : 0,
+		glblend_memohits - bsd_memo0, glblend_certhits - bsd_cert0, bsd_fpmiss, bsd_fpok, bsd_fpfail);
+	bsd_sorts = bsd_ok = bsd_fail = bsd_fpmiss = bsd_d0 = bsd_fpok = bsd_fpfail = 0;
+	bsd_ms = 0;
+	bsd_memo0 = glblend_memohits;
+	bsd_cert0 = glblend_certhits;
+	bsd_frame0 = host_framecount;
+	bsd_t0 = realtime;
+}
 static void GLBE_BlendPlaneSort(glblendface_t *faces, size_t n, glblendplanestats_t *stats, int site)
 {
+	double bsd_start = Sys_DoubleTime();
+	qboolean bsd_fp = false;
 	glblendplane_t *planes;
 	glblendface_t *ordered;
 	glblendprojface_t *proj = NULL;
@@ -10004,6 +10027,15 @@ static void GLBE_BlendPlaneSort(glblendface_t *faces, size_t n, glblendplanestat
 		memofp += (unsigned int)(((size_t)faces[f].mesh >> 4) * 2654435761u) ^ (unsigned int)((size_t)faces[f].mesh >> 20);
 	if (certify && r_blendsort_cert.ival != 2 && r_blendsort_retry.ival > 1)	// FTESurf Patch 1490
 	{
+		if (!glblend_memogate[site][depth][kind].run)	//DIAG
+			for (c = 0; c < GLBLEND_MEMO_SLOTS; c++)
+				if (glblend_memo[c].key == memokey && (glblend_memo[c].fp != memofp || glblend_memo[c].n != n)
+					&& glblend_memo[c].c.len[1] && GLBE_BlendCertCycle(faces, n, &glblend_memo[c].c, 1))
+				{
+					bsd_fpmiss++;
+					bsd_fp = true;
+					break;
+				}
 		for (c = 0; !glblend_memogate[site][depth][kind].run && c < GLBLEND_MEMO_SLOTS; c++)
 			if (glblend_memo[c].key == memokey && glblend_memo[c].fp == memofp && glblend_memo[c].n == n
 				&& glblend_memo[c].c.len[1] && GLBE_BlendCertCycle(faces, n, &glblend_memo[c].c, 1))
@@ -10205,6 +10237,12 @@ rebuild:
 	BZ_Free(ordered);
 	stats->status = 1;
 done:
+	bsd_sorts++;	//DIAG
+	bsd_d0 += !r_refdef.recurse;
+	if (stats->status == 1) bsd_ok++; else bsd_fail++;
+	if (bsd_fp) { if (stats->status == 1) bsd_fpok++; else bsd_fpfail++; }
+	bsd_ms += (Sys_DoubleTime() - bsd_start) * 1000;
+	BSD_Report();
 	stats->work += owork;
 	stats->overlapfull = owork >= GLBLEND_OVERLAP_WORK;
 	if (stats->cert >= 0 && passfail == 7)
