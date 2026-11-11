@@ -1,5 +1,16 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1493 -- show local game version in map-info HUD (QC only)
+
+Problem: the in-game World of Surf title did not identify the player's release.
+Change: append client-local release metadata, with the local compiled menu's
+version/dev label as fallback; never infer it from downloaded lobby CSQC. Measure
+and draw the same complete right-aligned title. No native source/pin/Build change.
+Verified: three VMs zero warnings, independent review clear. Native menu producer
+control lacked the new field; subject published0.1.44(dev) without overwriting a
+local0.1.42 release fixture. Menu-only evidence, not a CSQC/framebuffer pass;
+owner visual check pending. FTESurf tools/p1493-mapinfo-version.md.
+
 ## Patch 1491 -- size collector peer prefetch by its remaining pair allowance (backend only)
 
 **Problem:** the store-only similarity collector could select up to 200 peers
