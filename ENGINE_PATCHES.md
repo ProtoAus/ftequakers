@@ -5,6 +5,35 @@ all12lobbies verified,217recorder/resume payload+captured metadata rows unchange
 full public provenance/limits in FTESurf tools/playerfix-20261111-delivery.md.
 No new native build by that QC delivery; P1498 native/compiler delivery is separate.
 
+## Patch 1524 — Unusable input models neither accuse nor pass (12 Nov 2026)
+
+**Problem.** Six NaN model constant/term contexts made the native observation
+primitive count29BAD frames; finite gain overflow counted29clean. Four NaN
+headers and finite-header gain overflow retained reader/receipt OK. Float
+conversion alone proved neither a usable equation nor native float32 arithmetic.
+
+**Change.** Native observation derives/checks finite model gains, predictions
+and angle differences before publishing governed/bad counts. Reuse the engine
+exponent predicate (infinity too); unusable frames abstain. Equations, operation
+order, tolerances and actual movement remain unchanged. The reader respects
+native float32 constants/products; unusable numeric models refuse data quality
+and withhold whole identity comparisons, not partial healthy zeroes or bogus
+angle/count findings. Preserve unknown clipped/legacy terms, NativeQ_atof string
+semantics, supported profiles and independent finite counts joins. No wire,
+capture, numeric cutoff, policy/ranking, regrading or Build change.
+
+**Verified.** Windows HID878/0, receipt618/0, recording reader949/0. Literal native
+10-arm baseline/subject: sixNaN falseBAD and gain-overflow falseclean become
+29skip/0governed/0bad, finite29clean/nonlinear29skip/real contradiction29BAD
+remain;30views each/zero compiler warnings. Prior300native finite movement,
+callback, camera and view-stat rows identical. Cached actual digest/no-reopen/
+signature-status controls act.136same-byteHID3faulty identical;568REC automatic
+pairedVIEW356faulty unchanged/751hashes stable. Supported FullNoDeploy3VMzero
+warnings/native74existing warning lines/zeroNEW; all1399frozen SDK input hashes
+stable. See tools/p1524-model-constants.md. Minimal declared native context is
+NOT a full input pipeline, hardware, ARM, calibration, whole-domain/parser or
+native vulnerability audit. Independent review and deployment remain pending.
+
 ## Patch 1523 — Unusable observer terms are not clean comparisons (12 Nov 2026)
 
 **Problem.** Six view terms and two raw-annotation terms accepted NaN into numeric

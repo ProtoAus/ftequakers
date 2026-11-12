@@ -1857,7 +1857,7 @@ static qboolean in_jrn_ran;			/*a journal has been opened in this process, so th
 
 static void IN_Journal_CheckIdentity(const float *viewangles)
 {
-	float sens, pred, got, eps;
+	float sens, pgain, ygain, ppred, ypred, pgot, ygot, pred, got, eps;
 	int axis, axes = 0, broke = 0, ghosted = 0;
 
 	if (!in_jrn_vhavelast)
@@ -1873,6 +1873,21 @@ static void IN_Journal_CheckIdentity(const float *viewangles)
 	if (!sens)
 	{	in_jrn_vskip++;	return; }
 
+	pgain = m_pitch.value * sens;
+	ygain = -m_yaw.value * sens;
+	ppred = pgain * in_jrn_vdy + in_jrn_vkpitch;
+	ypred = ygain * (r_xflip.ival ? -in_jrn_vdx : in_jrn_vdx) + in_jrn_vkyaw;
+	pgot = viewangles[PITCH] - in_jrn_vlast[PITCH];
+	ygot = viewangles[YAW] - in_jrn_vlast[YAW];
+	/* IS_NAN tests the all-ones exponent: infinity is unusable too. Do not
+	 * publish either a clean or a bad frame from an undefined equation. */
+	if (IS_NAN(sens) || IS_NAN(pgain) || IS_NAN(ygain) ||
+		IS_NAN(ppred) || IS_NAN(ypred) || IS_NAN(pgot) || IS_NAN(ygot) ||
+		IS_NAN(cl.minpitch) || IS_NAN(cl.maxpitch))
+	{
+		in_jrn_vskip++;
+		return;
+	}
 	in_jrn_vcount++;
 
 	/*Two axes, opposite signs, and the r_xflip term belongs to yaw alone --
@@ -1883,19 +1898,18 @@ static void IN_Journal_CheckIdentity(const float *viewangles)
 		{
 			if (in_jrn_vflags & 2)
 				continue;	/*strafe_y: the counts went to forwardmove, not pitch*/
-			pred = m_pitch.value * sens * in_jrn_vdy + in_jrn_vkpitch;
+			pred = ppred;
 			if (pred > cl.maxpitch - in_jrn_vlast[PITCH] ||
 			    pred < cl.minpitch - in_jrn_vlast[PITCH])
 				continue;	/*the clamp may have truncated it: this axis abstains*/
-			got = viewangles[PITCH] - in_jrn_vlast[PITCH];
+			got = pgot;
 		}
 		else
 		{
 			if (in_jrn_vflags & 1)
 				continue;	/*strafe_x: the counts went to sidemove, not yaw*/
-			pred = -m_yaw.value * sens * (r_xflip.ival ? -in_jrn_vdx : in_jrn_vdx)
-			     + in_jrn_vkyaw;
-			got = viewangles[YAW] - in_jrn_vlast[YAW];
+			pred = ypred;
+			got = ygot;
 		}
 
 		while (got > 180)
