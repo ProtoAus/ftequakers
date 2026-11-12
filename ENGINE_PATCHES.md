@@ -5,6 +5,33 @@ all12lobbies verified,217recorder/resume payload+captured metadata rows unchange
 full public provenance/limits in FTESurf tools/playerfix-20261111-delivery.md.
 No new native build by that QC delivery; P1498 native/compiler delivery is separate.
 
+## Patch 1523 — Unusable observer terms are not clean comparisons (12 Nov 2026)
+
+**Problem.** Six view terms and two raw-annotation terms accepted NaN into numeric
+comparisons. Eight acting cases retained receipt content OK, angle/join metrics
+and healthy-zero input totals; converted-to-float did not mean usable arithmetic.
+Malformed observer rows could also leave a partial baseline or imply that a raw
+annotation was absent/equal when it was actually unusable.
+
+**Change.** Validate finite raw/view terms. Keep record descriptions separate
+from comparative measurements. An unusable view invalidates both-axis identity
+and raw-target join; an unusable raw annotation withholds the join, not independent
+finite view arithmetic. Existing profile exclusions account for unavailable
+axes; no measured zero or bogus angle/count accusation. Preserve older optional
+keyboard None, valid current/legacy/wrap/clamp/keyboard/controller paths, genuine
+contradictions and cached digest/signature separation. No native code/pin/tag,
+wire/schema, capture, numeric cutoff, policy/ranking, regrading or Build change.
+
+**Verified.** Windows HID805/0, receipt529/0, recording reader949/0.13original
+actual-reader/cached-consumer controls:8false OK,2finite OK/19judged+joined,
+2lexical/contradictionFAULT,controllerBLIND. Subject all/single-poisoned terms
+refuse quality, measurements absent not zero; good raw-annotation-independent
+view arithmetic still judges19. Real digest/no-reopen/signature-status controls
+act.136same-byte HID3faulty/identical lists;568REC automatic pairedVIEW356faulty
+unchanged,751hashes unchanged. NaN-only controls, no infinity-loop demonstration
+or native/hardware/whole-parser/calibration claim. tools/p1523-observer-values.md;
+required independent review and deployment remain pending.
+
 ## Patch 1522 — Refuse unusable pointer-coordinate observations (12 Nov 2026)
 
 **Problem.** The input reader silently ignored malformed relative coordinates,
