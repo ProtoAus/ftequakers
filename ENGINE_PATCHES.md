@@ -5,6 +5,32 @@ all12lobbies verified,217recorder/resume payload+captured metadata rows unchange
 full public provenance/limits in FTESurf tools/playerfix-20261111-delivery.md.
 No new native build by that QC delivery; P1498 native/compiler delivery is separate.
 
+## Patch 1514 — Observe retained gravity used by a clear water-jump move (12 Nov 2026)
+
+**Problem.** The Source11+ water-jump early return could move an airborne body
+with non-default retained gravity while skipping the existing start-gravity use
+observer. Admission of that property was not proof that movement used it.
+
+**Change.** Capture the actual forced-XY move's velocity, clear-first-trace result
+and accepted pre-categorization endpoint. For finite shallow/no-water airborne
+assists only, reuse the existing default-gravity clear-path/landing proof before
+setting the existing command-local use signal. Expiry during the tick still
+moves. Collision, landing, legacy/deep-water, portal/slide and nonfinite cases
+remain unsupported. No physics, wire field, reader, new rank rule or calibrated
+threshold change.
+
+**Verified.** Windows full isolated NoDeploy build: 74 inherited warnings, none
+in pm_source; incremental subject zero warnings. ARM64 server build: 16 inherited
+warnings, none in pm_source. Both actual native pm_selftest invocations exit0,
+1690 checks/0 failures, including 82 new assertions over 14 cases. Final-fixture
+ARM old-runtime control acts and fails exactly the four expected use assertions;
+subject passes. Observer-on/off entire playermove state matches byte-for-byte;
+positive default-gravity controls actually change the body; collision/landing/
+expiry controls act. Reader949/0; identical568REC+183VIEW bytes/results, existing
+349REC/7VIEW faulty unchanged. Source qualification is NOT independent review,
+deployment, human acceptance or complete retained-state coverage. Delivery held
+for independent frozen-source review and normal native deployment gates.
+
 ## Patch 1513 -- optional signed-run journal admission budget (backend only)
 
 Problem: the uploader has an absolute64MiB body ceiling but no operator-configured

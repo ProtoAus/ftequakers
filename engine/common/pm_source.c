@@ -3371,14 +3371,16 @@ static void PMSrc_CheckWaterJump (void)
 	Vector2Copy(push, pmove.waterjumpdir);
 }
 
-static void PMSrc_WaterJump (void)
+static void PMSrc_WaterJump (qboolean *firstclear, vec3_t velocity, vec3_t accepted)
 {
 	pmove.waterjumpremaining = max(0, min(pmove.waterjumpremaining, 10) - pms_frametime);
 	if (!pmove.waterlevel)
 		pmove.waterjumpremaining = 0;
 	pmove.velocity[0] = pmove.waterjumpdir[0];
 	pmove.velocity[1] = pmove.waterjumpdir[1];
-	PMSrc_TryPlayerMove(NULL, NULL);
+	if (velocity) VectorCopy(pmove.velocity, velocity);
+	PMSrc_TryPlayerMoveCore(NULL, NULL, firstclear);
+	if (accepted) VectorCopy(pmove.origin, accepted);
 	PMSrc_CategorizePosition();
 }
 
@@ -3390,14 +3392,14 @@ The order here IS the physics.  Do not reorder.
 ==================
 */
 // P1131: a bounded default-only start, not evidence that its result was used.
-static qboolean PMSrc_BankGravityDefaultStart(vec3_t normal, qboolean groundjump)
+static qboolean PMSrc_BankGravityDefaultStart(vec3_t normal, qboolean groundjump, qboolean waterjump)
 {
 	int i;
 	if (!pms_bankgravity_observe || pms_bankgravity_used ||
 		movevars.sourceversion < 11 || pmove.pm_type != PM_NORMAL ||
 		(pmove.onground && !groundjump) ||
 		(pmove.waterlevel != 0 && pmove.waterlevel != 1) || pmove.waterjumptime ||
-		pmove.waterjumpremaining ||
+		(pmove.waterjumpremaining && !waterjump) ||
 		pms_haveportals || pms_anyslide || pms_slidetick || pms_momslide ||
 		!movevars.entgravity || movevars.entgravity == 1 ||
 		!isfinite(pms_frametime) || pms_frametime <= 0)
@@ -3414,7 +3416,19 @@ static qboolean PMSrc_BankGravityDefaultStart(vec3_t normal, qboolean groundjump
 // Airborne input cannot enter the genuine-jump branch; retain that contract.
 static qboolean PMSrc_BankGravityStartDefault(vec3_t normal)
 {
-	return PMSrc_BankGravityDefaultStart(normal, false);
+	return PMSrc_BankGravityDefaultStart(normal, false, false);
+}
+
+/* P1514: WaterJump retains StartGravity's Z but replaces XY before moving.
+   Only finite, airborne shallow/no-water assists join the existing clear-path
+   proof. Expiry during this tick still moves; admission alone is never use. */
+static qboolean PMSrc_BankGravityWaterJumpStartDefault(vec3_t normal)
+{
+	if (movevars.sourceversion < 11 || !isfinite(pmove.waterjumpremaining) ||
+		pmove.waterjumpremaining <= 0 || !isfinite(pmove.waterjumpdir[0]) ||
+		!isfinite(pmove.waterjumpdir[1]) || !isfinite(movevars.entgravity) ||
+		!isfinite(movevars.gravity) || !isfinite(movevars.maxvelocity)) return false;
+	return PMSrc_BankGravityDefaultStart(normal, false, true);
 }
 
 static qboolean PMSrc_BankGravityGroundStartCommon(vec3_t normal)
@@ -3424,7 +3438,7 @@ static qboolean PMSrc_BankGravityGroundStartCommon(vec3_t normal)
 		!isfinite(movevars.entgravity) || !isfinite(movevars.gravity) ||
 		!isfinite(movevars.jumpvelocity) || !isfinite(movevars.maxvelocity))
 		return false;
-	return PMSrc_BankGravityDefaultStart(normal, true);
+	return PMSrc_BankGravityDefaultStart(normal, true, false);
 }
 
 static qboolean PMSrc_BankGravityJumpStaminaDefault(void)
@@ -3558,7 +3572,8 @@ static void PMSrc_FullWalkMove (void)
 	qboolean bankgroundjump = false;
 	vec3_t bankfinish_before, bankfinish_plane;
 	vec3_t bankstart_default, bankstart_origin, bankstart_airend, bankstart_airvel;
-	qboolean bankstart = wasonground ?
+	qboolean bankstart = pmove.waterjumpremaining > 0 ?
+		PMSrc_BankGravityWaterJumpStartDefault(bankstart_default) : wasonground ?
 		(movevars.normalizejump ? PMSrc_BankGravityGroundStartNormalized(bankstart_default) :
 		PMSrc_BankGravityGroundStartDefault(bankstart_default)) :
 		PMSrc_BankGravityStartDefault(bankstart_default);
@@ -3571,7 +3586,13 @@ static void PMSrc_FullWalkMove (void)
 	{
 		if (pmove.waterjumpremaining > 0)
 		{
-			PMSrc_WaterJump();
+			if (bankstart) VectorCopy(pmove.origin, bankstart_origin);
+			PMSrc_WaterJump(bankstart ? &bankairclear : NULL,
+				bankstart ? bankstart_airvel : NULL, bankstart ? bankstart_airend : NULL);
+			if (bankstart && bankairclear && !pmove.onground && !pms_slidetick && !pms_portalcrossed &&
+				VectorCompare(bankstart_airend, pmove.origin))
+				if (PMSrc_BankGravityAirChanged(bankstart_origin, bankstart_airend,
+					bankstart_airvel, bankstart_default[2])) pms_bankgravity_used = true;
 			return;
 		}
 		if (pmove.waterlevel == 2)
@@ -4872,6 +4893,133 @@ static void PMSrc_TestBankGravity(void)
 	pmove.waterjumptime = wjt;
 	pmove.onground = ground;
 	pms_slidetick = slide;
+	pms_bankgravity_observe = observe;
+	pms_bankgravity_used = used;
+}
+
+/* Full production water-jump path, not a numeric-only gravity witness. */
+static void PMSrc_TestBankWaterJumpGravity(void)
+{
+	static const struct
+	{
+		const char *name;
+		int level, gate;
+		float gravity, remaining, vz;
+		qboolean used;
+	} cases[] = {
+		{"shallow", 1, 0, .5f, 1, 256, true},
+		{"shallow expires", 1, 0, .5f, .005f, 256, true},
+		{"dry expires", 0, 0, .5f, 1, 256, true},
+		{"finite Z carrier", 1, 1, .5f, 1, 256, true},
+		{"zero default", 1, 0, 0, 1, 256, false},
+		{"one default", 1, 0, 1, 1, 256, false},
+		{"clamp discards difference", 1, 0, .5f, 1, -3500, false},
+		{"deep unsupported", 2, 0, .5f, 1, 256, false},
+		{"grounded unsupported", 1, 2, .5f, 1, 256, false},
+		{"collision unsupported", 1, 4, .5f, 1, 256, false},
+		{"landing unsupported", 1, 8, .5f, 1, 0, false},
+		{"legacy unsupported", 1, 16, .5f, 1, 256, false},
+		{"nonfinite property unsupported", 1, 0, INFINITY, 1, 256, false},
+		{"nonfinite timer unsupported", 1, 0, .5f, INFINITY, 256, false}
+	};
+	playermove_t *saved = BZ_Malloc(sizeof(pmove));
+	playermove_t *initial = BZ_Malloc(sizeof(pmove));
+	playermove_t *unobserved = BZ_Malloc(sizeof(pmove));
+	movevars_t mv = movevars;
+	float ft = pms_frametime;
+	int slide = pms_slidetick, momslide = pms_momslide, i, pass;
+	qboolean portals = pms_haveportals, anyslide = pms_anyslide;
+	qboolean crossed = pms_portalcrossed, surfed = pms_surfed;
+	qboolean observe = pms_bankgravity_observe, used = pms_bankgravity_used;
+	vec3_t default_origin;
+	char name[128];
+	memcpy(saved, &pmove, sizeof(pmove));
+	movevars.sourceversion = 13;
+	movevars.gravity = 800;
+	movevars.maxvelocity = 3500;
+	movevars.groundtracedist = 2;
+	movevars.groundquadrants = 1;
+	movevars.fixrampbugs = 0;
+	movevars.bumpcount = 4;
+	movevars.fixedges = movevars.fixslopes = 0;
+	pms_frametime = .015f;
+	for (i = 0; i < countof(cases); ++i)
+	{
+		memset(initial, 0, sizeof(*initial));
+		initial->pm_type = PM_NORMAL;
+		initial->skipent = -1;
+		VectorSet(initial->player_mins, -16, -16, 0);
+		VectorSet(initial->player_maxs, 16, 16, 72);
+		VectorSet(initial->origin, 0, 0, 128);
+		initial->velocity[2] = cases[i].vz;
+		initial->surfacefriction = 1;
+		initial->waterlevel = cases[i].level;
+		initial->waterjumpremaining = cases[i].remaining;
+		initial->waterjumpdir[0] = 50;
+		initial->waterjumpdir[1] = 25;
+		if (cases[i].gate & 1) initial->basevelocity[2] = 100;
+		if (cases[i].gate & 2) initial->onground = true;
+		if (cases[i].gate & 16) initial->waterjumptime = 1;
+		if (cases[i].gate & (4 | 8))
+		{
+			initial->numphysent = 1;
+			initial->physents[0].info = 1;
+			initial->physents[0].scale = 1;
+			if (cases[i].gate & 4)
+			{
+				VectorSet(initial->physents[0].mins, 16.3f, -256, 0);
+				VectorSet(initial->physents[0].maxs, 32, 256, 512);
+			}
+			else
+			{
+				VectorSet(initial->physents[0].mins, -256, -256, -16);
+				VectorSet(initial->physents[0].maxs, 256, 256, 0);
+				initial->physents[0].origin[2] = 126.5f;
+			}
+		}
+		for (pass = 0; pass < 3; ++pass)
+		{
+			memcpy(&pmove, initial, sizeof(pmove));
+			pms_slidetick = pms_momslide = 0;
+			pms_anyslide = pms_haveportals = pms_portalcrossed = pms_surfed = false;
+			movevars.entgravity = pass ? cases[i].gravity : 1;
+			PMSrc_BankGravityBegin(pass == 2);
+			PMSrc_FullWalkMove();
+			Q_snprintfz(name, sizeof(name), "P1514 %s pass%i use", cases[i].name, pass);
+			PMSrc_Check(name, PMSrc_BankGravityEnd(), pass == 2 && cases[i].used, 0);
+			if (!pass) VectorCopy(pmove.origin, default_origin);
+			if (pass == 1) memcpy(unobserved, &pmove, sizeof(pmove));
+			if (pass != 2) continue;
+			Q_snprintfz(name, sizeof(name), "P1514 %s entire body preserved", cases[i].name);
+			PMSrc_Check(name, memcmp(unobserved, &pmove, sizeof(pmove)) == 0, 1, 0);
+			if (cases[i].used)
+			{
+				Q_snprintfz(name, sizeof(name), "P1514 %s actual gravity body difference", cases[i].name);
+				PMSrc_Check(name, !VectorCompare(pmove.origin, default_origin), 1, 0);
+				Q_snprintfz(name, sizeof(name), "P1514 %s forced XY acted", cases[i].name);
+				PMSrc_Check(name, pmove.origin[0] > 0 && pmove.origin[1] > 0, 1, 0);
+			}
+			if (cases[i].gate & 4)
+				PMSrc_Check("P1514 collision actually clipped", pmove.origin[0] < .75f, 1, 0);
+			if (cases[i].gate & 8)
+				PMSrc_Check("P1514 landing actually acted", pmove.onground, 1, 0);
+			if (!cases[i].level || cases[i].remaining < pms_frametime)
+				PMSrc_Check("P1514 assist actually expired", pmove.waterjumpremaining, 0, 0);
+			PMSrc_Check("P1514 command use reset", PMSrc_BankGravityEnd(), 0, 0);
+		}
+	}
+	movevars = mv;
+	memcpy(&pmove, saved, sizeof(pmove));
+	BZ_Free(unobserved);
+	BZ_Free(initial);
+	BZ_Free(saved);
+	pms_frametime = ft;
+	pms_slidetick = slide;
+	pms_momslide = momslide;
+	pms_haveportals = portals;
+	pms_anyslide = anyslide;
+	pms_portalcrossed = crossed;
+	pms_surfed = surfed;
 	pms_bankgravity_observe = observe;
 	pms_bankgravity_used = used;
 }
@@ -7497,7 +7645,7 @@ static void PMSrc_SelfTest_f (void)
 		PMSrc_CheckJumpButton();
 		PMSrc_Check("P916 held jump cannot overwrite impulse", pmove.velocity[2], 256, 0);
 		pms_frametime = 0.015f;
-		PMSrc_WaterJump();
+		PMSrc_WaterJump(NULL, NULL, NULL);
 		PMSrc_Check("P916 assist tick: timer decrements", pmove.waterjumpremaining, 1.985f, 0.0001f);
 		PMSrc_Check("P916 assist tick: actually moves up", pmove.origin[2], 3.84f, 0.001f);
 		PMSrc_Check("P916 assist tick: actually moves forward", pmove.origin[0], 0.75f, 0.001f);
@@ -7528,6 +7676,7 @@ static void PMSrc_SelfTest_f (void)
 
 	PMSrc_TestBankGravity();
 	PMSrc_TestBankStartGravity();
+	PMSrc_TestBankWaterJumpGravity();
 
 	/* --- restore -------------------------------------------------------- */
 	movevars = savemv;
