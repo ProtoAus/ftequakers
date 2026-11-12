@@ -50,8 +50,13 @@ both extrema instructions (native code grows72bytes). Supported incremental nati
 compile/link exits0 with unchanged header/flag dependencies. Both baseline and
 subject ACT in moving Fairy transparent-sort views with positive edges/work and
 nonblank1920x1200 RGB output; no detected renderer/VM fatal. Paused camera alignment
-was not qualified, so no paired order/pixel-equality claim. Clean production
-build/delivery remain pending; no game-FPS or0.1%-low improvement is claimed yet.
+was not qualified, so no paired order/pixel-equality claim. Clean tagged Full
+exits0; native74warning payloads equal baseline (zeroNEW); TLS365objects/10symbols/
+0plain-address uses. Final normal client with installed legacy server/plugin
+advances actual Fairy0->12.0125s, acts on85transparent commands and renders
+nonblank RGB1920x1200. Both Windows clients installed12Nov05:02:33Z; independent
+05:08:37Z live/archive and19,595protected-file rehash clear, rollback retained.
+No server/plugin/VM/Pi/backend shipment or measured game-FPS/0.1%-low claim.
 
 ## Patch 1516 — Refuse unproved identity constants from clipped text (12 Nov 2026)
 
