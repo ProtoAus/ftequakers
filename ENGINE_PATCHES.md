@@ -5,6 +5,29 @@ all12lobbies verified,217recorder/resume payload+captured metadata rows unchange
 full public provenance/limits in FTESurf tools/playerfix-20261111-delivery.md.
 No new native build by that QC delivery; P1498 native/compiler delivery is separate.
 
+## Patch 1525 — Native quoted bytes are not Unicode coefficients (12 Nov 2026)
+
+**Problem.** Q_atof reads one native char byte for a quoted character; the
+journal reader instead used a Unicode codepoint. A recorded numeric cvar change
+could therefore make a native-consistent turn look like an identity break.
+The journal does not identify char signedness or a byte encoding profile.
+
+**Change.** Refuse unavailable non-ASCII quoted numeric coefficients rather
+than guess their value. Preflight withholds the whole identity, including after
+a late change, not healthy partial measurements or angle/count accusations.
+Preserve known nonzero flip/filter/acceleration paths and ordinary ASCII,
+hexadecimal, numeric-prefix and finite-contradiction controls. No native code,
+wire/capture/codec, cutoff, ranking/policy, regrading, engine pin/tag or Build change.
+
+**Verified.** Literal current native Q_atof/Q_atoi, seven rows under both char
+modes on Windows, zero compiler warnings. Seven native-consistent journal cases,
+including a late change: untouched reader fails28of46new checks; subject46/0.
+Windows HID924/0, receipt667/0, recording949/0. Actual cached-digest/no-reopen,
+independent counts join and signature/content separation controls act. See
+FTESurf tools/p1525-native-byte-values.md for corpus/build evidence and limits.
+This is parser-source fidelity, NOT hardware, calibration, ARM or a native
+vulnerability audit. Independent review and deployment remain pending.
+
 ## Patch 1524 — Unusable input models neither accuse nor pass (12 Nov 2026)
 
 **Problem.** Six NaN model constant/term contexts made the native observation
