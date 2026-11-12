@@ -1088,13 +1088,14 @@ static qboolean		in_jrn_haveabs[MAXPOINTERS];
   final delta in here, IN_Journal_View emits one line once the angle it produced
   is known.  See the essay above IN_Journal_View.*/
 static float		in_jrn_vdx, in_jrn_vdy;
-static float		in_jrn_vkpitch, in_jrn_vkyaw;	/*Patch 305: the non-mouse half*/
+static float		in_jrn_vkpitch, in_jrn_vkyaw;	/*Patch 305: keyboard turn, not controller look*/
 /*Patch 312: the counts AS THE RING DELIVERED THEM, before any of the pipeline
   touched them.  See the essay above IN_Journal_ViewRaw.*/
 static float		in_jrn_vrawx, in_jrn_vrawy;
 static int			in_jrn_vflags;
 static float		in_jrn_vlast[2];
 static qboolean		in_jrn_vhavelast;
+static qboolean		in_jrn_vjoyturn;	/*Patch 1521: unrecorded controller look this frame*/
 
 /*CPU-only main transactions. Release only our transition BEFORE callbacks;
   a borrowed false stays owned by its caller. Worker producers inherit indeplock.*/
@@ -1861,6 +1862,8 @@ static void IN_Journal_CheckIdentity(const float *viewangles)
 
 	if (!in_jrn_vhavelast)
 		return;	/*the first view of a journal has no previous angle to differ from*/
+	if (in_jrn_vjoyturn)
+	{	in_jrn_vskip++;	return; }	/*v records keyboard turn, not controller look*/
 	if (in_jrn_vflags & 4)
 	{	in_jrn_vskip++;	return; }	/*the cursor was free; the counts reached neither axis*/
 	if (m_filter.value || m_accel.value)
@@ -1984,6 +1987,7 @@ void IN_Journal_View(const float *viewangles)
 		  against someone who did nothing wrong.  MEASURED: arm D of this patch's
 		  falsifier orphaned exactly one 29-count batch on one console press.*/
 		in_jrn_vflags = 0;
+		in_jrn_vjoyturn = false;
 		return;
 	}
 
@@ -2019,6 +2023,7 @@ void IN_Journal_View(const float *viewangles)
 	in_jrn_vkpitch = in_jrn_vkyaw = 0;
 	in_jrn_vrawx = in_jrn_vrawy = 0;	/*Patch 312*/
 	in_jrn_vflags = 0;
+	in_jrn_vjoyturn = false;
 }
 
 /*Called by IN_MoveMouse once per pointer, with the delta as it enters the
@@ -2317,6 +2322,7 @@ static void IN_JournalBegin_f(void)
 	in_jrn_vrawx = in_jrn_vrawy = 0;	/*Patch 312*/
 	in_jrn_vflags = 0;
 	in_jrn_vhavelast = false;
+	in_jrn_vjoyturn = false;
 	in_jrn_vcount = 0;											/*Patch 484*/
 	in_jrn_vskip = 0;
 	in_jrn_violations[PITCH] = in_jrn_violations[YAW] = 0;
@@ -3442,7 +3448,7 @@ static float joydeadzone(float mag, float deadzone)
 void IN_MoveJoystick(struct joy_s *joy, float *movements, int pnum, float frametime)
 {
 	float mag;
-	vec3_t jlook, jstrafe;
+	vec3_t jlook, jstrafe, before;
 
 	int wpnum, i;
 	for (i = 0; i < MAXJOYAXIS; i++)
@@ -3563,9 +3569,15 @@ void IN_MoveJoystick(struct joy_s *joy, float *movements, int pnum, float framet
 		return;
 
 	//angle changes
+	VectorCopy(cl.playerview[pnum].viewanglechange, before);
 	cl.playerview[pnum].viewanglechange[PITCH] += joy_anglesens[0].value * jlook[0] * in_sensitivityscale;
 	cl.playerview[pnum].viewanglechange[YAW] -= joy_anglesens[1].value * jlook[1] * in_sensitivityscale;
 	cl.playerview[pnum].viewanglechange[ROLL] += joy_anglesens[2].value * jlook[2] * in_sensitivityscale;
+	if (pnum == 0 && in_jrn_buf && !in_jrn_full)
+		if (before[PITCH] != cl.playerview[pnum].viewanglechange[PITCH] ||
+			before[YAW] != cl.playerview[pnum].viewanglechange[YAW] ||
+			before[ROLL] != cl.playerview[pnum].viewanglechange[ROLL])
+			in_jrn_vjoyturn = true;
 
 	if (in_mlook.state[pnum] & 1)
 		V_StopPitchDrift (&cl.playerview[pnum]);

@@ -5,6 +5,32 @@ all12lobbies verified,217recorder/resume payload+captured metadata rows unchange
 full public provenance/limits in FTESurf tools/playerfix-20261111-delivery.md.
 No new native build by that QC delivery; P1498 native/compiler delivery is separate.
 
+## Patch 1521 — Do not attribute controller look to missing mouse counts (12 Nov 2026)
+
+**Problem.** The recorded keyboard-turn term is tapped before joystick movement.
+Legitimate controller look is applied later, so both angle observers could accuse
+it of unexplained motion despite the native controller path producing the turn.
+
+**Change.** Preserve the turn arithmetic and journal format. The native observer
+marks actual primary-view controller accumulator changes and abstains for that
+frame; quiet/normal emission and begin reset the private marker. Other seats,
+zero/unmapped inputs and inactive capture do not mark it. Offline analysis lacks
+the mapping and persistent initial axis state: assigned controller tables or axis
+records therefore use existing unsupported-profile exclusions on both axes. The
+receipt consumer retains BLIND, never a clean-angle judgement. No new capture,
+wire, policy, ranking, signature verdict, threshold or QC Build; no regrading.
+
+**Verified.** Literal native deadzone/move/identity/view functions300rows, zero
+compiler warnings;120parent motion rows identical. Look/pitch/roll skip29 with
+zero bad; unmapped/zero/null/zero-scale/other-seat controls judge29 clean. Actual
+view emission/quiet reset and next mouse frame act; begin reset is source-only.
+Windows HID606/0, receipt413/0, reader949/0. Actual parent look contribution
+previously broke29/29 now refuses offline judgement; missing axis records still
+refuse assigned controllers. Malformed-clock/header, captured-scalar ambiguity,
+namespace/pad faults and mouse angle-fault controls remain active. Full native/QC
+build and corpus qualification are recorded in tools/p1521-controller-identity.md.
+Independent reviews, promotion and real-controller calibration remain pending.
+
 ## Patch 1518 — Keep input device identities in their actual namespaces (12 Nov 2026)
 
 **Problem.** The HID reader globally keyed device IDs although native pointer,
