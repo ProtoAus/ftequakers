@@ -5,6 +5,29 @@ all12lobbies verified,217recorder/resume payload+captured metadata rows unchange
 full public provenance/limits in FTESurf tools/playerfix-20261111-delivery.md.
 No new native build by that QC delivery; P1498 native/compiler delivery is separate.
 
+## Patch 1529 — Bounded landing gravity use remains observable (12 Nov 2026)
+
+**Problem.** The existing clear-air gravity observer discarded a use signal when
+only the foreign-gravity path reached a floor during final categorization. Four
+native landing controls changed the actual body but the old runtime reported no
+use. Admission or possession of gravity alone is still not evidence of use.
+
+**Change.** Retain the command-local signal for the bounded clear-air and
+water-jump paths only when the default-gravity endpoint independently clears its
+own ground probe and retains an acted vertical body difference. Ordinary shared
+landings, obstructed/ambiguous paths and unavailable counterfactuals do not become
+positive witnesses. Reuse the existing flag and probes; no movement, public API,
+recording format, reader, ranking rule, threshold or QC Build change.
+
+**Verified.** Actual native Windows and ARM64 pm_selftest:1773checks/0failures,
+including83additional assertions. The untouched runtime with the final fixture
+misses exactly4acted landing-use assertions. Observer on/off preserves complete
+playermove and movevars bytes; ordinary shared landing and command-reset controls
+act. ARM768canonical source files verified before compilation; zero new PM
+warnings. This is bounded native source qualification, NOT a complete bank,
+hardware/calibration or independent review/deployment. Full Windows build and
+corpus evidence/limits are recorded in FTESurf tools/p1529-landing-gravity.md.
+
 ## Patch 1526 — Unusable journal clocks cannot be clean evidence (12 Nov 2026)
 
 **Problem.** Non-finite base/frame/end clocks and a NaN truncation marker retained
