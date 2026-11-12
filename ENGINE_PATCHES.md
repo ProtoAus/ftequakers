@@ -136,7 +136,13 @@ exits0; native74warning payloads equal baseline (zeroNEW); TLS365objects/10symbo
 advances actual Fairy0->12.0125s, acts on85transparent commands and renders
 nonblank RGB1920x1200. Both Windows clients installed12Nov05:02:33Z; independent
 05:08:37Z live/archive and19,595protected-file rehash clear, rollback retained.
-No server/plugin/VM/Pi/backend shipment or measured game-FPS/0.1%-low claim.
+No server/plugin/VM/Pi/backend shipment. Later owner-authorized full-FX shared
+Fairy ABBA/BAAB8run measurement of matched diagnostics P1517vsP1511 shows NOgain:
+meanavg295.4->267.2FPS,1%122.3->99.8,0.1%95.2->78.6. Mirroredblockavg+0.5%,
+0.1%-6.8%; varying sharedload limits causal/significance claims. All8retained/
+independentlyrecomputed. This does not establish a precise17.4%regression or
+production/allpatch gain. Earlier render smoke left sprites/glow0; full-FX
+benchmark explicitly enables/readbacks both1. No rollback or further deployment.
 
 ## Patch 1516 — Refuse unproved identity constants from clipped text (12 Nov 2026)
 
