@@ -5,6 +5,25 @@ all12lobbies verified,217recorder/resume payload+captured metadata rows unchange
 full public provenance/limits in FTESurf tools/playerfix-20261111-delivery.md.
 No new native build by that QC delivery; P1498 native/compiler delivery is separate.
 
+## Patch 1515 — Decode native quoted cvars in the HID reader (12 Nov 2026)
+
+**Problem.** hidcheck did not invert COM_QuotedString: prefixed escapes and
+literal plain backslashes changed recorded cvar values, falsely breaking angle
+identity. Header/change tokenization also collapsed value whitespace.
+
+**Change.** Decode the two default native quote forms and preserve their raw
+payload spacing. Malformed quoted values are explicit format faults; a damaged
+change invalidates its scale/sign until a valid update, not a stale-value angle
+accusation. Python only: no native/wire/capture/ranking/threshold or Build change.
+Legacy producer truncation/non-default console codecs remain explicit limits.
+
+**Verified.** Literal native encoder:16/16 actual rows at64/128-byte capacities,
+zero compiler warnings. Old reader fails32 new checks; subject HID378/0 including
+64 new assertions, receipt268/0, reader949/0. Existing136HID bytes give unchanged
+3faulty/fault lists;568REC183VIEW hashes/results unchanged,349/7faulty existing.
+CLI and ARM reader qualification are recorded in tools/p1515-hid-quotes.md.
+Source qualification is not independent review, deployment or human calibration.
+
 ## Patch 1514 — Observe retained gravity used by a clear water-jump move (12 Nov 2026)
 
 **Problem.** The Source11+ water-jump early return could move an airborne body
