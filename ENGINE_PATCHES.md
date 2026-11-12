@@ -5,6 +5,33 @@ all12lobbies verified,217recorder/resume payload+captured metadata rows unchange
 full public provenance/limits in FTESurf tools/playerfix-20261111-delivery.md.
 No new native build by that QC delivery; P1498 native/compiler delivery is separate.
 
+## Patch 1530 — Lost journal state cannot inherit old certainty (12 Nov 2026)
+
+**Problem.** Early rejection of malformed input-setting changes left the previous
+angle setting active, so later valid angles could receive a stale-scale finding.
+Malformed keyboard-observation changes/counts could likewise leave a whole-run
+measured zero despite an unknown observation gap. A format fault alone did not
+invalidate these unsupported measurements.
+
+**Change.** Reuse immutable per-view setting snapshots: reject a lost named change
+as unknown until restored; an unrecoverable name invalidates the identity settings,
+not independent counts. Retain known earlier comparisons and valid later recovery.
+Latch unusable keyboard state/count records as partial/unavailable and withhold
+whole-journal key/nohandle totals. Valid zero, positive counts and known observation
+stops keep their distinct answers. Format/clock faults remain faults. No capture,
+writer, native movement, recording field, ranking, threshold or QC Build change.
+
+**Verified.** Matched untouched reader fails40of1090assertions; subject1090/0,
+including89newassertions and acting independent-count contradiction controls.
+The cvar-only subject independently reproduces13keyboard-coverage failures before
+that correction. Reader949/0, receipt/structured-diagnostic consumers pass. All134
+retained journal hashes and faults/info/notes agree with the parent (3existing
+faulty files); all751REC/VIEW hashes/per-file reports/356existingfaults unchanged.
+Supported isolated NoDeploy3VM0warnings. Original fixture errors retained/corrected,
+not product changes to fit them. Source verification, not independent review or
+live deployment; FTESurf tools/p1530-journal-state-loss.md records exact limits.
+Native code, commit/tag pins and Build89 stay held.
+
 ## Patch 1529 — Bounded landing gravity use remains observable (12 Nov 2026)
 
 **Problem.** The existing clear-air gravity observer discarded a use signal when
