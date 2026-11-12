@@ -5,6 +5,27 @@ all12lobbies verified,217recorder/resume payload+captured metadata rows unchange
 full public provenance/limits in FTESurf tools/playerfix-20261111-delivery.md.
 No new native build by that QC delivery; P1498 native/compiler delivery is separate.
 
+## Patch 1516 — Refuse unproved identity constants from clipped text (12 Nov 2026)
+
+**Problem.** Legacy cvar buffers can capture identical text for different actual
+integer/float values. Reading that prefix as complete caused false angle findings
+or unsupported journal-OK results; decoding cannot recover missing suffixes.
+
+**Change.** Keep encoded token spans; ambiguous boundary prefixes for all six
+identity constants become explicit data-quality refusal and unknown until valid
+replacement. Proven terminated/character prefixes still act; existing non-linear
+exclusions and typed header scalars stay intact. Python only: no native/wire/
+capture/rank/signature-verdict/threshold/Build change or historical regrading.
+
+**Verified.** Literal native encoder/Q_atoi20rows and encoder/Q_atof5rows, zero
+warnings. Exact P1515 parent with corrected fixtures535checks/92fail; subject
+Windows/ARM535/0,157new assertions. Receipt388/0 including120new captured-digest/
+content-refusal/no-false-accusation/signature-separation checks; reader949/0.
+136HID3faulty and568REC183VIEW349/7faulty remain byte/fault equivalent. Prior
+bad-printf/wrong-sign fixtures retained, not product claims. Complete legacy
+capture/non-default console codec remain open; tools/p1516-hid-capture.md.
+Source-qualified, not independently reviewed/deployed or human calibration.
+
 ## Patch 1515 — Decode native quoted cvars in the HID reader (12 Nov 2026)
 
 **Problem.** hidcheck did not invert COM_QuotedString: prefixed escapes and
