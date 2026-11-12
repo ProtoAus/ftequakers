@@ -5,6 +5,33 @@ all12lobbies verified,217recorder/resume payload+captured metadata rows unchange
 full public provenance/limits in FTESurf tools/playerfix-20261111-delivery.md.
 No new native build by that QC delivery; P1498 native/compiler delivery is separate.
 
+## Patch 1522 — Refuse unusable pointer-coordinate observations (12 Nov 2026)
+
+**Problem.** The input reader silently ignored malformed relative coordinates,
+never parsed absolute coordinates, and let NaN compare as an unbroken counts
+join. Five acting bad-payload cases retained receipt content OK and measured zero
+input totals. Individually finite samples could also overflow a sum while still
+retaining OK. The comment claiming a catch-all numeric fault was false; width
+validation already existed and was not the missing check.
+
+**Change.** Parse both pointer coordinates before modifying a window; require
+finite coordinates and finite next sums. Refuse unusable data as quality, not an
+angle/count accusation. Withhold the whole counts join after malformed pointer
+shape/coordinates or overflow instead of measuring a surviving partial stream.
+Existing receipt quality handling then withholds unproved input totals without
+changing digest/signature status. Preserve finite signed/fractional values,
+absolute unjoinability, controller BLIND and genuine finite contradiction faults.
+No native code/pin/tag, capture, wire/schema, threshold, ranking or Build change.
+
+**Verified.** Windows HID714/0, receipt471/0, recording reader949/0. Actual cached
+bytes/digests/no-reopen consumer controls act, invalid data FAULT rather than OK,
+input/join absence rather than zero, signature status unchanged.136same-byte HID:
+3faulty/identical lists.568REC automatic pairedVIEW:356faulty unchanged,751input
+hashes unchanged. Initial false missing-width expectation and own missing global
+math-import failure retained; not passes. Native float32/hardware does not follow
+from large-value numeric closure controls. tools/p1522-pointer-coordinates.md;
+independent reviews/deployment remain pending.
+
 ## Patch 1521 — Do not attribute controller look to missing mouse counts (12 Nov 2026)
 
 **Problem.** The recorded keyboard-turn term is tapped before joystick movement.
