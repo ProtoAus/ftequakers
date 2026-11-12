@@ -5,6 +5,32 @@ all12lobbies verified,217recorder/resume payload+captured metadata rows unchange
 full public provenance/limits in FTESurf tools/playerfix-20261111-delivery.md.
 No new native build by that QC delivery; P1498 native/compiler delivery is separate.
 
+## Patch 1526 — Unusable journal clocks cannot be clean evidence (12 Nov 2026)
+
+**Problem.** Non-finite base/frame/end clocks and a NaN truncation marker retained
+content OK. NaN evaded difference checks; closing deltas were not held to the
+body's nonnegative rule, and an unrepresentable end delta raised an exception.
+Unusable values could also remain in duration/rate metadata. An unusable body
+delta could crash parsing, or drop a pointer row and falsely fault a counts join.
+
+**Change.** Validate finite absolute clocks before storing or comparing them.
+Validate closing/truncation deltas and elapsed arithmetic before committing
+clock/trailer state; body arithmetic refuses rather than crashes. An unusable
+timestamp cannot turn a skipped pointer into a complete counts comparison.
+Refuse source quality and withhold unusable timing metrics;
+never convert this into angle/count/player guilt. Finite input comparisons remain
+independent. Preserve the existing fixed clock tolerance and genuine finite
+clock-contradiction control. No native code, capture/codec/version, cutoff,
+policy/rank, regrading, engine pin/tag or QC Build change.
+
+**Verified.** Eighteen malformed-clock cases and finite/rate/rounding controls:
+untouched P1525 reader fails32of71executed checks (including two overflow cases),
+subject77/0. Windows HID1001/0, receipts800/0, recording reader949/0. Actual cached
+digest/no-reopen and signature/content separation controls ACT. Current corpus
+and supported NoDeploy build evidence/limits: tools/p1526-journal-clock-quality.md
+in FTESurf. This is a bounded parser correction, not complete clock provenance,
+hardware, calibration, independent review or deployment. Native audit deferred.
+
 ## Patch 1525 — Native quoted bytes are not Unicode coefficients (12 Nov 2026)
 
 **Problem.** Q_atof reads one native char byte for a quoted character; the
