@@ -5,6 +5,30 @@ all12lobbies verified,217recorder/resume payload+captured metadata rows unchange
 full public provenance/limits in FTESurf tools/playerfix-20261111-delivery.md.
 No new native build by that QC delivery; P1498 native/compiler delivery is separate.
 
+## Patch 1518 — Keep input device identities in their actual namespaces (12 Nov 2026)
+
+**Problem.** The HID reader globally keyed device IDs although native pointer,
+keyboard and joystick allocators are independent. Legal shared numbers became
+false identity conflicts. Joystick axes also spent a touchpad's pointer budget.
+
+**Change.** Namespace claims by actual event routing; keep pointer subclasses
+in the same namespace and preserve genuine within-namespace ambiguity. Count
+joystick axes separately; another class cannot establish missing pointer/key/
+axis identity. Legacy non-keyboard keys are not impossible keyboard events or
+raw-key attestation. Python only: no native/capture/wire/rank/signature-verdict/
+threshold/Build change, no historical regrading, native pins unchanged.
+
+**Verified.** Literal native allocators5rows0warnings. Exact P1516 reader plus
+fixtures570/20fail; subject Windows/ARM570/0. Windows receipt408/0 with actual
+nested metrics/healthy-zero controls (also corrects the P1516 wrapper assertion);
+ARM4captured-byte consumers preserve content/signature separation. Full ARM
+receipt suite not run: flat HID stage lacks backend fixture. Reader949/0;
+751corpus hashes unchanged, actual supported568REC paired sweep349REC/7VIEW
+faulty and136HID3faulty/identical lists. Wrong standalone/orphan-assuming corpus
+callers retained as failures, not evidence of new faults. Actual healthy/fault
+CLI controls act. tools/p1518-hid-namespaces.md; independent reviews/deployment
+and real-device/human calibration remain pending.
+
 ## Patch 1517 — Select the strict halfspace before scanning alpha faces (12 Nov 2026)
 
 **Problem.** P1511 already stops an inconclusive plane-side scan early, but a
