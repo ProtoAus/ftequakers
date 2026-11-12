@@ -81,10 +81,20 @@ zero new native warning payloads against the affected baseline translation units
 only gl_backend.o changes. Same headers/flags/owned JPEG9c cache in both arms.
 Initial compiler PATH/header-line-ending/reader refusals retained, not regraded.
 Real Fairy33811 render/replay advances through39s both arms; alpha-sort trace
-acted and paused15s decoded pixels match exactly. Numerical native FPS gain
+acted. Earlier paused15s exact-pixel claim RETRACTED: an RGBA difference
+getbbox reader tested alpha only; corrected direct bytes/RGB comparison differ.
+Screenshots inspected, not human/full visual equivalence. Numerical native FPS gain
 UNMEASURED: bounded quiet gate refused peer games/lock, no arm ran. This is a
 semantics/acted-work optimization, not a measured gameplay FPS claim. Final
-clean-tag Full build/deployment pending; owner feel acceptance pending. Default
+clean-tag Full0/297.79s completed11Nov23:45:03Z at24a3d0104/tagpatch-1511:
+client532842ea / clean git-8704-patch-1511-0-g24a3d0104;74same warningpayloads,
+zero new; TLS365objects/10symbols/0plainuses. Actual final-client Fairy0->39s,
+then15s paused, canonicalP1508server/plugin compatibility smoke also passes.
+BOTH Windows clients verified12Nov00:04:26Z, independentreadback00:05:04Z:
+exact532842ea/clean1511stamp;19594capturedexistingprotectedfilesbyteunchanged,
+oldprevarchivedandP1508clientin.prev/pre1511. No othernative/progs/config/data
+promotion. ONE reviewed transaction, no owner/peer kill or healthy redeploy.
+Owner wider visual/feel acceptance pending. Default
 legacy CPU suite still stops at its stale three-argument sort-call assertion;
 neither it nor its reported historical cycle failure is qualified here.
 No recorder/physics/protocol/QC Build change. FTESurf tools/p1511-plane-side.md.
