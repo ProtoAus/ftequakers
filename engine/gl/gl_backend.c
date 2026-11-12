@@ -9451,21 +9451,38 @@ static qboolean GLBE_BlendWorldRasterEmptyNear(batch_t *batch, const mesh_t *mes
 // -1: a before b; +1: b before a; 0: no strict separation proof.
 static int GLBE_BlendPlaneSide(const glblendplane_t *a, const glblendplane_t *b)
 {
-	double side, lo = 0, hi = 0;
+	double side;
 	int v, j;
-	for (v = 0; v < a->mesh->numvertexes; v++)
+	if (a->mesh->numvertexes <= 0)
+		return 0;
+	side = 0;
+	for (j = 0; j < 3; j++)
+		side += b->normal[j] * ((double)a->mesh->xyz_array[0][j] - b->origin[j]);
+	// The first vertex leaves at most one strict half-space proof possible.
+	if (side > 2*GLBLEND_PLANE_EPS)
 	{
-		side = 0;
-		for (j = 0; j < 3; j++)
-			side += b->normal[j] * ((double)a->mesh->xyz_array[v][j] - b->origin[j]);
-		if (!v || side < lo) lo = side;
-		if (!v || side > hi) hi = side;
-		// Later vertices cannot restore either strict half-space proof.
-		if (lo <= 2*GLBLEND_PLANE_EPS && hi >= -2*GLBLEND_PLANE_EPS)
-			return 0;
+		for (v = 1; v < a->mesh->numvertexes; v++)
+		{
+			side = 0;
+			for (j = 0; j < 3; j++)
+				side += b->normal[j] * ((double)a->mesh->xyz_array[v][j] - b->origin[j]);
+			if (side <= 2*GLBLEND_PLANE_EPS)
+				return 0;
+		}
+		return b->eye > 0 ? 1 : -1;
 	}
-	if (lo > 2*GLBLEND_PLANE_EPS) return b->eye > 0 ? 1 : -1;
-	if (hi < -2*GLBLEND_PLANE_EPS) return b->eye < 0 ? 1 : -1;
+	if (side < -2*GLBLEND_PLANE_EPS)
+	{
+		for (v = 1; v < a->mesh->numvertexes; v++)
+		{
+			side = 0;
+			for (j = 0; j < 3; j++)
+				side += b->normal[j] * ((double)a->mesh->xyz_array[v][j] - b->origin[j]);
+			if (side >= -2*GLBLEND_PLANE_EPS)
+				return 0;
+		}
+		return b->eye < 0 ? 1 : -1;
+	}
 	return 0;
 }
 

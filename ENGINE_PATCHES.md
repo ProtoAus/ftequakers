@@ -5,6 +5,30 @@ all12lobbies verified,217recorder/resume payload+captured metadata rows unchange
 full public provenance/limits in FTESurf tools/playerfix-20261111-delivery.md.
 No new native build by that QC delivery; P1498 native/compiler delivery is separate.
 
+## Patch 1517 — Select the strict halfspace before scanning alpha faces (12 Nov 2026)
+
+**Problem.** P1511 already stops an inconclusive plane-side scan early, but a
+strictly separated face still maintains both distance extrema. After its first
+vertex, only one halfspace can possibly prove that separation.
+
+**Change.** Classify the first vertex with the unchanged double dot expression,
+then test remaining vertices only against that strict halfspace. A band vertex
+or opposing side still returns unknown. Keep component order, epsilon, eye-side
+mapping, empty-face behavior, admission, memo keys and original vertex-budget
+charges unchanged. No renderer-quality, geometry or sort-order change.
+
+**Verified.** Independent finite/source/oracle review clear; actual P1511 and
+subject each match the frozen full-scanner oracle on1312 existing plus84 added
+finite cases, ordinary and fast-math builds. Original full scanner fails the
+acted early-exit work control. Native16-byte XYZ layout/offsets separately checked;
+optimized raw-helper and actual native GL translation-unit disassembly remove
+both extrema instructions (native code grows72bytes). Supported incremental native
+compile/link exits0 with unchanged header/flag dependencies. Both baseline and
+subject ACT in moving Fairy transparent-sort views with positive edges/work and
+nonblank1920x1200 RGB output; no detected renderer/VM fatal. Paused camera alignment
+was not qualified, so no paired order/pixel-equality claim. Clean production
+build/delivery remain pending; no game-FPS or0.1%-low improvement is claimed yet.
+
 ## Patch 1516 — Refuse unproved identity constants from clipped text (12 Nov 2026)
 
 **Problem.** Legacy cvar buffers can capture identical text for different actual

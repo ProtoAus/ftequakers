@@ -88,10 +88,14 @@ static int frozen_plane_side(const glblendplane_t *a, const glblendplane_t *b)
 '''
 side_candidate=code[code.index('static int GLBE_BlendPlaneSide('):code.index('#define GLBLEND_CLIP_VERTS')]
 def counted_side(source, name, counter):
-    # Count at the actual vertex evaluation, without adding a candidate exit.
+    # Count every actual dot-product site, including both selected-side loops.
+    selected = 'if (a->mesh->numvertexes <= 0)' in source
+    if selected:
+        assert source.count('for (v = 1; v < a->mesh->numvertexes; v++)') == 2
+        assert source.count('xyz_array[0][j]') == 1
     source=source.replace(source[source.index('static int '):source.index('(')], 'static int '+name, 1)
     source, count=re.subn(r'(?m)^(\s*)side = 0;', rf'\1++{counter};\n\1side = 0;', source)
-    assert count==1
+    assert count == (3 if selected else 1), 'Uncounted or unexpected side-evaluation site'
     return source
 side_instrumented=('static unsigned candidate_visits, frozen_visits;\n'
                    +counted_side(side_candidate,'counted_plane_side','candidate_visits')
@@ -151,6 +155,34 @@ static void plane_side_equivalence(void) {
  printf("PASS plane-side frozen full-scan equivalence: -1=%u 0=%u +1=%u\n",seen[0],seen[1],seen[2]);
  fflush(stdout);
 }
+static void plane_side_selected_controls(void) {
+ float xyz[64][3]={{0}};mesh_t mesh={.xyz_array=xyz};
+ glblendplane_t a={.mesh=&mesh},b={.normal={1,0,0}};
+ const int lengths[]={0,-1,3,4,64};unsigned checks=0;
+ for(unsigned n=0;n<sizeof(lengths)/sizeof(*lengths);n++)
+  for(int sign=-1;sign<=1;sign+=2) for(int eye=-1;eye<=1;eye++) {
+   mesh.numvertexes=lengths[n];b.eye=eye;
+   for(int v=0;v<64;v++) xyz[v][0]=sign;
+   candidate_visits=frozen_visits=0;
+   int actual=counted_plane_side(&a,&b),expected=counted_frozen_plane_side(&a,&b);
+   assert(actual==expected&&candidate_visits==(unsigned)(mesh.numvertexes>0?mesh.numvertexes:0));
+   assert(frozen_visits==candidate_visits);checks++;
+   if(mesh.numvertexes<=0) { assert(actual==0);continue; }
+   assert(actual==(sign>0?(eye>0?1:-1):(eye<0?1:-1)));
+   // A closed-band first vertex, then an exact late boundary or opposing side.
+   xyz[0][0]=sign*.25f;candidate_visits=0;
+   actual=counted_plane_side(&a,&b);expected=frozen_plane_side(&a,&b);
+   assert(actual==expected&&actual==0&&candidate_visits==1);checks++;
+   xyz[0][0]=sign;
+   for(int late=0;late<2;late++) {
+    xyz[mesh.numvertexes-1][0]=late?-sign:sign*.25f;
+    candidate_visits=0;
+    actual=counted_plane_side(&a,&b);expected=frozen_plane_side(&a,&b);
+    assert(actual==expected&&actual==0&&candidate_visits==(unsigned)mesh.numvertexes);checks++;
+   }
+  }
+ printf("PASS selected-side empty/strict/band/opposed controls: %u checks\n",checks);
+}
 static void plane_side_work_control(void) {
  float xyz[64][3]={{0}};mesh_t mesh={.numvertexes=64,.xyz_array=xyz};
  glblendplane_t a={.mesh=&mesh},b={.normal={1,0,0},.eye=1};
@@ -164,6 +196,7 @@ static void plane_side_work_control(void) {
 }
 int main(void) {
  plane_side_equivalence();
+ plane_side_selected_controls();
  realshader_t sh={0};sh.remapto=&sh;
  batch_t b={.ent=&r_worldentity,.shader=&sh};
  mesh_t *frozen[3]={&mesh1235,&mesh1236,&mesh1228};
@@ -353,7 +386,7 @@ if args.side_only:
 typedef struct { int numvertexes; float (*xyz_array)[3]; } mesh_t;
 '''
  side_tests=tests[tests.index('static void check_plane_side('):tests.index('int main(void)')]
- base=minimal+plane_type+'\n'+epsilon+'\n'+side_candidate+side_reference+side_instrumented+side_tests+'\nint main(void) { plane_side_equivalence(); plane_side_work_control(); return 0; }\n'
+ base=minimal+plane_type+'\n'+epsilon+'\n'+side_candidate+side_reference+side_instrumented+side_tests+'\nint main(void) { plane_side_equivalence(); plane_side_selected_controls(); plane_side_work_control(); return 0; }\n'
 flags=['-std=c99','-Wall','-Wextra','-Werror','-O2','-fno-strict-aliasing']
 mutants = {
  'actual': base,
