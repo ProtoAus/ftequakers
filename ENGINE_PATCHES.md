@@ -5,6 +5,27 @@ all12lobbies verified,217recorder/resume payload+captured metadata rows unchange
 full public provenance/limits in FTESurf tools/playerfix-20261111-delivery.md.
 No new native build by that QC delivery; P1498 native/compiler delivery is separate.
 
+## Patch 1535 — Byte-cap boundaries exclude unsupported body observations (12 Nov 2026)
+
+**Problem.** The reader accepted/processed body records after a cap marker, even
+though only closing tables/end can follow. An extra coherent frame was judged as
+captured input; a contradictory tail could pollute otherwise valid prefix rules.
+
+**Change.** Fault/ignore known body records after a cap before any clock/count/
+view/model mutation. Preserve the supported prefix, known cap and legitimate
+whole closing totals, allowing the existing device tables/end footer. No native/
+writer/capture/recording field, detector threshold, signature, rank or Build change.
+
+**Verified.** Same1294assertions, parent6failures, subject0;9new checks. Actual CLI
+valid0, formerly accepted tail now1. Coherent and contradictory tails cannot
+change prefix19angle/19join/rates; the same21frame body without cap acts20/20;
+permitted closing tables/end remain accepted. Reader949/0, receipts800/0,
+structured32/0; supported normal NoDeploy3VM0warnings.134HID hashes/fault/info/
+notes (3oldfaulty) and751REC/VIEW hashes/per-file reports/356oldfaults identical.
+Publication/qualification is not independent review/deployment or physical truth;
+FTESurf tools/p1535-journal-cap-boundary.md. Native code/pins/tag/Build held;
+original38acceptance inputs and deferred audit remain untouched.
+
 ## Patch 1534 — Closing clocks must cover the recorded prefix (12 Nov 2026)
 
 **Problem.** A marked partial journal could claim an earlier whole duration than
