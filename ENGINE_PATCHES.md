@@ -1,5 +1,28 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1539 — Rejected journal observations remain unavailable (13 Nov 2026)
+
+**Problem.** Rejected touchpad quantities could cancel into measured zero;
+kind-only source rows skipped availability guards. Unusable keyboard data still
+supported cause prose, and touchpad mode differed from native integer semantics.
+Malformed recognized cap/end records could lose lifecycle meaning. Existing
+snapshot expectations omitted the retained partial-coverage boolean.
+
+**Change.** Reuse independent quantity/pointer availability, native integer
+parsing and usable-coverage cause gates. Separate recognized boundaries from
+usable clocks, preserving order, duplicates, partial lower bounds and present
+unusable closure. Reconcile stale snapshot expectations without revealing
+withheld totals. Reader/tests only: native pin remains P1538, no recording field,
+profile, threshold, ranking, historical regrade or QC Build change.
+
+**Verified.** Actual matched original1603/50fail and same-fixture subject1603/0;
+77new assertions. REC949/0, receipt800/0, structured32/0, snapshot12/0. Two stale
+stored-receipt expectations reproduce on original, then pass with only expected
+partial boolean corrected. Ordinary CLI/captured metrics act;134HID/751REC-VIEW
+reports and hashes identical, existing faults3/356unchanged. Original failures
+retained privately. Independent re-review/ARM/final rollout are separate gates;
+no human/device/calibration/security acceptance. FTESurf tools/p1539-journal-availability.md.
+
 ## Patch 1538 — Unsupported landing context cannot claim observed use (13 Nov 2026)
 
 **Problem.** The newly admitted ordinary-landing observation could remain
