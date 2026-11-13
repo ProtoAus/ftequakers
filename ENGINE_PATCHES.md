@@ -1,5 +1,33 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1541 — JARGON search-local fallback and valid elites (13 Nov 2026)
+
+**Problem.** An all-invalid initial CEM grid could center a new search on a
+previous search's best steering vector. Invalid (-1) samples also became elite
+training data when there were fewer than five useful samples.
+
+**Change.** QC-only: initialize active best/mean/spread dimensions after the full
+aim/lead count is known; exclude only the established invalid -1 sentinel from
+elite fitting, preserving legitimate negative penalized fitness. Explicit seeds,
+priors, archives, scoring, RNG and movement remain unchanged. All coordinated,
+joint-finish and boarding-window experiments were removed. No new option ships;
+no native code/pin/tag, evidence-format, finish-authority or Build change by this task.
+
+**Verified.** Clean QC6baeb6b4 three-VM NoDeploy build: zero warnings. Retained
+production helpers execute4185 assertions in standalone qclib, with acting pristine stale-best
+and invalid-elite controls, negative-fitness falsifiers and all20 sampler/RNG
+comparisons. Synthetic scores/stubbed side effects are not movement or performance
+proof. Fixed OpenGL stage2 controls finished12.450; no speedup is established.
+A valid joint candidate did not finish within600s. A native-anchored window actually
+played3 alternatives but finished12.720/298wall seconds versus12.450/217control,
+one seed only; it was rejected, not promoted. Earlier coordinated-sampler timing
+was renderer-confounded. Existing completed controls retain a duplicate-board-counter
+REC fault; in-game finish is not structural/native recording verification. Final
+scoped review found no blockers. Actual installed Windows-native copies completed
+one clean-source stage2 compatibility control12.450/5backs at10:21Z; source,
+inputs and canonical data stayed exact, original actors stopped and lock released.
+No cross-native timing claim. Deployment remains pending. tools/p1541-jargon-search.md.
+
 ## Patch 1540 — Prefix timing survives unsupported closure shape (13 Nov 2026)
 
 **Problem.** Newly recognized malformed closing widths set global clock-quality
