@@ -5,6 +5,30 @@ all12lobbies verified,217recorder/resume payload+captured metadata rows unchange
 full public provenance/limits in FTESurf tools/playerfix-20261111-delivery.md.
 No new native build by that QC delivery; P1498 native/compiler delivery is separate.
 
+## Patch 1533 — Closing counters cannot contradict the recorded prefix (12 Nov 2026)
+
+**Problem.** Truncation disabled the hidden-event equality check without retaining
+the required lower bound: a closing0 could be accepted despite an observed hidden
+event. Other closing counters could retain impossible unsigned values or publish
+contradictory totals. Nonnumeric counts also wrongly tainted finite clocks.
+
+**Change.** Reuse the native unsigned-counter domain for closing events, frames,
+loss and hidden totals, preserving the different signed backend sentinels. Enforce
+hidden-prefix direction on truncated files, retain exact full-file equality, and
+withhold unsupported/contradictory totals rather than report0 or a subtotal.
+Preserve independently measured prefix rates, clocks and angle/count comparisons.
+No native/writer/capture/recording field, signature, rank, threshold or Build change.
+
+**Verified.** Same1244assertions: untouched36failures, subject0;94new assertions.
+Actual CLI still accepts valid hidden1 and now refuses the previously accepted
+truncated hidden0/body1. Equal/ahead/nativeMAX controls and loss sentinels act.
+Reader949/0, receipts800/0, structured32/0; normal isolated NoDeploy3VM0warnings.
+All134HID hashes/faults/info/notes (3oldfaulty) and751REC/VIEW hashes/reports/
+356oldfaults unchanged. Incorrect initial prefix-rate fixture premise retained and
+corrected from source before product edits; rates are not whole closing totals.
+Source qualification is NOT independent review/deployment or physical input truth;
+FTESurf tools/p1533-journal-closing-counters.md. Native code/pins/tag/Build held.
+
 ## Patch 1532 — Invalid loss declarations cannot become measured zero (12 Nov 2026)
 
 **Problem.** The journal reader accepted signed or out-of-native-range loss
