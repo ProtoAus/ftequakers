@@ -27,8 +27,17 @@ These synthetic API/world/arrival fixtures are not a mover, real-socket, full
 restore-admission, cold-session or complete-REC verification. Three-VM NoDeploy
 QC build has zero warnings; unchanged strict reader passes949/0. A stable570REC/
 173VIEW corpus retains352/6 existing faulty files; those are not clean recordings.
-Full native builds, actual same-image TAS finish/strict recording acceptance,
-independent review and installed/fleet provenance are separate gates tracked in
+The subsequent full Windows client/server/five-plugin build has74 known and0new
+warnings; all three VMs build with0warnings. Two independent clean-source reviews
+found no blocker. A fresh source-built same-image real-socket tensor2 stage2 run
+finishes12.450 with830inputs and6board arrivals; the unchanged strict reader has
+0faults. All21 captured native prediction endpoints are bit-equal when actually
+played, not a claim of hidden/per-tick parity, first-contact precision, VIEW or
+nativePM_verify acceptance. At13Nov20:03:27UTC the exact prepared images were
+promoted to both Windows installs:22 role-target hashes match, rollback retained.
+Post-copy installed-role startup remains blocked before actors by the unchanged
+2500MiB guard (fresh1066MiB); no fleet/Build change. Source, corpus, negative
+launch experiments, protected-file audit and delivery limits are detailed in
 FTESurf `tools/p1543-tas-board-restore.md`.
 
 ## Patch 1542 — Experimental GoldSrc-style practice profiles (13 Nov 2026)
