@@ -59,7 +59,17 @@ REC fault; in-game finish is not structural/native recording verification. Final
 scoped review found no blockers. Actual installed Windows-native copies completed
 one clean-source stage2 compatibility control12.450/5backs at10:21Z; source,
 inputs and canonical data stayed exact, original actors stopped and lock released.
-No cross-native timing claim. Deployment remains pending. tools/p1541-jargon-search.md.
+No cross-native timing claim. Exact qualified QW DAT/LNO installed in BOTH Windows
+installs10:36UTC;38protected native/config/CSQC/menu files unchanged, differing menus
+preserved, owner games not hot-reloaded. Full existing Pi transaction with frozen
+QW79e18f47/unchanged CS3a52a7c9, normal10s warning/no force, restarted all12 lobbies
+11:59UTC. Fresh preservation checks before upload and after countdown/before swap;
+independent12:00postflight verified new12process births, unchanged native/config/
+backend and all216selected recorder/resume payloads plus checked metadata. Previous
+program pair and private onbox/offbox preimages retained. Earlier occupied pre-upload
+refusal was not bypassed: independent followup required a new actual closed epoch;
+no occupied-stream/general-writer qualification claimed. No release/Build/native bump.
+Full provenance and remaining physical-goal limits: tools/p1541-jargon-search.md.
 
 ## Patch 1540 — Prefix timing survives unsupported closure shape (13 Nov 2026)
 
