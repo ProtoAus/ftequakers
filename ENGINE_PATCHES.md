@@ -5,6 +5,30 @@ all12lobbies verified,217recorder/resume payload+captured metadata rows unchange
 full public provenance/limits in FTESurf tools/playerfix-20261111-delivery.md.
 No new native build by that QC delivery; P1498 native/compiler delivery is separate.
 
+## Patch 1536 — Backend count observations cannot cancel into measured zero (13 Nov 2026)
+
+**Problem.** Rejected-input and legacy-click body deltas could cancel positive
+counts into a clean0; malformed observations or contradictory closing totals
+also retained unsupported quantities and numerical cause notes.
+
+**Change.** Validate signed-native non-negative i/b deltas, keep unavailable whole
+quantities per counter, and omit contradictory totals rather than0/subtotals.
+Malformed/unread observations cannot manufacture complete0. Preserve independently
+known other counters, finite prefix clocks/rates and angle/count comparisons;
+suppress numerical cause notes for unavailable quantity. Positive valid counts
+remain review-only, never a new cheat fault. Signed trailer-1 remains legitimate.
+No native/writer/capture/recording-field/rank/signature/threshold/Build change.
+
+**Verified.** Same1398assertions parent44failures, subject0;104new. Actual ordinary
+CLI still accepts valid0 and now refuses formerly accepted cancellation. NativeMAX,
+known0/positive2/independent-counter2/backend-1 controls act; finite19angle/19join
+prefix retained, existing bad-clock abstention unchanged. REC949/0, receipts800/0,
+structured32/0; normal final-metadata NoDeploy3VM0warnings.134HID hashes/fault/info/
+notes (3oldfaulty) and751REC/VIEW bytes/reports/356oldfaults identical. One transient
+Git fetch failure retained; ordinary bounded retry recovered, no gate changed.
+Source qualification is not independent review/deployment or physical provenance;
+FTESurf tools/p1536-journal-backend-counts.md. Native2274050a9/tag1529/Build89 held.
+
 ## Patch 1535 — Byte-cap boundaries exclude unsupported body observations (13 Nov 2026)
 
 **Problem.** The reader accepted/processed body records after a cap marker, even
