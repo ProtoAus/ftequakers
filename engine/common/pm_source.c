@@ -3570,6 +3570,8 @@ static void PMSrc_FullWalkMove (void)
 {
 	qboolean wasonground = pmove.onground, bankfinish_projected = false, bankairclear = false;
 	qboolean bankgroundjump = false;
+	qboolean banklandingfinite = isfinite(movevars.entgravity) &&
+		isfinite(movevars.gravity) && isfinite(movevars.maxvelocity);
 	vec3_t bankfinish_before, bankfinish_plane;
 	vec3_t bankstart_default, bankstart_origin, bankstart_airend, bankstart_airvel;
 	qboolean bankstart = pmove.waterjumpremaining > 0 ?
@@ -3705,7 +3707,7 @@ static void PMSrc_FullWalkMove (void)
 	if (bankstart && bankairclear && !pms_bankgravity_used &&
 		(pmove.waterlevel == 0 || pmove.waterlevel == 1) && !pms_slidetick && !pms_portalcrossed &&
 		((!pmove.onground && VectorCompare(pmove.origin, bankstart_airend)) ||
-		 (!wasonground && pmove.onground)) &&
+		 (!wasonground && pmove.onground && banklandingfinite)) &&
 		PMSrc_BankGravityAirChanged(bankstart_origin, bankstart_airend, bankstart_airvel, bankstart_default[2]))
 		pms_bankgravity_used = true;
 }
@@ -4933,7 +4935,11 @@ static void PMSrc_TestBankWaterJumpGravity(void)
 		{"cf-air zero stays air", 1, 8|32, 0, 1, 0, false},
 		{"both land foreign", 1, 8, 2, 1, 0, false},
 		{"both land ordinary", 0, 8|64, 2, 0, 0, false},
-		{"ordinary surviving air", 0, 64, 2, 0, 0, true}
+		{"ordinary surviving air", 0, 64, 2, 0, 0, true},
+		{"ordinary infinite property landing", 0, 8|32|64|128, INFINITY, 0, 0, false},
+		{"ordinary infinite cap landing", 0, 8|32|64|256, 2, 0, 0, false},
+		{"ordinary NaN cap landing", 0, 8|32|64|512, 2, 0, 0, false},
+		{"ordinary infinite world shared landing", 0, 8|64|128|1024, 2, 0, 0, false}
 	};
 	playermove_t *saved = BZ_Malloc(sizeof(pmove));
 	playermove_t *initial = BZ_Malloc(sizeof(pmove));
@@ -4998,6 +5004,9 @@ static void PMSrc_TestBankWaterJumpGravity(void)
 			pms_slidetick = pms_momslide = 0;
 			pms_anyslide = pms_haveportals = pms_portalcrossed = pms_surfed = false;
 			movevars.entgravity = pass ? cases[i].gravity : 1;
+			movevars.gravity = (cases[i].gate & 1024) ? INFINITY : 800;
+			movevars.maxvelocity = (cases[i].gate & 128) ? 12 :
+				(cases[i].gate & 256) ? INFINITY : (cases[i].gate & 512) ? NAN : 3500;
 			trial = movevars;
 			PMSrc_BankGravityBegin(pass == 2);
 			PMSrc_FullWalkMove();
@@ -5012,7 +5021,7 @@ static void PMSrc_TestBankWaterJumpGravity(void)
 			if (pass != 2) continue;
 			Q_snprintfz(name, sizeof(name), "P1514 %s entire body preserved", cases[i].name);
 			PMSrc_Check(name, memcmp(unobserved, &pmove, sizeof(pmove)) == 0, 1, 0);
-			if (cases[i].used)
+			if (cases[i].used || ((cases[i].gate & 32) && (cases[i].gate & (128|256|512))))
 			{
 				Q_snprintfz(name, sizeof(name), "P1514 %s actual gravity body difference", cases[i].name);
 				PMSrc_Check(name, !VectorCompare(pmove.origin, default_origin), 1, 0);
@@ -5024,7 +5033,7 @@ static void PMSrc_TestBankWaterJumpGravity(void)
 			if (cases[i].gate & 32)
 			{
 				PMSrc_Check("landing default canonical body stays airborne", default_ground, 0, 0);
-				PMSrc_Check("landing selected canonical ground witness", pmove.onground, cases[i].used, 0);
+				PMSrc_Check("landing selected canonical ground witness", pmove.onground, cases[i].used || (cases[i].gate & (128|256|512)), 0);
 			}
 			else if (cases[i].gate & 8)
 				PMSrc_Check("P1514 landing actually acted", pmove.onground, 1, 0);

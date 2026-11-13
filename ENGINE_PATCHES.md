@@ -1,5 +1,26 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1538 — Unsupported landing context cannot claim observed use (13 Nov 2026)
+
+**Problem.** The newly admitted ordinary-landing observation could remain
+positive after unsupported numeric context was sanitized by normal movement.
+The existing original-input gate was intact; older airborne behavior is not
+part of this defect and must remain unchanged.
+
+**Change.** Capture finite entity/world gravity and velocity-cap eligibility
+before movement, requiring it only for the new ordinary-landing arm. Retain
+existing airborne/water-jump admission, endpoint and ground proofs, observation
+lifetime and all movement state. No new traces, fields, thresholds or QC Build.
+
+**Verified.** Actual native Windows FullWalkMove control with the final expanded
+fixture:1814checks/exactly3unsupported-positive failures; same fixture with repair:
+1814/0. Complete playermove/movevars bytes and finite landing/older airborne
+controls preserved. Dedicated build has zero new warnings against same-target
+baseline. Earlier failed infrastructure/fixture assumptions retained, not passed.
+This is bounded Windows source qualification, not ARM/full-world/HFR/human,
+independent review, security-audit completion or deployment. Final qualification
+and rollout remain separate; FTESurf tools/p1538-native-landing-finite.md.
+
 QC P1492–P1495 combined development delivery (11 Nov): both Windows installs and
 all12lobbies verified,217recorder/resume payload+captured metadata rows unchanged;
 full public provenance/limits in FTESurf tools/playerfix-20261111-delivery.md.
