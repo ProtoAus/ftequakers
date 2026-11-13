@@ -1,5 +1,26 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1540 — Prefix timing survives unsupported closure shape (13 Nov 2026)
+
+**Problem.** Newly recognized malformed closing widths set global clock-quality
+loss and erased otherwise finite accepted-prefix timing. Unsupported boundary
+shape proves neither a whole duration nor corruption of the earlier prefix.
+
+**Change.** A boundary-only availability flag withholds whole time/cap endpoint
+without discarding independent prefix rates. Keep recognized closure/order,
+partial lower bounds, body exclusion and all existing unusable-clock gates.
+Reader/tests only; native pin/tag1538, schema/policy/threshold/ranking and Build89
+unchanged. No data write or historical regrade.
+
+**Verified.** Actual unchanged P1539 product with expanded fixture1623/2fail;
+same fixture with correction1623/0,20addedassertions. Healthy/absent-end controls
+and earlier unusable-clock refusals act; ordinary CLI/captured receipt checks.
+REC949/0, receipt800/0, structured32/0, snapshots12/0, stored receipts0fail;
+134HID/751REC-VIEW reports+hashes unchanged, existing faults3/356unchanged.
+Native1538 clean Windows/ARM1814/0 qualification is unchanged, not a new native
+build by this reader fix. Independent review/deployment remain separate gates;
+no human/HFR/calibration/security-audit acceptance. FTESurf tools/p1540-journal-prefix-timing.md.
+
 ## Patch 1539 — Rejected journal observations remain unavailable (13 Nov 2026)
 
 **Problem.** Rejected touchpad quantities could cancel into measured zero;
