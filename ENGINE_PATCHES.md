@@ -35,9 +35,14 @@ finishes12.450 with830inputs and6board arrivals; the unchanged strict reader has
 played, not a claim of hidden/per-tick parity, first-contact precision, VIEW or
 nativePM_verify acceptance. At13Nov20:03:27UTC the exact prepared images were
 promoted to both Windows installs:22 role-target hashes match, rollback retained.
-Post-copy installed-role startup remains blocked before actors by the unchanged
-2500MiB guard (fresh1066MiB); no fleet/Build change. Source, corpus, negative
-launch experiments, protected-file audit and delivery limits are detailed in
+The original2500MiB resource refusal and invalid nonzero-Z smoke predicate are
+retained. A genuinely fresh4207MiB boundary allowed the corrected installed-image
+three-role startup: native source/tag versions, loaded HL2 hashes, dedicated map,
+client CSQC and finite SSQC body replies PASS in isolated thin fixtures. All3actors
+exit0;22destinations and a fresh18526protected-file epoch match at13Nov20:43:08UTC.
+This is not owner-config/visual/cold-session/movement acceptance; no fleet/Build
+change. Source, corpus, negative launch experiments and earlier changed-log audit
+remain distinct observations. Details and delivery limits are in
 FTESurf `tools/p1543-tas-board-restore.md`.
 
 ## Patch 1542 — Experimental GoldSrc-style practice profiles (13 Nov 2026)
