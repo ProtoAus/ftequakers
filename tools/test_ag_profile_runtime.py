@@ -137,6 +137,8 @@ def main():
     ap.add_argument('--port',type=int,required=True)
     ap.add_argument('--expect-missing-capability',action='store_true',help='client input must be an independently inspected native binary without AG capability')
     args=ap.parse_args()
+    if args.review_controls and args.selector_cycle:
+        ap.error('review-controls and selector-cycle require separate cases: map resets interrupt the timed review phases')
     root=args.runtime.resolve()
     assert any((p/'OWNER.md').is_file() for p in root.parents)
     assert 27520 <= args.port <= 27620
@@ -272,6 +274,10 @@ def main():
     review_code=''
     if args.review_controls:
         review_code=(Path(__file__).parent/'test_ag_review_probe.qc').read_text()
+        # Eight one-second review phases follow restore; cold CSQC startup can
+        # consume most of the basic 25-second world lifetime before input begins.
+        assert probe_code.count('    if (time < 25) return;') == 1
+        probe_code=probe_code.replace('    if (time < 25) return;', '    if (time < 40) return;',1)
         probe_code=probe_code.replace('        bprint(PRINT_HIGH, sprintf("AGSOCKET pbguard', '        AGReviewServerStep(p, ag_probe_restored);\n        bprint(PRINT_HIGH, sprintf("AGSOCKET pbguard',1)
     if args.residual_retention:
         review_code=(Path(__file__).parent/'test_ag_review_probe.qc').read_text()
@@ -302,6 +308,7 @@ def main():
     source_list=src/'ag-profile-probe.src'
     with source_list.open('x') as handle:handle.write('\n'.join(manifest)+'\n')
     try:
+        (root/'probe-manifest.src').write_bytes(source_list.read_bytes())
         compilecmd=[str(args.compiler.resolve()),'-max_strings','4194304','-srcfile',source_list.name]
         with (root/'compile.log').open('x') as compileout:
             compiler=subprocess.Popen(compilecmd,cwd=src,stdout=compileout,stderr=subprocess.STDOUT)
@@ -515,6 +522,7 @@ float(string cmd) CSQC_ConsoleCommand =
             reader_sent=False
             cycle_state=0
             cycle_at=0
+            cycle_client_offset=0;cycle_walk=False;cycle_witness=None
             walk_started=time.monotonic()
             stopped_walk=False
             deadline=time.monotonic()+35
@@ -561,11 +569,30 @@ float(string cmd) CSQC_ConsoleCommand =
                         server.stdin.write(b'echo AG_CYCLE_DEFAULT\nsv_movementprofile default\nmap ag_profile_test\nmovement\n');server.stdin.flush()
                         cycle_state=2;cycle_at=now
                     elif cycle_state==2 and now-cycle_at>4:
+                        cycle_client_offset=len(clientlog.read_text(errors='replace'))
                         server.stdin.write(b'echo AG_CYCLE_FINAL\nsv_movementprofile ag-250\nmap ag_profile_test\nmovement\n');server.stdin.flush()
                         cycle_state=3;cycle_at=now
-                    elif cycle_state==3 and now-cycle_at>5:
-                        server.stdin.write(b'echo AG_CYCLE_DONE\nquit\n');server.stdin.flush()
-                        cycle_state=4
+                    elif cycle_state==3:
+                        final_client=clientlog.read_text(errors='replace')[cycle_client_offset:]
+                        assert client.poll() is None, ('final AG250 client exited',final_client[-2000:])
+                        assert 'Refusing AG commands:' not in final_client and 'Host_EndGame:' not in final_client, final_client[-2000:]
+                        if not cycle_walk and 'FTESurf CSQC loaded' in final_client:
+                            client.stdin.write(b'echo AG_CLIENT_FINAL\nserverinfo\n+forward\n');client.stdin.flush()
+                            cycle_walk=True
+                        final_server=(root/'server-console.log').read_text(errors='replace').split('AG_CYCLE_FINAL',1)[-1]
+                        samples=[tuple(map(float,row)) for row in re.findall(r'AGSOCKET player origin=([^ ]+) ([^ ]+) ([^ ]+) .* ticks=([^ ]+) rate=([^\r\n]+)',final_server)]
+                        inputs=[float(v) for v in re.findall(r'AGSOCKET cp=.* input=([^ ]+)',final_server)]
+                        pins=[line for line in final_server.splitlines() if 'AGSOCKET pin ' in line]
+                        valid_pin=any(re.search(r'\bpmsrcver=1\b',line) and re.search(r'\bphysmode=2\b',line) for line in pins)
+                        if cycle_walk and len(samples)>=2:
+                            ticks=[row[3] for row in samples];xs=[row[0] for row in samples]
+                            if max(ticks)-min(ticks)>100 and max(xs)-min(xs)>64 and any(v>0 for v in inputs) and valid_pin:
+                                assert all(abs(row[4]-.004)<1e-8 for row in samples)
+                                cycle_witness={'client_live_before_stop':True,'no_context_refusal':True,'native_ag250_pin':True,'ticks':ticks,'x_positions':xs,'forward_inputs':inputs,'rate':.004}
+                                client.stdin.write(b'-forward\n');client.stdin.flush()
+                                server.stdin.write(b'echo AG_CYCLE_DONE\nquit\n');server.stdin.flush()
+                                cycle_state=4
+                        assert cycle_state==4 or now-cycle_at<12, 'final AG250 client/input/body witness missing'
                 time.sleep(0.1)
             servercode=server.wait(timeout=5)
         finally:
@@ -591,7 +618,8 @@ float(string cmd) CSQC_ConsoleCommand =
         assert 'AGSOCKET server profile= mode=1' in restored, 'default did not restore Source'
         assert 'optional ag-' not in restored
         assert 'profile=ag-250-v1 mode=2' in final and 'AG_CYCLE_DONE' in final
-        (root/'selector-cycle.json').write_text(json.dumps({'passed':True,'midmap_identity_unchanged':True,'default_source_restored':True,'ag250_next_map':True},indent=2))
+        assert cycle_witness is not None, 'server strings alone do not qualify the final client'
+        (root/'selector-cycle.json').write_text(json.dumps({'passed':True,'midmap_identity_unchanged':True,'default_source_restored':True,'ag250_next_map':True,'final_client_acting':cycle_witness},indent=2))
         rate_logs=initial
     if args.expect_missing_capability:
         assert 'requires an AG-v1 capable client' in logs

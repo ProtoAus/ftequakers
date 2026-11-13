@@ -1746,7 +1746,8 @@ void SV_SendClientPrespawnInfo(client_t *client)
 			}
 			else if (client->prespawn_idx == 2)
 			{
-				static const char *prioritykeys[] = {"*", "fpd", "teamplay", "deathmatch", "maxfps", NULL};	//make sure these are in there.
+				// Closed AG context must accompany *movementprofile before the first active command.
+				static const char *prioritykeys[] = {"*", "fpd", "teamplay", "deathmatch", "maxfps", "pm_physicsmode", "pm_agversion", "pm_ticrate", NULL};	//make sure these are in there.
 				static const char *ignorekeys[] = {"mapname"/*here for q3, useless for qw*/, NULL};
 				if (!ISNQCLIENT(client) || (client->fteprotocolextensions & PEXT_CSQC) || (client->fteprotocolextensions2 & PEXT2_PREDINFO))
 				{	//nq does not normally get serverinfo sent to it.

@@ -21,26 +21,39 @@ and QC peer changes are retained by the current-main integration.
 **Packaging follow-up.** The clean 92d candidate Full exposed inherited plugin
 metadata containing literal backslash-n separators: shell `echo` did not expand
 the controlled payload. Use portable `printf '%b\n'` in the existing EMBEDMETA
-recipe, preserving all values and ZIP flow. Five actual old-payload negative
-controls reproduce the defect; five same-shell printf controls preserve all
-fields with real LF separators and valid control ZIPs. Those are source/byte
-controls, not an executed package parser. The original compiled cohort remains
-retained with its metadata HOLD; a new commit-bound Full is still required.
+recipe, preserving all values and ZIP flow. The subsequent clean 1bfa Full
+rebuilt all five payloads with real LF separators, exact field/token contracts
+and valid ZIP CRCs. Original negative products remain retained. This is static
+byte acceptance, not an executed package parser or redistribution clearance.
 
-**Verified — local candidate, not deployed.** Independent movement/evidence
-merge review cleared the code scope. The isolated Windows Full build compiled
-the client, dedicated server and all five plugins; QC emitted zero warnings and
-native warnings matched the retained baseline multiset with no new entries.
-Current reader regression: 949 checks / 0 failures plus seven profile controls;
-568 stable recordings and 173 associated views retain exactly the baseline
-fault sets. Earlier-candidate Native controls matched 90 named rows across six
-maps and passed both historical pin2 arms; historical pin7 still requires its
-qualified missing zone input. Those observations do not qualify the new merged
-binaries. Windows runtime DLL packaging, commit-bound runtime qualification and
-human feel remain pending. The successful build's automatic dependency fetch is
-retained as an operational deviation, not a no-network pass. No full HL1/AG,
-1000-rate, HL2, ranked-evidence or gameplay-parity claim. See FTESurf
-`tools/p1542-legacy-movement.md` for the active limits and completion state.
+**Signon follow-up.** Include `pm_physicsmode`, `pm_agversion` and `pm_ticrate`
+in the existing first-snapshot priority set alongside `*movementprofile`.
+Otherwise a late plain version key can miss the bounded initial snapshot and
+the strict client correctly refuses the new map's incomplete AG context.
+Preserve the snapshot size, wildcard, deferred infosync, previous-map reset and
+closed-context guards; never infer a missing version. Priority is membership,
+not emission order or a guarantee for arbitrarily oversized priority payloads.
+
+**Verified — local candidate, not deployed at this checkpoint.** Independent
+movement/evidence merge review cleared the integrated scope. The clean 1bfa
+Windows Full compiled client, dedicated server and all five plugins; QC emitted
+zero warnings and all 74 native warnings exactly matched the retained baseline.
+Current reader regression remains 949 checks / 0 failures plus seven profile
+controls; 568 stable recordings and 173 associated views retain the baseline
+fault sets. Earlier-image Native execution completed all 16 required arms,
+including both corrected-input pin7 arms; 90 named current-map rows matched.
+Old failed cases were not regraded; these are not current-image platform proof.
+Headless 100/250 save/load and carried-waterjump controls passed. With the
+strengthened final-client witness, original signon fails at version0 after the
+100/default/250 cycle; the priority candidate stays connected and acts with
+advancing ticks, directional input and body displacement at .004. Bad/missing
+versions still refuse, the default Source control passes, and 1000 refuses.
+The priority change has a successful incremental NoDeploy build; its final
+clean commit/tag-bound Full and deployment remain separate delivery gates.
+A prior build's automatic dependency fetch remains an operational deviation;
+the later cached Full observed no bootstrap/download, not a network sandbox.
+No full HL1/AG, 1000-rate, HL2, ranked-evidence, rendered/feel or gameplay-parity
+claim. See FTESurf `tools/p1542-legacy-movement.md` for limits and delivery state.
 
 ## Patch 1541 — JARGON search-local fallback and valid elites (13 Nov 2026)
 
