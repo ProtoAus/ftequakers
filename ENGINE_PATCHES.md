@@ -5,6 +5,29 @@ all12lobbies verified,217recorder/resume payload+captured metadata rows unchange
 full public provenance/limits in FTESurf tools/playerfix-20261111-delivery.md.
 No new native build by that QC delivery; P1498 native/compiler delivery is separate.
 
+## Patch 1534 — Closing clocks must cover the recorded prefix (12 Nov 2026)
+
+**Problem.** A marked partial journal could claim an earlier whole duration than
+its recorded prefix and still pass. Finite full-file end mismatches faulted yet
+retained unsupported durations. Cap timestamps were not checked against their
+relative clock, and the special cap branch bypassed post-close/duplicate guards.
+
+**Change.** Reuse existing TIME_EPS to validate cap absolute/relative agreement and
+closing-prefix chronology. Omit unsupported duration/cap timestamps, preserving
+known cap existence, valid ahead totals and independent finite prefix rates and
+angle/count observations. Guard a second cap or one after end. No new capture or
+recording field, clock/detector threshold, native/writer/rank/signature/Build change.
+
+**Verified.** Matched parent1285assertions15failures, subject1285/0;41new checks.
+Actual ordinary CLI valid0, previously accepted backwards close now1. Zero origin,
+existing print budget and legitimate partial ahead controls act. Reader949/0,
+receipts800/0, structured32/0; normal NoDeploy3VM0warnings.134HID hashes/faults/
+info/notes (3oldfaulty) and751REC/VIEW hashes/per-file reports/356oldfaults stable.
+An incorrect zero-clock fixture index retained/corrected before product edit;
+zero controls not removed. Source qualification is not independent review, live
+verification or physical input truth. FTESurf tools/p1534-journal-closing-clocks.md;
+native code/pins/tag/Build held. No deferred native/compiler/filewriter audit.
+
 ## Patch 1533 — Closing counters cannot contradict the recorded prefix (12 Nov 2026)
 
 **Problem.** Truncation disabled the hidden-event equality check without retaining
