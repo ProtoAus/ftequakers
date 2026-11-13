@@ -20,6 +20,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 // sv_phys.c
 
 #include "quakedef.h"
+#include "pm_ag.h"
 #if !defined(CLIENTONLY) || defined(CSQC_DAT)
 
 #include "pr_common.h"
@@ -57,6 +58,9 @@ cvar_t	sv_spectatormaxspeed = CVAR( "sv_spectatormaxspeed", "500");
 cvar_t	sv_accelerate		 = CVAR( "sv_accelerate", "10");
 cvar_t	sv_airaccelerate	 = CVAR( "sv_airaccelerate", "0.7");
 cvar_t	sv_wateraccelerate	 = CVAR( "sv_wateraccelerate", "10");
+static int sv_agprofile; //map-spawn authority, never derived from raw pm_physicsmode
+static cvar_t sv_movementprofile = CVARFD("sv_movementprofile", "", CVAR_NOTFROMSERVER|CVAR_MAPLATCH, "Experimental unranked movement, applied only on map spawn: default (or empty), ag-100, ag-250. ag-1000 is not acceptance-qualified. Ladder intent uses analog signs; v1 has no longjump equipment.");
+
 static cvar_t pm_sourceversion = CVARFD("pm_sourceversion", STRINGIFY(PMSRC_VERSION), CVAR_SERVERINFO|CVAR_NOSET, "Source mover version used by this server (read-only). 3 adds swimming; 4 linked portals; 5 keeps a linked portal landing exact; 6 keeps moving as the hull clears a linked door; 7 traces a static prop's collision hull as its convex pieces; 8 recovers a surfer pinned to the face it is sliding along; 9 traces a prop hull whose indices overflowed as it really is; 10 honours Momentum's limitmovement and slide triggers; 11 adds Source's ceiling eye clearance and water-lip assist; 12 meets a prop hull's pieces where they really are, so a crease between two pieces no longer snags a surfer. Old clients need updating to predict them correctly.");
 cvar_t	sv_friction			 = CVAR( "sv_friction", "4");
 cvar_t	sv_waterfriction	 = CVAR( "sv_waterfriction", "4");
@@ -148,6 +152,7 @@ void WPhys_Init(void)
 	Cvar_Register (&sv_accelerate,						cvargroup_serverphysics);
 	Cvar_Register (&sv_airaccelerate,					cvargroup_serverphysics);
 	Cvar_Register (&sv_wateraccelerate,					cvargroup_serverphysics);
+	Cvar_Register (&sv_movementprofile, cvargroup_serverphysics);
 	Cvar_Register (&pm_sourceversion,					cvargroup_serverphysics);
 	//Early +set survives registration even for NOSET cvars. Never advertise
 	//a mover different from SV_SetSourceMoveVars or the recorder's pin.
@@ -225,7 +230,7 @@ void WPhys_CheckVelocity (world_t *w, wedict_t *ent)
 	//
 	//Gated on the mode, not changed outright: quakers/nettest share this tree and
 	//run pm_physicsmode 0, where the radial clamp is the long-standing behaviour.
-	if (sv_nqplayerphysics.ival || movevars.physicsmode == PHYSMODE_SOURCE)
+	if (sv_nqplayerphysics.ival || movevars.physicsmode == PHYSMODE_SOURCE || movevars.physicsmode == PHYSMODE_AG)
 	{	//bound axially (like vanilla, and like Source)
 		for (i=0 ; i<3 ; i++)
 		{
@@ -2954,12 +2959,19 @@ void SV_SetSourceMoveVars(void)
 	movevars.fixslopes			= pm_fixslopes.value;
 	movevars.fixedges			= pm_fixedges.value;
 	movevars.fixrampbugs		= pm_fixrampbugs.value;
-	movevars.sourceversion	= PMSRC_VERSION;
+	movevars.sourceversion	= movevars.physicsmode == PHYSMODE_AG ? atoi(InfoBuf_ValueForKey(&svs.info, "pm_agversion")) : PMSRC_VERSION;
 	movevars.rampretrace		= pm_rampretrace.value;
 	movevars.ladders			= pm_ladders.value;					//Patch 260
 	movevars.ladderdampen		= pm_ladderdampen.value > 0 ? pm_ladderdampen.value : 0.2;
 	movevars.ladderangle		= pm_ladderangle.value ? pm_ladderangle.value : -0.707;
 	movevars.slide				= pm_slide.value;					//Patch 280
+	movevars.agprofile = 0;
+	if (sv.state == ss_active && (movevars.physicsmode == PHYSMODE_AG || sv_agprofile || *InfoBuf_ValueForKey(&svs.info, "*movementprofile")))
+	{
+		movevars.agprofile = PMAg_ProfileRate(InfoBuf_ValueForKey(&svs.info, "*movementprofile"), movevars.sourceversion, movevars.ticrate);
+		if (!sv_agprofile || sv_agprofile != movevars.agprofile || !PMAg_ContextValid(&movevars))
+			Host_Error("Refusing movement: unbound or mismatched AG profile/model/version/rate");
+	}
 }
 
 /*
@@ -4204,6 +4216,50 @@ third is not an edge case: surf has no mode_surf.cfg by design, so EVERY surf ma
 takes it, and every map this layer was written for is a surf map.  Hence a
 wrapper rather than a call bolted onto the end of the function.
 */
+static void SV_AGOverride(const char *name, const char *value)
+{
+	cvar_t *var = Cvar_FindVar(name);
+	int i;
+	if (!var) Sys_Error("AG profile: missing cvar %s", name);
+	for (i = 0; i < pms_numover; i++) if (pms_over[i].var == var) break;
+	if (i == pms_numover)
+	{
+		if (pms_numover == PMS_MAXOVERRIDE) Sys_Error("AG profile override limit");
+		pms_over[i].var = var; pms_over[i].val = NULL; pms_numover++;
+	}
+	if (pms_over[i].val) Z_Free(pms_over[i].val);
+	pms_over[i].val = Z_StrDup(value);
+	Cvar_ForceSet(var, value);
+}
+
+static void SV_ApplyMovementProfile(void)
+{
+	const char *tick, *identity;
+	sv_agprofile = 0;
+	InfoBuf_SetValueForStarKey(&svs.info, "*movementprofile", "");
+	InfoBuf_SetValueForKey(&svs.info, "pm_agversion", "");
+	if (!*sv_movementprofile.string || !strcmp(sv_movementprofile.string, "default")) return;
+	if (!strcmp(sv_movementprofile.string, "ag-100")) { tick = "0.01"; identity = "ag-100-v1"; }
+	else if (!strcmp(sv_movementprofile.string, "ag-250")) { tick = "0.004"; identity = "ag-250-v1"; }
+	else
+	{
+		Host_Error("Refusing map: unknown sv_movementprofile %s", sv_movementprofile.string);
+		return;
+	}
+	SV_AGOverride("pm_physicsmode", "2"); SV_AGOverride("pm_ticrate", tick);
+	SV_AGOverride("sv_gravity", "800"); SV_AGOverride("pm_stepheight", "18");
+	SV_AGOverride("sv_friction", "4"); SV_AGOverride("sv_stopspeed", "100");
+	SV_AGOverride("pm_edgefriction", "2"); SV_AGOverride("sv_accelerate", "10");
+	SV_AGOverride("sv_airaccelerate", "10"); SV_AGOverride("sv_maxspeed", "320");
+	SV_AGOverride("sv_maxvelocity", "2000"); SV_AGOverride("pm_maxvelocity", "2000");
+	SV_AGOverride("pm_standheight", "72"); SV_AGOverride("pm_duckheight", "36");
+	SV_AGOverride("pm_viewheight", "28"); SV_AGOverride("pm_duckviewheight", "12");
+	InfoBuf_SetValueForStarKey(&svs.info, "*movementprofile", identity);
+	InfoBuf_SetValueForKey(&svs.info, "pm_agversion", "1");
+	sv_agprofile = PMAg_ProfileRate(identity, PMAG_VERSION, atof(tick));
+	Con_Printf("Experimental AG-derived %s: UNRANKED, %gs steps, eight-step cap; analog-sign ladder, no longjump equipment.\n", identity, atof(tick));
+}
+
 void SV_ApplyGamemode(const char *mapname)
 {
 	char name[MAX_QPATH];
@@ -4214,6 +4270,7 @@ void SV_ApplyGamemode(const char *mapname)
 		return;
 	SV_BareMapName(mapname, name, sizeof(name));
 	SV_LoadMapRuleset(name);
+	SV_ApplyMovementProfile();
 
 	if (pms_mapover)
 		Con_Printf("^5movement^7: %s adds %i cvar%s from %s\n",
@@ -4259,6 +4316,8 @@ void SV_Movement_f(void)
 				   sv_cheats.ival?"sv_cheats is 1, so no run here is legal"
 								 :"pm_lockmovement's default is 0");
 
+	if (*InfoBuf_ValueForKey(&svs.info, "*movementprofile"))
+		Con_Printf("  optional %s: experimental AG-derived UNRANKED, version 1; analog-sign ladder intent, no longjump equipment, eight-step cap\n", InfoBuf_ValueForKey(&svs.info, "*movementprofile"));
 	/*Patch 313: print the published key rather than re-deriving it here, so
 	  this line is a test of what QC will actually read and not a second opinion
 	  that could agree while the key was stale.*/

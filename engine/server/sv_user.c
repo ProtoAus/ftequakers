@@ -21,6 +21,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 #include "quakedef.h"
 #include "fs.h"
+#include "pm_ag.h"
 
 #ifndef CLIENTONLY
 #include "pr_common.h"
@@ -153,6 +154,7 @@ const char *sv_pmpin_names[SV_PMPIN_COUNT] =
 int SV_PMSrcVer(const float *pin)
 {
 	float f = pin[SV_PMPIN_FIXRAMPBUGS];
+	if (pin[1] == PHYSMODE_AG) return pin[0] == 1 ? 1 : 0;
 	if (strcmp(sv_pmpin_names[SV_PMPIN_FIXRAMPBUGS], "fixrampbugs"))
 		Sys_Error("SV_PMSrcVer: SV_PMPIN_FIXRAMPBUGS is \"%s\"", sv_pmpin_names[SV_PMPIN_FIXRAMPBUGS]);
 	//Reject non-finite pins before the shortcut, even with fast-math enabled.
@@ -173,7 +175,7 @@ int SV_PMSrcVer(const float *pin)
 //three; an older pin is complete without them (they replay as 0).
 int SV_PMPinNeed(const float *pin)
 {
-	return SV_PMSrcVer(pin) >= 10 ? SV_PMPIN_COUNT : SV_PMPIN_COUNT_PRE882;
+	return pin[1] == PHYSMODE_AG || SV_PMSrcVer(pin) >= 10 ? SV_PMPIN_COUNT : SV_PMPIN_COUNT_PRE882;
 }
 
 void SV_PMPinFill(float *v)
@@ -235,6 +237,36 @@ size_t SV_PMStateText(const pmsourcestate_t *st, char *out, size_t outsz)
 	v[15] = st->waterjumpremaining;
 	Vector2Copy(st->waterjumpdir, v+16);
 	return SV_PMTokens(names, v, countof(names), out, outsz);
+}
+
+size_t SV_PMStateTextForModel(const pmsourcestate_t *st, int model, char *out, size_t outsz)
+{
+	size_t len = SV_PMStateText(st, out, outsz);
+	if (!len || model != PHYSMODE_AG) return len;
+	if (Q_snprintfz(out + len, outsz - len, " agwaterjump=%i", st->agwaterjump ? 1 : 0))
+	{
+		*out = 0; return 0;
+	}
+	return strlen(out);
+}
+qboolean SV_PMStateParseForModel(const char *text, int model, pmsourcestate_t *st)
+{
+	const char *p;
+	char *end;
+	double value;
+	if (!text) return false;
+	p = text;
+	while ((p = strstr(p, "agwaterjump=")))
+	{
+		if (p == text || p[-1] == ' ') break;
+		p += 12;
+	}
+	if (model == PHYSMODE_SOURCE) return !p && SV_PMStateParse(text, st);
+	if (model != PHYSMODE_AG || !p || !SV_PMStateHasWater(text) || !SV_PMStateParse(text, st)) return false;
+	value = strtod(p + 12, &end);
+	if (end == p + 12 || (*end && *end != ' ') || (value != 0 && value != 1) || strstr(end, "agwaterjump=")) return false;
+	st->agwaterjump = value != 0;
+	return true;
 }
 
 //Chunk idx of text, split at spaces, each at most 240 chars: infokey's buffer is 256.
@@ -730,6 +762,13 @@ void SV_New_f (void)
 	client_t *split;
 	unsigned int fteext1, fteext2, ezext1, vers;	//reported to client
 
+	if (movevars.physicsmode == PHYSMODE_AG &&
+		strcmp(InfoBuf_ValueForKey(&host_client->userinfo, "*agmove"), "1"))
+	{
+		SV_ClientPrintf(host_client, PRINT_HIGH, "Experimental AG movement requires an AG-v1 capable client.\n");
+		SV_DropClient(host_client);
+		return;
+	}
 	host_client->prespawn_stage = PRESPAWN_INVALID;
 	host_client->prespawn_idx = 0;
 
@@ -8694,10 +8733,9 @@ static enum sv_tas_action SV_TASCommandPlan(usercmd_t *cmd, int kind, eval_t **f
 }
 
 //FTESurf Patch 893: later = a later part of a usercmd split per tick (a parameter, so nothing outlives it)
-// Zero-duration Source commands may run no categorization tick. The physent
-// list was rebuilt for THIS player, so a previous global ground INDEX is not
-// contact evidence. Seed it from this body's authoritative edict identity.
-static void SV_SeedZeroSourceGround(unsigned int groundentity)
+// Source zero commands and AG sub-tick commands may not categorize. Resolve
+// this body's support identity against its rebuilt list, never a prior index.
+static void SV_SeedPlayerGround(unsigned int groundentity)
 {
 	int i;
 	pmove.groundent = -1;
@@ -8879,8 +8917,9 @@ static void SV_RunCmdPart (usercmd_t *ucmd, qboolean recurse, int kind, float to
 		}
 	}
 
-	// chop up very long commands
-	if (cmd.msec > 50 && !later)
+	// AG owns the whole-command eight-step budget; generic recursive halves
+	// would multiply it and make prediction/server discard different time.
+	if (cmd.msec > 50 && !later && movevars.physicsmode != PHYSMODE_AG)
 	{
 		oldmsec = ucmd->msec;
 		// Preserve the existing integer split policy; P672 client splits differ.
@@ -9288,6 +9327,23 @@ static void SV_RunCmdPart (usercmd_t *ucmd, qboolean recurse, int kind, float to
 		}
 	}
 
+	{
+		eval_t *pending = svprogfuncs->GetEdictFieldValue(svprogfuncs, sv_player, "run_forceagwater", ev_float, NULL);
+		if (pending && pending->_float)
+		{
+			eval_t *active = svprogfuncs->GetEdictFieldValue(svprogfuncs, sv_player, "run_agwateractive", ev_float, NULL);
+			eval_t *timer = svprogfuncs->GetEdictFieldValue(svprogfuncs, sv_player, "run_agwatertime", ev_float, NULL);
+			eval_t *push = svprogfuncs->GetEdictFieldValue(svprogfuncs, sv_player, "run_agwaterpush", ev_vector, NULL);
+			pending->_float = 0;
+			if (!PMAg_ContextValid(&movevars) || !active || !timer || !push ||
+				(active->_float != 0 && active->_float != 1) || !(timer->_float >= 0 && timer->_float <= 2) ||
+				!(fabs(push->_vector[0]) <= 50 && fabs(push->_vector[1]) <= 50))
+				Host_Error("Refusing mismatched or malformed AG waterjump restore");
+			pmove.agwaterjump = active->_float != 0;
+			pmove.waterjumpremaining = timer->_float;
+			Vector2Copy(push->_vector, pmove.waterjumpdir);
+		}
+	}
 	pmove.jump_msec = 0;
 	if (progstype != PROG_QW)	//this is just annoying.
 		pmove.waterjumptime = sv_player->v->teleport_time - sv.time;
@@ -9320,9 +9376,10 @@ static void SV_RunCmdPart (usercmd_t *ucmd, qboolean recurse, int kind, float to
 	}
 	sv_player->xv->pmove_flags = (int)sv_player->xv->pmove_flags & ~PMF_LADDER;	//assume not touching ladder trigger
 	AddAllLinksToPmove (&sv.world, (wedict_t*)sv_player);
-	if (movevars.physicsmode == PHYSMODE_SOURCE && !held && pmove.pm_type == PM_NORMAL &&
-		pmove.cmd.msec == 0 && pmove.onground)
-		SV_SeedZeroSourceGround(NUM_FOR_EDICT(svprogfuncs,
+	if (pmove.onground && (movevars.physicsmode == PHYSMODE_AG ||
+		(movevars.physicsmode == PHYSMODE_SOURCE && !held &&
+		 pmove.pm_type == PM_NORMAL && pmove.cmd.msec == 0)))
+		SV_SeedPlayerGround(NUM_FOR_EDICT(svprogfuncs,
 			PROG_TO_EDICT(svprogfuncs, sv_player->v->groundentity)));
 
 	if ((int)sv_player->xv->pmove_flags & PMF_LADDER)
@@ -9335,7 +9392,7 @@ static void SV_RunCmdPart (usercmd_t *ucmd, qboolean recurse, int kind, float to
 	//FTESurf Patch 346: snapshot what the mover is about to be handed -- after every
 	//input above is final, so the pin is what ran and not what was configured.
 	//Not while held (Patch 380): the pin carries pmtype, and a held move is not a move.
-	if (movevars.physicsmode == PHYSMODE_SOURCE && !held)
+	if ((movevars.physicsmode == PHYSMODE_SOURCE || movevars.physicsmode == PHYSMODE_AG) && !held)
 	{
 		float pin[SV_PMPIN_COUNT];
 		SV_PMPinFill(pin);
@@ -9461,7 +9518,7 @@ if (sv_player->v->health > 0 && before && !after )
 	//FTESurf: the engine owns the hull while pm_source is driving, so push
 	//the ducked size back onto the edict.  Without this the entity keeps its
 	//standing bbox and trigger/touch tests use the wrong box while crouched.
-	if (movevars.physicsmode == PHYSMODE_SOURCE)
+	if (movevars.physicsmode == PHYSMODE_SOURCE || movevars.physicsmode == PHYSMODE_AG)
 	{
 		if (sv_player->v->maxs[2] != pmove.player_maxs[2])
 		{

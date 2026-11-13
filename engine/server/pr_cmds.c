@@ -6750,7 +6750,7 @@ char *PF_infokey_Internal (int entnum, const char *key)
 			char text[2048];
 			qboolean st = !strncmp(key, "*pmstate", 8);
 			*ov = 0;
-			if (pl->pmepoch && (st ? SV_PMStateText(&pl->pmsrc, text, sizeof(text))
+			if (pl->pmepoch && (st ? SV_PMStateTextForModel(&pl->pmsrc, (int)pl->pmpin[1], text, sizeof(text))
 			                       : SV_PMPinText(pl->pmpin, text, sizeof(text))))
 				SV_PMTextChunk(text, atoi(key + (st?8:6)), ov, sizeof(ov));
 		}
@@ -11410,8 +11410,8 @@ static void QCBUILTIN PF_held_metadata(pubprogfuncs_t *prinst, struct globalvars
 	client_t *client;
 	cvar_t *enabled, *recording, *port;
 	eval_t *fhfield;
-	const char *generationarg, *payload, *rid, *fieldsource, *generation, *p;
-	char expected[MAX_QPATH], identity[160], native_generation[33], native_payload[2*MAX_OSPATH];
+	const char *generationarg, *payload, *rid, *fieldsource, *generation, *p, *profile;
+	char expected[MAX_QPATH], ordinaryroot[MAX_QPATH], identity[160], native_generation[33], native_payload[2*MAX_OSPATH];
 	float op, slot, serial, stream, fh, buf, mode, cap, partlob, phase;
 	unsigned int opbits;
 	int index, handle, selection;
@@ -11509,15 +11509,21 @@ static void QCBUILTIN PF_held_metadata(pubprogfuncs_t *prinst, struct globalvars
 	if (!generation || *generation || !fieldsource || !rid || !*rid || strlen(rid) > 95) return;
 	for (p = rid; *p; ++p)
 		if (!((*p >= '0' && *p <= '9') || (*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z') || *p == '-')) return;
+	profile = PF_HeldString(prinst, ent, "rec_agprofile");
+	if (!profile) profile = ""; // unchanged QC may omit the additive namespace field
+	if (strcmp(profile, InfoBuf_ValueForKey(&svs.info, "*movementprofile")) ||
+		(*profile && strcmp(profile, "ag-100-v1") && strcmp(profile, "ag-250-v1"))) return;
+	if (*profile) Q_snprintfz(ordinaryroot, sizeof(ordinaryroot), "data/experimental/%s/parts/", profile);
+	else Q_strncpyz(ordinaryroot, "data/parts/", sizeof(ordinaryroot));
 	if (partlob == 1)
 	{
 		port = Cvar_FindVar("sv_port");
 		if (!port || !*port->string || strlen(port->string) > 5) return;
 		for (p = port->string; *p; ++p) if (*p < '0' || *p > '9') return;
-		Q_snprintfz(expected, sizeof(expected), "data/parts/p%s-%u.rec", port->string, (unsigned int)slot);
+		Q_snprintfz(expected, sizeof(expected), "%sp%s-%u.rec", ordinaryroot, port->string, (unsigned int)slot);
 	}
 	else
-		Q_snprintfz(expected, sizeof(expected), "data/parts/%u.rec", (unsigned int)slot);
+		Q_snprintfz(expected, sizeof(expected), "%s%u.rec", ordinaryroot, (unsigned int)slot);
 	Q_snprintfz(identity, sizeof(identity), "%s %u", rid, (unsigned int)serial);
 	if (*generationarg || strcmp(fieldsource, expected) || strcmp(payload, identity)) return;
 	fhfield = prinst->GetEdictFieldValue(prinst, ent, "rec_rec_fh", ev_float, NULL);

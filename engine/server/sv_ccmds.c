@@ -1060,6 +1060,15 @@ void SV_Map_f (void)
 	int i;
 	char *startspot;
 	const char *cmd = Cmd_Argv(0);
+	cvar_t *profile = Cvar_FindVar("sv_movementprofile");
+	const char *requested = profile ? (profile->latched_string ? profile->latched_string : profile->string) : "";
+
+	if (*requested && strcmp(requested, "default") && strcmp(requested, "ag-100") &&
+		strcmp(requested, "ag-250"))
+	{
+		Con_Printf(CON_ERROR "Refusing map: sv_movementprofile %s is unknown or not acceptance-qualified\n", requested);
+		return;
+	}
 
 	//nettest (P26 Part 2): default to NO map-prefer-hint.  Only an explicit "@spec/map" arg (parsed below)
 	//sets it, so paths that skip the parse (map_restart, changelevel, savegame restore) can't inherit a
@@ -5467,7 +5476,7 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify, const
 	char          line[4096];		/* Patch 347: a v9 `pmpin`/`pm` line is ~1.3 KB */
 	char          mapname[64];
 	unsigned int  filecrc = 0;
-	qboolean      havecrc = false, inbody;
+	qboolean      havecrc = false, inbody, optionalprofile = false;
 	int           hdrentfile = 0;	/* Patch 890: `entfile`; absent = 0, the map's own lump */
 	qboolean      hdrentbad = false;
 	char          hdrpintext[2048] = "";	/* Patch 882: for SV_PMPinNamesBelow */
@@ -5691,6 +5700,8 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify, const
 						filever = atoi(ln+12);
 					else if (!strncmp(ln, "proprule ", 9))
 						filepropr = atoi(ln+9);
+					else if (!strncmp(ln, "movementprofile ", 16))
+						optionalprofile = true;
 					else if (!strncmp(ln, "pmpin ", 6))	/* Patch 347 */
 					{
 						pinfound = SV_PMPinParse(ln+6, hdrpin);
@@ -6104,7 +6115,7 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify, const
 						VectorCopy(sv, seedvel);
 						seedground = sg;
 						/* Patch 882: at mover 10 the cooldown's clock is state too */
-						seedstate_ok = SV_PMStateParse(q, &seedstate) && (SV_PMSrcVer(hdrpin) < 10 || SV_PMStateHasLand(q)) &&
+						seedstate_ok = SV_PMStateParseForModel(q, pinfound ? (int)hdrpin[1] : PHYSMODE_SOURCE, &seedstate) && (SV_PMSrcVer(hdrpin) < 10 || SV_PMStateHasLand(q)) &&
 							(SV_PMSrcVer(hdrpin) < 11 || SV_PMStateHasWater(q));
 					}
 					else if (cses && cses <= nses && !ses[cses-1].seeded)
@@ -6114,7 +6125,7 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify, const
 						VectorCopy(so, s->org);
 						VectorCopy(sv, s->vel);
 						s->ground = sg;
-						s->stateok = SV_PMStateParse(q, &s->st) && (SV_PMSrcVer(hdrpin) < 10 || SV_PMStateHasLand(q)) &&
+						s->stateok = SV_PMStateParseForModel(q, pinfound ? (int)hdrpin[1] : PHYSMODE_SOURCE, &s->st) && (SV_PMSrcVer(hdrpin) < 10 || SV_PMStateHasLand(q)) &&
 							(SV_PMSrcVer(hdrpin) < 11 || SV_PMStateHasWater(q));
 					}
 				}
@@ -6340,6 +6351,19 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify, const
 	if (nses)
 		Con_Printf("  sessions  %i after the first (pauses: %s) -- each reseeded from its own `seed`\n",
 		           nses, pausewhys);
+	/* A restated optional model is just as authoritative as the header.
+	 * Refuse before any replay claim, including an identity with a missing pin. */
+	if (optionalprofile || (pinfound && hdrpin[1] != PHYSMODE_SOURCE))
+	{
+		Con_Printf("^3UNSUPPORTED physics mode %g: this verifier replays Source only; optional identity retained, no physics verdict.^7\n", pinfound ? hdrpin[1] : PHYSMODE_AG);
+		goto ag_unsupported_cleanup;
+	}
+	for (i = 0; pms && i < npm; i++)
+		if (pms[i].pin[1] != PHYSMODE_SOURCE)
+		{
+			Con_Printf("^3UNSUPPORTED physics mode %g in pm restatement: Source-only verifier, no physics verdict.^7\n", pms[i].pin[1]);
+			goto ag_unsupported_cleanup;
+		}
 	if (filever >= 9 || pinfound || haveseed)
 		Con_Printf("  v9 state  pin %i/%i names, seed %s, %i pm, %i pe, %i portal -- %s\n",
 		           pinfound, SV_PMPinNeed(hdrpin),
@@ -7397,6 +7421,7 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify, const
 		}
 	}
 
+ag_unsupported_cleanup:
 	Z_Free(ins);
 	Z_Free(sam);
 	Z_Free(wrp);
@@ -7558,7 +7583,7 @@ static void SV_PMPin_f (void)
 			continue;
 		if (SV_PMPinText(cl->pmpin, text, sizeof(text)))
 			Con_Printf("  pin   %s\n", text);
-		if (SV_PMStateText(&cl->pmsrc, text, sizeof(text)))
+		if (SV_PMStateTextForModel(&cl->pmsrc, (int)cl->pmpin[1], text, sizeof(text)))
 			Con_Printf("  state %s\n", text);
 		if (cl->portalx)
 			Con_Printf("  last crossing: org %.9g %.9g %.9g  vel %.9g %.9g %.9g\n",

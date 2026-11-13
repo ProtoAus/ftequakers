@@ -30,6 +30,7 @@ void PM_ThreadBind(playermove_t *pm, movevars_t *mv)
 	mv_ctx = mv ? mv : &movevars;
 }
 #include "pm_thread.h"
+#include "pm_ag.h"
 extern cvar_t	pm_noround;	//evile.
 
 #define movevars_dpflags		MOVEFLAG_QWCOMPAT
@@ -1539,6 +1540,13 @@ void PM_PlayerMove (float gamespeed)
 	//FTESurf: Counter-Strike: Source movement lives in its own module and
 	//shares nothing below this line but the trace layer.  Defaults to off,
 	//so every other game on this engine keeps QuakeWorld's physics exactly.
+	if (movevars.physicsmode == PHYSMODE_AG || movevars.agprofile)
+	{
+		if (!PMAg_ContextValid(&movevars))
+			Host_Error("Refusing movement: unbound or mismatched AG context");
+		PMAg_PlayerMove(gamespeed);
+		return;
+	}
 	if (movevars.physicsmode == PHYSMODE_SOURCE)
 	{
 		PMSrc_PlayerMove (gamespeed);

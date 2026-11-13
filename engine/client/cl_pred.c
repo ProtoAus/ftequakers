@@ -576,7 +576,7 @@ static qboolean CL_PredictSourcePhase(int seat, int sequence, player_state_t *st
 	unsigned int slot, localowner = cl.playerview[seat].playernum + 1;
 	float phase, tick = movevars.ticrate < 0.001f ? 0.015f : movevars.ticrate;
 
-	if (movevars.physicsmode != PHYSMODE_SOURCE || IS_NAN(tick) ||
+	if ((movevars.physicsmode != PHYSMODE_SOURCE && movevars.physicsmode != PHYSMODE_AG) || IS_NAN(tick) ||
 		strcmp(InfoBuf_ValueForKey(&cl.serverinfo, "fs_sourcephase"), "1"))
 		return false;
 	if (cl.playerview[seat].source_return.minack && sequence <= cl.playerview[seat].source_return.minack)
@@ -638,7 +638,7 @@ static void CL_PredictUsercmdPart (int pnum, int entnum, player_state_t *from, p
 		}
 	}
 	// split up very long moves
-	if (u->msec > 50 && !later)
+	if (u->msec > 50 && !later && movevars.physicsmode != PHYSMODE_AG)
 	{
 		player_state_t temp;
 		usercmd_t split;
@@ -2460,7 +2460,7 @@ void CL_PredictMovePNum (int seat)
 		//between the two halves is a visible 18-unit pop.  Only the Source module
 		//writes this field; every other physicsmode leaves the stat in charge.
 		VectorClear(pv->portaloffset);
-		if (movevars.physicsmode == PHYSMODE_SOURCE)
+		if (movevars.physicsmode == PHYSMODE_SOURCE || movevars.physicsmode == PHYSMODE_AG)
 		{
 			pv->viewheight = pmove.viewheight;
 			if (movevars.sourceversion >= 11 && pmove.pm_type == PM_NORMAL)

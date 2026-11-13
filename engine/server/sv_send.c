@@ -2382,7 +2382,7 @@ static void SV_WritePendingStats(client_t *client, int pnum, sizebuf_t *msg, cli
 
 	// A phase tag superseded before transmission cannot seed that old ACK later.
 	// Priority is opportunistic: retain the shared byte/slot/seat limits.
-	if (m > STAT_FS_SOURCEPHASE && pm_physicsmode.ival == PHYSMODE_SOURCE &&
+	if (m > STAT_FS_SOURCEPHASE && (pm_physicsmode.ival == PHYSMODE_SOURCE || pm_physicsmode.ival == PHYSMODE_AG) &&
 		!strcmp(InfoBuf_ValueForKey(&svs.info, "fs_sourcephase"), "1"))
 		SV_WritePendingStringStat(client, pnum, msg, frame, STAT_FS_SOURCEPHASE);
 

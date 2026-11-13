@@ -1510,6 +1510,8 @@ int SV_PMPinNeed(const float *pin);
 int SV_PMPinNamesBelow(const char *text, int below);
 size_t SV_PMPinText(const float *v, char *out, size_t outsz);
 size_t SV_PMStateText(const pmsourcestate_t *st, char *out, size_t outsz);
+size_t SV_PMStateTextForModel(const pmsourcestate_t *st, int model, char *out, size_t outsz);
+qboolean SV_PMStateParseForModel(const char *text, int model, pmsourcestate_t *st);
 qboolean SV_PMTextChunk(const char *text, int idx, char *out, size_t outsz);
 int SV_PMPinParse(const char *text, float *v);
 void SV_PMPinApply(const float *v);

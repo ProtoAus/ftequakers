@@ -20,6 +20,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 // cl_main.c  -- client main loop
 
 #include "quakedef.h"
+#include "pm_ag.h"
 #include "qkupdate.h"
 #include "winquake.h"
 #include <sys/types.h>
@@ -3360,8 +3361,12 @@ void CL_CheckServerInfo(void)
 		movevars.physicsmode = Q_atoi(InfoBuf_ValueForKey(&cl.serverinfo, "pm_physicsmode"));
 		//No key means an old server: predict its drift, not the new swimmer.
 		movevars.sourceversion = Q_atoi(InfoBuf_ValueForKey(&cl.serverinfo, "pm_sourceversion"));
+		if (movevars.physicsmode == PHYSMODE_AG)
+			movevars.sourceversion = Q_atoi(InfoBuf_ValueForKey(&cl.serverinfo, "pm_agversion"));
 		s = InfoBuf_ValueForKey(&cl.serverinfo, "pm_ticrate");
 		movevars.ticrate = *s?Q_atof(s):0.015;
+		movevars.agprofile = PMAg_ProfileRate(InfoBuf_ValueForKey(&cl.serverinfo, "*movementprofile"), movevars.sourceversion, movevars.ticrate);
+		if (!movevars.agprofile && *InfoBuf_ValueForKey(&cl.serverinfo, "*movementprofile")) movevars.agprofile = -1;
 		s = InfoBuf_ValueForKey(&cl.serverinfo, "pm_maxairspeed");
 		movevars.maxairspeed = *s?Q_atof(s):30;
 		s = InfoBuf_ValueForKey(&cl.serverinfo, "pm_jumpvelocity");
@@ -6138,6 +6143,7 @@ void CL_Init (void)
 		cls.userinfo[seat].ChangeCTX = &cls.userinfo[seat];
 		cls.userinfo[seat].ChangeCB = CL_UserinfoChanged;
 		InfoBuf_SetStarKey (&cls.userinfo[seat], "*ver", ver);
+		InfoBuf_SetStarKey (&cls.userinfo[seat], "*agmove", "1");
 	}
 
 	InitValidation();
@@ -7511,7 +7517,7 @@ float CL_MaxFPSFloor(float fps)
 {
 	float tickfps;
 	if (fps <= 0 || cls.state != ca_active || cls.demoplayback ||
-		movevars.physicsmode != PHYSMODE_SOURCE || movevars.ticrate <= 0)
+		(movevars.physicsmode != PHYSMODE_SOURCE && movevars.physicsmode != PHYSMODE_AG) || movevars.ticrate <= 0)
 		return fps;
 	tickfps = 1.0f / movevars.ticrate;
 	return fps < tickfps ? tickfps : fps;

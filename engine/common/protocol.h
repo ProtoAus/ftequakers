@@ -763,6 +763,7 @@ typedef struct
 	int			landticks;	//FTESurf Patch 882: ticks since landing, for PMLIM_BHOP's cooldown
 	float		waterjumpremaining;	//P916: Source water-lip assist, seconds
 	vec2_t		waterjumpdir;		//wall-normal XY push, not recomputed from view
+	qboolean	agwaterjump;	//optional AG movement only; carried in prediction rings
 } pmsourcestate_t;
 
 // player move types

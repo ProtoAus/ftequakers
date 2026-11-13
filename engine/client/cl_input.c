@@ -20,6 +20,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 // cl.input.c  -- builds an intended movement command to send to the server
 
 #include "quakedef.h"
+#include "pm_ag.h"
 
 #ifdef _WIN32
 #include "winquake.h"	//fps indep stuff.
@@ -3270,7 +3271,15 @@ void CL_SendCmd (double frametime, qboolean mainloop)
 		integer and there is no rounding left to get wrong.
 		==================================================================
 		*/
-		if (cl_netfps_snap.ival && wantfps > 0 &&
+		if ((movevars.physicsmode == PHYSMODE_AG || movevars.agprofile) && cls.state == ca_active)
+		{
+			if (!PMAg_ContextValid(&movevars))
+				Host_EndGame("Refusing AG commands: profile/model/version/rate mismatch (model=%i version=%i profile=%i tick=%.9g identity=%s)", movevars.physicsmode, movevars.sourceversion, movevars.agprofile, movevars.ticrate, InfoBuf_ValueForKey(&cl.serverinfo, "*movementprofile"));
+			snapms = PMAg_CommandSlot(movevars.ticrate, wantfps, cls.maxfps);
+			if (!snapms)
+				Host_EndGame("Refusing AG commands: server packet ceiling exceeds eight-tick budget");
+		}
+		else if (cl_netfps_snap.ival && wantfps > 0 &&
 			movevars.physicsmode == PHYSMODE_SOURCE && movevars.ticrate > 0)
 		{
 			double tickms = movevars.ticrate * 1000.0;

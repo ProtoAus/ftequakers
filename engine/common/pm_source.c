@@ -614,6 +614,7 @@ void PMSrc_SaveState (pmsourcestate_t *out)
 	out->landticks       = pmove.landticks;		//Patch 882
 	out->waterjumpremaining = pmove.waterjumpremaining;
 	Vector2Copy(pmove.waterjumpdir, out->waterjumpdir);
+	out->agwaterjump = pmove.agwaterjump;
 }
 
 void PMSrc_LoadState (const pmsourcestate_t *in)
@@ -634,6 +635,7 @@ void PMSrc_LoadState (const pmsourcestate_t *in)
 	pmove.landticks       = in->landticks;		//Patch 882
 	pmove.waterjumpremaining = in->waterjumpremaining;
 	Vector2Copy(in->waterjumpdir, pmove.waterjumpdir);
+	pmove.agwaterjump = in->agwaterjump;
 }
 
 /*
@@ -1962,6 +1964,17 @@ void PMSrc_ReconcileHull (pmsourcestate_t *s, const vec3_t mins, const vec3_t ma
 	float h = maxs[2] - mins[2];
 	qboolean ducked;
 
+	if (movevars.physicsmode == PHYSMODE_AG)
+	{
+		if (mins[2] == -18 && maxs[2] == 18) ducked = true;
+		else if (mins[2] == -36 && maxs[2] == 36) ducked = false;
+		else return;
+		if (s->ducked != ducked)
+		{
+			s->ducked = ducked; s->ducking = false; s->ducktime = 0;
+		}
+		return;
+	}
 	if (movevars.physicsmode != PHYSMODE_SOURCE || mins[2] != 0)
 		return;
 	if (fabs(h - PMSrc_DuckHeight()) < 0.5f)
@@ -7673,6 +7686,36 @@ static void PMSrc_SelfTest_f (void)
 			PMSrc_Check("P916 nonnumeric push refused", SV_PMStateParse(va("%s wjtime=1 wjx=bad wjy=0", base), &parsed), 0, 0);
 			PMSrc_Check("P916 infinite push refused", SV_PMStateParse(va("%s wjtime=1 wjx=inf wjy=0", base), &parsed), 0, 0);
 			PMSrc_Check("P916 NaN timer refused", SV_PMStateParse(va("%s wjtime=nan wjx=0 wjy=0", base), &parsed), 0, 0);
+			{
+				char source[1024], ag[1024];
+				state.waterjumpremaining = 0; state.agwaterjump = false;
+				SV_PMStateText(&state, source, sizeof(source));
+				state.agwaterjump = true;
+				SV_PMStateTextForModel(&state, PHYSMODE_SOURCE, ag, sizeof(ag));
+				PMSrc_Check("AG state: Source bytes unchanged", !strcmp(source, ag), 1, 0);
+				PMSrc_Check("AG state: Source wrapper accepts Source", SV_PMStateParseForModel(source, PHYSMODE_SOURCE, &parsed), 1, 0);
+				PMSrc_Check("AG state: Source lookalike not marker", SV_PMStateParseForModel(va("%s xagwaterjump=1", source), PHYSMODE_SOURCE, &parsed), 1, 0);
+				SV_PMStateTextForModel(&state, PHYSMODE_AG, ag, sizeof(ag));
+				PMSrc_Check("AG state: Source wrapper refuses AG", SV_PMStateParseForModel(ag, PHYSMODE_SOURCE, &parsed), 0, 0);
+				PMSrc_Check("AG state: Source finds marker after lookalike", SV_PMStateParseForModel(va("xagwaterjump=1 %s", ag), PHYSMODE_SOURCE, &parsed), 0, 0);
+				PMSrc_Check("AG state: legacy parser unchanged", SV_PMStateParse(ag, &parsed), 1, 0);
+				PMSrc_Check("AG state: legacy Source no water still accepted", SV_PMStateParseForModel(base, PHYSMODE_SOURCE, &parsed), 1, 0);
+				PMSrc_Check("AG state: missing complete water refused", SV_PMStateParseForModel(va("%s agwaterjump=1", base), PHYSMODE_AG, &parsed), 0, 0);
+				PMSrc_Check("AG state: partial water refused", SV_PMStateParseForModel(va("%s wjtime=0 agwaterjump=1", base), PHYSMODE_AG, &parsed), 0, 0);
+				PMSrc_Check("AG state: malformed water refused", SV_PMStateParseForModel(va("%s wjtime=bad wjx=0 wjy=0 agwaterjump=1", base), PHYSMODE_AG, &parsed), 0, 0);
+				PMSrc_Check("AG state: active zero parse", SV_PMStateParseForModel(ag, PHYSMODE_AG, &parsed), 1, 0);
+				PMSrc_Check("AG state: active zero retained", parsed.agwaterjump && parsed.waterjumpremaining == 0, 1, 0);
+				state.agwaterjump = false;
+				SV_PMStateTextForModel(&state, PHYSMODE_AG, ag, sizeof(ag));
+				PMSrc_Check("AG state: inactive zero parse", SV_PMStateParseForModel(ag, PHYSMODE_AG, &parsed) && !parsed.agwaterjump, 1, 0);
+				state.agwaterjump = true; state.waterjumpremaining = 1.5f;
+				SV_PMStateTextForModel(&state, PHYSMODE_AG, ag, sizeof(ag));
+				PMSrc_Check("AG state: positive timer retained", SV_PMStateParseForModel(ag, PHYSMODE_AG, &parsed) && parsed.agwaterjump && parsed.waterjumpremaining == 1.5f, 1, 0);
+				PMSrc_Check("AG state: missing bit refused", SV_PMStateParseForModel(source, PHYSMODE_AG, &parsed), 0, 0);
+				PMSrc_Check("AG state: wrong model refused", SV_PMStateParseForModel(ag, 999, &parsed), 0, 0);
+				PMSrc_Check("AG state: malformed bit refused", SV_PMStateParseForModel(va("%s agwaterjump=2", source), PHYSMODE_AG, &parsed), 0, 0);
+			}
+
 		}
 #endif
 		PMSrc_Check("P916 assist state: timer", pmove.waterjumpremaining, 2, 0);

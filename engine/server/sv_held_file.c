@@ -68,7 +68,10 @@ static qboolean Held_FileComponent(const char *s, size_t n)
 static qboolean Held_FileRelative(const char *s)
 {
 	const char *p, *start;
-	if (!s || strncmp(s, "data/parts/", 11) || strlen(s) >= MAX_QPATH)
+	if (!s || strlen(s) >= MAX_QPATH ||
+	    (strncmp(s, "data/parts/", 11) &&
+	     strncmp(s, "data/experimental/ag-100-v1/parts/", 34) &&
+	     strncmp(s, "data/experimental/ag-250-v1/parts/", 34)))
 		return false;
 	start = s;
 	for (p = s; ; ++p)
@@ -569,6 +572,11 @@ int SV_HeldFileTest(unsigned int *checks)
 	CHECK(!Held_FileRelative("data/parts/CON.rec"));
 	CHECK(!Held_FileRelative("data/parts/slot.rec."));
 	CHECK(!Held_FileRelative("data/runs/slot.rec"));
+	CHECK(Held_FileRelative("data/experimental/ag-100-v1/parts/0.rec"));
+	CHECK(Held_FileRelative("data/experimental/ag-250-v1/parts/p27530-0.rec"));
+	CHECK(!Held_FileRelative("data/experimental/ag-1000-v1/parts/0.rec"));
+	CHECK(!Held_FileRelative("data/experimental/other/parts/0.rec"));
+	CHECK(!Held_FileRelative("data/experimental/ag-100-v1/parts/../0.rec"));
 	f = SV_HeldFileCreate(path, &t);
 	CHECK(f && t);
 	if (!f) { *checks = n; return failed; }

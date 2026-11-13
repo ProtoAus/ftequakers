@@ -1,5 +1,38 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1542 — Experimental GoldSrc-style practice profiles (13 Nov 2026)
+
+**Problem.** Optional legacy movement needs a closed simulation identity shared
+by prediction and the server, without changing default Source movement or
+mixing practice saves, replay state and times with ordinary runs. A tick-rate
+cvar alone does not implement GoldSrc movement or establish reference parity.
+
+**Change.** Add explicit map-spawn selections `ag-100` and `ag-250`, advertised
+as experimental `ag-100-v1` / `ag-250-v1` contexts. Shared movement handles
+bounded command timing, crouch, stairs, water/ladder transitions and carried
+waterjump state. Unknown and unqualified selectors, including `ag-1000`, are
+refused. Default/empty selection retains the existing Source path. Practice
+runs remain unranked in separate closed data namespaces; save/replay/resume
+checks reject mismatched identities before mutation. Unsupported historical AG
+disk rewind export refuses without replacing an existing save. New QC string
+checks use content comparisons. The published landing-observation correction
+and QC peer changes are retained by the current-main integration.
+
+**Verified — local candidate, not deployed.** Independent movement/evidence
+merge review cleared the code scope. The isolated Windows Full build compiled
+the client, dedicated server and all five plugins; QC emitted zero warnings and
+native warnings matched the retained baseline multiset with no new entries.
+Current reader regression: 949 checks / 0 failures plus seven profile controls;
+568 stable recordings and 173 associated views retain exactly the baseline
+fault sets. Earlier-candidate Native controls matched 90 named rows across six
+maps and passed both historical pin2 arms; historical pin7 still requires its
+qualified missing zone input. Those observations do not qualify the new merged
+binaries. Windows runtime DLL packaging, commit-bound runtime qualification and
+human feel remain pending. The successful build's automatic dependency fetch is
+retained as an operational deviation, not a no-network pass. No full HL1/AG,
+1000-rate, HL2, ranked-evidence or gameplay-parity claim. See FTESurf
+`tools/p1542-legacy-movement.md` for the active limits and completion state.
+
 ## Patch 1541 — JARGON search-local fallback and valid elites (13 Nov 2026)
 
 **Problem.** An all-invalid initial CEM grid could center a new search on a

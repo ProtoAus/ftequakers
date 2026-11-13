@@ -232,6 +232,7 @@ typedef struct
 	int			landticks;			//ticks since the last landing; carried (pmsourcestate_t)
 	float		waterjumpremaining;	//P916: Source assist, seconds; not Quake teleport_time
 	vec2_t		waterjumpdir;		//fixed wall-normal XY push, carried across commands
+	qboolean	agwaterjump;	//AG timer and flag have distinct zero-boundary semantics
 } playermove_t;
 
 //Patch 882: limitmovement spawnflags >> 13 (mom_triggers.h SF_LIMIT_*).
@@ -298,6 +299,7 @@ typedef struct {
 	//APPEND ONLY.  All are pushed through serverinfo like the other pm_*
 	//extended movevars, so client prediction and the server agree.
 	int		physicsmode;		//PHYSMODE_*. 0 keeps QuakeWorld's pmove.c untouched.
+	int		agprofile;		//authoritative closed profile rate (100/250), zero is unbound
 	float	ticrate;			//fixed physics step, seconds. 0.015 == 66.666.. Hz
 	float	maxairspeed;		//GetAirSpeedCap(), 30. The surf budget.
 	float	jumpvelocity;		//301.9933774 == sqrt(2*800*57), Momentum CGameModeBase::GetJumpFactor()
@@ -344,6 +346,7 @@ typedef struct {
 
 #define PHYSMODE_QUAKEWORLD	0
 #define PHYSMODE_SOURCE		1
+#define PHYSMODE_AG		2
 
 //pmsourcestate_t is declared in protocol.h -- client.h needs it and is
 //included before this header (client/quakedef.h:186 vs :196).

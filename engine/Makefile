@@ -1025,6 +1025,8 @@ COMMON_OBJS = \
 	pmove.o		\
 	pmovetst.o		\
 	pm_source.o		\
+		pm_ag.o \
+		pm_ag_world.o \
 	iwebiface.o		\
 	translate.o		\
 	plugin.o		\
