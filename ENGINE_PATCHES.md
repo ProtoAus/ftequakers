@@ -5,6 +5,30 @@ all12lobbies verified,217recorder/resume payload+captured metadata rows unchange
 full public provenance/limits in FTESurf tools/playerfix-20261111-delivery.md.
 No new native build by that QC delivery; P1498 native/compiler delivery is separate.
 
+## Patch 1537 — Bad backend fields cannot erase a present closing record (13 Nov 2026)
+
+**Problem.** A malformed backend count discarded the entire otherwise valid
+closing record, lost finite time/other counters, and falsely reported no end.
+Native-out-of-domain counts could also remain complete quantities in a partial file.
+
+**Change.** Parse all five signed backend totals independently with native-1
+sentinel support. Present-but-unusable is unavailable, not0/absent/pre-patch
+format. Preserve finite end/core metadata and valid sibling counters, including
+partial rejected-input/touchpad pairs; numerical notes require usable quantity.
+Old missing/unsupported backend, XI2, sentinel and clock-abstention branches stay.
+No native/writer/capture/field/signature/rank/threshold/Build change.
+
+**Verified.** Same1526assertions parent53failures, subject0;128new. Ordinary CLI
+keeps valid0/bad1 but no longer falsely calls the bad-counter file unclosed.
+Five fields/full+partial/bad/fractional/overflow/-2 isolate, four known sibling2
+and finite19angle/19join/rates act; MAX/ahead/all2/all-1 controls survive.
+REC949/0, receipts800/0, structured32/0, normal finalmetadataNoDeploy3VM0warnings;
+134HID/all hashes-fault-info-notes3oldfaulty and751REC-VIEW/all hashes-reports/
+356oldfaults identical. Two fixture API mistakes retained; bounded read of actual
+Journal/_padjournal corrected BEFORE product edit, no new wrapper. Source is NOT
+independent review/deployment or physical truth; tools/p1537-journal-backend-fields.md.
+Native2274050a9/tag1529/Build89 held; original38acceptance inputs and audit deferral held.
+
 ## Patch 1536 — Backend count observations cannot cancel into measured zero (13 Nov 2026)
 
 **Problem.** Rejected-input and legacy-click body deltas could cancel positive
