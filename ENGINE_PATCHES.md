@@ -1,5 +1,36 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1543 — TAS restore rebases the board-event observer (13 Nov 2026)
+
+**Problem.** A TAS native checkpoint restores the carried movement board counter,
+but the public QC counter was not republished until a later move. A warm REC cut
+retained the writer's change latch from the abandoned future. The first resumed
+non-arrival could therefore write the already-retained board counter a second
+time. Cold/streamed cuts also initialized their latch before native restoration.
+This is a writer/restore synchronization defect, not permission for a reader to
+accept duplicate board events.
+
+**Change.** Publish the restored native `run_boardcount` beside `run_movecarry`.
+After a successful native restore, `SV_TASGo` rebases the recorder's existing
+change latch before freeze settlement, TAS-head capture or resumed simulation.
+Failed placement/native restore does not rebase the latch. The reader, file
+format, movement equations, connection tick/epoch, scoring and search remain
+unchanged. Native and QC halves are required together; old recordings are not
+rewritten or regraded. No Build change.
+
+**Verified.** Source-bound production carry-restore block: 24 count/optional-field
+arms, preserved carried state, plan rebind and connection tick/epoch. Actual QC
+go/board functions: 29 assertions, including non-arrival suppression, first new
+arrival emission, counter skips and failed-restore controls. Original native and
+QC sources fail independently at their respective stale-counter/latch assertions.
+These synthetic API/world/arrival fixtures are not a mover, real-socket, full
+restore-admission, cold-session or complete-REC verification. Three-VM NoDeploy
+QC build has zero warnings; unchanged strict reader passes949/0. A stable570REC/
+173VIEW corpus retains352/6 existing faulty files; those are not clean recordings.
+Full native builds, actual same-image TAS finish/strict recording acceptance,
+independent review and installed/fleet provenance are separate gates tracked in
+FTESurf `tools/p1543-tas-board-restore.md`.
+
 ## Patch 1542 — Experimental GoldSrc-style practice profiles (13 Nov 2026)
 
 **Problem.** Optional legacy movement needs a closed simulation identity shared

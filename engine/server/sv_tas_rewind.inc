@@ -264,9 +264,11 @@ float SV_TASRewind(edict_t *e, unsigned int slot, unsigned int token, unsigned i
 	pool->planepoch = cl->pmepoch;
 	f = SV_TASRewindField(e,"run_tas_pitchfollow",ev_float);
 	if (f) f->_float = s->pitchfollow;
-	// Publish restored fractional state immediately, never the cumulative tick.
+	// Publish restored carried state immediately, never the cumulative tick.
 	f = SV_TASRewindField(e, "run_movecarry", ev_float);
 	if (f) f->_float = cl->pmsrc.msec_carry;
+	f = SV_TASRewindField(e, "run_boardcount", ev_float);
+	if (f) f->_float = cl->pmsrc.boardcount;
 	VectorCopy(s->origin, e->v->origin); VectorCopy(s->oldorigin, e->v->oldorigin);
 	VectorCopy(s->velocity, e->v->velocity); VectorCopy(s->angles, e->v->angles);
 	VectorCopy(s->viewangles, e->v->v_angle); VectorCopy(s->mins, e->v->mins);
