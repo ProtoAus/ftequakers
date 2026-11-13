@@ -5,7 +5,7 @@ all12lobbies verified,217recorder/resume payload+captured metadata rows unchange
 full public provenance/limits in FTESurf tools/playerfix-20261111-delivery.md.
 No new native build by that QC delivery; P1498 native/compiler delivery is separate.
 
-## Patch 1535 — Byte-cap boundaries exclude unsupported body observations (12 Nov 2026)
+## Patch 1535 — Byte-cap boundaries exclude unsupported body observations (13 Nov 2026)
 
 **Problem.** The reader accepted/processed body records after a cap marker, even
 though only closing tables/end can follow. An extra coherent frame was judged as
@@ -26,7 +26,7 @@ Publication/qualification is not independent review/deployment or physical truth
 FTESurf tools/p1535-journal-cap-boundary.md. Native code/pins/tag/Build held;
 original38acceptance inputs and deferred audit remain untouched.
 
-## Patch 1534 — Closing clocks must cover the recorded prefix (12 Nov 2026)
+## Patch 1534 — Closing clocks must cover the recorded prefix (13 Nov 2026)
 
 **Problem.** A marked partial journal could claim an earlier whole duration than
 its recorded prefix and still pass. Finite full-file end mismatches faulted yet
@@ -49,7 +49,7 @@ zero controls not removed. Source qualification is not independent review, live
 verification or physical input truth. FTESurf tools/p1534-journal-closing-clocks.md;
 native code/pins/tag/Build held. No deferred native/compiler/filewriter audit.
 
-## Patch 1533 — Closing counters cannot contradict the recorded prefix (12 Nov 2026)
+## Patch 1533 — Closing counters cannot contradict the recorded prefix (13 Nov 2026)
 
 **Problem.** Truncation disabled the hidden-event equality check without retaining
 the required lower bound: a closing0 could be accepted despite an observed hidden
@@ -73,7 +73,7 @@ corrected from source before product edits; rates are not whole closing totals.
 Source qualification is NOT independent review/deployment or physical input truth;
 FTESurf tools/p1533-journal-closing-counters.md. Native code/pins/tag/Build held.
 
-## Patch 1532 — Invalid loss declarations cannot become measured zero (12 Nov 2026)
+## Patch 1532 — Invalid loss declarations cannot become measured zero (13 Nov 2026)
 
 **Problem.** The journal reader accepted signed or out-of-native-range loss
 counts. A negative marker could cancel a positive one and leave a format-success
