@@ -5,6 +5,29 @@ all12lobbies verified,217recorder/resume payload+captured metadata rows unchange
 full public provenance/limits in FTESurf tools/playerfix-20261111-delivery.md.
 No new native build by that QC delivery; P1498 native/compiler delivery is separate.
 
+## Patch 1532 — Invalid loss declarations cannot become measured zero (12 Nov 2026)
+
+**Problem.** The journal reader accepted signed or out-of-native-range loss
+counts. A negative marker could cancel a positive one and leave a format-success
+report with dropped0 and no loss warning. Rejected loss records could likewise
+leave a zero/subtotal presented as a complete measurement.
+
+**Change.** Validate loss markers and the closing loss total against their native
+unsigned32-bit producer contract. Reject invalid declarations and withhold the
+unsupported drop measurement. Keep independently finite clocks/angle/count
+comparisons, valid0/positive/nativeMAX values, closing totals ahead of emitted
+markers and signed backend-unknown sentinels distinct. No recording/native/writer,
+new measurement field, ranking/threshold or QC Build change.
+
+**Verified.** Same1150assertions: untouched24failures, subject0failures,60new
+assertions. Actual normal CLI accepts the valid control and now refuses the
+previously accepted cancellation. Reader949/0, receipts800/0, structured32/0;
+normal isolated NoDeploy3VM0warnings. All134retained journal reports/byte hashes
+(3existingfaulty) and751REC/VIEW hashes/reports/356oldfaults unchanged. Native
+producer%u/type inspected; actual supported Windows compiler unsigned-int ABI32.
+Source-qualified/published is not independent review/deployment or authenticity;
+FTESurf tools/p1532-journal-loss-declarations.md. Native code/pins/tag/Build held.
+
 ## Patch 1530 — Lost journal state cannot inherit old certainty (12 Nov 2026)
 
 **Problem.** Early rejection of malformed input-setting changes left the previous
