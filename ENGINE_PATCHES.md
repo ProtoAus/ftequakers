@@ -18,6 +18,15 @@ disk rewind export refuses without replacing an existing save. New QC string
 checks use content comparisons. The published landing-observation correction
 and QC peer changes are retained by the current-main integration.
 
+**Packaging follow-up.** The clean 92d candidate Full exposed inherited plugin
+metadata containing literal backslash-n separators: shell `echo` did not expand
+the controlled payload. Use portable `printf '%b\n'` in the existing EMBEDMETA
+recipe, preserving all values and ZIP flow. Five actual old-payload negative
+controls reproduce the defect; five same-shell printf controls preserve all
+fields with real LF separators and valid control ZIPs. Those are source/byte
+controls, not an executed package parser. The original compiled cohort remains
+retained with its metadata HOLD; a new commit-bound Full is still required.
+
 **Verified — local candidate, not deployed.** Independent movement/evidence
 merge review cleared the code scope. The isolated Windows Full build compiled
 the client, dedicated server and all five plugins; QC emitted zero warnings and

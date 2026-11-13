@@ -130,7 +130,7 @@ PLUG_CXXFLAGS:=-I$(ARCHLIBS) $(PLUG_CXXFLAGS)
 
 #$1 is the plugin name, $2 is its filename, $3 is title, $4 is description
 define EMBEDMETA
-	@echo "{\\n	package fteplug_$1\\n	ver \"${SVN_VERSION}\"\\n	category Plugins\\n	title \"$3\"\\n	gamedir \"\"\\n	desc \"$4\"\\n}" | zip -q -9 -fz- $2.metazip -
+	@printf '%b\n' "{\\n	package fteplug_$1\\n	ver \"${SVN_VERSION}\"\\n	category Plugins\\n	title \"$3\"\\n	gamedir \"\"\\n	desc \"$4\"\\n}" | zip -q -9 -fz- $2.metazip -
 	@cat $2.metazip >> $2
 	@zip -q -A $2
 	@rm $2.metazip
