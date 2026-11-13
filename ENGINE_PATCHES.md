@@ -79,26 +79,44 @@ Preserve the snapshot size, wildcard, deferred infosync, previous-map reset and
 closed-context guards; never infer a missing version. Priority is membership,
 not emission order or a guarantee for arbitrarily oversized priority payloads.
 
-**Verified — local candidate, not deployed at this checkpoint.** Independent
+**Verified — P1542 source/image scope, not full retail fidelity.** Independent
 movement/evidence merge review cleared the integrated scope. The clean 1bfa
 Windows Full compiled client, dedicated server and all five plugins; QC emitted
-zero warnings and all 74 native warnings exactly matched the retained baseline.
-Current reader regression remains 949 checks / 0 failures plus seven profile
-controls; 568 stable recordings and 173 associated views retain the baseline
-fault sets. Earlier-image Native execution completed all 16 required arms,
-including both corrected-input pin7 arms; 90 named current-map rows matched.
-Old failed cases were not regraded; these are not current-image platform proof.
-Headless 100/250 save/load and carried-waterjump controls passed. With the
-strengthened final-client witness, original signon fails at version0 after the
-100/default/250 cycle; the priority candidate stays connected and acts with
-advancing ticks, directional input and body displacement at .004. Bad/missing
-versions still refuse, the default Source control passes, and 1000 refuses.
-The priority change has a successful incremental NoDeploy build; its final
-clean commit/tag-bound Full and deployment remain separate delivery gates.
+zero warnings and all 74 native warnings matched the retained baseline. Reader
+regression was949/0 plus seven profile controls; the568 stable recordings and
+173 associated views retained their baseline fault sets. Headless100/250
+save/load and carried-waterjump controls passed. With the final-client witness,
+original signon fails at version0 after the100/default/250 cycle; the priority
+candidate stays connected with advancing ticks, directional input and body
+movement at.004. Bad/missing versions and1000 still refuse; Source default passes.
 A prior build's automatic dependency fetch remains an operational deviation;
 the later cached Full observed no bootstrap/download, not a network sandbox.
-No full HL1/AG, 1000-rate, HL2, ranked-evidence, rendered/feel or gameplay-parity
-claim. See FTESurf `tools/p1542-legacy-movement.md` for limits and delivery state.
+
+The final exact479/9cb P1542 cohort completed a clean commit/tag-bound Full and
+was delivered to both Windows installs. Second's actual installed headless
+signon, SSQC replies and short body displacement were checked; Main had delivery
+hash/actor/dual-root closure, not its own completed P1542 loader check. P1543 later
+superseded the native/QW Windows roles and P1544 the client program. Their later
+startup/delivery checks do not backdate a P1542 pass; do not restore this older
+cohort over those published fixes.
+
+For exact P1542 source47998d6e3, the AArch64 dedicated server and matching HL2
+plugin now have qualified source/build/finite-dependency bindings. All16 selected
+Native DEFAULT cases acted: six full maps per image yielded90 exact normalized
+named-row pairs, and both historical Pin2/Pin7 cases passed on both images. A
+separate mapless built-in smoke produced1831 `ok` checks and its positive AG-state
+controls, exit0/reaped/group gone. This is current479 evidence, not a422/P1543
+image pass or whole-platform/AG-retail/HL2-before-or-after acceptance.
+
+An isolated479/9cb cold world loaded the actual P1542 QW, real Source BSP and
+matching HL2, acted all15 named collision rows/2048 tick control and owned its
+loopback UDP socket. Its bounded status reply was not captured: the whole smoke
+remains HOLD, with narrower VM/world positives retained separately. No actual
+Native client/CS spawn/body, recorder-resume promotion or lobby deployment is
+claimed. The old four-role stage is retained, not promoted over P1543/P1544; a
+peer-preserving roll-forward still needs its own binding and client leaf.
+No full HL1/AG,1000-rate,HL2,ranked-evidence,rendered/feel or gameplay-parity claim.
+See FTESurf `tools/p1542-legacy-movement.md` for exact limits and delivery state.
 
 ## Patch 1541 — JARGON search-local fallback and valid elites (13 Nov 2026)
 
