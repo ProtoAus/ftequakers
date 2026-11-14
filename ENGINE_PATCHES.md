@@ -61,9 +61,14 @@ pass; the unrelated pre-existing ranked-template failure stays explicit.
 checked here, not native certification. The existing8MiB remote Archive safety
 limit remains: larger server originals are retained but not automatically copied
 to a remote client. Missing run IDs do not gain guessed VIEW pairs or retroactive
-signatures. Human visual/menu checks remain pending. QC dual/fleet delivery and
-guarded backend activation require their own hashes, UTC receipts and authority;
-source/tests/review are not claims about installed or serving code.
+signatures. Human visual/menu checks remain pending. QC dual-Windows delivery
+verified14Nov22:13:30UTC and all12lobbies22:44:22UTC; postflight preserves213payloads
+353434424bytes/fullmetadata, native/configs and85backenddependencies. All12live
+servers advertise CSQC0x952cce39/5477026bytes and32hex history epochs. Normal10s
+warning/noForce and.prev retained; original preupload worker-recycle refusal and
+explicit reviewed continuation remain separate history. See mod tools/p1564-delivery.md.
+Guarded TAS-board backend activation still awaits the owner's privileged-policy
+authorization; QC delivery does not claim that backend is serving.
 
 ## Patch 1563 - name-filtered boosters predicted (surf_tendies at high ping)
 
