@@ -171,6 +171,11 @@ typedef struct prinst_s
 	prstack_t pr_stack[MAX_STACK_DEPTH];
 	int pr_depth;
 
+	// One idle recorder callback's reserved words, rooted in the addressable hunk.
+	size_t reservedwordsofs, reservedglobalsofs;
+	int reservedargc;
+	pbool reservedactive;
+
 	//locals
 #define	LOCALSTACK_SIZE		(65536*16)	//in words
 	int *localstack;

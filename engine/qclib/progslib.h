@@ -255,6 +255,10 @@ struct pubprogfuncs_s
 	void (PDECL *EnumProfile)					(pubprogfuncs_t *progfuncs, void (*cb)(void *ctx, const char *func, const char *file, double selfus, double totalus), void *ctx, pbool reset);
 	//FTESurf Patch 1451, appended: the tempstring collector's buffers allocated and touched now (NULL without THREADEDGC)
 	void (PDECL *PrewarmGC)						(pubprogfuncs_t *progfuncs);
+	pbool (PDECL *IsRunning)(pubprogfuncs_t *progfuncs); // callbacks must not re-enter an active VM
+	// One idle recorder callback: bounded GC-visible save, then restore and clear.
+	pbool (PDECL *SaveReserved)(pubprogfuncs_t *progfuncs);
+	void (PDECL *RestoreReserved)(pubprogfuncs_t *progfuncs);
 };
 
 typedef struct progexterns_s {
@@ -332,7 +336,7 @@ typedef union eval_s
 #define PR_CURRENT	-1
 #define PR_ANY	-2	//not always valid. Use for finding funcs
 #define PR_ANYBACK -3
-#define PROGSTRUCT_VERSION 4
+#define PROGSTRUCT_VERSION 5
 
 
 #ifndef DLL_PROG

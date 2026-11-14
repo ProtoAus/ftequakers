@@ -1912,6 +1912,8 @@ static void CL_AccumlateInput(int plnum, float frametime/*extra contribution*/, 
 	unsigned int st;
 
 	CL_BaseMove (newmoves, plnum);
+	if (plnum == 0)
+		IN_Journal_AngleBegin(cl.playerview[plnum].viewangles);
 
 	/*FTESurf Patch 305: capture what CL_AdjustAngles adds to the angle, by
 	  DIFFING the accumulator across the call rather than by re-deriving it.
@@ -1951,7 +1953,10 @@ static void CL_AccumlateInput(int plnum, float frametime/*extra contribution*/, 
 	  Seat 0 only -- the journal has no seat column and splitscreen is not a ranked
 	  configuration.*/
 	if (plnum == 0)
+	{
 		IN_Journal_View(cl.playerview[plnum].viewangles);
+		IN_Journal_AngleEnd(cl.playerview[plnum].viewangles);
+	}
 
 	/*Patch 136.  aimangles, not viewangles: CL_FinishMove:1722 writes aimangles
 	  on the first frame of a window and this used to write viewangles on frames

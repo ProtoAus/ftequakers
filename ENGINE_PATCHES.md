@@ -1,5 +1,32 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1565 - Preserve exact server angle-operation context
+
+**Problem.** A whole-view change does not identify its source. Historical body
+events cannot uniquely identify the client operation; future context must not
+exempt unrelated input or rewrite old results.
+
+**Change.** Optional versioned REC/HID context binds an ordinary seat-zero QW ABS
+operation's nonce/ID/basis/wire bytes to its actual application and sparse input
+interval. Only fresh live unfrozen SSQC custody can publish authority. Exact
+verified joins may substitute the starting pose, never the remaining input;
+unsupported, ambiguous or unavailable observations stay inconclusive. Strict
+native/Python readers and isolated immediate/delayed receipt joins preserve old
+faults and identity. ABI5 reserved-register roots protect callback state from GC;
+Full rebuilds retire PCH. No movement/capture/retention/enforcement/threshold or
+historical-result change; qcbuild89 unchanged.
+
+**Verified.** Three QC VMs: zero warnings; Full Windows client/server/five plugins
+pass. Configured clean-baseline/current TU controls match warning payload
+multiplicity; other existing dependency warnings remain. Seventeen reader
+methods, signed arrival controls, legacy corpus/HID invariance and scoped reviews
+pass. Actual bounded collector controls preserve words/strings/argc. A real
+headless synthetic component produces a complete fault-free REC and DIRECT ABS
+HID closure: exact custody accounts it, removed/wrong custody leaves it unbound.
+An old staged DAT failed first; current rebuilt bytes correct that fixture, not
+the failed history. Manual journal lifecycle is NOT automatic CSQC/receipt or
+hardware attestation. Clean-commit/deployment provenance: tools/p1565-angle-context.md.
+
 ## Patch 1564 - TAS community boards and completed-run history
 
 **Problem.** Assisted submissions were discarded rather than retained in a

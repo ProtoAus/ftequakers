@@ -505,6 +505,8 @@ typedef struct client_s
 	qboolean jump_held;
 	pmsourcestate_t	pmsrc;	//FTESurf: pm_source.c cross-command state (duck, tick carry)
 	held_coverage_t held_coverage; /* Inactive until an admitted recording bind. */
+	quint64_t anglecause_op;
+	int anglecause_map;
 	unsigned int	lockanglesseq;		//mod is spamming angle changes, don't do relative changes. outgoing sequence. v_angles isn't really known until netchan.incoming_acknowledged>=lockangles
 
 	float			maxspeed;			// localized maxspeed

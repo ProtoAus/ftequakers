@@ -76,6 +76,11 @@ void IN_Journal_ViewDelta(float dx, float dy, int flags);
 void IN_Journal_ViewRaw(float dx, float dy);	/*Patch 312: the counts as the RING delivered them, before in_xflip and every other transform -- the other end of the window a delta-mutating hook occupies*/
 void IN_Journal_ViewKeyboard(float dpitch, float dyaw);	/*Patch 305: the non-mouse angle change, so the P293 identity closes on a keyboard turn*/
 void IN_Journal_View(const float *viewangles);
+void IN_Journal_AngleBegin(const float *angles);
+void IN_Journal_AngleEnd(const float *angles);
+void IN_Journal_AngleOperation(const char *nonce, const char *op, const char *basis,
+	const char *fmt, const char *hex, const char *disposition, const float *before, const float *after);
+
 
 //system-specific functions
 void INS_Move (void);

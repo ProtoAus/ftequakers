@@ -1,4 +1,5 @@
 #include "quakedef.h"
+#include "../common/anglecause.h"
 #include "sv_held_ledger.h"
 #include "sv_held_replay.h" /* shared ordinary neutral-floor grammar */
 
@@ -824,6 +825,7 @@ int SV_HeldRecordingRead(held_reader_t read, void *context, size_t size, held_wi
 	char line[HELD_MAX_LINE];
 	unsigned char rowkinds[HELD_MAX_PIECES];
 	unsigned int body = 0, ended = 0, seeds = 0, history = 0, rows = 0, floor_seen = 0, i, family;
+	int anglecap = 0;
 	uint32_t floor_packet = 0, floor_movetick = 0, first_packet = 0, first_movetick = 0;
 	size_t length, line_size, suffix = 0;
 	int result = 0;
@@ -859,9 +861,16 @@ int SV_HeldRecordingRead(held_reader_t read, void *context, size_t size, held_wi
 		if (Held_TagIs(tag,length,"FTESURF-REC") || (body && Held_TagIs(tag,length,"begin"))) goto malformed;
 		if (!body)
 		{
+			if (Held_TagIs(tag,length,"anglecause"))
+			{
+				if (anglecap++ || line_size != 13 || memcmp(line,"anglecause 1\n",13)) goto malformed;
+			}
+			if (Held_TagIs(tag,length,"angleop")) goto malformed;
 			if (Held_TagIs(tag,length,"begin")) body = 1;
 			continue;
 		}
+		if (Held_TagIs(tag,length,"anglecause")) goto malformed;
+		if (Held_TagIs(tag,length,"angleop") && (!anglecap || !AC_Record(line,line_size,svc_setangle))) goto malformed;
 		if (ended && !Held_TagIs(tag,length,"split")) goto malformed;
 		if (Held_TagIs(tag,length,"end")) ended = 1;
 		else if (Held_TagIs(tag,length,"in") || Held_TagIs(tag,length,"fzin"))

@@ -18,6 +18,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 */
 #include "quakedef.h"
+#include "../common/anglecause.h"
 #include "com_bih.h"
 #include "sv_held_ledger.h"
 #include "sv_held_replay.h"
@@ -5656,6 +5657,7 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify, const
 	for (pass = 0; pass < 2; pass++)
 	{
 		int cin = 0, csam = 0, cwarp = 0, cride = 0, cpm = 0, cpe = 0, cportal = 0;
+		int anglecap = 0;
 		/* Patch 367: from a `pause` to the next `in` row, state records are the
 		   next session's floor: they apply from its first row, whatever <row> says. */
 		int cses = 0, ppmt = 0, pptk = 0, crst = 0, cgho = 0, gopen = 0;
@@ -5663,16 +5665,35 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify, const
 		float ppc = 0;
 		qboolean floorwin = false, openpause = false, viewpausevalid = false;
 		p = buf; end = buf + fsz; inbody = false;
-		while ((ln = SV_RecSim_Line(&p, end, line, sizeof(line))) != NULL)
+		while (p < end)
 		{
-			const char *fzargs = SV_RecSim_RecordArgs(ln, "fzin");
-			const char *clockargs = SV_RecSim_RecordArgs(ln, "clockend");
+			const char *physical = p, *fzargs, *clockargs;
+			size_t physicalsize, content;
+			ln = SV_RecSim_Line(&p, end, line, sizeof(line));
+			physicalsize = p-physical;
+			fzargs = SV_RecSim_RecordArgs(ln, "fzin");
+			clockargs = SV_RecSim_RecordArgs(ln, "clockend");
 			if (!*ln)
 				continue;
 			if (pass == 0 && strlen(ln) >= sizeof(line)-1)
 				nlong++;	/* Patch 347: truncated, and said so below */
+			if (inbody && (SV_RecSim_RecordArgs(ln, "angleop") || SV_RecSim_RecordArgs(ln, "anglecause")))
+			{
+				if (!anglecap || !AC_PhysicalLine(physical, physicalsize, &content) ||
+					!AC_Record(physical, content, svc_setangle))
+				{ RECSIM_REFUSE("malformed angle operation metadata"); FS_FreeFile(buf); return; }
+				continue;
+			}
 			if (!inbody)
 			{
+				if (SV_RecSim_RecordArgs(ln, "anglecause"))
+				{
+					if (anglecap++ || !AC_PhysicalLine(physical, physicalsize, &content) ||
+						content != sizeof("anglecause 1")-1 || memcmp(physical, "anglecause 1", content))
+					{ RECSIM_REFUSE("malformed anglecause capability"); FS_FreeFile(buf); return; }
+				}
+				if (SV_RecSim_RecordArgs(ln, "angleop"))
+				{ RECSIM_REFUSE("angle operation outside body"); FS_FreeFile(buf); return; }
 				if (!strcmp(ln, "begin"))
 					{ inbody = true; continue; }
 				if (pass == 0)

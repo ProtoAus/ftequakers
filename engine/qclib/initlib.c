@@ -588,6 +588,9 @@ void PRAddressableFlush(progfuncs_t *progfuncs, size_t totalammount)
 	prinst.addressableused = 0;
 	prinst.mfreelist = 0;
 	prinst.numnostr = 0;	//FTESurf Patch 763
+	prinst.reservedwordsofs = prinst.reservedglobalsofs = 0;
+	prinst.reservedactive = false;
+	prinst.reservedargc = 0;
 	// Clear localstack state when flushing memory
 	prinst.localstack = NULL;
 	prinst.localstack_used = 0;
@@ -2215,6 +2218,66 @@ static pbool PDECL PR_DumpProfiles (pubprogfuncs_t *ppf, pbool resetprofiles)
 	return true;
 }
 
+static pbool PDECL PR_IsRunning(pubprogfuncs_t *ppf)
+{
+	progfuncs_t *progfuncs = (progfuncs_t*)ppf;
+	return prinst.pr_depth != 0;
+}
+
+// Unlike AddressableAlloc, this optional save never grows the hunk or raises an
+// allocation error. The one retained span is scanned by GC and zero outside use.
+static pbool PDECL PR_SaveReserved(pubprogfuncs_t *ppf)
+{
+	progfuncs_t *progfuncs = (progfuncs_t*)ppf;
+	const size_t bytes = (OFS_PARM7+3)*sizeof(int);
+	struct globalvars_s *globals;
+	size_t end;
+	if (prinst.pr_depth || prinst.reservedactive)
+		return false;
+	globals = PR_globals(ppf, PR_CURRENT);
+	if (!globals)
+		return false;
+	if (!prinst.reservedwordsofs)
+	{
+		// Only already reserved capacity is eligible; failure leaves the VM intact.
+		if (!prinst.addressableused || (prinst.addressableused & 3) ||
+			prinst.addressableused >= prinst.addressablesize ||
+			prinst.addressablesize-prinst.addressableused <= bytes+4)
+			return false;
+		end = prinst.addressableused+bytes+4;
+#if defined(_WIN32) && !defined(WINRT)
+		if (!VirtualAlloc(prinst.addressablehunk, end+1, MEM_COMMIT, PAGE_READWRITE))
+			return false;
+#endif
+		prinst.reservedwordsofs = prinst.addressableused;
+		memset(prinst.addressablehunk+prinst.reservedwordsofs, 0, bytes+4);
+		prinst.addressableused = end;
+		ppf->stringtablesize = end;
+	}
+	prinst.reservedglobalsofs = (char*)globals-ppf->stringtable;
+	memcpy(prinst.addressablehunk+prinst.reservedwordsofs, globals, bytes);
+	prinst.reservedargc = ppf->callargc;
+	prinst.reservedactive = true;
+	return true;
+}
+
+static void PDECL PR_RestoreReserved(pubprogfuncs_t *ppf)
+{
+	progfuncs_t *progfuncs = (progfuncs_t*)ppf;
+	const size_t bytes = (OFS_PARM7+3)*sizeof(int);
+	char *saved;
+	if (!prinst.reservedactive)
+		return;
+	// The callback may have relocated the hunk. Restore before clearing roots.
+	saved = prinst.addressablehunk+prinst.reservedwordsofs;
+	memcpy(prinst.addressablehunk+prinst.reservedglobalsofs, saved, bytes);
+	ppf->callargc = prinst.reservedargc;
+	// Threaded GC scans its private snapshot: it keeps the saved roots even
+	// after this clear. Subsequent snapshots see the restored global words.
+	memset(saved, 0, bytes);
+	prinst.reservedactive = false;
+}
+
 //FTESurf Patch 800
 static pbool PDECL PR_SetProfiling (pubprogfuncs_t *ppf, pbool on)
 {
@@ -2481,6 +2544,9 @@ pubprogfuncs_t * PDECL InitProgs(progexterns_t *ext)
 #ifdef THREADEDGC
 	funcs->funcs.PrewarmGC = PR_PrewarmGC;	//FTESurf Patch 1451
 #endif
+	funcs->funcs.IsRunning = PR_IsRunning;
+	funcs->funcs.SaveReserved = PR_SaveReserved;
+	funcs->funcs.RestoreReserved = PR_RestoreReserved;
 
 	funcs->funcs.progstate = &funcs->inst.progstate;
 

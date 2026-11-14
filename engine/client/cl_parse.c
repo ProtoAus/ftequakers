@@ -20,9 +20,13 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 // cl_parse.c  -- parse a message received from the server
 
 #include "quakedef.h"
+#include "../common/anglecause.h"
 #include "cl_ignore.h"
 #include "shader.h"
 #include "fs.h"
+
+// The active reader may be a decompressed submessage, not net_message.
+extern sizebuf_t *msg_readmsg;
 
 void CL_GetNumberedEntityInfo (int num, float *org, float *ang);
 void CLDP_ParseDarkPlaces5Entities(void);
@@ -8132,6 +8136,7 @@ void CLEZ_ParseHiddenDemoMessage(void)
 CL_ParseServerMessage
 =====================
 */
+
 void CLQW_ParseServerMessage (void)
 {
 	int			cmd;
@@ -8145,6 +8150,9 @@ void CLQW_ParseServerMessage (void)
 	inframe_t	*inf;
 	extern vec3_t demoangles;
 	unsigned int cmdstart;
+	anglecause_t anglecause;
+	qboolean ac_pending = false, ac_bound, ac_waspending;
+	unsigned int ac_offset = 0;
 
 	cl.last_servermessage = realtime;
 	CL_ClearProjectiles ();
@@ -8215,6 +8223,10 @@ void CLQW_ParseServerMessage (void)
 
 		cmdstart = MSG_GetReadCount();
 		cmd = MSG_ReadByte ();
+		ac_waspending = ac_pending;
+		ac_bound = ac_pending && cmdstart == ac_offset && cmd == svc_setangle &&
+			AC_Matches(&anglecause, msg_readmsg->data+cmdstart, msg_readmsg->cursize-cmdstart, msg_readmsg->prim.anglesize);
+		ac_pending = false; // any intervening service, duplicate marker or EOM consumes eligibility
 
 		if (cmd == svcfte_choosesplitclient)
 		{
@@ -8292,7 +8304,18 @@ void CLQW_ParseServerMessage (void)
 
 		case svc_stufftext:
 			s = MSG_ReadString ();
-			CL_ParseStuffCmd(s, destsplit);
+			if (!strncmp(s, "//ac1 ", 6))
+			{
+				ac_offset = MSG_GetReadCount();
+				if (!ac_waspending && !cls.demoplayback && !msg_badread && msg_readmsg->packing == SZ_RAWBYTES &&
+					!(msg_readmsg->currentbit & 7) && destsplit == 0 && cl.splitclients == 1 &&
+					cl.defaultnetsplit == 0 && !(cls.ezprotocolextensions1 & EZPEXT1_SETANGLEREASON) &&
+					AC_Parse(s, &anglecause, msg_readmsg->prim.anglesize, svc_setangle) &&
+					ac_offset <= (unsigned)msg_readmsg->cursize &&
+					AC_Matches(&anglecause, msg_readmsg->data+ac_offset, msg_readmsg->cursize-ac_offset, msg_readmsg->prim.anglesize))
+					ac_pending = true;
+			}
+			else CL_ParseStuffCmd(s, destsplit);
 			break;
 
 		case svc_damage:
@@ -8370,6 +8393,7 @@ void CLQW_ParseServerMessage (void)
 			{
 				inframe_t *inf = &cl.inframes[cls.netchan.incoming_sequence&UPDATE_MASK];
 				int fixtype = 2;
+				qboolean ac_direct = false, ac_consumed;
 				if (cls.ezprotocolextensions1 & EZPEXT1_SETANGLEREASON)
 					fixtype = MSG_ReadByte();	//0=unknown, 1=tele, 2=spawn
 				for (i=0 ; i<3 ; i++)
@@ -8384,9 +8408,10 @@ void CLQW_ParseServerMessage (void)
 				else
 				{
 					fixtype = 2;	//snap
-					CSQC_PredictAngleAbsolute(destsplit, ang);	//FTESurf Patch 396 (335 flushed here)
+					ac_direct = CSQC_PredictAngleAbsolute(destsplit, ang);	//FTESurf Patch 396 (335 flushed here)
 				}
-				if (!CSQC_Parse_SetAngles(destsplit, ang, fixtype==1))
+				ac_consumed = CSQC_Parse_SetAngles(destsplit, ang, fixtype==1);
+				if (!ac_consumed)
 				{
 					inf->packet_entities.fixangles[destsplit] = true;
 					VectorCopy (ang, cl.playerview[destsplit].viewangles);
@@ -8394,6 +8419,9 @@ void CLQW_ParseServerMessage (void)
 				}
 				VectorCopy (cl.playerview[destsplit].viewangles, cl.playerview[destsplit].intermissionangles);
 				CL_AngleHistoryFollow(destsplit, angbefore);	//FTESurf Patch 396
+				if (ac_bound && destsplit == 0 && cl.splitclients == 1 && !msg_badread)
+					IN_Journal_AngleOperation(anglecause.nonce, anglecause.op, anglecause.basis, anglecause.fmt, anglecause.hex,
+						ac_consumed ? "consumed" : ac_direct ? "direct" : "predicted", angbefore, cl.playerview[destsplit].viewangles);
 			}
 			break;
 
@@ -8992,7 +9020,6 @@ static void CLQ2EX_ParseDamage(int seat)
 		MSG_ReadDir(dir);
 	}
 }
-extern sizebuf_t	*msg_readmsg;
 #ifdef AVAIL_ZLIB
 size_t ZLib_DecompressBuffer(qbyte *in, size_t insize, qbyte *out, size_t maxoutsize);
 #endif
@@ -10359,7 +10386,7 @@ void CLNQ_ParseServerMessage (void)
 				for (i=0 ; i<3 ; i++)
 					ang[i] = MSG_ReadAngle();
 				VectorCopy(cl.playerview[destsplit].viewangles, angbefore);
-				CSQC_PredictAngleAbsolute(destsplit, ang);	//FTESurf Patch 396 (335 flushed here)
+				(void)CSQC_PredictAngleAbsolute(destsplit, ang);	//FTESurf Patch 396 (335 flushed here)
 				if (!CSQC_Parse_SetAngles(destsplit, ang, false))
 				{
 					inf->packet_entities.fixangles[destsplit] = true;

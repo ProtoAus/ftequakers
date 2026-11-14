@@ -8964,6 +8964,7 @@ qc_extension_t QSG_Extensions[] = {
 	{"FTE_QC_MATCHCLIENTNAME",			NULL,	1,{"matchclientname"}},
 	{"FTE_QC_MULTICAST",				NULL,	1,{"multicast"}, "QuakeWorld's multicast builtin works along with MSG_MULTICAST, but also with unicast support."},
 //	{"FTE_QC_MESHOBJECTS",				NULL,	0,{"mesh_create", "mesh_build", "mesh_getvertex", "mesh_getindex", "mesh_setvertex", "mesh_setindex", "mesh_destroy"}, "Provides qc with the ability to create its own meshes."},
+	{"FTE_ANGLECAUSE_V1", NULL, 0, {NULL}, "Optional idle-VM SV_RecAngleOperation callback for QW absolute wire operations."},
 	{"FTE_QC_PAUSED"},
 #ifdef QCGC
 	{"FTE_QC_PERSISTENTTEMPSTRINGS",	NOBI	 "Supersedes DP_QC_MULTIPLETEMPSTRINGS. Temp strings are garbage collected automatically, and do not expire while they're still in use. This makes strzone redundant."},

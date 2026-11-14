@@ -1648,7 +1648,7 @@ void	 CSQC_PredictBaseVelFlush(void);
 void     CSQC_PredictBaseVelResetSeat(int seat);
 void	 CSQC_PredictAngleCorrect(int seat, vec3_t delta);
 void	 CSQC_PredictAngleFlush(int seat);
-void	 CSQC_PredictAngleAbsolute(int seat, vec3_t ang);	//FTESurf Patch 396: may redirect ang to a newer predicted snap
+qboolean CSQC_PredictAngleAbsolute(int seat, vec3_t ang);	//FTESurf Patch 396: may redirect ang to a newer predicted snap
 void	 CSQC_Input_Frame(int seat, usercmd_t *cmd);
 void	 CSQC_WorldLoaded(void);
 qboolean CSQC_ParseTempEntity(void);
@@ -1687,7 +1687,7 @@ void	 CSQC_CvarChanged(cvar_t *var);
 #define CSQC_PredictBaseVelResetSeat(seat)
 #define CSQC_PredictAngleCorrect(seat,delta)
 #define CSQC_PredictAngleFlush(seat)
-#define CSQC_PredictAngleAbsolute(seat,ang)
+#define CSQC_PredictAngleAbsolute(seat,ang) true
 #define CSQC_ServerInfoChanged()
 #define CSQC_PlayerInfoChanged(player)
 #endif

@@ -1959,6 +1959,81 @@ static void IN_Journal_CheckIdentity(const float *viewangles)
 	}
 }
 
+static struct {
+	quint64_t interval, vordinal, beginv;
+	qboolean active, pending, sparse, havelast, forced, haveannotation;
+	unsigned int baseline[3], lastv[3], annotated[3];
+} in_jrn_angle;
+
+static qboolean IN_Journal_AngleBits(unsigned int *out, const float *angles)
+{
+	int i;
+	memcpy(out, angles, 3*sizeof(float));
+	for (i = 0; i < 3; i++)
+		if ((out[i] & 0x7f800000u) == 0x7f800000u) return false;
+	return true;
+}
+
+void IN_Journal_AngleBegin(const float *angles)
+{
+	if (!in_jrn_buf || in_jrn_full || in_jrn_angle.interval == ~(quint64_t)0) return;
+	in_jrn_angle.interval++;
+	in_jrn_angle.active = true;
+	in_jrn_angle.beginv = in_jrn_angle.vordinal;
+	IN_Journal_AngleBits(in_jrn_angle.baseline, angles);
+	in_jrn_angle.forced = in_jrn_angle.pending;
+	in_jrn_angle.sparse = in_jrn_angle.pending || !in_jrn_angle.havelast ||
+		memcmp(in_jrn_angle.baseline, in_jrn_angle.lastv, sizeof(in_jrn_angle.lastv));
+	in_jrn_angle.pending = false;
+}
+
+void IN_Journal_AngleEnd(const float *angles)
+{
+	char tail[160];
+	unsigned int bits[3];
+	if (!in_jrn_buf || in_jrn_full || !in_jrn_angle.active) return;
+	if (in_jrn_angle.sparse &&
+		(in_jrn_angle.vordinal != in_jrn_angle.beginv || in_jrn_angle.forced || !in_jrn_angle.haveannotation ||
+		 memcmp(in_jrn_angle.baseline, in_jrn_angle.annotated, sizeof(in_jrn_angle.baseline))) &&
+		IN_Journal_AngleBits(bits, angles) &&
+		(in_jrn_angle.baseline[0] & 0x7f800000u) != 0x7f800000u &&
+		(in_jrn_angle.baseline[1] & 0x7f800000u) != 0x7f800000u &&
+		(in_jrn_angle.baseline[2] & 0x7f800000u) != 0x7f800000u)
+	{
+		Q_snprintfz(tail, sizeof(tail), "%"PRIu64" %08x %08x %08x", (uint64_t)in_jrn_angle.interval,
+			in_jrn_angle.baseline[0], in_jrn_angle.baseline[1], in_jrn_angle.baseline[2]);
+		IN_Journal_Line(in_jrn_last, "anglebaseline", tail);
+		IN_Journal_AngleBits(bits, angles);
+		Q_snprintfz(tail, sizeof(tail), "%"PRIu64" %08x %08x %08x %"PRIu64,
+			(uint64_t)in_jrn_angle.interval, bits[0], bits[1], bits[2],
+			(uint64_t)(in_jrn_angle.vordinal != in_jrn_angle.beginv ? in_jrn_angle.vordinal : 0));
+		IN_Journal_Line(in_jrn_last, "angleend", tail);
+		memcpy(in_jrn_angle.annotated, in_jrn_angle.baseline, sizeof(in_jrn_angle.baseline));
+		in_jrn_angle.haveannotation = true;
+	}
+	in_jrn_angle.active = false;
+}
+
+void IN_Journal_AngleOperation(const char *nonce, const char *op, const char *basis,
+	const char *fmt, const char *hex, const char *disposition, const float *before, const float *after)
+{
+	char tail[384];
+	unsigned int pre[3], post[3];
+	if (!in_jrn_buf || in_jrn_full || in_jrn_angle.interval == ~(quint64_t)0) return;
+	if (!IN_Journal_AngleBits(pre, before) || !IN_Journal_AngleBits(post, after)) return;
+	if (in_jrn_angle.active)
+	{
+		disposition = "interleaved";
+		in_jrn_angle.sparse = true;
+		in_jrn_angle.forced = true;
+	}
+	else in_jrn_angle.pending = true;
+	Q_snprintfz(tail, sizeof(tail), "%s %s %s %s %s %s %08x %08x %08x %08x %08x %08x %"PRIu64,
+		nonce, op, basis, fmt, hex, disposition, pre[0], pre[1], pre[2], post[0], post[1], post[2],
+		(uint64_t)(in_jrn_angle.interval + !in_jrn_angle.active));
+	IN_Journal_Line(in_jrn_last, "angleop", tail);
+}
+
 void IN_Journal_View(const float *viewangles)
 {
 	char tail[128];
@@ -2029,6 +2104,9 @@ void IN_Journal_View(const float *viewangles)
 		viewangles[PITCH], viewangles[YAW],
 		in_jrn_vkpitch, in_jrn_vkyaw);
 	IN_Journal_Line(Sys_DoubleTime(), "v", tail);
+	if (in_jrn_angle.vordinal != ~(quint64_t)0) in_jrn_angle.vordinal++;
+	IN_Journal_AngleBits(in_jrn_angle.lastv, viewangles);
+	in_jrn_angle.havelast = true;
 
 	in_jrn_vlast[0] = viewangles[PITCH];
 	in_jrn_vlast[1] = viewangles[YAW];
@@ -2336,6 +2414,7 @@ static void IN_JournalBegin_f(void)
 	in_jrn_vrawx = in_jrn_vrawy = 0;	/*Patch 312*/
 	in_jrn_vflags = 0;
 	in_jrn_vhavelast = false;
+	memset(&in_jrn_angle, 0, sizeof(in_jrn_angle));
 	in_jrn_vjoyturn = false;
 	in_jrn_vcount = 0;											/*Patch 484*/
 	in_jrn_vskip = 0;
@@ -2453,6 +2532,7 @@ static void IN_JournalBegin_f(void)
 		}
 	}
 
+	IN_Journal_Raw("anglecause 1\n");
 	IN_Journal_Raw("begin\n");
 	CL_AllowIndependantSendCmd(allowed);
 }

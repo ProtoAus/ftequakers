@@ -10822,16 +10822,16 @@ void CSQC_PredictAngleCorrect(int seat, vec3_t delta)
   stale-base replay fire the snap again on top of it.  Review fix: it retires the snaps up to its
   basis (and the one it matches, as a delta does); a newer snap the server has not run stays live
   and the view ends on its target, so the absolute only re-bases older state.*/
-void CSQC_PredictAngleAbsolute(int seat, vec3_t ang)
+qboolean CSQC_PredictAngleAbsolute(int seat, vec3_t ang)
 {
 	int i, K, m = -1, n = -1;
 	unsigned int upto;
 	if ((unsigned int)seat >= MAX_SPLITS)
-		return;
+		return false;
 	if (!PredAngExact())
 	{
 		CSQC_PredictAngleReset(seat);
-		return;
+		return true;
 	}
 	K = cls.netchan.incoming_acknowledged;
 	for (i = 0; i < 3; i++)
@@ -10865,6 +10865,7 @@ void CSQC_PredictAngleAbsolute(int seat, vec3_t ang)
 	pred_trace_until[seat] = realtime + 1;
 	PA_Log("predangle: %.4f absolute %.3f basis %i %s seq %i -> %.3f", realtime, predsrv[seat].target[YAW], K,
 		n >= 0 ? "abs-keep-newer" : m >= 0 ? "abs-match" : "abs-server", n >= 0 ? (int)predsnaps[seat][n].seq : m >= 0 ? (int)predsnaps[seat][m].seq : -1, ang[YAW]);
+	return m < 0 && n < 0;
 }
 
 /*FTESurf Patch 754: a module with the pre-move hook can apply a held body's

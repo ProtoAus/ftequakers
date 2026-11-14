@@ -20,6 +20,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 // sv_main.c -- server main program
 
 #include "quakedef.h"
+#include "../common/anglecause.h"
 #include "pr_common.h"
 
 #ifndef CLIENTONLY
@@ -1524,6 +1525,73 @@ void SV_FindModelNumbers (void)
 	}
 }
 
+
+// The callback writes through the existing recorder; no authority row means no marker.
+static void SV_AngleCause(client_t *client, sizebuf_t *msg, const pvec_t *ang, qboolean roll)
+{
+	unsigned char bytes[AC_WIRE_MAX];
+	sizebuf_t wire;
+	char hex[AC_WIRE_MAX*2+1], op[21], basis[21], marker[AC_MARKER_MAX];
+	const char *nonce, *fmt = AC_Format(msg->prim.anglesize);
+	func_t callback;
+	int i, argc, builtin;
+	string_t arg;
+	unsigned char *argsizes;
+	globalvars_t *pr_globals;
+	if (client->protocol != SCP_QUAKEWORLD || client->seat || client->controller || client->controlled ||
+		client->ezprotocolextensions1 & EZPEXT1_SETANGLEREASON || !*fmt ||
+		!svprogfuncs || svprogfuncs->progsversion != PROGSTRUCT_VERSION ||
+		!svprogfuncs->IsRunning || !svprogfuncs->SaveReserved || !svprogfuncs->RestoreReserved ||
+		svprogfuncs->IsRunning(svprogfuncs) || msg->overflowed ||
+		msg->maxsize-msg->cursize < AC_MARKER_MAX+AC_WIRE_MAX+2)
+		return;
+	callback = PR_FindFunction(svprogfuncs, "SV_RecAngleOperation", PR_ANY);
+	if (!callback || !svprogfuncs->GetFunctionInfo(svprogfuncs, callback, &argc, &argsizes, &builtin, NULL, 0) ||
+		argc != 5 || builtin >= 0) return;
+	for (i = 0; i < 5; i++) if (argsizes[i] != 1) return;
+	memset(&wire, 0, sizeof(wire));
+	wire.data = bytes; wire.maxsize = sizeof(bytes); wire.prim = msg->prim;
+	MSG_WriteByte(&wire, svc_setangle);
+	for (i = 0; i < 3; i++) MSG_WriteAngle(&wire, (i == 2 && !roll)?0:ang[i]);
+	AC_Encode(hex, bytes, wire.cursize);
+	if (!AC_WireHex(hex, msg->prim.anglesize)) return;
+	if (client->anglecause_map != svs.spawncount)
+	{
+		client->anglecause_map = svs.spawncount;
+		client->anglecause_op = 0;
+	}
+	if (client->anglecause_op == ~(quint64_t)0) return; // exhausted identities stay unavailable
+	Q_snprintfz(op, sizeof(op), "%"PRIu64, (uint64_t)++client->anglecause_op);
+	Q_snprintfz(basis, sizeof(basis), "%u", client->netchan.incoming_acknowledged);
+	if (!svprogfuncs->SaveReserved(svprogfuncs)) return;
+	pr_globals = PR_globals(svprogfuncs, PR_CURRENT);
+	G_INT(OFS_PARM0) = EDICT_TO_PROG(svprogfuncs, client->edict);
+	arg = svprogfuncs->TempString(svprogfuncs, op);
+	pr_globals = PR_globals(svprogfuncs, PR_CURRENT);
+	G_INT(OFS_PARM1) = arg;
+	arg = svprogfuncs->TempString(svprogfuncs, basis);
+	pr_globals = PR_globals(svprogfuncs, PR_CURRENT);
+	G_INT(OFS_PARM2) = arg;
+	arg = svprogfuncs->TempString(svprogfuncs, fmt);
+	pr_globals = PR_globals(svprogfuncs, PR_CURRENT);
+	G_INT(OFS_PARM3) = arg;
+	arg = svprogfuncs->TempString(svprogfuncs, hex);
+	pr_globals = PR_globals(svprogfuncs, PR_CURRENT);
+	G_INT(OFS_PARM4) = arg;
+	svprogfuncs->callargc = 5;
+	PR_ExecuteProgram(svprogfuncs, callback);
+	pr_globals = PR_globals(svprogfuncs, PR_CURRENT);
+	nonce = PR_GetString(svprogfuncs, G_INT(OFS_RETURN));
+	if (AC_Hex(nonce, 32) && !msg->overflowed &&
+		msg->maxsize-msg->cursize >= AC_MARKER_MAX+AC_WIRE_MAX+2)
+	{
+		Q_snprintfz(marker, sizeof(marker), "//ac1 %s %s %s %s %s\n", nonce, op, basis, fmt, hex);
+		MSG_WriteByte(msg, svc_stufftext);
+		MSG_WriteString(msg, marker);
+	}
+	svprogfuncs->RestoreReserved(svprogfuncs);
+}
+
 void SV_SendFixAngle(client_t *client, sizebuf_t *msg, int fixtype, qboolean roll)
 {
 	unsigned i;
@@ -1592,11 +1660,15 @@ void SV_SendFixAngle(client_t *client, sizebuf_t *msg, int fixtype, qboolean rol
 		}
 		else
 		{
+			pvec_t absolute[3];
+			// Recorder allocation may relocate QC storage; retain the original wire values.
+			VectorCopy(ang, absolute);
+			SV_AngleCause(client, msg, absolute, roll);
 			MSG_WriteByte (msg, svc_setangle);
 			if (client->ezprotocolextensions1 & EZPEXT1_SETANGLEREASON)
 				MSG_WriteByte (msg, (fixtype == FIXANGLE_DELTA)?2:0);	//shitty backwards incompatible protocol extension that breaks from writebytes.
 			for (i=0 ; i < 3 ; i++)
-				MSG_WriteAngle (msg, (i==2&&!roll)?0:ang[i]);
+				MSG_WriteAngle (msg, (i==2&&!roll)?0:absolute[i]);
 		}
 	}
 	ClientReliable_FinishWrite(client);
