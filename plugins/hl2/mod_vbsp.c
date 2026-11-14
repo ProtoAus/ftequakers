@@ -170,9 +170,11 @@ int Mat_VMT_UnderwaterOverlay(const char *material, char *out, size_t outsize);	
 qboolean Mat_VMT_OverlayScript(const char *overlay, char *script, size_t size);
 qboolean Mat_VMT_CensusMissing(const char *name);
 void Mat_VMT_CensusForget(const char *name);
+void Mat_VMT_MapColoursReset(void);	//FTESurf Patch 1548
+void Mat_VMT_MapColour(const char *name, const float *refl, qboolean warp);
 static cvar_t *hl2_bottommaterial;
 static cvar_t *hl2_missinggrid;	//FTESurf Patch 780
-static cvar_t *hl2_missingtint;	//FTESurf Patch 1191
+cvar_t *hl2_missingtint;	//FTESurf Patch 1191; Patch 1548: mat_vmt.c reads it too
 static cvar_t *hl2_lt_blend, *hl2_lt_illumpos;	//FTESurf Patch 780, read by VBSP_LeafAmbientCube / VBSP_PropSamplePoint
 cvar_t *hl2_skinfallback;		//FTESurf Patch 234: read by Mod_LoadHL2Model in mod_hl2.c, registered here with the rest
 extern cvar_t *hl2_dither_alpha, *hl2_bumpmap, *hl2_envmap;	//FTESurf Build 13, all owned by mat_vmt.c
@@ -6437,6 +6439,12 @@ static void VBSP_GenerateMaterials(void *ctx, void *data, size_t a, size_t b)
 
 	if (!a)
 	{	//submodels share textures, so only do this if 'a' is 0 (inline index, 0 = world).
+		//FTESurf Patch 1548: each world texture's reflectivity, for a VMT whose image is missing (mat_vmt.c)
+		vbspinfo_t *cprv = (vbspinfo_t*)mod->meshinfo;
+		Mat_VMT_MapColoursReset();
+		for (a = 0; a < (size_t)mod->numtexinfo; a++)
+			if (mod->texinfo[a].texture)
+				Mat_VMT_MapColour(mod->texinfo[a].texture->name, cprv->texinfo[a].reflect, !!(mod->texinfo[a].flags & TI_WARP));
 		for(a = 0; a < mod->numtextures; a++)
 		{
 			VBSP_LoadingPump();	//FTESurf Patch 1259: with Batches_Build below, 0.5 s on surf_eternity
