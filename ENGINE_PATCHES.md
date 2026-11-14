@@ -131,6 +131,26 @@ evidence, cheater); the last census: 28 covered ENDs over 1164 zone files, and t
 lobby or uploaded run on any covered (map, track) -- only Momentum/KSF imports. The bonus-2 finish itself is
 an owner check.
 
+## Patch 1560 — no map-load warning for materials a map never shipped (15 Nov 2026)
+
+**Problem.** surf_ferros printed "2 material(s) did not resolve": its luna_tag_0 prop wears two Elden Ring textures
+neither build packed and no game supplies. 1104 of the 2303 library maps reference such content, so the block (and
+cl_gfx.qc's red banner, which reads hl2_unresolved_visible) fired on about half of them, saying "never shipped" on
+fs_automount_state 0 -- which is any map that wants no pack, censused or not, and the state an engine lookup fault
+would show in.
+
+**Change.** mat_vmt.c loads data/unshipped.txt (the mod's tools/mapdeps.py --unshipped: "<map>\t<key>" byte-sorted,
+what no pack, mount or pakfile supplies) and answers Mat_VMT_Unshipped for the map Mat_VMT_SetMap named at the top of
+the VBSP load. mod_vbsp.c's block goes to developer only when every load-time miss is listed, the state is 0 or 1 and
+fs_addons_missing is empty; then hl2_unresolved_visible publishes 0 (no banner, no lobby report). Unlisted misses stay
+loud and say how many are unlisted; with no list installed the old wording prints unchanged. Material paths are
+untouched: a neutral fallback for listed prop skins was built and removed for want of a visible case (mod BACKLOG).
+
+**Verified.** Windowed rigs on surf_ferros and surf_beyond with the installed exe: with the list, no block at
+developer 0 and the banner absent (9.4k / 7.6k px at fixed cameras against the no-list run); without it, the
+installed plugin's console and cvars. Four review rounds; the fourth found nothing above low. Details:
+`tools/p1560-missing.md` in the mod repository.
+
 ## Patch 1559 - Source map visuals (surf_beyond/beyond2/ace/null/legends) and the replay roof eye
 
 **Problem.** Scaled props were culled with the unscaled radius (the plugin's pre-cull, gl_alias's LOD/near
