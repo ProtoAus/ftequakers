@@ -1,5 +1,27 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1557 — journal whole-angle diagnostic states the attribution limit
+
+**Problem.** The standalone input checker correctly left whole-angle changes
+unresolved, but claimed REC warp records could distinguish their source and
+implied every teleport changes angles. A body-warp row does not uniquely bind
+a client view mutation, and some teleport branches preserve orientation.
+
+**Change.** Correct only the explanatory note and its existing fixture text.
+Four assertions require body-event corroboration and the client-angle
+attribution limit, rejecting the obsolete resolution/universal-teleport claims.
+No calculation, tolerance, counter, verdict, schema, capture or policy change.
+Native commit/tag and qcbuild unchanged; source tool diagnostic, not a runtime
+lobby/backend ship-set or release change. See tools/p1557-hid-angle-cause.md.
+
+**Verified.** Acting whole-angle fixture retains5unresolved/both-axis counters
+and0faults; only4new wording assertions fail against the old message (8/4),
+then8/0. Full input-reader1627/0 and recorder949/0; existing corpus output and
+fault count identical before/after. Protected existing input retains all metrics
+and faults, one note changed only, unresolved still unresolved. Independent
+review and publication are recorded separately; no new detection coverage or
+historical causal proof claimed. No engine/VM build needed for Python text.
+
 ## Patch 1550 — a game ended inside a menu call no longer stops menu.dat collecting (14 Nov 2026)
 
 **Problem.** Crash records of 8-10 Nov (Akatosh x3 on patch-1476, MetalGio on 8 Nov "every story-mode map
