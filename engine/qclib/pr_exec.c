@@ -2155,6 +2155,20 @@ void	PDECL PR_AbortStack			(pubprogfuncs_t *ppf)
 	prinst.pr_xstatement = -1;	//should make the loop abort.
 }
 
+//FTESurf Patch 1550: every frame, to depth 0. A longjmp out of a builtin (Host_EndGame inside a menu call) left
+//pr_depth and exitdepth where the abandoned call had them, and PR_ExecuteProgram collects only at depth 0, so
+//that VM never collected again. Returns the depth it unwound.
+int		PDECL PR_ResetExecution		(pubprogfuncs_t *ppf)
+{
+	progfuncs_t *progfuncs = (progfuncs_t*)ppf;
+	int depth = prinst.pr_depth;
+	prinst.exitdepth = 0;
+	while (prinst.pr_depth > 0)
+		PR_LeaveFunction(progfuncs);
+	prinst.pr_xstatement = -1;
+	return depth;
+}
+
 //FTESurf Patch 800: here, not in initlib.c, for Sys_GetClock
 void PDECL PR_ProfileExclude (pubprogfuncs_t *ppf, pbool begin)
 {

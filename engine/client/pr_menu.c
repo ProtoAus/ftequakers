@@ -2641,7 +2641,10 @@ static void QCBUILTIN PF_m_downloadmap(pubprogfuncs_t *prinst, struct globalvars
 	//local server, or the enqueue failed -- and FALSE once it is really queued.
 	if (!CL_CheckOrEnqueDownloadFile(rel, rel, flags))
 	{
-		CL_RequestNextDownload();	//nothing pumps the queue from the menu; see the Patch 465 block there
+		//FTESurf Patch 1550: not during a signon. There it runs CL_LoadModels, whose failures Host_EndGame from
+		//inside this builtin (see MP_HostAbort); Host_Frame pumps the queue every frame anyway.
+		if (!cl.sendprespawn)
+			CL_RequestNextDownload();	//nothing pumps the queue from the menu; see the Patch 465 block there
 		G_FLOAT(OFS_RETURN) = 1;
 	}
 }
@@ -3503,6 +3506,24 @@ void VARGS Menu_Abort (const char *format, ...)
 		inmenuprogs = 0;
 		longjmp(mp_abort, 1);
 	}
+}
+
+/*
+FTESurf Patch 1550: Host_Frame's host_abort landing, where no VM call can still be live (Host_Frame is not
+re-entered). A Host_EndGame inside a menu builtin jumped past inmenuprogs-- and left the menu VM's call depth
+up; PR_ExecuteProgram collects only at depth 0, so menu.dat never collected again and its temp-string table
+grew until the game died (initlib.c PR_AllocTempStringLen). CSQC needs none of this: CL_Disconnect shut it down.
+*/
+void MP_HostAbort(void)
+{
+	int PDECL PR_ResetExecution(pubprogfuncs_t *ppf);	//qclib pr_exec.c
+	int depth;
+	if (!menu_world.progs)
+		return;
+	depth = PR_ResetExecution(menu_world.progs);
+	if (depth || inmenuprogs)
+		Con_Printf("menu.dat: the game ended inside one of its calls (depth %i); its call stack is reset\n", depth);
+	inmenuprogs = 0;
 }
 
 void MP_CvarChanged(cvar_t *var)

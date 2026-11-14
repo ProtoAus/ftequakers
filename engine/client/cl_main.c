@@ -7566,6 +7566,12 @@ double Host_Frame (double time)
 			CSQC_RealKeyAbort();
 		}
 #endif
+#ifdef MENU_DAT
+		{
+			void MP_HostAbort(void);	//FTESurf Patch 1550: a menu call it jumped out of
+			MP_HostAbort();
+		}
+#endif
 		return 0;			// something bad happened, or the server disconnected
 	}
 
