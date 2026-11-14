@@ -970,7 +970,7 @@ qboolean Mat_VMT_Unshipped(const char *name, qboolean tex)
 //(review 2). Flag 'n' marks it for the dprints; 'd' is nodraw.
 static int VMT_ModelFallbackColour(const char *name, const char *tex, float *rgb, char *flags, size_t flagsize, float *tint, qboolean *world)
 {
-	char key[MAX_QPATH], nogame[8];
+	char key[MAX_QPATH], nogame[1024];
 	const char *leaf;
 	size_t len = strlen(name);
 	float state;
@@ -981,7 +981,9 @@ static int VMT_ModelFallbackColour(const char *name, const char *tex, float *rgb
 	if (Q_strncasecmp(key, "models/", 7) || len < 4 || Q_strcasecmp(name + len - 4, ".vmt"))
 		return found;
 	state = cvarfuncs->GetFloat("fs_automount_state");
-	if ((state != 0 && state != 1) || (cvarfuncs->GetString("fs_addons_missing", nogame, sizeof(nogame)) && *nogame))
+	*nogame = 0;	//GetString answers FALSE for a value that does not fit, after copying what does (review 3)
+	cvarfuncs->GetString("fs_addons_missing", nogame, sizeof(nogame));
+	if ((state != 0 && state != 1) || *nogame)
 		return found;
 	if (!Mat_VMT_Unshipped(tex ? tex : name, !!tex))
 		return found;

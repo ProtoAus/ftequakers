@@ -14380,6 +14380,9 @@ static void VBSP_Missing_f(void)
 		Con_Printf("%i of the load-time %i are on something you can look at (hl2_unresolved_visible);\n"
 			"the rest are named by the map and drawn by nothing.\n",
 			vmt_miss_visible, vmt_census_atload);
+		if (vmt_miss_quiet)	//FTESurf Patch 1560
+			Con_Printf("Every one is on data/unshipped.txt as never shipped with this map, so the banner's\n"
+				"count (hl2_unresolved_visible) is published as 0 and the load-time list was developer-only.\n");
 	}
 	if (vmt_stat_unparsed)
 	{
