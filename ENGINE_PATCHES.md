@@ -1,5 +1,40 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1548 — a missing texture draws its colour, not the checker; the default sky survives a map change (14 Nov 2026)
+
+**Problem.** Without the game a map borrows from (CS:S, TF2...), P1191 coloured only world materials
+with no VMT from the map's dtexdata reflectivity. A VMT whose image was missing, a model material
+(no dtexdata), a 0x0 texdata entry and water still drew the magenta/black checker. Separately, after a
+map change a map whose own sky was missing drew the checker across the whole sky: the default-sky
+shader kept from the earlier map had its box faces freed by Image_Purge, because
+Shader_TouchTextures marks a shader's pass and default images but not `skydome` faces.
+
+**Change.** hl2 plugin (mat_vmt.c, mod_vbsp.c): mod_vbsp.c hands each world texture's reflectivity to
+the material loader before shaders load. A VMT whose `$basetexture` is not installed draws that colour
+(map first, then `data/matcolours.txt`, the mod's index of 24,919 material/texture colours) through its
+own class times its `$color`: linear for LightmappedGeneric/WorldVertexTransition (P1288's
+`pow(COLOR,1/2.2)`), gamma for the others; decals, sprites and additive draw nothing; alphatest and
+translucent half see-through; `$selfillum`/`$basealphaenvmapmask` dropped (their mask was the missing
+alpha); Water/Refract/Sky untouched. A material with no VMT that the index lists draws vertex-lit,
+unlit or (0x0 world texdata) lightmapped -- world textures and `models/` only, since particle scripts
+register textures by name expecting no material. World water with no VMT is an unlit see-through plane
+of its fog colour. `hl2_missingtint 0` turns all of it off. Engine (gl_warp.c `R_TouchForcedSky`,
+called from Shader_TouchTextures): the sky in use's far/near faces are touched each map -- only that
+one, so every sky visited in a session is not kept.
+
+**Verified.** Rig: the exe and plugin under test beside the install's DLLs, a private home, spawn-view
+screenshots. Every game mounted, five maps: 0 colour actions, so nothing changes for a player who has
+the assets. Momentum only (no CS:S): surf_aqua's water a purple/black checker floor before, a
+see-through teal plane after; surf_utopia then bhop_eazy drew 269,837 / 208,969 / 269,682 magenta sky
+pixels in three runs before, 0 after (bhop_eazy alone: 0 either way); a 16-map sample coloured 40
+VMTs whose image is missing (map-packed props textured from CS:S: huts, doors, ramps) and drew 12
+water planes, no crash; surf_2012_beta12's distant checker block now draws in the wall colour. One
+independent review: no crash or memory finding; its three real ones (gamma in the lightmapped classes,
+particle textures taken by the no-VMT path, every visited sky kept) fixed, and the build re-measured.
+The particle case did not occur on the maps tried (Momentum ships HL2's particles): read, not measured.
+
+Details: `tools/p1548-matcolour.md` in the mod repository.
+
 ## Patch 1546 — native verifier retains its explicit lifetime (14 Nov 2026)
 
 **Problem.** The ordinary native-verifier launch used subprocess.run's default
