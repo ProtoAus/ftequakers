@@ -926,18 +926,25 @@ static void VMT_UnshippedLoad(void)
 	}
 }
 
-//TRUE if the loading map's list names this material or texture.
-qboolean Mat_VMT_Unshipped(const char *name)
+//TRUE once data/unshipped.txt has loaded with entries; without it every caller behaves as before P1560.
+qboolean Mat_VMT_UnshippedLoaded(void)
+{
+	if (!vmt_unshiptried)
+		VMT_UnshippedLoad();
+	return vmt_unshipn > 0;
+}
+
+//TRUE if the loading map's list names this material, or (tex) this texture: textures keep ".vtf" in their key
+//so a missing image does not vouch for a missing material of the same name (review 2).
+qboolean Mat_VMT_Unshipped(const char *name, qboolean tex)
 {
 	char key[MAX_QPATH], q[MAX_QPATH*2];
 	size_t lo = 0, hi, mid;
 	int c;
-	if (!*vmt_curmap)
+	if (!*vmt_curmap || !Mat_VMT_UnshippedLoaded())
 		return false;
-	if (!vmt_unshiptried)
-		VMT_UnshippedLoad();
 	VMT_ColourKey(name, key, sizeof(key));
-	if (!*key || Q_snprintfz(q, sizeof(q), "%s\t%s", vmt_curmap, key))
+	if (!*key || Q_snprintfz(q, sizeof(q), "%s\t%s%s", vmt_curmap, key, tex ? ".vtf" : ""))
 		return false;
 	hi = vmt_unshipn;
 	while (lo < hi)
@@ -955,22 +962,28 @@ qboolean Mat_VMT_Unshipped(const char *name)
 }
 
 //FTESurf Patch 1560: as VMT_FallbackColour, and a prop skin data/unshipped.txt lists for this map, asked for by its
-//.vmt name as mod_hl2.c asks (a particle script's bare texture name never is) -- surf_ferros' luna_tag_0 wears two
+//.vmt name as mod_hl2.c asks (a particle script's or CSQC's bare name never is) -- surf_ferros' luna_tag_0 wears two
 //Elden Ring textures neither build shipped -- draws neutral grey under its lighting instead of the checker; one
 //named as a nodraw tool material (surf_beyond's models/props/bronis/TOOLSNODRAW) draws nothing. `tex`, when given,
-//is a VMT's missing image and is what must be listed. Flag 'n' marks it for the dprints; 'd' is nodraw.
+//is a VMT's missing image and is what must be listed. Only where fs_automount says no pack is wanted or the wanted
+//one is mounted, with every game found: a list made on a PC short of a pack must not grey what fs_load would bring
+//(review 2). Flag 'n' marks it for the dprints; 'd' is nodraw.
 static int VMT_ModelFallbackColour(const char *name, const char *tex, float *rgb, char *flags, size_t flagsize, float *tint, qboolean *world)
 {
-	char key[MAX_QPATH];
+	char key[MAX_QPATH], nogame[8];
 	const char *leaf;
 	size_t len = strlen(name);
+	float state;
 	int found = VMT_FallbackColour(name, tex, rgb, flags, flagsize, tint, world);
 	if (found != VMTC_EMPTY || *world || (hl2_missingtint && !hl2_missingtint->ival))
 		return found;
 	VMT_ColourKey(name, key, sizeof(key));
-	if (Q_strncasecmp(key, "models/", 7))
+	if (Q_strncasecmp(key, "models/", 7) || len < 4 || Q_strcasecmp(name + len - 4, ".vmt"))
 		return found;
-	if (tex ? !Mat_VMT_Unshipped(tex) : (len < 4 || Q_strcasecmp(name + len - 4, ".vmt") || !Mat_VMT_Unshipped(name)))
+	state = cvarfuncs->GetFloat("fs_automount_state");
+	if ((state != 0 && state != 1) || (cvarfuncs->GetString("fs_addons_missing", nogame, sizeof(nogame)) && *nogame))
+		return found;
+	if (!Mat_VMT_Unshipped(tex ? tex : name, !!tex))
 		return found;
 	leaf = strrchr(key, '/');
 	rgb[0] = rgb[1] = rgb[2] = 0.5f;

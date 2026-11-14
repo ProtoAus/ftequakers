@@ -125,6 +125,7 @@ static int vmt_miss_reasons;
 //...and how many of them are on something the player can end up looking at.  Published as
 //hl2_unresolved_visible, which is what decides whether the HUD banner is worth drawing.
 static int vmt_miss_visible;
+static qboolean vmt_miss_quiet;	//FTESurf Patch 1560: every load-time miss is listed in data/unshipped.txt
 extern char vmt_stat_missing_name[VMT_MISSING_LIST][MAX_QPATH];
 extern int vmt_stat_unparsed;	//FTESurf Patch 181, found but would not parse -- a different fault
 extern char vmt_stat_unparsed_name[VMT_MISSING_LIST][MAX_QPATH];
@@ -173,7 +174,8 @@ void Mat_VMT_CensusForget(const char *name);
 void Mat_VMT_MapColoursReset(void);	//FTESurf Patch 1548
 void Mat_VMT_MapColour(const char *name, const float *refl, qboolean warp);
 void Mat_VMT_SetMap(const char *modname);	//FTESurf Patch 1560: data/unshipped.txt's map key
-qboolean Mat_VMT_Unshipped(const char *name);
+qboolean Mat_VMT_UnshippedLoaded(void);
+qboolean Mat_VMT_Unshipped(const char *name, qboolean tex);
 static cvar_t *hl2_bottommaterial;
 static cvar_t *hl2_missinggrid;	//FTESurf Patch 780
 cvar_t *hl2_missingtint;	//FTESurf Patch 1191; Patch 1548: mat_vmt.c reads it too
@@ -8999,6 +9001,7 @@ static void VBSP_BuildBIHMain(void *ctx, void *unusedp, size_t unuseda, size_t u
 	//letting the difference look like a fault.
 	vmt_census_atload = vmt_stat_missing;
 	vmt_miss_reasons = vmt_miss_visible = 0;
+	vmt_miss_quiet = false;
 
 	if (vmt_stat_missing)
 	{
@@ -9009,7 +9012,7 @@ static void VBSP_BuildBIHMain(void *ctx, void *unusedp, size_t unuseda, size_t u
 		const char *sl;
 		void (*say)(const char *format, ...);	//FTESurf Patch 1560
 		int listed;
-		qboolean allshipped;
+		qboolean haslist, allshipped;
 
 		//FTESurf Patch 233: classify every name we RECORDED, not just the ones about to be
 		//printed -- hl2_missing shows the rest and the visible count has to cover all of them.
@@ -9042,12 +9045,15 @@ static void VBSP_BuildBIHMain(void *ctx, void *unusedp, size_t unuseda, size_t u
 			*nogame = 0;
 
 		//FTESurf Patch 1560: developer-only when every miss is content data/unshipped.txt proves this map never
-		//shipped and every game was found -- nothing a player can do. Anything unlisted (a map newer than the list,
-		//a lookup fault) stays loud. hl2_missing and data/missing keep the names either way.
+		//shipped, no pack is wanted or the wanted one is mounted (states 0/1), and every game was found -- nothing
+		//a player can do. Anything unlisted (a map newer than the list, a lookup fault) stays loud, and with no
+		//list installed everything is as before. hl2_missing and data/missing keep the names either way.
+		haslist = Mat_VMT_UnshippedLoaded();
 		for (i = 0, listed = 0; i < vmt_miss_reasons; i++)
-			listed += !!Mat_VMT_Unshipped(vmt_stat_missing_name[i]);
-		allshipped = (listed == vmt_stat_missing);	//names past VMT_MISSING_LIST were never stored, so never listed
-		say = (!*nogame && allshipped) ? Con_DPrintf : Con_Printf;
+			listed += !!Mat_VMT_Unshipped(vmt_stat_missing_name[i], false);
+		allshipped = haslist && listed == vmt_stat_missing;	//names past VMT_MISSING_LIST were never stored, so never listed
+		vmt_miss_quiet = allshipped && !*nogame && (state == 0 || state == 1);
+		say = vmt_miss_quiet ? Con_DPrintf : Con_Printf;
 		say(CON_WARNING "%s: %i material(s) did not resolve:\n",
 			mod->name, vmt_stat_missing);
 		for (i = 0; i < shown; i++)
@@ -9073,6 +9079,20 @@ static void VBSP_BuildBIHMain(void *ctx, void *unusedp, size_t unuseda, size_t u
 			break;
 		case 0:	//no pack wanted: mapdeps.txt has no line for this map (censused or not -- P1560)
 		case 1:	//its pack is mounted from disk
+			if (!haslist)	//P1560: no data/unshipped.txt -- the pre-P1560 wording, unchanged
+			{
+				if (state == 0)
+					Con_Printf(CON_WARNING
+						"  No asset pack supplies these.  data/mapdeps.txt names none for this map,\n"
+						"  which is tools/mapdeps.py having already resolved every material against\n"
+						"  every pack and the map's own pakfile.  Mounting something will not bring\n"
+						"  them back: this map references content that was never shipped with it.\n");
+				else
+					Con_Printf(CON_WARNING
+						"  \"%s\" is already mounted for this map, so these are missing from it too.\n"
+						"  The map references content that was never shipped with it.\n", spec);
+				break;
+			}
 			if (state == 1)
 				say(CON_WARNING "  \"%s\" is already mounted for this map, so these are missing from it too.\n", spec);
 			if (allshipped)
@@ -9149,7 +9169,9 @@ static void VBSP_BuildBIHMain(void *ctx, void *unusedp, size_t unuseda, size_t u
 	banner is the one a player reads, so it is the one that has to be worth reading; the
 	console still lists everything, and hl2_missing still says which is which.
 	*/
-	cvarfuncs->SetFloat("hl2_unresolved_visible", vmt_miss_visible);
+	//FTESurf Patch 1560: 0 when every miss is proven never shipped, which takes down CSQC's red banner and its
+	//lobby report (cl_gfx.qc reads only this); hl2_unresolved keeps the raw count.
+	cvarfuncs->SetFloat("hl2_unresolved_visible", vmt_miss_quiet ? 0 : vmt_miss_visible);
 
 	/*
 	FTESurf Patch 254: the map's underwater fog, published for the gamecode.
@@ -14849,7 +14871,7 @@ qboolean VBSP_Init(void)
 		cvarfuncs->GetNVFDG("hl2_unresolved_first", "", CVAR_NOSAVE, "The first material the loaded map failed to resolve, as a hint at which asset pack it wants.", MAPOPTIONS);
 		//FTESurf Patch 233: ...and how many of them are on a face or a prop rather than only
 		//in the texdata string table.  The HUD banner draws on THIS, not on the raw count.
-		cvarfuncs->GetNVFDG("hl2_unresolved_visible", "0", CVAR_NOSAVE, "How many of hl2_unresolved are on something you can actually look at -- a drawn world face, or a prop skin. A material named in the map's texdata table that no face uses cannot be seen and does not count. `hl2_missing` says which is which.", MAPOPTIONS);
+		cvarfuncs->GetNVFDG("hl2_unresolved_visible", "0", CVAR_NOSAVE, "How many of hl2_unresolved are on something you can actually look at -- a drawn world face, or a prop skin. A material named in the map's texdata table that no face uses cannot be seen and does not count. `hl2_missing` says which is which. FTESurf Patch 1560: 0 when data/unshipped.txt lists every miss as content the map never shipped.", MAPOPTIONS);
 
 		/*
 		FTESurf Patch 254: the loaded map's underwater fog, read out of the first
