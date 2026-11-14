@@ -882,8 +882,9 @@ static int VMT_FallbackColour(const char *name, const char *tex, float *rgb, cha
 FTESurf Patch 1560: data/unshipped.txt (tools/mapdeps.py --unshipped), "<map>\t<key>" byte-sorted: every material
 and texture of a library map that no pack, mount or the map's own pakfile supplies -- proven never shipped with it,
 which fs_automount_state 0 is not (that is any map wanting no pack, censused or not). mod_vbsp.c keeps the map-load
-warning quiet when every miss is listed; VMT_ModelFallbackColour draws a listed prop skin neutral, not the checker.
-A map or name missing from the list (a new map, an engine lookup fault) stays loud.
+warning and the banner quiet when every miss is listed. A map or name missing from the list (a new map, an engine
+lookup fault) stays loud. Drawing a listed prop skin neutral instead of the checker waits in BACKLOG: every listed
+skin measured (surf_ferros, surf_beyond, surf_fairy) sat where no camera could show it.
 */
 static char *vmt_unship;
 static const char **vmt_unshipline;
@@ -934,9 +935,9 @@ qboolean Mat_VMT_UnshippedLoaded(void)
 	return vmt_unshipn > 0;
 }
 
-//TRUE if the loading map's list names this material, or (tex) this texture: textures keep ".vtf" in their key
-//so a missing image does not vouch for a missing material of the same name (review 2).
-qboolean Mat_VMT_Unshipped(const char *name, qboolean tex)
+//TRUE if the loading map's list names this material (the list keys textures with ".vtf", so a missing image never
+//vouches for a missing material of the same name -- review 2).
+qboolean Mat_VMT_Unshipped(const char *name)
 {
 	char key[MAX_QPATH], q[MAX_QPATH*2];
 	size_t lo = 0, hi, mid;
@@ -944,7 +945,7 @@ qboolean Mat_VMT_Unshipped(const char *name, qboolean tex)
 	if (!*vmt_curmap || !Mat_VMT_UnshippedLoaded())
 		return false;
 	VMT_ColourKey(name, key, sizeof(key));
-	if (!*key || Q_snprintfz(q, sizeof(q), "%s\t%s%s", vmt_curmap, key, tex ? ".vtf" : ""))
+	if (!*key || Q_snprintfz(q, sizeof(q), "%s\t%s", vmt_curmap, key))
 		return false;
 	hi = vmt_unshipn;
 	while (lo < hi)
@@ -959,39 +960,6 @@ qboolean Mat_VMT_Unshipped(const char *name, qboolean tex)
 			lo = mid + 1;
 	}
 	return false;
-}
-
-//FTESurf Patch 1560: as VMT_FallbackColour, and a prop skin data/unshipped.txt lists for this map, asked for by its
-//.vmt name as mod_hl2.c asks (a particle script's or CSQC's bare name never is) -- surf_ferros' luna_tag_0 wears two
-//Elden Ring textures neither build shipped -- draws neutral grey under its lighting instead of the checker; one
-//named as a nodraw tool material (surf_beyond's models/props/bronis/TOOLSNODRAW) draws nothing. `tex`, when given,
-//is a VMT's missing image and is what must be listed. Only where fs_automount says no pack is wanted or the wanted
-//one is mounted, with every game found: a list made on a PC short of a pack must not grey what fs_load would bring
-//(review 2). Flag 'n' marks it for the dprints; 'd' is nodraw.
-static int VMT_ModelFallbackColour(const char *name, const char *tex, float *rgb, char *flags, size_t flagsize, float *tint, qboolean *world)
-{
-	char key[MAX_QPATH], nogame[1024];
-	const char *leaf;
-	size_t len = strlen(name);
-	float state;
-	int found = VMT_FallbackColour(name, tex, rgb, flags, flagsize, tint, world);
-	if (found != VMTC_EMPTY || *world || (hl2_missingtint && !hl2_missingtint->ival))
-		return found;
-	VMT_ColourKey(name, key, sizeof(key));
-	if (Q_strncasecmp(key, "models/", 7) || len < 4 || Q_strcasecmp(name + len - 4, ".vmt"))
-		return found;
-	state = cvarfuncs->GetFloat("fs_automount_state");
-	*nogame = 0;	//GetString answers FALSE for a value that does not fit, after copying what does (review 3)
-	cvarfuncs->GetString("fs_addons_missing", nogame, sizeof(nogame));
-	if ((state != 0 && state != 1) || *nogame)
-		return found;
-	if (!Mat_VMT_Unshipped(tex ? tex : name, !!tex))
-		return found;
-	leaf = strrchr(key, '/');
-	rgb[0] = rgb[1] = rgb[2] = 0.5f;
-	tint[0] = tint[1] = tint[2] = 1;
-	Q_strlcpy(flags, strstr(leaf ? leaf+1 : key, "nodraw") ? "nd" : "n", flagsize);
-	return VMTC_COLOUR;
 }
 
 static void VMT_FogColorString(const char *in, char *out, size_t outsize)
@@ -3199,9 +3167,9 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 		char flags[16];
 		qboolean world;
 		const char *cval = *st->color2 ? st->color2 : st->color;
-		if (VMT_ModelFallbackColour(shortname, st->tex[0].name, rgb, flags, sizeof(flags), tint, &world) == VMTC_COLOUR)
+		if (VMT_FallbackColour(shortname, st->tex[0].name, rgb, flags, sizeof(flags), tint, &world) == VMTC_COLOUR)
 		{
-			if (st->decal || st->additive || !Q_strncasecmp(st->type, "Sprite", 6) || (strchr(flags, 'n') && strchr(flags, 'd')))
+			if (st->decal || st->additive || !Q_strncasecmp(st->type, "Sprite", 6))
 				st->nodraw = 1;
 			else
 			{
@@ -6190,7 +6158,7 @@ static qboolean Shader_LoadVMT(parsestate_t *ps, const char *filename, void (*Lo
 			float rgb[3], tint[3];
 			char flags[16], key[MAX_QPATH];
 			qboolean world;
-			int found = VMT_ModelFallbackColour(vmtname, NULL, rgb, flags, sizeof(flags), tint, &world);
+			int found = VMT_FallbackColour(vmtname, NULL, rgb, flags, sizeof(flags), tint, &world);
 			VMT_ColourKey(vmtname, key, sizeof(key));
 			if (found != VMTC_EMPTY && (VMT_OwnImageExists(key) || (!world && Q_strncasecmp(key, "models/", 7))))
 				found = VMTC_EMPTY;
@@ -6227,8 +6195,7 @@ static qboolean Shader_LoadVMT(parsestate_t *ps, const char *filename, void (*Lo
 					st.translucent = 1;
 					st.alphaval = 0.5;
 				}
-				Con_DPrintf("%s: no VMT; drawing %s %s\n", vmtname, st.nodraw ? "nothing" : st.color2,
-					strchr(flags, 'n') ? "(nothing knows its colour)" : "from the colour index");
+				Con_DPrintf("%s: no VMT; drawing %s from the colour index\n", vmtname, st.nodraw ? "nothing" : st.color2);
 				Shader_GenerateFromVMT(ps, &st, vmtname, LoadMaterialString);
 				return true;
 			}
