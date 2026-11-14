@@ -674,7 +674,13 @@ static char *vmt_idx;
 static const char **vmt_idxline;
 static size_t vmt_idxn;
 static qboolean vmt_idxtried;
-int vmt_stat_coloured;			//materials drawn as a colour this map, for hl2_missing
+
+//The classes whose program multiplies $color in linear light (lightmapped/transition.glsl, P1288's
+//pow(COLOR, 1/2.2)); the others take it as the gamma value the colours here are.
+static qboolean VMT_LinearColourClass(const char *type)
+{
+	return !Q_strncasecmp(type, "Lightmapped", 11) || !Q_strncasecmp(type, "WorldVertexTransition", 21);
+}
 
 //A material or texture path as the index spells it: no materials/, no extension, lowercase, '/'.
 static void VMT_ColourKey(const char *in, char *out, size_t size)
@@ -714,7 +720,6 @@ static int VMT_MapColourSlot(const char *key, qboolean add)
 void Mat_VMT_MapColoursReset(void)
 {
 	memset(vmt_mapcol, 0, sizeof(vmt_mapcol));
-	vmt_stat_coloured = 0;
 }
 
 //mod_vbsp.c: world texture `name`'s reflectivity (linear; NULL or out of range = none) and whether it is water.
@@ -3080,7 +3085,11 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 			{
 				if (!VMT_ParseColour(cval, c))
 					c[0] = c[1] = c[2] = 1;
+				if (VMT_LinearColourClass(st->type))
+					rgb[0] = pow(rgb[0], 2.2), rgb[1] = pow(rgb[1], 2.2), rgb[2] = pow(rgb[2], 2.2);
 				Q_snprintfz(st->color2, sizeof(st->color2), "[%f %f %f]", rgb[0]*c[0], rgb[1]*c[1], rgb[2]*c[2]);
+				st->selfillum = 0;	//its mask was the missing image's alpha; $whiteimage's is 1 everywhere
+				st->envfrombase = 0;
 				if (st->alphatest)
 				{
 					st->alphatest = false;
@@ -3090,7 +3099,6 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 					st->alphaval = 0.5;
 			}
 			st->nobasetex = 1;
-			vmt_stat_coloured++;
 			Con_DPrintf("%s: %s is not installed; drawing %s\n", shortname, st->tex[0].name,
 				st->nodraw ? "nothing" : st->color2);
 		}
@@ -6037,25 +6045,29 @@ static qboolean Shader_LoadVMT(parsestate_t *ps, const char *filename, void (*Lo
 		/*
 		FTESurf Patch 1548: a material with no VMT that the colour index lists draws that colour under
 		its tint: vertex-lit for a model, unlit where the index says UnlitGeneric, nothing for a decal,
-		sprite or additive glow, half see-through where it says translucent or alpha-tested. A world
-		texture the map coloured itself is VBSP_MissingTint's (P1191) and water keeps the checker; only
-		a world texture with no reflectivity (0x0 texdata) is lightmapped from the index here.
+		sprite or additive glow, half see-through where it says translucent, alpha-tested or Refract. A
+		world texture the map coloured itself is VBSP_MissingTint's (P1191); a world texture with no
+		reflectivity (0x0 texdata) is lightmapped from the index here, and world water is a see-through
+		plane of its fog. Only world textures and models/: a particle script registers its texture by
+		name expecting no material (p_script.c), and an image under the material's own name still wins.
 		*/
 		if (missing)
 		{
 			float rgb[3], tint[3];
-			char flags[16];
+			char flags[16], key[MAX_QPATH];
 			qboolean world;
 			int found = VMT_FallbackColour(vmtname, NULL, rgb, flags, sizeof(flags), tint, &world);
+			VMT_ColourKey(vmtname, key, sizeof(key));
+			if (found != VMTC_EMPTY && (VMT_OwnImageExists(key) || (!world && Q_strncasecmp(key, "models/", 7))))
+				found = VMTC_EMPTY;
 			if (found == VMTC_WATER)
-			{	//a see-through plane of its fog colour: unlit, as a warped face has no lightmap
+			{	//unlit: a warped face has no lightmap
 				memset(&st, 0, sizeof(st));
 				Q_strlcpy(st.type, "UnlitGeneric", sizeof(st.type));
 				st.nobasetex = 1;
 				st.translucent = 1;
 				st.alphaval = 0.6;
 				Q_snprintfz(st.color2, sizeof(st.color2), "[%f %f %f]", rgb[0], rgb[1], rgb[2]);
-				vmt_stat_coloured++;
 				Con_DPrintf("%s: no VMT; drawing water %s\n", vmtname, st.color2);
 				Shader_GenerateFromVMT(ps, &st, vmtname, LoadMaterialString);
 				return true;
@@ -6069,13 +6081,18 @@ static qboolean Shader_LoadVMT(parsestate_t *ps, const char *filename, void (*Lo
 				st.nobasetex = 1;
 				if (strchr(flags, 'e') || strchr(flags, 's') || strchr(flags, 'd'))
 					st.nodraw = 1;
+				if (VMT_LinearColourClass(st.type))
+				{	//the base to linear; its $color tint already is, in these classes
+					rgb[0] = pow(rgb[0], 2.2);
+					rgb[1] = pow(rgb[1], 2.2);
+					rgb[2] = pow(rgb[2], 2.2);
+				}
 				Q_snprintfz(st.color2, sizeof(st.color2), "[%f %f %f]", rgb[0]*tint[0], rgb[1]*tint[1], rgb[2]*tint[2]);
-				if (strchr(flags, 't') || strchr(flags, 'a'))
+				if (strchr(flags, 't') || strchr(flags, 'a') || strchr(flags, 'r'))
 				{
 					st.translucent = 1;
 					st.alphaval = 0.5;
 				}
-				vmt_stat_coloured++;
 				Con_DPrintf("%s: no VMT; drawing %s from the colour index\n", vmtname, st.nodraw ? "nothing" : st.color2);
 				Shader_GenerateFromVMT(ps, &st, vmtname, LoadMaterialString);
 				return true;
