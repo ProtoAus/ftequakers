@@ -1,5 +1,28 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1564 - TAS community boards and completed-run history
+
+**Problem.** Assisted submissions were discarded rather than retained in a
+separate TAS leaderboard. The local completion-history and replay-camera
+portions of the same requested feature also need delivery; they are not
+represented as shipped by this first backend change.
+
+**Change.** Backend-only first part: store TAS submissions on community TAS
+boards, retaining their flags and keeping them uncertifiable. Add a TAS web
+selector and separate counts. Preserve ordinary clean/segmented boards, points,
+story completion, key/ban checks and public replay privacy gates. Local-history
+and viewer changes remain pending. No engine implementation, native pin/tag,
+evidence format, release or qcbuild change. See tools/p1564-tas-history.md in the
+mod repository; original unshipped test labels P1559 are retained as history.
+
+**Verified.** Four scoped backend tests cover class isolation, ordinary boards,
+community-only storage, account/ban/key controls, counts, retained native replay
+access and unchanged public web gates. The existing web and board suites
+pass; JavaScript syntax passes. One pre-existing untouched test_ranked template
+assertion remains explicit rather than repaired as part of this feature.
+Backend commit/deployment and local game acceptance must be recorded separately;
+a source build or unit suite is not evidence of what the fleet currently runs.
+
 ## Patch 1563 - name-filtered boosters predicted (surf_tendies at high ping)
 
 **Problem.** surf_tendies' start pad is a trigger_multiple behind a negated name filter whose OnStartTouch
