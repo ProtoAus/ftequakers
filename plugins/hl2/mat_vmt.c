@@ -682,7 +682,7 @@ static void VMT_ColourKey(const char *in, char *out, size_t size)
 	size_t n = 0;
 	if (!Q_strncasecmp(in, "materials/", 10) || !Q_strncasecmp(in, "materials\\", 10))
 		in += 10;
-	for (; *in && n + 1 < size; in++)
+	for (; *in && *in != '#' && n + 1 < size; in++)	//"#warp": the world's own suffix on a water face's texture
 	{
 		char c = (*in == '\\') ? '/' : *in;
 		if (c == '/' && (!n || out[n-1] == '/'))
@@ -840,7 +840,14 @@ static int VMT_FallbackColour(const char *name, const char *tex, float *rgb, cha
 	{
 		*world = true;
 		if (vmt_mapcol[i].state == VMTC_WATER)
+		{	//its reflectivity is its ripple normal map's; the colour is its fog (the index's 'w' line)
+			if (VMT_IndexColour(key, c, flags, flagsize, tint) && strchr(flags, 'w'))
+				rgb[0] = c[0]/255.0f, rgb[1] = c[1]/255.0f, rgb[2] = c[2]/255.0f;
+			else
+				rgb[0] = 0.06f, rgb[1] = 0.11f, rgb[2] = 0.15f;	//VMT_FogColorString's default
+			tint[0] = tint[1] = tint[2] = 1;
 			return VMTC_WATER;
+		}
 		if (vmt_mapcol[i].state == VMTC_COLOUR)
 		{
 			rgb[0] = vmt_mapcol[i].rgb[0]/255.0f; rgb[1] = vmt_mapcol[i].rgb[1]/255.0f; rgb[2] = vmt_mapcol[i].rgb[2]/255.0f;
@@ -6039,7 +6046,21 @@ static qboolean Shader_LoadVMT(parsestate_t *ps, const char *filename, void (*Lo
 			float rgb[3], tint[3];
 			char flags[16];
 			qboolean world;
-			if (VMT_FallbackColour(vmtname, NULL, rgb, flags, sizeof(flags), tint, &world) == VMTC_COLOUR &&
+			int found = VMT_FallbackColour(vmtname, NULL, rgb, flags, sizeof(flags), tint, &world);
+			if (found == VMTC_WATER)
+			{	//a see-through plane of its fog colour: unlit, as a warped face has no lightmap
+				memset(&st, 0, sizeof(st));
+				Q_strlcpy(st.type, "UnlitGeneric", sizeof(st.type));
+				st.nobasetex = 1;
+				st.translucent = 1;
+				st.alphaval = 0.6;
+				Q_snprintfz(st.color2, sizeof(st.color2), "[%f %f %f]", rgb[0], rgb[1], rgb[2]);
+				vmt_stat_coloured++;
+				Con_DPrintf("%s: no VMT; drawing water %s\n", vmtname, st.color2);
+				Shader_GenerateFromVMT(ps, &st, vmtname, LoadMaterialString);
+				return true;
+			}
+			if (found == VMTC_COLOUR &&
 			    !strchr(flags, 'w') && !(world && !*flags))
 			{
 				memset(&st, 0, sizeof(st));

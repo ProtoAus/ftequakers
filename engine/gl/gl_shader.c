@@ -9901,6 +9901,17 @@ void Shader_TouchTextures(void)
 		}
 		for (j = 0; j < max(1,s->numdefaulttextures); j++)
 			Shader_TouchTexnums(&s->defaulttextures[j]);
+		//FTESurf Patch 1548: and a skyparms box's faces. Untouched, a sky shader kept from the last map
+		//(r_skybox_default after a second map's sky was missing too) had its faces freed by Image_Purge
+		//and drew the missing image: utopia then bhop_eazy without CS:S, 270k magenta pixels of sky.
+		if (s->skydome)
+			for (k = 0; k < 6; k++)
+			{
+				if (s->skydome->farbox_textures[k])
+					s->skydome->farbox_textures[k]->regsequence = r_regsequence;
+				if (s->skydome->nearbox_textures[k])
+					s->skydome->nearbox_textures[k]->regsequence = r_regsequence;
+			}
 	}
 }
 
