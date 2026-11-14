@@ -1,5 +1,51 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1549 - JARGON platform footprint and event-aligned steering seeds
+
+Problem: A guide endpoint or permission volume alone does not describe a physical
+landing area. A halfway split of the initial two-band steering trials can couple
+late-ramp corrections to air correction, despite nonuniform ride knots. A safe
+final-platform landing can also be discarded because the finish handoff tests
+only passive drift, not steering toward its door.
+
+Change: QC-only. Bind an endsafe goal to one eligible endpoint-local rectangular
+BHOP region and one course-owned end portal, after five static full-hull support
+probes and compatible feet-origin hull checks. Rank supported post-air platform
+arrival separately; steer toward the nearest inset footprint. Initial ambiguity
+keeps the legacy objective. Capture a local nonserialized zone-table generation
+and portal/goal geometry; a changed active binding cancels before play, never
+mixes legacy scores into the same population. Initial native-follow demo trials
+partition at the available launch/catch event or existing ride-knot boundary,
+with the exact old midpoint fallback if either side is empty. Grid, amplitudes,
+RNG, population and evaluation caps stay unchanged. Actual supported standing
+hands off to four-tick literal manual native input toward the captured portal,
+rechecking support/ownership each step. Keep the inset arrival predicate separate
+from supported walking in the raw region/doorway. A framed portal can require a
+clear face approach rather than walking into its side post; full-hull traces
+choose that waypoint and actual-current visibility gates its consumption.
+A latched-run-tick progress watchdog pauses rather than rewinds if blocked;
+only the existing real game-finish observation succeeds. This is a bounded
+one-waypoint visibility route, not general navigation or a persistent checkpoint.
+No movement, game-finish rule, recorder, verifier, engine pin/tag or qcbuild change.
+
+Verified: Three scoped source reviews; corrected the handoff clock note and the
+latest review's waypoint-distance shortcut defect before compilation. CEM
+suite4381checks passes;17direct standalone-QC synthetic rectangle/cache/landing
+checks pass (not physics/trace/ownership proof). Reader949/0. On the exact accepted
+P1543 native trio, pre-handoff midpoint13.110 versus ride12.285seconds, both four
+backtracks and complete6board REC14strict0faults. The original old-native snapshot
+is retained separately. Both latest control/production3VMbuilds have0warnings.
+Earlier acting ground tails pause without ramp backtracking, not a finish;
+actual terminal body/BSP data identifies a concrete doorway side post. The corrected
+clear-face acting arm actually finishes14.280seconds/0backtracks,952inputs,
+4boards/strict0faults; production stays12.285/4backs,819inputs,6boards/strict0.
+These use the accepted P1543 trio. Clean-source/current-installed renderer
+compatibility and promotion remain pending.
+Shared-rig admission refusals are preserved without process/lease interference.
+Five probes do not certify no holes;
+other maps, moving support, optimal boarding loss and human feel remain
+unverified. tools/p1549-jargon-platform.md.
+
 ## Patch 1546 — native verifier retains its explicit lifetime (14 Nov 2026)
 
 **Problem.** The ordinary native-verifier launch used subprocess.run's default
