@@ -29,26 +29,41 @@ hardware attestation. Clean-commit/deployment provenance: tools/p1565-angle-cont
 
 ## Patch 1564 - TAS community boards and completed-run history
 
-**Problem.** Assisted submissions were discarded rather than retained in a
-separate TAS leaderboard. The local completion-history and replay-camera
-portions of the same requested feature also need delivery; they are not
-represented as shipped by this first backend change.
+**Problem.** Assisted submissions lacked a separate TAS leaderboard. Completed
+ordinary/segmented attempts and TAS runs could be overwritten or unavailable in
+local replay history; TAS playback could follow the live mouse-camera track
+rather than the recorded mover angles.
 
-**Change.** Backend-only first part: store TAS submissions on community TAS
-boards, retaining their flags and keeping them uncertifiable. Add a TAS web
-selector and separate counts. Preserve ordinary clean/segmented boards, points,
-story completion, key/ban checks and public replay privacy gates. Local-history
-and viewer changes remain pending. No engine implementation, native pin/tag,
-evidence format, release or qcbuild change. See tools/p1564-tas-history.md in the
-mod repository; original unshipped test labels P1559 are retained as history.
+**Change.** Keep TAS on separate community boards with flags retained and no
+ordinary ranked points, completion credit or certification. Add the TAS
+scoreboard tab and local filters. Retain uniquely named completed recordings,
+including slower finishes, while preserving compatibility PB/last pointers;
+authenticated background acquisition never opens playback. Frame-budget local
+indexing, attachment/run/nonce-bound renderer metadata and resolved-final-path
+signing preserve ownership and sidecar semantics. Known REC4-15 archive reads
+copy raw bytes, including overlong native headers. TAS presentation selects REC
+angles. No native implementation/pin/tag, evidence format, consent, detector,
+release or qcbuild change; published peer engine metadata is preserved. See
+mod tools/p1564-tas-history.md; original unshipped P1559 test labels remain history.
 
-**Verified.** Four scoped backend tests cover class isolation, ordinary boards,
-community-only storage, account/ban/key controls, counts, retained native replay
-access and unchanged public web gates. The existing web and board suites
-pass; JavaScript syntax passes. One pre-existing untouched test_ranked template
-assertion remains explicit rather than repaired as part of this feature.
-Backend commit/deployment and local game acceptance must be recorded separately;
-a source build or unit suite is not evidence of what the fleet currently runs.
+**Verified.** Three integrated VMs compile with zero warnings. A real dedicated
+socket fixture retained two ordinary, one save-resumed segmented and two actual
+TAS completions; all five owner downloads match server bytes and the prior three
+bodies remain unchanged. Real account proof acted. Separate TAS replay controls
+show REC policy with no VIEW rows. The initial test matched a TAS mode announcement
+prematurely: only the later finish-specific two-case evidence is credited for TAS.
+Reader suite952/0; same-byte578REC/184VIEW sweep365faults on both published base
+and candidate, no new faults. Independent final source/acceptance review passes.
+Four backend class/isolation/access tests, existing web/board suites and JS syntax
+pass; the unrelated pre-existing ranked-template failure stays explicit.
+
+**Limits.** Runtime completion samples are REC14; REC15 eligibility is source
+checked here, not native certification. The existing8MiB remote Archive safety
+limit remains: larger server originals are retained but not automatically copied
+to a remote client. Missing run IDs do not gain guessed VIEW pairs or retroactive
+signatures. Human visual/menu checks remain pending. QC dual/fleet delivery and
+guarded backend activation require their own hashes, UTC receipts and authority;
+source/tests/review are not claims about installed or serving code.
 
 ## Patch 1563 - name-filtered boosters predicted (surf_tendies at high ping)
 
