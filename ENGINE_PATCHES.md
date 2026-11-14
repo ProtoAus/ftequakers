@@ -1,5 +1,32 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1546 — native verifier retains its explicit lifetime (14 Nov 2026)
+
+**Problem.** The ordinary native-verifier launch used subprocess.run's default
+close_fds=True. Unlike the similarity worker, it discarded an explicitly
+inheritable lifetime descriptor. A real controlled native-command child remained
+active after the launcher's reference closed, but an independent exclusive drain
+already succeeded. This is a subprocess-lifetime defect, not a player finding.
+
+**Change.** Preserve explicit inheritable descriptors through that existing
+launch, matching the similarity child. Ordinary descriptors remain CLOEXEC.
+Command construction, source challenge, output handling, timeout, scheduling,
+recording format, ranks and numerical budgets are unchanged. Share the existing
+acting lease test between the two launch paths with test-local witnesses.
+Backend-only: native commit/tag and qcbuild89 stay unchanged.
+
+**Verified.** On real Linux launches, the old native arm ACTS then prematurely
+drains; the old similarity arm stays held. Fixed process suite18/0 proves both
+exact descriptor identities/inheritability, private-descriptor exclusion, normal
+response, held drain while working and eventual drain after exit. Windows18
+passes with7Linux-only skips. Existing sweep checks0fail, source15/0 and
+per-attempt counts7/0. The first combined test exposed reused ready/release names;
+test-local names fix that fixture, original failure retained. Two independent
+narrow source/proof reviews CLEAR; live admission remains separate, not claimed.
+No universal whole-pass
+resource bound, calibration or native vulnerability-audit credit. Details:
+`tools/p1546-native-verifier-lease.md` in the mod repository.
+
 ## Patch 1543 — TAS restore rebases the board-event observer (13 Nov 2026)
 
 **Problem.** A TAS native checkpoint restores the carried movement board counter,
