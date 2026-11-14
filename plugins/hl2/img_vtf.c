@@ -407,6 +407,10 @@ struct pendingtextureinfo *Image_ReadVTFFile(unsigned int flags, const char *fna
 		imagefuncs->BlockSizeForEncoding(mips->encoding, &bb, &bw, &bh, &bd);
 
 		miplevels = vtf->mipmapcount;
+		//Patch 1559: TEXTUREFLAGS_NOMIP (0x100) -- Source samples the top level only.  surf_null's
+		//alpha-tested grate (9 levels shipped) kept 6% of its texels at mip 2 and vanished at range.
+		if ((vtf->flags & 0x100) && miplevels > 1)
+			miplevels = 1;
 		frames = (mips->type==PTI_2D_ARRAY)?vtf->numframes:1;
 		faces = ((mips->type==PTI_CUBE)?6:1);
 

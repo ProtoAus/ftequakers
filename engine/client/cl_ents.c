@@ -6900,6 +6900,18 @@ void CL_LinkPacketEntities (void)
 					absmax[i] = ent->origin[i] + max;
 				}
 			}
+			else if (model->type != mod_brush && model->radius > 0 &&
+				(state->angles[0]||state->angles[1]||state->angles[2]||(state->scale && state->scale != 16)))
+			{	//Patch 1559: a rotated or scaled model's leaves come from its scaled radius, not its
+				//unscaled, unrotated box (ent->scale is only set further down, from the same byte).
+				float r = model->radius * (state->scale ? state->scale/16.0f : 1);
+				int i;
+				for (i=0 ; i<3 ; i++)
+				{
+					absmin[i] = ent->origin[i] - r;
+					absmax[i] = ent->origin[i] + r;
+				}
+			}
 			else
 			{
 				VectorAdd(model->mins, ent->origin, absmin);

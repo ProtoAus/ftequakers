@@ -2603,6 +2603,7 @@ void R_GAlias_GenerateBatches(entity_t *e, batch_t **batches)
 		vec3_t v;
 		float z;
 
+		float radius = clmodel->radius * ((e->scale > 0) ? e->scale : 1);	//Patch 1559: a scale-2 prop's sphere
 		VectorSubtract(e->origin, r_refdef.vieworg, v);
 		z = DotProduct(v, vpn);
 		//nettest Patch 100b: `sizecullable` gates this return too, not just the coverage cull below.
@@ -2620,7 +2621,7 @@ void R_GAlias_GenerateBatches(entity_t *e, batch_t **batches)
 		//and their geometry need not be anywhere near e->origin.
 		//When exempt we fall through to the `z < 0` branch and take lod 0, which is what a
 		//viewmodel wants anyway -- it is never a LOD candidate.
-		if (sizecullable && z < -clmodel->radius)
+		if (sizecullable && z < -radius)
 			return;		//furthest extent of bounding sphere is nearer than the near clip plane, and thus completely invisible
 		else if (z < 0)
 			lod = 0;	//nearer than the camera, use the highest lod (and never size-cull)
@@ -2629,8 +2630,8 @@ void R_GAlias_GenerateBatches(entity_t *e, batch_t **batches)
 			//if the ent is in the middle of the screen, then the right edge of its sphere is at what percentage of the width of the screen...?
 
 			//simplified Matrix4x4_CM_Transform4
-			float coverage = (r_refdef.m_projection_std[5]*clmodel->radius + r_refdef.m_projection_std[ 9]*-z + r_refdef.m_projection_std[13]) /
-							 (r_refdef.m_projection_std[7]*clmodel->radius + r_refdef.m_projection_std[11]*-z + r_refdef.m_projection_std[15]);
+			float coverage = (r_refdef.m_projection_std[5]*radius + r_refdef.m_projection_std[ 9]*-z + r_refdef.m_projection_std[13]) /
+							 (r_refdef.m_projection_std[7]*radius + r_refdef.m_projection_std[11]*-z + r_refdef.m_projection_std[15]);
 
 			//nettest Patch 100: size cull.  Culling HERE (before Mod_Extradata's surface walk below)
 			//drops the whole per-entity cost -- batch-gen, Alias_GAliasBuildMesh's bone build,

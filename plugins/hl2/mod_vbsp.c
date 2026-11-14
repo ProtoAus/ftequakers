@@ -213,7 +213,7 @@ static cvar_t *hl2_lt_baked;		//FTESurf Patch 163: sp_N.vhv static prop lighting
 static cvar_t *hl2_lt_baked_vc;		//FTESurf Patch 259: the live on/off for the per-vertex half of it
 static int vbsp_vc_live = -1;		//...as last applied, so a change can invalidate the cached lighting solve
 static model_t *vbsp_vc_mod;		//...and which map that was for
-static int cube_stat_count, cube_stat_missing, cube_stat_default;
+static int cube_stat_count, cube_stat_missing, cube_stat_default, cube_stat_hdr;
 
 char *Q_strlwr(char *s)
 {
@@ -504,6 +504,8 @@ typedef struct vbspinfo_s
 	vec3_t			*vertnormals;		//FTESurf Patch 1023, VBSP_LoadVertNormals
 	unsigned int	*vertnormalidx;
 	unsigned int	*surfvn;			//[numsurfaces] first vertnormalidx entry; NULL: plane normals
+	unsigned short	**surfprimidx;		//Patch 1559: [numsurfprims] vbsp's crack-free triangle list, or NULL: a fan
+	int				numsurfprims;
 
 	int				numleafbrushes;
 	q2cbrush_t		**leafbrushes;
@@ -4259,6 +4261,50 @@ static void VBSP_LoadVertNormals(model_t *mod, qbyte *mod_base, vlump_t *lumps)
 }
 #endif
 
+/*
+Patch 1559: where a world face has T-junction vertices and no corner a clean fan can start from,
+vbsp writes a triangle list for it (utils/vbsp/faces.cpp, LUMP_PRIMITIVES 37 + LUMP_PRIMINDICES 39;
+indices are into the face's own surfedge-ordered vertices).  A fan from vertex 0 runs triangle
+edges through those vertices and leaves pixel cracks: surf_ace's "white light at the seams",
+456 such faces there.  Kept only for the shape vbsp writes: one TRILIST, no extra verts.
+*/
+static void VBSP_FacePrims (vbspinfo_t *prv, model_t *mod, qbyte *mod_base, vlump_t *lumps, int surfnum, unsigned int np, unsigned int fp, int numedges)
+{
+	const qbyte *prim;
+	const unsigned short *idx;
+	unsigned int first, n, i, nprims, nidx;
+	unsigned short *out;
+
+	if (np != 1 || numedges < 4 || lumps[37].version != 0 || (lumps[37].filelen % 10) || (lumps[39].filelen & 1))
+		return;
+	nprims = lumps[37].filelen / 10;
+	nidx = lumps[39].filelen / 2;
+	if (fp >= nprims)
+		return;
+	prim = mod_base + lumps[37].fileofs + fp*10;	//u8 type, pad, u16 firstIndex, indexCount, firstVert, vertCount
+	if (prim[0] != 0 || (prim[8] | prim[9]))
+		return;
+	first = prim[2] | (prim[3]<<8);
+	n = prim[4] | (prim[5]<<8);
+	if (n != (unsigned int)(numedges-2)*3 || first + n > nidx)
+		return;
+	idx = (const unsigned short *)(mod_base + lumps[39].fileofs) + first;
+	for (i = 0; i < n; i++)
+		if ((unsigned short)LittleShort(idx[i]) >= numedges)
+			return;
+	if (!prv->surfprimidx)
+	{
+		prv->numsurfprims = mod->numsurfaces;
+		prv->surfprimidx = plugfuncs->GMalloc(&mod->memgroup, sizeof(*prv->surfprimidx) * prv->numsurfprims);
+	}
+	if (surfnum < 0 || surfnum >= prv->numsurfprims)
+		return;
+	out = plugfuncs->GMalloc(&mod->memgroup, sizeof(*out) * n);
+	for (i = 0; i < n; i++)
+		out[i] = (unsigned short)LittleShort(idx[i]);
+	prv->surfprimidx[surfnum] = out;
+}
+
 static qboolean VBSP_LoadFaces (model_t *mod, qbyte *mod_base, vlump_t *lumps, int version)
 {
 	vbspinfo_t	*prv = (vbspinfo_t*)mod->meshinfo;
@@ -4313,6 +4359,7 @@ static qboolean VBSP_LoadFaces (model_t *mod, qbyte *mod_base, vlump_t *lumps, i
 	{
 		int firstedge, numedges, lightofs, extmin[2], extsize[2];
 		qbyte side, onnode, *styles;
+		unsigned int numprims = 0, firstprim = 0;	//Patch 1559, narrow faces only
 
 		if (wide)
 		{
@@ -4341,6 +4388,8 @@ static qboolean VBSP_LoadFaces (model_t *mod, qbyte *mod_base, vlump_t *lumps, i
 			extsize[0] = in->extents_size[0]; extsize[1] = in->extents_size[1];
 			styles     = in->styles;
 			lightofs   = LittleLong(in->lightofs);
+			numprims   = (unsigned short)LittleShort(in->numprims);
+			firstprim  = (unsigned short)LittleShort(in->firstprim);
 		}
 
 		out->firstedge = firstedge;
@@ -4349,6 +4398,8 @@ static qboolean VBSP_LoadFaces (model_t *mod, qbyte *mod_base, vlump_t *lumps, i
 		out->mesh = meshes+surfnum;
 		out->mesh->numvertexes = out->numedges;
 		out->mesh->numindexes = (out->mesh->numvertexes-2)*3;
+		if (numprims)
+			VBSP_FacePrims(prv, mod, mod_base, lumps, surfnum, numprims, firstprim, numedges);
 
 		if (side)
 			out->flags |= SURF_PLANEBACK;
@@ -4807,14 +4858,23 @@ static void VBSP_BuildSurfMesh(model_t *mod, msurface_t *surf, builddata_t *bd)
 	}
 
 	//regular surfaces...
-	mesh->istrifan = true;
+	mesh->istrifan = true;	//still one convex polygon for decals/shadows; only the triangulation may be vbsp's
 
 	//output the mesh's indicies
-	for (i=0 ; i<mesh->numvertexes-2 ; i++)
 	{
-		mesh->indexes[i*3] = 0;
-		mesh->indexes[i*3+1] = i+1;
-		mesh->indexes[i*3+2] = i+2;
+		vbspinfo_t *fprv = (vbspinfo_t*)mod->meshinfo;
+		int sn = surf - mod->surfaces;
+		if (fprv && fprv->surfprimidx && sn >= 0 && sn < fprv->numsurfprims && fprv->surfprimidx[sn])
+		{	//Patch 1559: VBSP_FacePrims
+			for (i=0 ; i<mesh->numindexes ; i++)
+				mesh->indexes[i] = fprv->surfprimidx[sn][i];
+		}
+		else for (i=0 ; i<mesh->numvertexes-2 ; i++)
+		{
+			mesh->indexes[i*3] = 0;
+			mesh->indexes[i*3+1] = i+1;
+			mesh->indexes[i*3+2] = i+2;
+		}
 	}
 	//output the renderable verticies
 	for (i=0 ; i<mesh->numvertexes ; i++)
@@ -9273,8 +9333,8 @@ static void VBSP_BuildBIHMain(void *ctx, void *unusedp, size_t unuseda, size_t u
 		Con_DPrintf("%s: no env_cubemaps built -- using the map's cubemapdefault%s\n",
 			mod->name, cube_stat_missing?", WHICH IS ALSO MISSING":"");
 	else if (cube_stat_count)
-		Con_DPrintf("%s: %i env_cubemap(s), %i whose baked VTF is missing\n",
-			mod->name, cube_stat_count, cube_stat_missing);
+		Con_DPrintf("%s: %i env_cubemap(s), %i whose baked VTF is missing, %i black LDR read from .hdr.vtf\n",
+			mod->name, cube_stat_count, cube_stat_missing, cube_stat_hdr);
 #endif
 
 	mod->funcs.PointContents		= VBSP_PointContents;
@@ -11216,7 +11276,7 @@ static void VBSP_PrepareFrame(model_t *mod, refdef_t *r_refdef, int area, int cl
 			if (src->pvscache.num_leafs==-2)
 			{
 				vec3_t absmin, absmax;
-				float r = src->model->radius;
+				float r = src->model->radius * (src->scale > 0 ? src->scale : 1);	//Patch 1559: scaled props
 				VectorSet(absmin, -r,-r,-r);
 				VectorSet(absmax, r,r,r);
 				VectorAdd(absmin, src->origin, absmin);
@@ -11250,7 +11310,7 @@ static void VBSP_PrepareFrame(model_t *mod, refdef_t *r_refdef, int area, int cl
 			//cheap frustum cull on the model's radius box (props through the portal still pass PVS above, so this only drops what's off-screen).
 			{
 				vec3_t cmin, cmax;
-				float r = src->model->radius;
+				float r = src->model->radius * (src->scale > 0 ? src->scale : 1);	//Patch 1559: a scale-10 logo was culled at a tenth of its size
 				VectorSet(cmin, src->origin[0]-r, src->origin[1]-r, src->origin[2]-r);
 				VectorSet(cmax, src->origin[0]+r, src->origin[1]+r, src->origin[2]+r);
 				if (VBSP_CullBox(cmin, cmax))
@@ -13358,6 +13418,62 @@ created for that case, which is what keeps the skybox out of the reflection
 even on a map that never built any.
 =================
 */
+//Patch 1559: Momentum builds ship LDR cubemaps that are black (every DXT colour endpoint 0x0000 or
+//0x0001 on surf_beyond2) beside good .hdr.vtf copies -- 38 of 151 sampled maps; beyond2's floor lost
+//its reflection.  Judges DXT1/DXT5 only, over the whole high-res image block, any endpoint more than
+//one 565 step above black is "not black"; any other format is "not black".
+static qboolean VBSP_CubeIsBlack (const char *name)
+{
+	qbyte *f;
+	size_t len = 0, ofs, p, bs;
+	unsigned int hs, ver, fmt, i, nres;
+	qboolean black = false;
+
+	f = filefuncs->LoadFile(name, &len);
+	if (!f)
+		return false;
+	if (len < 80 || memcmp(f, "VTF\0", 4))
+		goto done;
+	ver = f[8] | (f[9]<<8);
+	hs = f[12] | (f[13]<<8) | (f[14]<<16) | ((unsigned int)f[15]<<24);
+	fmt = f[52] | (f[53]<<8) | (f[54]<<16) | ((unsigned int)f[55]<<24);
+	if (fmt == 13)	//DXT1: colour endpoints are bytes 0-3 of an 8-byte block
+		bs = 8;
+	else if (fmt == 15)	//DXT5: bytes 8-11 of a 16-byte block
+		bs = 16;
+	else
+		goto done;
+	ofs = 0;
+	if (ver >= 3)
+	{	//7.3+: the resource directory names the high-res block (tag 0x30)
+		nres = f[68] | (f[69]<<8) | (f[70]<<16) | ((unsigned int)f[71]<<24);
+		for (i = 0; i < nres && 80 + i*8 + 8 <= len; i++)
+			if (f[80+i*8] == 0x30 && !f[80+i*8+1] && !f[80+i*8+2])
+				ofs = f[84+i*8] | (f[85+i*8]<<8) | (f[86+i*8]<<16) | ((size_t)f[87+i*8]<<24);
+	}
+	else
+	{	//older: the DXT1 thumbnail follows the header
+		unsigned int lw = f[61], lh = f[62];
+		ofs = hs + (((lw+3)/4) * ((lh+3)/4) * 8);
+	}
+	if (!ofs || ofs >= len)
+		goto done;
+	black = true;
+	for (p = ofs; p + bs <= len && black; p += bs)
+	{
+		qbyte *c = f + p + (bs == 16 ? 8 : 0);
+		for (i = 0; i < 2; i++)
+		{
+			unsigned int e = c[i*2] | (c[i*2+1]<<8);
+			if ((e >> 11) > 1 || ((e >> 5) & 63) > 2 || (e & 31) > 1)
+				black = false;
+		}
+	}
+done:
+	plugfuncs->Free(f);
+	return black;
+}
+
 static void VBSP_LoadCubemaps (model_t *mod, qbyte *mod_base, vlump_t *l)
 {
 	vbspinfo_t	*prv = (vbspinfo_t*)mod->meshinfo;
@@ -13369,7 +13485,7 @@ static void VBSP_LoadCubemaps (model_t *mod, qbyte *mod_base, vlump_t *l)
 
 	mod->envmaps = NULL;
 	mod->numenvmaps = 0;
-	cube_stat_count = cube_stat_missing = cube_stat_default = 0;
+	cube_stat_count = cube_stat_missing = cube_stat_default = cube_stat_hdr = 0;
 
 	if (hl2_cubemaps && !hl2_cubemaps->ival)
 		return;
@@ -13391,6 +13507,8 @@ static void VBSP_LoadCubemaps (model_t *mod, qbyte *mod_base, vlump_t *l)
 		VectorClear(out->origin);
 		out->cubesize = 32;
 		Q_snprintfz(imagename, sizeof(imagename), "materials/maps/%s/cubemapdefault.vtf", base);
+		if (!filefuncs->LocateFile(imagename, FSLF_IFFOUND, NULL))
+			cube_stat_missing++;
 		out->image = modfuncs->GetTexture(imagename, NULL, IF_TEXTYPE_CUBE|IF_LINEAR|IF_NOREPLACE, NULL, NULL, 0, 0, PTI_INVALID);
 		mod->envmaps = out;
 		mod->numenvmaps = 1;
@@ -13411,6 +13529,19 @@ static void VBSP_LoadCubemaps (model_t *mod, qbyte *mod_base, vlump_t *l)
 			//the same path, so the name is the same either way.
 			Q_snprintfz(imagename, sizeof(imagename), "materials/maps/%s/c%i_%i_%i.vtf", base,
 						(int)out[i].origin[0], (int)out[i].origin[1], (int)out[i].origin[2]);
+			if (VBSP_CubeIsBlack(imagename))
+			{
+				char hdrname[MAX_QPATH];
+				Q_snprintfz(hdrname, sizeof(hdrname), "materials/maps/%s/c%i_%i_%i.hdr.vtf", base,
+							(int)out[i].origin[0], (int)out[i].origin[1], (int)out[i].origin[2]);
+				if (filefuncs->LocateFile(hdrname, FSLF_IFFOUND, NULL))
+				{
+					Q_strlcpy(imagename, hdrname, sizeof(imagename));
+					cube_stat_hdr++;
+				}
+			}
+			else if (!filefuncs->LocateFile(imagename, FSLF_IFFOUND, NULL))
+				cube_stat_missing++;
 			out[i].image = modfuncs->GetTexture(imagename, NULL, IF_TEXTYPE_CUBE|IF_LINEAR|IF_NOREPLACE, NULL, NULL, 0, 0, PTI_INVALID);
 		}
 		mod->envmaps = out;
@@ -13487,9 +13618,8 @@ static void VBSP_LoadCubemaps (model_t *mod, qbyte *mod_base, vlump_t *l)
 		surf->envmap = mod->envmaps[best].image;
 	}
 
-	for (i = 0; i < mod->numenvmaps; i++)
-		if (!TEXLOADED(mod->envmaps[i].image))
-			cube_stat_missing++;
+	//Patch 1559: the file, not TEXLOADED -- images load on worker threads, and the HDR cubes were
+	//still in flight here (15 of 15 "missing" on surf_beyond2 while the floor reflected them).
 }
 #endif
 

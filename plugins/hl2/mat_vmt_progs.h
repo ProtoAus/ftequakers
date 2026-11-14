@@ -2668,6 +2668,7 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "!!ver 110\n"
 "!!permu FOG\n"
 "!!samps diffuse lower fullbright\n"
+"!!samps =OPAQUEBASE upper\n"
 
 // ftesurf (P250): Source's $emissiveblend pass -- a self-illumination layer whose
 // lookup is displaced by a flow map and then scrolled, which is what makes a rune
@@ -2718,11 +2719,23 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "#endif\n"
 
 "varying vec2 tex_c;\n"
+// Patch 1559: OPAQUEBASE -- a material with an opaque $basetexture (beyond2's ramp_effect: cs_italy/black).
+// Source draws the lit base, then this pass added; here one opaque draw does both, the base under a
+// plain lambert (s_upper), not vertexlit.glsl's full model.  Without it the black added nothing and
+// the ramp was see-through.
+"#ifdef OPAQUEBASE\n"
+"varying vec2 base_c;\n"
+"varying vec3 lit_c;\n"
+"#endif\n"
 
 "#ifdef VERTEX_SHADER\n"
 "void main ()\n"
 "{\n"
 "tex_c = v_texcoord * vec2(EMISUVSCALE);\n"
+"#ifdef OPAQUEBASE\n"
+"base_c = v_texcoord;\n"
+"lit_c = e_light_ambient + max(0.0, dot(v_normal, e_light_dir)) * e_light_mul;\n"
+"#endif\n"
 "gl_Position = ftetransform();\n"
 "}\n"
 "#endif\n"
@@ -2738,9 +2751,15 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 
 "vec4 result;\n"
 "result.rgb = base_f.rgb * emis_f.rgb * vec3(TINT) * float(STRENGTH);\n"
+"#ifdef OPAQUEBASE\n"
+"result.rgb += texture2D(s_upper, base_c).rgb * lit_c;\n"
+"result.a = 1.0;\n"
+"gl_FragColor = fog4(result);\n"
+"#else\n"
 "result.a = 0.0;\n"
 
 "gl_FragColor = fog4additive(result);\n"
+"#endif\n"
 "}\n"
 "#endif\n"
 },

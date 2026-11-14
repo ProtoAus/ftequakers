@@ -2957,7 +2957,13 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 	nothing.
 	*/
 	char progargs[1024];
-	qboolean emisdefaultmapping = st->emisenabled && !st->modelmaterial && !*st->tex[0].name;
+	char matkey[MAX_QPATH];
+	qboolean emisdefaultmapping;
+
+	//Patch 1559: $modelmaterial is rarely written; a model's material lives under materials/models/.
+	//surf_beyond's ramp_glass took the brush-only 32-unit correction and tiled 32x.
+	VMT_ColourKey(shortname, matkey, sizeof(matkey));
+	emisdefaultmapping = st->emisenabled && !st->modelmaterial && !*st->tex[0].name && Q_strncasecmp(matkey, "models/", 7);
 
 	*progargs = 0;
 	Q_strlcpy(st->vmtclass, st->type, sizeof(st->vmtclass));	//FTESurf Patch 783, for VMT_AdditiveBlend
@@ -3630,8 +3636,12 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 		float tg = st->emistint_set ? st->emistint[1] : 1.0f;
 		float tb = st->emistint_set ? st->emistint[2] : 1.0f;
 
+		//Patch 1559: an opaque $basetexture under the pass (not $additive/$translucent) is drawn by it.
+		qboolean opaquebase = *st->tex[0].name && !st->nobasetex && !st->additive && !st->translucent;
 		Q_snprintfz(t, sizeof(t), "#SCROLL=%f,%f#TINT=%f,%f,%f#STRENGTH=%f", sx, sy, tr, tg, tb, str);
 		Q_strlcat(progargs, t, sizeof(progargs));
+		if (opaquebase)
+			Q_strlcat(progargs, "#OPAQUEBASE", sizeof(progargs));
 		Q_strlcpy(st->type, "vmt/emissive", sizeof(st->type));
 		if (emisdefaultmapping)
 			VMT_EmissiveMappingScale(st->emisbase, progargs, sizeof(progargs));
@@ -3639,6 +3649,8 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 		Q_strlcatfz(script, &offset, sizeof(script),	"\tprogram \"%s%s\"\n", st->type, progargs);
 		Q_strlcatfz(script, &offset, sizeof(script),	"\tdiffusemap \"%s%s.vtf\"\n", strcmp(st->emisbase, "materials/")?"materials/":"", st->emisbase);
 		Q_strlcatfz(script, &offset, sizeof(script),	"\tlowermap \"%s%s.vtf\"\n", strcmp(st->emisflow, "materials/")?"materials/":"", st->emisflow);
+		if (opaquebase)
+			Q_strlcatfz(script, &offset, sizeof(script),	"\tuppermap \"%s\"\n", VMT_BaseImage(st));
 		//The scrolling texture rides the fullbright slot, which is the self-illum
 		//one and semantically exactly right.  Emitted by the shared tail below, so
 		//it is set rather than written here -- these materials never set
@@ -3646,8 +3658,11 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 		Q_strlcpy(st->fullbrightmap, st->emistex, sizeof(st->fullbrightmap));
 		//Source's pass is unconditionally ONE ONE. These materials all say
 		//$additive anyway, but the shader is additive whatever the material said.
-		st->additive = 1;
-		st->additive_oneone = 1;	//FTESurf Patch 783: emissive.glsl writes alpha 0, so never src_alpha one
+		if (!opaquebase)
+		{
+			st->additive = 1;
+			st->additive_oneone = 1;	//FTESurf Patch 783: emissive.glsl writes alpha 0, so never src_alpha one
+		}
 		vmt_stat_emissive++;
 	}
 	/*
