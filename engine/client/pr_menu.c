@@ -3517,13 +3517,13 @@ grew until the game died (initlib.c PR_AllocTempStringLen). CSQC needs none of t
 void MP_HostAbort(void)
 {
 	int PDECL PR_ResetExecution(pubprogfuncs_t *ppf);	//qclib pr_exec.c
-	int depth;
+	int depth, was = inmenuprogs;
+	inmenuprogs = 0;	//review: also when the VM is gone, or the next one inherits the count (MP_Executing, the P1259 pump)
 	if (!menu_world.progs)
 		return;
 	depth = PR_ResetExecution(menu_world.progs);
-	if (depth || inmenuprogs)
+	if (depth || was)
 		Con_Printf("menu.dat: the game ended inside one of its calls (depth %i); its call stack is reset\n", depth);
-	inmenuprogs = 0;
 }
 
 void MP_CvarChanged(cvar_t *var)

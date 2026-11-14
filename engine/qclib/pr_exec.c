@@ -2164,7 +2164,17 @@ int		PDECL PR_ResetExecution		(pubprogfuncs_t *ppf)
 	int depth = prinst.pr_depth;
 	prinst.exitdepth = 0;
 	while (prinst.pr_depth > 0)
+	{	//review: never PR_LeaveFunction's underflow PR_RunError from here (its Abort would longjmp into a dead
+		//wrapper's mp_abort): a stack that does not add up is zeroed instead
+		if (!prinst.pr_xfunction || prinst.localstack_used < prinst.pr_xfunction->locals)
+		{
+			prinst.pr_depth = 0;
+			prinst.localstack_used = 0;
+			prinst.spushed = 0;
+			break;
+		}
 		PR_LeaveFunction(progfuncs);
+	}
 	prinst.pr_xstatement = -1;
 	return depth;
 }
