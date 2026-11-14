@@ -39,8 +39,14 @@ Earlier acting ground tails pause without ramp backtracking, not a finish;
 actual terminal body/BSP data identifies a concrete doorway side post. The corrected
 clear-face acting arm actually finishes14.280seconds/0backtracks,952inputs,
 4boards/strict0faults; production stays12.285/4backs,819inputs,6boards/strict0.
-These use the accepted P1543 trio. Clean-source/current-installed renderer
-compatibility and promotion remain pending.
+The first pair uses the accepted P1543 trio; both reproduce with the current
+installed P1548 renderer/plugin. Clean isolated source3a1351b5 has3VM0warnings
+and all6DAT/LNObytes identical to qualified production.14Nov06:38:45UTC QW DAT/LNO
+only promoted to both Windows installs;4destination/prev matches,81protected
+native/config/CS/menu and18,528player-data files unchanged.06:46:17UTC actual
+installed-cohort run again12.285/4backs,819inputs/6boards/strict0faults; all own
+actors exit0. Local practice refuses Lobby_Active: no Pi/backend/release/Build
+swap or native/CS/menu replacement. Owner feel remains pending.
 Shared-rig admission refusals are preserved without process/lease interference.
 Five probes do not certify no holes;
 other maps, moving support, optimal boarding loss and human feel remain
