@@ -878,6 +878,27 @@ static int VMT_FallbackColour(const char *name, const char *tex, float *rgb, cha
 	return VMTC_EMPTY;
 }
 
+//FTESurf Patch 1560: as VMT_FallbackColour, and a models/ material that nothing knows the colour of -- no pack,
+//pakfile or index (surf_ferros' luna_tag_0 draws two Elden Ring textures neither build shipped) -- draws a
+//neutral grey under its lighting instead of the checker; one named as a nodraw tool material (surf_beyond's
+//models/props/bronis/TOOLSNODRAW) draws nothing. Flag 'n' marks it for the dprints, 'd' is the index's nodraw.
+static int VMT_ModelFallbackColour(const char *name, const char *tex, float *rgb, char *flags, size_t flagsize, float *tint, qboolean *world)
+{
+	char key[MAX_QPATH];
+	const char *leaf;
+	int found = VMT_FallbackColour(name, tex, rgb, flags, flagsize, tint, world);
+	if (found != VMTC_EMPTY || *world || (hl2_missingtint && !hl2_missingtint->ival))
+		return found;
+	VMT_ColourKey(name, key, sizeof(key));
+	if (Q_strncasecmp(key, "models/", 7))
+		return found;
+	leaf = strrchr(key, '/');
+	rgb[0] = rgb[1] = rgb[2] = 0.5f;
+	tint[0] = tint[1] = tint[2] = 1;
+	Q_strlcpy(flags, strstr(leaf ? leaf+1 : key, "nodraw") ? "nd" : "n", flagsize);
+	return VMTC_COLOUR;
+}
+
 static void VMT_FogColorString(const char *in, char *out, size_t outsize)
 {
 	float c[3];
@@ -3083,7 +3104,7 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 		char flags[16];
 		qboolean world;
 		const char *cval = *st->color2 ? st->color2 : st->color;
-		if (VMT_FallbackColour(shortname, st->tex[0].name, rgb, flags, sizeof(flags), tint, &world) == VMTC_COLOUR)
+		if (VMT_ModelFallbackColour(shortname, st->tex[0].name, rgb, flags, sizeof(flags), tint, &world) == VMTC_COLOUR)
 		{
 			if (st->decal || st->additive || !Q_strncasecmp(st->type, "Sprite", 6))
 				st->nodraw = 1;
@@ -6074,7 +6095,7 @@ static qboolean Shader_LoadVMT(parsestate_t *ps, const char *filename, void (*Lo
 			float rgb[3], tint[3];
 			char flags[16], key[MAX_QPATH];
 			qboolean world;
-			int found = VMT_FallbackColour(vmtname, NULL, rgb, flags, sizeof(flags), tint, &world);
+			int found = VMT_ModelFallbackColour(vmtname, NULL, rgb, flags, sizeof(flags), tint, &world);
 			VMT_ColourKey(vmtname, key, sizeof(key));
 			if (found != VMTC_EMPTY && (VMT_OwnImageExists(key) || (!world && Q_strncasecmp(key, "models/", 7))))
 				found = VMTC_EMPTY;
@@ -6111,7 +6132,8 @@ static qboolean Shader_LoadVMT(parsestate_t *ps, const char *filename, void (*Lo
 					st.translucent = 1;
 					st.alphaval = 0.5;
 				}
-				Con_DPrintf("%s: no VMT; drawing %s from the colour index\n", vmtname, st.nodraw ? "nothing" : st.color2);
+				Con_DPrintf("%s: no VMT; drawing %s %s\n", vmtname, st.nodraw ? "nothing" : st.color2,
+					strchr(flags, 'n') ? "(nothing knows its colour)" : "from the colour index");
 				Shader_GenerateFromVMT(ps, &st, vmtname, LoadMaterialString);
 				return true;
 			}

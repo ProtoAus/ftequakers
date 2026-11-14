@@ -8170,7 +8170,7 @@ static qboolean VBSP_MissReason(model_t *mod, const char *name, char *out, size_
 //FTESurf Patch 1460: the map's whole unresolved list, kept in <gamedir>/data/missing/<map>.txt so a player
 //can hand it over later (the console shows 24 and scrolls away). Rewritten each load and removed once the
 //map resolves, so the folder is the current set. Client only: a server draws nothing to miss.
-static void VBSP_MissingFile(const char *modname, int state, const char *spec, const char *nogame)
+static void VBSP_MissingFile(const char *modname, int state, const char *spec, const char *nogame, void (*say)(const char *format, ...))
 {
 	char mapshort[MAX_QPATH], path[MAX_QPATH+32], line[MAX_QPATH*6], *dot;
 	const char *sl = strrchr(modname, '/');
@@ -8212,7 +8212,7 @@ static void VBSP_MissingFile(const char *modname, int state, const char *spec, c
 		VFS_PUTS(f, line);
 	}
 	VFS_CLOSE(f);
-	Con_Printf(CON_WARNING "  The whole list is saved in %s\n", path);
+	say(CON_WARNING "  The whole list is saved in %s\n", path);	//P1560: with the block it closes
 }
 
 /* Patch 509: movement's NativeTrace includes the receiver prop itself, omits
@@ -9005,6 +9005,7 @@ static void VBSP_BuildBIHMain(void *ctx, void *unusedp, size_t unuseda, size_t u
 		char spec[MAX_QPATH*4], mapshort[MAX_QPATH], *dot;
 		char nogame[1024];	//FTESurf Patch 1382
 		const char *sl;
+		void (*say)(const char *format, ...);	//FTESurf Patch 1560
 
 		//FTESurf Patch 233: classify every name we RECORDED, not just the ones about to be
 		//printed -- hl2_missing shows the rest and the visible count has to cover all of them.
@@ -9017,15 +9018,6 @@ static void VBSP_BuildBIHMain(void *ctx, void *unusedp, size_t unuseda, size_t u
 
 		if (shown > VMT_MISSING_SHOW)
 			shown = VMT_MISSING_SHOW;
-
-		Con_Printf(CON_WARNING "%s: %i material(s) did not resolve:\n",
-			mod->name, vmt_stat_missing);
-		for (i = 0; i < shown; i++)
-			Con_Printf(CON_WARNING "    %-42s -- %s\n",
-				vmt_stat_missing_name[i], vmt_miss_reason[i]);
-		if (vmt_stat_missing > shown)
-			Con_Printf(CON_WARNING "    ...and %i more (`hl2_missing` lists every one)\n",
-				vmt_stat_missing - shown);
 
 		//"maps/surf_aesthetic.bsp" -> "surf_aesthetic", which is the argument
 		//fs_cache_clear takes and the name mapdeps.txt is keyed on.
@@ -9044,6 +9036,19 @@ static void VBSP_BuildBIHMain(void *ctx, void *unusedp, size_t unuseda, size_t u
 		//drop the "never shipped" claims of states 0 and 1.
 		if (!cvarfuncs->GetString("fs_addons_missing", nogame, sizeof(nogame)))
 			*nogame = 0;
+
+		//FTESurf Patch 1560: states 0 and 1 are content the map never shipped (mapdeps.py found it in no pack);
+		//no player can act on that, so the block is developer-only there. hl2_missing and data/missing keep it.
+		say = (!*nogame && (state == 0 || state == 1)) ? Con_DPrintf : Con_Printf;
+		say(CON_WARNING "%s: %i material(s) did not resolve:\n",
+			mod->name, vmt_stat_missing);
+		for (i = 0; i < shown; i++)
+			say(CON_WARNING "    %-42s -- %s\n",
+				vmt_stat_missing_name[i], vmt_miss_reason[i]);
+		if (vmt_stat_missing > shown)
+			say(CON_WARNING "    ...and %i more (`hl2_missing` lists every one)\n",
+				vmt_stat_missing - shown);
+
 		if (*nogame)
 		{
 			Con_Printf(CON_WARNING
@@ -9059,14 +9064,14 @@ static void VBSP_BuildBIHMain(void *ctx, void *unusedp, size_t unuseda, size_t u
 		case -1:	//P1382: said above
 			break;
 		case 0:	//mapdeps.txt was read and names no pack for this map
-			Con_Printf(CON_WARNING
+			say(CON_WARNING
 				"  No asset pack supplies these.  data/mapdeps.txt names none for this map,\n"
 				"  which is tools/mapdeps.py having already resolved every material against\n"
 				"  every pack and the map's own pakfile.  Mounting something will not bring\n"
 				"  them back: this map references content that was never shipped with it.\n");
 			break;
 		case 1:	//its pack is mounted from disk
-			Con_Printf(CON_WARNING
+			say(CON_WARNING
 				"  \"%s\" is already mounted for this map, so these are missing from it too.\n"
 				"  The map references content that was never shipped with it.\n", spec);
 			break;
@@ -9092,10 +9097,10 @@ static void VBSP_BuildBIHMain(void *ctx, void *unusedp, size_t unuseda, size_t u
 				"  reload, or fs_load the pack by hand.\n");
 			break;
 		}
-		VBSP_MissingFile(mod->name, (int)cvarfuncs->GetFloat("fs_automount_state"), spec, nogame);	//FTESurf Patch 1460: as published, not the -1 above
+		VBSP_MissingFile(mod->name, (int)cvarfuncs->GetFloat("fs_automount_state"), spec, nogame, say);	//FTESurf Patch 1460: as published, not the -1 above
 	}
 	else
-		VBSP_MissingFile(mod->name, 0, "", "");
+		VBSP_MissingFile(mod->name, 0, "", "", Con_DPrintf);
 	/*
 	FTESurf Patch 181: materials that WERE found and would not parse.
 
