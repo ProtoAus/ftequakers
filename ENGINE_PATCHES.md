@@ -1,5 +1,45 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1558 - JARGON ramp-first openings and purple TAS presentation
+
+**Problem.** A copied opening could circle back to the start floor, and native
+search held jump even for an ordinary first-ramp approach. Slow practice had no
+full purple TAS presentation. Sharing display ancestry with native controls on
+restore would incorrectly turn slow-only saves into native-TAS ancestry.
+
+**Change.** QC-only. Prefer one ordinary opening jump toward the first known
+ramp; reject ordinary extra takeoffs/floor returns before handover, suppress
+forced native jump on that opening, and re-place a failed opening through the
+existing legal-placement path only after pending/tape work drains. Refuse if
+legal placement fails. Retain guide-authored permitted floor hops, including
+pre-clock rows and joined floor-hop waypoints, scoped to the selected course's
+start-entry prefix. Keep the exact old bounded jump-count fallback if no first
+ramp is known. Add full Tool Assisted Speedrun status and purple assisted timer,
+finish/banner/chat/results colours; ordinary completions green, segments blue.
+Retain per-player slow assistance as unranked display ancestry, separately from
+native controls; cold/warm save application and both identity readers preserve
+that distinction and fail conservatively on incomplete observations. No native
+implementation, movement rule, REC grammar/version, ranking admission, engine
+pin/tag, release or qcbuild change. tools/p1558-jargon-start-tas.md in the mod repo.
+
+**Verified.** Three-VM builds have zero warnings; scoped independent source
+reviews closed opening-course bounds, legacy fallback and ancestry/reader
+issues. An ordinary tensor2 stage2 native arm reached ramp1 with opening jump
+release; it is not a complete-course/speedup claim. Actual Prosurf B4 native
+playback retains its authored-hop branch, but reached0of9 within63seconds.
+Final integrated stock-Spec zero-gravity real-socket smoke passes12slow-only/
+status/cold/warm/finish checks, native controls/ancestry remain0, final4records
+strict0faults (original5also0); both actor exits0 and protected bytes unchanged.
+Reader suites949/0 and1627/0; canonical571recordings retain identical360historical
+diagnostics, recording/view hashes and fault lists. That fixture proves UI/
+lifecycle, NOT surf movement. The B4 observer timed out after
+gameplay/cleanup; read-only recovery proves actors absent, lease released and
+18611player files/input/canonical hashes unchanged, not unretained exit codes.
+Final integrated build, reader/corpus and deployment states are recorded in
+the mod verification note. Human opening/visual acceptance remains pending.
+Original unshipped P1553 evidence labels are preserved after P1557 made the
+current single feature number P1558.
+
 ## Patch 1557 — journal whole-angle diagnostic states the attribution limit
 
 **Problem.** The standalone input checker correctly left whole-angle changes
