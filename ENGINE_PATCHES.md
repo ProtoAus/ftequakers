@@ -1,5 +1,90 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1563 - name-filtered boosters predicted (surf_tendies at high ping)
+
+**Problem.** surf_tendies' start pad is a trigger_multiple behind a negated name filter whose OnStartTouch
+renames the player and OnEndTouch writes basevelocity 1337. A name filter is UNKNOWN at load and P1405's
+per-touch judging excluded event triggers, so the client left it to the server: at 500 ms ping the push
+arrived a round trip late as a ~670 u snap.
+
+**Change.** QC-only (cl_triggers.qc). An event whose own rows are delay-0 unlimited renames of the
+activator and payable basevelocity writes (at least one of each), and whose filter no other rename on the
+map can turn to a refusal, is judged per touch: on *tn, except that its own predicted rename stands from the
+command after it until *tn shows it acked (a third name, three round trips, or a replay that passed its
+command without re-firing it clear it), and at or before that command its entry is judged on the name it
+had there (*tn can carry the rename one command before the ack). A toucher already inside stays inside when
+the filter fails, as SV_TouchFilter keeps it. Every other name filter, P1405's teleports included, keeps
+*tn. Prediction only.
+
+**Verified.** Rig at sv_minping 500 (kill, walk over the pad): the control csprogs logged prederr 20.05 u at
+the exit on 4/4 passes; P1563 printed the predicted rename and "OnEndTouch -> basevelocity 1337 0 0" on 6/6
+passes with no prederr. Walking back over the pad still renamed: no boost on either side. Two latch defects
+were found and fixed by that arm before commit (a chain starting at the rename's command; a rename back to
+the original name holding a stale latch). Review 1 narrowed a global predicted name to the slot's own judging
+(chained renamers on ~92 maps would have judged P1405 teleports on an intermediate name); review 2 required
+a slot's own rename and excluded slots another rename can refuse (surf_carbon_css's touching pads); re-run
+4/4 after each.
+
+## Patch 1562 - map entity fixes: surf_1day, surf_forbidden_tomb, surf_network2008_final
+
+**Problem.** KSF's surf_1day demos ride stage 6's *125 at 2100 u/s (out +2115.75 = 1.0075 x 2100) and pass
+stage 8's *82 with no carrier; the lump has 1000 and an active push. surf_forbidden_tomb's round logic
+switches its level-wide jail teleports on (a 420 s timer, the finish, the secret counter) and nothing turns
+them off without rounds. P890's network2008 start destination faced 135, into a corner.
+
+**Change.** cfg/maps entfix files (Patch 890 applier): *125 speed 2100, *82 startdisabled 1; the three jail
+Enable outputs deleted; the destination at 0 270 0. Keys and outputs only, nothing removed or renumbered.
+Each edit changes its map's entfile identity, so earlier runs there no longer verify.
+
+**Verified.** The applier compiled from gl_model.c (tools/test_entfix.py's build) over each map's real lump
+modified exactly the intended entities; rig zone_goto 0 on network2008 faces -90 (control 135).
+
+## Patch 1561 - !r on the platform, the own track's covered END, map spawn yaws
+
+**Problem.** SV_ZoneDestRead traced its floor snap from teleDestPos itself; editors write it flush on the
+floor and a box resting on a face is inside the brush (com_bih.c d1 == 0), so !r fell to the next floor
+(surf_mesa 800 u, mesa_revo 992, ahop_coast 563; 17 regions). SV_ZoneScan kept the first END hit, so
+surf_reytx's bonus-2 END (the main END's box) never finished. Spawn yaws needed a spawn within 1 u of the
+zone centre and exactly one destination (surf_beyond2 s1/s3/s5, surf_beyond s5 kept the zoner's view).
+
+**Change.** QC-only. The snap traces from a unit up. SV_ZoneScan takes the runner's track; an END lying wholly
+inside another track's END (zone_ecov, Zone_EndCover in Zone_Hash) outranks it, mirrored in the replay; partial
+overlaps keep the first-END rule so pre-1561 recordings verify the same; a cover must come earlier in the
+table (where the old rule always took the tick), within 0.01 u. The event latch is re-taken after a jump-start re-arm that
+changed the track. Spawn yaws take a spawn within 16 u and the destinations whose floor
+is the zone's when they share a yaw, else the old one-destination rule; the zone editor mirrors it.
+
+**Verified.** Rig, worktree progs against the installed qwprogs: zone_goto 0 lands surf_mesa at 10144 (control
+9490, falling), mesa_revo 8928, ahop_coast -14221; beyond2 zones 0/2/4 face 0/0/-90 (control 148/158/38),
+beyond stage 5 faces 0; surf_reytx's bonus-2 END is covered by main's. Three review rounds (control flow,
+evidence, cheater); the last census: 28 covered ENDs over 1164 zone files, and the board database holds no
+lobby or uploaded run on any covered (map, track) -- only Momentum/KSF imports. The bonus-2 finish itself is
+an owner check.
+
+## Patch 1559 - Source map visuals (surf_beyond/beyond2/ace/null/legends) and the replay roof eye
+
+**Problem.** Scaled props were culled with the unscaled radius (the plugin's pre-cull, gl_alias's LOD/near
+reject, cl_ents' leaf box); base-less model emissives took the brush-only 32-unit UV correction (ramp_glass
+tiled 32x); Momentum's LDR cubemaps are black beside good .hdr.vtf ones; the emissive branch forced every
+material additive, so an opaque black base added nothing (see-through ramps); faces were fanned from vertex 0
+past vbsp's crack-free LUMP_PRIMITIVES lists (surf_ace: 456 faces, pixel cracks); TEXTUREFLAGS_NOMIP was
+ignored (surf_null's grate faded). Client: replay/rewind/save-lead eyes ignored ceilings; dust motes spawned
+anywhere in the brush's box; child particle systems were off (custom_particle_003 alone is a black disc);
+surf_legends' fog was opaque at 2700 u.
+
+**Change.** Radius x scale in the three culls; the 32-unit correction skipped under models/; black LDR
+(endpoints <= one 565 step) -> an RGBA16161616F .hdr.vtf; #OPAQUEBASE draws a model material's opaque base
+under the emissive (not cutouts, faded or brush bases); one-TRILIST faces keep vbsp's indices (numprims
+& 0x7fff); NOMIP keeps level 0 (DXT/BC only); the cube census counts files. QC: Line_ClipEye (P916's rule at
+the drawn feet, a crown slab, start-solid = no clip); a non-box dust brush keeps up to 128 points inside it
+and scales its rate by Source's ten tries; children on by default; legends joins sidistic's thin fog.
+
+**Verified.** Rig at Lex's saves, worktree build: beyond's ramp at CS:S's scale, the logo drawn half off the
+edge, info_particle_system 0 -> 60 created with the M portal's swirl rings, dust "105 points inside" (surf_shade
+22 of 339 brushes pooled); beyond2's floor reflects ("15 black LDR read from .hdr.vtf"), ramps opaque black. A
+replay trace of an imported bhop_tranquility run draws eyes of 33-63 under its ceilings (installed csprogs:
+never below 47); surf_ace's PB trace holds 64 on ramps. surf_ace cracks and surf_null's grate are owner checks.
+
 ## Patch 1558 - JARGON ramp-first openings and purple TAS presentation
 
 **Problem.** A copied opening could circle back to the start floor, and native
