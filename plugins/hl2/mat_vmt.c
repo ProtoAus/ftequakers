@@ -3636,8 +3636,11 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 		float tg = st->emistint_set ? st->emistint[1] : 1.0f;
 		float tb = st->emistint_set ? st->emistint[2] : 1.0f;
 
-		//Patch 1559: an opaque $basetexture under the pass (not $additive/$translucent) is drawn by it.
-		qboolean opaquebase = *st->tex[0].name && !st->nobasetex && !st->additive && !st->translucent;
+		//Patch 1559: an opaque $basetexture under the pass is drawn by it -- model materials only (the
+		//lambert reads e_light_*, which a brush face does not light), and never a cutout or faded base.
+		qboolean opaquebase = *st->tex[0].name && !st->nobasetex && !st->additive && !st->translucent &&
+			!st->alphatest && !(st->alphaval > 0 && st->alphaval < 1) && !st->vertexalpha_on &&
+			!Q_strncasecmp(matkey, "models/", 7);
 		Q_snprintfz(t, sizeof(t), "#SCROLL=%f,%f#TINT=%f,%f,%f#STRENGTH=%f", sx, sy, tr, tg, tb, str);
 		Q_strlcat(progargs, t, sizeof(progargs));
 		if (opaquebase)

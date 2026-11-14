@@ -4388,7 +4388,7 @@ static qboolean VBSP_LoadFaces (model_t *mod, qbyte *mod_base, vlump_t *lumps, i
 			extsize[0] = in->extents_size[0]; extsize[1] = in->extents_size[1];
 			styles     = in->styles;
 			lightofs   = LittleLong(in->lightofs);
-			numprims   = (unsigned short)LittleShort(in->numprims);
+			numprims   = (unsigned short)LittleShort(in->numprims) & 0x7fff;	//top bit: shadows disabled
 			firstprim  = (unsigned short)LittleShort(in->firstprim);
 		}
 
@@ -13474,6 +13474,22 @@ done:
 	return black;
 }
 
+//Patch 1559: only a float cube (RGBA16161616F, Patch 887 encodes it) replaces a black LDR one; an
+//integer or packed HDR cube would load as 0..1 data from a wider range.
+static qboolean VBSP_CubeIsFloat (const char *name)
+{
+	qbyte *f;
+	size_t len = 0;
+	qboolean yes;
+
+	f = filefuncs->LoadFile(name, &len);
+	if (!f)
+		return false;
+	yes = len >= 56 && !memcmp(f, "VTF\0", 4) && (f[52] | (f[53]<<8) | (f[54]<<16) | ((unsigned int)f[55]<<24)) == 24;
+	plugfuncs->Free(f);
+	return yes;
+}
+
 static void VBSP_LoadCubemaps (model_t *mod, qbyte *mod_base, vlump_t *l)
 {
 	vbspinfo_t	*prv = (vbspinfo_t*)mod->meshinfo;
@@ -13534,7 +13550,7 @@ static void VBSP_LoadCubemaps (model_t *mod, qbyte *mod_base, vlump_t *l)
 				char hdrname[MAX_QPATH];
 				Q_snprintfz(hdrname, sizeof(hdrname), "materials/maps/%s/c%i_%i_%i.hdr.vtf", base,
 							(int)out[i].origin[0], (int)out[i].origin[1], (int)out[i].origin[2]);
-				if (filefuncs->LocateFile(hdrname, FSLF_IFFOUND, NULL))
+				if (VBSP_CubeIsFloat(hdrname))
 				{
 					Q_strlcpy(imagename, hdrname, sizeof(imagename));
 					cube_stat_hdr++;
