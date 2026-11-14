@@ -35,8 +35,16 @@ diagnostics, recording/view hashes and fault lists. That fixture proves UI/
 lifecycle, NOT surf movement. The B4 observer timed out after
 gameplay/cleanup; read-only recovery proves actors absent, lease released and
 18611player files/input/canonical hashes unchanged, not unretained exit codes.
-Final integrated build, reader/corpus and deployment states are recorded in
-the mod verification note. Human opening/visual acceptance remains pending.
+Clean product commit b51f98cf builds3VM0warnings with all6DAT/LNO identical to
+acting images. Dual-Windows QW/CS DAT/LNO delivered14Nov12:09:59UTC; actual current
+native cohort passes12checks/4strict records0faults,20188protected files unchanged
+at12:38:22UTC. Pi completed45/45statements/all12restarts with10second warnings,
+noForce; independent12:34:38UTC postflight preserves217payloads/fullmetadata,
+85backend dependencies, native/config and ordinary.prev. Earlier worker-recycle
+refusal was retained and exact stages withdrawn before genuine fresh-actor epoch
+qualification; no old evidence re-dated. Native/backend/menu/release unchanged.
+Full states/limits are in the mod verification note; human opening/visual
+acceptance remains pending.
 Original unshipped P1553 evidence labels are preserved after P1557 made the
 current single feature number P1558.
 
