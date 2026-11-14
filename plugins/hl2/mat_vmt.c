@@ -657,6 +657,227 @@ static qboolean VMT_ParseColour(const char *in, float *c)
 	return true;
 }
 
+/*
+FTESurf Patch 1548: a material whose image will not load draws its average colour under its own lighting
+(lightmap, vertex light), not the missing checker. The map's own record first: dtexdata reflectivity, the
+linear average VBSP read from the VTF, which mod_vbsp.c hands over for each world texture before its
+shader loads (Mat_VMT_MapColour). Then data/matcolours.txt (tools/matcolours.py), every material of the
+games fs_addons mounts, sorted: "<path> <RRGGBB sRGB> <flags> [<tint RRGGBB>]". hl2_missingtint 0 keeps
+the checker everywhere.
+*/
+extern cvar_t *hl2_missingtint;
+static plugfsfuncs_t *fsfuncs;		//defined with the other interfaces below (a tentative definition)
+#define VMT_MAPCOL_SIZE 8192		//a power of two; a map's world textures stay well under half
+enum {VMTC_EMPTY, VMTC_COLOUR, VMTC_NONE, VMTC_WATER};
+static struct {char name[MAX_QPATH]; qbyte rgb[3]; char state;} vmt_mapcol[VMT_MAPCOL_SIZE];
+static char *vmt_idx;
+static const char **vmt_idxline;
+static size_t vmt_idxn;
+static qboolean vmt_idxtried;
+
+//The classes whose program multiplies $color in linear light (lightmapped/transition.glsl, P1288's
+//pow(COLOR, 1/2.2)); the others take it as the gamma value the colours here are.
+static qboolean VMT_LinearColourClass(const char *type)
+{
+	return !Q_strncasecmp(type, "Lightmapped", 11) || !Q_strncasecmp(type, "WorldVertexTransition", 21);
+}
+
+//A material or texture path as the index spells it: no materials/, no extension, lowercase, '/'.
+static void VMT_ColourKey(const char *in, char *out, size_t size)
+{
+	size_t n = 0;
+	if (!Q_strncasecmp(in, "materials/", 10) || !Q_strncasecmp(in, "materials\\", 10))
+		in += 10;
+	for (; *in && *in != '#' && n + 1 < size; in++)	//"#warp": the world's own suffix on a water face's texture
+	{
+		char c = (*in == '\\') ? '/' : *in;
+		if (c == '/' && (!n || out[n-1] == '/'))
+			continue;
+		out[n++] = (c >= 'A' && c <= 'Z') ? c + ('a'-'A') : c;
+	}
+	out[n] = 0;
+	if (n > 4 && (!strcmp(out+n-4, ".vmt") || !strcmp(out+n-4, ".vtf")))
+		out[n-4] = 0;
+}
+
+static int VMT_MapColourSlot(const char *key, qboolean add)
+{
+	unsigned int h = 2166136261u, n;
+	const char *s;
+	for (s = key; *s; s++)
+		h = (h ^ (qbyte)*s) * 16777619u;
+	for (n = 0; n < VMT_MAPCOL_SIZE; n++, h++)
+	{
+		h &= VMT_MAPCOL_SIZE-1;
+		if (vmt_mapcol[h].state == VMTC_EMPTY)
+			return add ? (int)h : -1;
+		if (!strcmp(vmt_mapcol[h].name, key))
+			return h;
+	}
+	return -1;
+}
+
+void Mat_VMT_MapColoursReset(void)
+{
+	memset(vmt_mapcol, 0, sizeof(vmt_mapcol));
+}
+
+//mod_vbsp.c: world texture `name`'s reflectivity (linear; NULL or out of range = none) and whether it is water.
+void Mat_VMT_MapColour(const char *name, const float *refl, qboolean warp)
+{
+	char key[MAX_QPATH];
+	int i, j;
+	VMT_ColourKey(name, key, sizeof(key));
+	if (!*key || (i = VMT_MapColourSlot(key, true)) < 0 || vmt_mapcol[i].state != VMTC_EMPTY)
+		return;		//the first texinfo naming it decides, as VBSP_MissingTint's search does
+	Q_strlcpy(vmt_mapcol[i].name, key, sizeof(vmt_mapcol[i].name));
+	vmt_mapcol[i].state = warp ? VMTC_WATER : VMTC_COLOUR;
+	for (j = 0; j < 3 && !warp; j++)
+	{
+		if (!refl || !(refl[j] >= 0 && refl[j] <= 1))	//-1 for 0x0 texdata, and NaN
+		{
+			vmt_mapcol[i].state = VMTC_NONE;
+			break;
+		}
+		vmt_mapcol[i].rgb[j] = (qbyte)(255 * pow(refl[j], 1/2.2) + 0.5);	//the sRGB the texture's bytes were
+	}
+}
+
+static void VMT_IndexLoad(void)
+{
+	size_t sz = 0, n = 1;
+	char *p, *e, *nl;
+	vmt_idxtried = true;
+	vmt_idx = (char*)fsfuncs->LoadFile("data/matcolours.txt", &sz);
+	if (!vmt_idx)
+		return;
+	for (p = vmt_idx, e = vmt_idx + sz; p < e; p++)
+		n += (*p == '\n');
+	vmt_idxline = plugfuncs->Malloc(sizeof(*vmt_idxline) * n);
+	for (p = vmt_idx; p < e && (nl = memchr(p, '\n', e - p)); p = nl + 1)
+	{
+		*nl = 0;
+		if (nl > p && nl[-1] == '\r')		//a checkout with core.autocrlf
+			nl[-1] = 0;
+		if (*p && *p != '/')
+			vmt_idxline[vmt_idxn++] = p;
+	}
+}
+
+static int VMT_IndexCmp(const char *key, const char *line)
+{
+	for (; *key && *line && *line != ' '; key++, line++)
+		if (*key != *line)
+			return (qbyte)*key - (qbyte)*line;
+	if (!*key)
+		return (!*line || *line == ' ') ? 0 : -1;
+	return 1;
+}
+
+static qboolean VMT_Hex6(const char *s, qbyte *out)
+{
+	int i, v;
+	for (i = 0; i < 6; i++)
+		if (!((s[i] >= '0' && s[i] <= '9') || (s[i] >= 'a' && s[i] <= 'f')))
+			return false;
+	for (i = 0; i < 3; i++)
+	{
+		sscanf(s + i*2, "%2x", &v);
+		out[i] = v;
+	}
+	return true;
+}
+
+//The index's line for `key`: its colour, flags and tint (1 1 1 when none). FALSE when not listed.
+static qboolean VMT_IndexColour(const char *key, qbyte *rgb, char *flags, size_t flagsize, float *tint)
+{
+	size_t lo = 0, hi, mid, n;
+	const char *s;
+	qbyte t[3];
+	int c;
+	if (!vmt_idxtried)
+		VMT_IndexLoad();
+	hi = vmt_idxn;
+	while (lo < hi)
+	{
+		mid = (lo + hi) / 2;
+		c = VMT_IndexCmp(key, vmt_idxline[mid]);
+		if (c < 0)
+			hi = mid;
+		else if (c > 0)
+			lo = mid + 1;
+		else
+		{
+			s = vmt_idxline[mid] + strlen(key);
+			if (*s++ != ' ' || !VMT_Hex6(s, rgb) || s[6] != ' ')
+				return false;
+			s += 7;
+			for (n = 0; *s && *s != ' ' && n + 1 < flagsize; )
+				flags[n++] = *s++;
+			flags[n] = 0;
+			tint[0] = tint[1] = tint[2] = 1;
+			if (*s == ' ' && VMT_Hex6(s + 1, t))
+				tint[0] = t[0]/255.0f, tint[1] = t[1]/255.0f, tint[2] = t[2]/255.0f;
+			return true;
+		}
+	}
+	return false;
+}
+
+/*
+The colour material `name` (or its texture `tex`, which may be NULL) draws as, sRGB 0..1, into rgb, and the
+index's flags (or "" for the map's own): VMTC_COLOUR found, VMTC_WATER a world water texture (left alone),
+VMTC_EMPTY nothing. `world` says whether the map lists it: a world texture with no reflectivity (0x0
+texdata) still takes the index's colour. The tint is the index's, for a material with no VMT to apply it.
+*/
+static int VMT_FallbackColour(const char *name, const char *tex, float *rgb, char *flags, size_t flagsize, float *tint, qboolean *world)
+{
+	char key[MAX_QPATH];
+	qbyte c[3];
+	int i;
+	*flags = 0;
+	*world = false;
+	tint[0] = tint[1] = tint[2] = 1;
+	if (hl2_missingtint && !hl2_missingtint->ival)
+		return VMTC_EMPTY;
+	VMT_ColourKey(name, key, sizeof(key));
+	if ((i = VMT_MapColourSlot(key, false)) >= 0)
+	{
+		*world = true;
+		if (vmt_mapcol[i].state == VMTC_WATER)
+		{	//its reflectivity is its ripple normal map's; the colour is its fog (the index's 'w' line)
+			if (VMT_IndexColour(key, c, flags, flagsize, tint) && strchr(flags, 'w'))
+				rgb[0] = c[0]/255.0f, rgb[1] = c[1]/255.0f, rgb[2] = c[2]/255.0f;
+			else
+				rgb[0] = 0.06f, rgb[1] = 0.11f, rgb[2] = 0.15f;	//VMT_FogColorString's default
+			tint[0] = tint[1] = tint[2] = 1;
+			return VMTC_WATER;
+		}
+		if (vmt_mapcol[i].state == VMTC_COLOUR)
+		{
+			rgb[0] = vmt_mapcol[i].rgb[0]/255.0f; rgb[1] = vmt_mapcol[i].rgb[1]/255.0f; rgb[2] = vmt_mapcol[i].rgb[2]/255.0f;
+			return VMTC_COLOUR;
+		}
+	}
+	if (tex && *tex)
+	{
+		char tkey[MAX_QPATH];
+		VMT_ColourKey(tex, tkey, sizeof(tkey));
+		if (VMT_IndexColour(tkey, c, flags, flagsize, tint))
+		{
+			tint[0] = tint[1] = tint[2] = 1;	//a VMT that names it applies its own $color
+			rgb[0] = c[0]/255.0f; rgb[1] = c[1]/255.0f; rgb[2] = c[2]/255.0f;
+			return VMTC_COLOUR;
+		}
+	}
+	if (VMT_IndexColour(key, c, flags, flagsize, tint))
+	{
+		rgb[0] = c[0]/255.0f; rgb[1] = c[1]/255.0f; rgb[2] = c[2]/255.0f;
+		return VMTC_COLOUR;
+	}
+	return VMTC_EMPTY;
+}
+
 static void VMT_FogColorString(const char *in, char *out, size_t outsize)
 {
 	float c[3];
@@ -2841,6 +3062,47 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 	st->normalmapgone = *st->normalmapkey && !VMT_OwnImageExists(st->normalmapkey);
 	if (*st->dudvmap && !VMT_OwnImageExists(st->dudvmap))
 		*st->dudvmap = 0;
+
+	/*
+	FTESurf Patch 1548: a VMT that loaded but whose $basetexture is not installed draws that texture's
+	average colour (VMT_FallbackColour) in place of the checker, times its own $color, through its own
+	class -- lightmapped, vertex-lit or unlit. A decal, a sprite or an additive glow has no surface to
+	stand for and draws nothing; $alphatest and $translucent (a fence, a window) draw half see-through, as
+	their average alpha cannot be read without the image. Water and Refract keep their own handling.
+	*/
+	if (!st->nobasetex && *st->tex[0].name && !VMT_OwnImageExists(st->tex[0].name) &&
+	    Q_strncasecmp(st->type, "Water", 5) && Q_strncasecmp(st->type, "Refract", 7) && Q_strncasecmp(st->type, "Sky", 3))
+	{
+		float rgb[3], tint[3], c[3];
+		char flags[16];
+		qboolean world;
+		const char *cval = *st->color2 ? st->color2 : st->color;
+		if (VMT_FallbackColour(shortname, st->tex[0].name, rgb, flags, sizeof(flags), tint, &world) == VMTC_COLOUR)
+		{
+			if (st->decal || st->additive || !Q_strncasecmp(st->type, "Sprite", 6))
+				st->nodraw = 1;
+			else
+			{
+				if (!VMT_ParseColour(cval, c))
+					c[0] = c[1] = c[2] = 1;
+				if (VMT_LinearColourClass(st->type))
+					rgb[0] = pow(rgb[0], 2.2), rgb[1] = pow(rgb[1], 2.2), rgb[2] = pow(rgb[2], 2.2);
+				Q_snprintfz(st->color2, sizeof(st->color2), "[%f %f %f]", rgb[0]*c[0], rgb[1]*c[1], rgb[2]*c[2]);
+				st->selfillum = 0;	//its mask was the missing image's alpha; $whiteimage's is 1 everywhere
+				st->envfrombase = 0;
+				if (st->alphatest)
+				{
+					st->alphatest = false;
+					st->translucent = 1;
+				}
+				if (st->translucent && !st->alphaval)
+					st->alphaval = 0.5;
+			}
+			st->nobasetex = 1;
+			Con_DPrintf("%s: %s is not installed; drawing %s\n", shortname, st->tex[0].name,
+				st->nodraw ? "nothing" : st->color2);
+		}
+	}
 
 	/*
 	FTESurf Build 13: the feature switches, applied HERE rather than at each of
@@ -5614,6 +5876,7 @@ static qboolean Shader_LoadVMT(parsestate_t *ps, const char *filename, void (*Lo
 	vmtstate_t st;
 	const char *vmtname = filename;
 	float spriterate = 0;
+	qboolean missing = false;	//P1548: counted as a missing material, so the colour index may stand in
 
 	//FTESurf P1099: a picture named by its URL (the menu's map thumbnails) is no VMT, and
 	//"materials/http:/..." made the Windows FS print an alternative-data-stream error.
@@ -5772,11 +6035,69 @@ static qboolean Shader_LoadVMT(parsestate_t *ps, const char *filename, void (*Lo
 						Q_strlcpy(vmt_stat_missing_name[vmt_stat_missing], vmtname, MAX_QPATH);
 					vmt_stat_missing++;
 				}
+				missing = true;
 			}
 		}
 
 		if (st.sourcefile)
 			plugfuncs->Free(st.sourcefile);
+
+		/*
+		FTESurf Patch 1548: a material with no VMT that the colour index lists draws that colour under
+		its tint: vertex-lit for a model, unlit where the index says UnlitGeneric, nothing for a decal,
+		sprite or additive glow, half see-through where it says translucent, alpha-tested or Refract. A
+		world texture the map coloured itself is VBSP_MissingTint's (P1191); a world texture with no
+		reflectivity (0x0 texdata) is lightmapped from the index here, and world water is a see-through
+		plane of its fog. Only world textures and models/: a particle script registers its texture by
+		name expecting no material (p_script.c), and an image under the material's own name still wins.
+		*/
+		if (missing)
+		{
+			float rgb[3], tint[3];
+			char flags[16], key[MAX_QPATH];
+			qboolean world;
+			int found = VMT_FallbackColour(vmtname, NULL, rgb, flags, sizeof(flags), tint, &world);
+			VMT_ColourKey(vmtname, key, sizeof(key));
+			if (found != VMTC_EMPTY && (VMT_OwnImageExists(key) || (!world && Q_strncasecmp(key, "models/", 7))))
+				found = VMTC_EMPTY;
+			if (found == VMTC_WATER)
+			{	//unlit: a warped face has no lightmap
+				memset(&st, 0, sizeof(st));
+				Q_strlcpy(st.type, "UnlitGeneric", sizeof(st.type));
+				st.nobasetex = 1;
+				st.translucent = 1;
+				st.alphaval = 0.6;
+				Q_snprintfz(st.color2, sizeof(st.color2), "[%f %f %f]", rgb[0], rgb[1], rgb[2]);
+				Con_DPrintf("%s: no VMT; drawing water %s\n", vmtname, st.color2);
+				Shader_GenerateFromVMT(ps, &st, vmtname, LoadMaterialString);
+				return true;
+			}
+			if (found == VMTC_COLOUR &&
+			    !strchr(flags, 'w') && !(world && !*flags))
+			{
+				memset(&st, 0, sizeof(st));
+				Q_strlcpy(st.type, world ? "LightmappedGeneric" : (strchr(flags, 'u') ? "UnlitGeneric" : "VertexLitGeneric"), sizeof(st.type));
+				st.modelmaterial = !world;
+				st.nobasetex = 1;
+				if (strchr(flags, 'e') || strchr(flags, 's') || strchr(flags, 'd'))
+					st.nodraw = 1;
+				if (VMT_LinearColourClass(st.type))
+				{	//the base to linear; its $color tint already is, in these classes
+					rgb[0] = pow(rgb[0], 2.2);
+					rgb[1] = pow(rgb[1], 2.2);
+					rgb[2] = pow(rgb[2], 2.2);
+				}
+				Q_snprintfz(st.color2, sizeof(st.color2), "[%f %f %f]", rgb[0]*tint[0], rgb[1]*tint[1], rgb[2]*tint[2]);
+				if (strchr(flags, 't') || strchr(flags, 'a') || strchr(flags, 'r'))
+				{
+					st.translucent = 1;
+					st.alphaval = 0.5;
+				}
+				Con_DPrintf("%s: no VMT; drawing %s from the colour index\n", vmtname, st.nodraw ? "nothing" : st.color2);
+				Shader_GenerateFromVMT(ps, &st, vmtname, LoadMaterialString);
+				return true;
+			}
+		}
 		return false;
 	}
 

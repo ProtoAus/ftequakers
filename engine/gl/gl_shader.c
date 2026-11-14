@@ -9902,6 +9902,10 @@ void Shader_TouchTextures(void)
 		for (j = 0; j < max(1,s->numdefaulttextures); j++)
 			Shader_TouchTexnums(&s->defaulttextures[j]);
 	}
+	{	//FTESurf Patch 1548: and the sky in use's box faces (gl_warp.c)
+		void R_TouchForcedSky(void);
+		R_TouchForcedSky();
+	}
 }
 
 /*

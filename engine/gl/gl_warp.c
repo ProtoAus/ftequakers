@@ -139,6 +139,27 @@ texid_t R_GetDefaultEnvmap(void)
 	return r_nulltex;
 }
 
+/*
+FTESurf Patch 1548: Shader_TouchTextures marks a shader's pass and default images, not a skyparms
+box's faces. A sky shader kept from an earlier map (r_skybox_default, reused when a second map's own
+sky was missing too) then had its faces freed by Image_Purge and drew the missing image across the
+sky: surf_utopia then bhop_eazy without CS:S, 270k magenta pixels. Only the sky in use, so the faces
+of every sky visited this session are not all kept.
+*/
+void R_TouchForcedSky(void)
+{
+	int i;
+	if (!forcedsky || !forcedsky->skydome)
+		return;
+	for (i = 0; i < 6; i++)
+	{
+		if (forcedsky->skydome->farbox_textures[i])
+			forcedsky->skydome->farbox_textures[i]->regsequence = r_regsequence;
+		if (forcedsky->skydome->nearbox_textures[i])
+			forcedsky->skydome->nearbox_textures[i]->regsequence = r_regsequence;
+	}
+}
+
 static void R_LoadSky(const char *sky);
 //no forced sky, or a six-face one where every face is missing (Shader_ParseSkySides fills
 //each with r_blackimage, so the "even one face" test in R_LoadSky keeps it)
