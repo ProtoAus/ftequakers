@@ -1,5 +1,30 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1550 — a game ended inside a menu call no longer stops menu.dat collecting (14 Nov 2026)
+
+**Problem.** Crash records of 8-10 Nov (Akatosh x3 on patch-1476, MetalGio on 8 Nov "every story-mode map
+switch while downloading"): "BZ_Malloc: Failed on allocation of 18446744071578836992 bytes". That is not a file
+length (P1417's reading): 131072 temp-string slots grown by doubled+1024 eleven times is 0x80FFE000 bytes, passed
+to memalloc(int) and sign-extended. A VM collects only when PR_ExecuteProgram returns at depth 0, and a
+Host_EndGame inside a menu builtin longjmped to host_abort with menu.dat's pr_depth, exitdepth and inmenuprogs
+up; CL_Disconnect frees CSQC and SV_UnspawnServer the server, but menu.dat survives and never collected again.
+downloadmap was such a builtin: during a signon CL_RequestNextDownload runs CL_LoadModels and its Host_EndGame
+failures inside the call.
+
+**Change.** Host_Frame's host_abort landing calls MP_HostAbort: inmenuprogs cleared and the menu VM unwound to
+depth 0 (qclib PR_ResetExecution, which zeroes a stack that does not add up rather than raise a QC error into a
+dead frame); Host_Frame is never re-entered, so no menu call is live there. downloadmap no longer pumps the
+queue during a signon (Host_Frame does each frame). PR_AllocTempStringLen grows the table in size_t, prints one
+line a step from 4.2M slots and stops with a Sys_Error naming the VM, its depths and collector state at the step
+past 2^25 (from 16.9M live) instead of the overflow or P1481's truncated memalloc fallback.
+
+**Verified.** Test-only builds (never shipped) make downloadmap("p1550abort") Host_EndGame inside the builtin,
+driven by the real menu.dat's `ui_dlmap` over stdin (-plugin): without the reset the menu's table grew 261k ->
+523k -> 1.05M -> 2.10M slots in 90 s with exit depth stuck at 2; with it, "menu.dat: the game ended inside one
+of its calls (depth 2); its call stack is reset" and no growth in 90 s; the menu answered in both. One independent
+review (control flow, memory safety): no high finding; its A1-A4 fixed in the second commit. Server VMs share the
+qclib cap at their next engine build. Details: `tools/p1550-reports.md` in the mod repository.
+
 ## Patch 1549 - JARGON platform footprint and event-aligned steering seeds
 
 Problem: A guide endpoint or permission volume alone does not describe a physical
