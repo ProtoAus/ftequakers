@@ -1,5 +1,32 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1570 - Admit owned similarity sources without unused prefetch
+
+**Problem.** A valid first comparison could become unavailable under a selected
+small SQL allowance because the owned collector materialized its entire source
+window before using one source. The existing remaining-peer allowance fix did
+not prevent this separate source-side waste.
+
+**Change.** The owned collector selects currently eligible sources on demand,
+with fixed-anchor rotation and proven recovery retirement. Source limits remain
+independent of pair allowance: unresolved sources do not suppress later usable
+ones. Admission is checked before the next SQL read and after selection; late
+read/time/lock stops retain real prior commits. Generic pending/direct callers,
+normal raw-byte capture, parser/model and default policies stay unchanged. No
+native implementation/pin/tag, qcbuild, ranking or enforcement change.
+
+**Verified.** Actual wrapper/reader regression fails old production with no
+comparison and passes the subject with the normal measured row/capture. Source,
+peer, wrap/recovery, zero-ID, late-stop, unresolved-later and contention controls
+act. Targeted Windows programs pass; Linux final197checks have zero skips or
+failures, including all six typed/POSIX arms. A new test's Windows-only capture
+constant first failed on Linux; the independently reviewed correction derives
+exact expected hashes/sizes from authored input bytes before collection. Both
+independent production and test-delta reviews found no P1/P2. These are scoped
+availability/correctness controls, not calibrated detection, global hard time/
+RSS/fairness guarantees or a whole research-leaf completion. Backend delivery is
+separate and recorded in tools/p1570-similarity-source-budget.md (mod tree).
+
 ## Patch 1568 - Bounded large owner-history acquisition
 
 **Problem.** Owner history refused bodies over8MiB. Raising that constant alone
