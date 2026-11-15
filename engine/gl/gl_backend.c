@@ -26,6 +26,7 @@ extern cvar_t r_instancing;	//FTESurf Patch 831
 extern cvar_t r_skyroomneed;	//FTESurf Patch 850
 extern cvar_t r_waterskyroom, r_waterforcereflectentities;	//FTESurf Patch 868
 extern cvar_t r_waterskyroomcapture;	//FTESurf Patch 1018
+extern cvar_t r_capturewarm;	//FTESurf Patch 1575
 extern int r_skyroomlevel;
 int r_capturenoents;	//FTESurf Patch 868: the reflection capture being rendered draws only the world
 int r_noentsfirstvisedict;	//...and the firstvisedict it replaced, for a 3D sky drawn inside it
@@ -1607,6 +1608,7 @@ typedef struct
 	unsigned int checked;	//the buffer bits whose resolve was error-checked since the build
 	qboolean active;		//bound for the current view
 	qboolean broken;		//refused: no MSAA until vid_restart
+	int builds;				//storage builds, for r_mapready_info (Patch 1575)
 } bemsaa_t;
 static bemsaa_t be_msaa, be_reflmsaa;
 static bemsaa_t *be_msaa_read;	//the target the last ReadBegin resolved
@@ -1777,6 +1779,7 @@ static qboolean MSAA_Begin(bemsaa_t *t, int samples, texid_t col, texid_t depth,
 		t->colnum = col->num;
 		t->depnum = depnum;
 		t->checked = 0;
+		t->builds++;
 	}
 	t->uw = uw;
 	t->uh = uh;
@@ -7923,13 +7926,13 @@ static qboolean BE_ShaderReadsReflectionDepth(const shader_t *s)
 			return true;
 	return false;
 }
-//FTESurf Patch 1475: level 0's reflection depth, resolved from its multisampled target under r_reflectmultisample
-static texid_t GLBE_ReflectionDepthTarget(int w, int h)
+//FTESurf Patch 1575: a capture texture, (re)specified only when its size changes (shared with GLBE_CaptureTargets_MapActive)
+static int be_captexbuilds;	//for r_mapready_info
+static texid_t BE_CaptureTexture(texid_t *t, const char *name, GLint ifmt, GLenum fmt, GLint filter, int w, int h)
 {
-	texid_t *t = &shaderstate.tex_reflectiondepth[0];
 	if (!*t)
 	{
-		*t = Image_CreateTexture("***tex_reflectiondepth***", NULL, 0);
+		*t = Image_CreateTexture(name, NULL, 0);
 		if (!(*t)->num)
 			qglGenTextures(1, &(*t)->num);
 	}
@@ -7938,13 +7941,35 @@ static texid_t GLBE_ReflectionDepthTarget(int w, int h)
 		(*t)->width = w;
 		(*t)->height = h;
 		GL_MTBind(0, GL_TEXTURE_2D, *t);
-		qglTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT24_ARB, w, h, 0, GL_DEPTH_COMPONENT, GL_UNSIGNED_BYTE, NULL);
-		qglTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-		qglTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+		qglTexImage2D(GL_TEXTURE_2D, 0, ifmt, w, h, 0, fmt, GL_UNSIGNED_BYTE, NULL);
+		qglTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, filter);
+		qglTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, filter);
 		qglTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
 		qglTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+		be_captexbuilds++;
 	}
 	return *t;
+}
+static GLint BE_CaptureColourFormat(qboolean reflection)
+{
+	if ((vid.flags&VID_FP16) && sh_config.texfmt[PTI_RGBA16F])
+		return GL_RGBA16F;
+	if ((vid.flags&(VID_SRGBAWARE|VID_FP16)) && sh_config.texfmt[reflection ? PTI_RGBA8_SRGB : PTI_RGBA16F])	//the refraction's test as it was
+		return GL_SRGB8_ALPHA8_EXT;
+	return GL_RGBA;
+}
+//FTESurf Patch 1475: level 0's reflection depth, resolved from its multisampled target under r_reflectmultisample
+static texid_t GLBE_ReflectionDepthTarget(int w, int h)
+{
+	return BE_CaptureTexture(&shaderstate.tex_reflectiondepth[0], "***tex_reflectiondepth***", GL_DEPTH_COMPONENT24_ARB, GL_DEPTH_COMPONENT, GL_NEAREST, w, h);
+}
+//P1475: made when a shader reads it (vmt/water #PARALLAX); once made, every level-0 reflection keeps it attached,
+//so planes or glass in one frame do not rebuild the FBO and its multisampled targets between their captures
+static qboolean BE_ReflectionDepthWanted(const shader_t *cs)
+{
+	return !r_refdef.recurse && BE_CAPTUREKEEPS && r_captureparallax.ival && !gl_config_gles &&
+		r_worldentity.model && (r_worldentity.model->engineflags & MDLF_SOURCEBSP) &&
+		(shaderstate.tex_reflectiondepth[0] || BE_ShaderReadsReflectionDepth(cs));
 }
 static qboolean GLBE_GenerateBatchTextures(batch_t *batch, shader_t *bs)
 {
@@ -8113,36 +8138,9 @@ static qboolean GLBE_GenerateBatchTextures(batch_t *batch, shader_t *bs)
 		vrect_t orect = r_refdef.vrect;
 		pxrect_t oprect = r_refdef.pxrect;
 		qboolean reflmsaa;
-		if (!shaderstate.tex_reflection[r_refdef.recurse])
-		{
-			shaderstate.tex_reflection[r_refdef.recurse] = Image_CreateTexture("***tex_reflection***", NULL, 0);
-			if (!shaderstate.tex_reflection[r_refdef.recurse]->num)
-				qglGenTextures(1, &shaderstate.tex_reflection[r_refdef.recurse]->num);
-		}
-
 		BE_WaterCaptureRect(renderscale, false);
-		if (shaderstate.tex_reflection[r_refdef.recurse]->width!=r_refdef.pxrect.width || shaderstate.tex_reflection[r_refdef.recurse]->height!=r_refdef.pxrect.height)
-		{
-			shaderstate.tex_reflection[r_refdef.recurse]->width = r_refdef.pxrect.width;
-			shaderstate.tex_reflection[r_refdef.recurse]->height = r_refdef.pxrect.height;
-			GL_MTBind(0, GL_TEXTURE_2D, shaderstate.tex_reflection[r_refdef.recurse]);
-
-			if ((vid.flags&VID_FP16) && sh_config.texfmt[PTI_RGBA16F])
-				qglTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, shaderstate.tex_reflection[r_refdef.recurse]->width, shaderstate.tex_reflection[r_refdef.recurse]->height, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
-			else if ((vid.flags&(VID_SRGBAWARE|VID_FP16)) && sh_config.texfmt[PTI_RGBA8_SRGB])
-				qglTexImage2D(GL_TEXTURE_2D, 0, GL_SRGB8_ALPHA8_EXT, shaderstate.tex_reflection[r_refdef.recurse]->width, shaderstate.tex_reflection[r_refdef.recurse]->height, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
-			else
-				qglTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, shaderstate.tex_reflection[r_refdef.recurse]->width, shaderstate.tex_reflection[r_refdef.recurse]->height, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
-			qglTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-			qglTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-			qglTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-			qglTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-		}
-		//P1475: made when a shader reads it (vmt/water #PARALLAX); once made, every level-0 reflection keeps it attached,
-		//so planes or glass in one frame do not rebuild the FBO and its multisampled targets between their captures
-		if (!r_refdef.recurse && BE_CAPTUREKEEPS && r_captureparallax.ival && !gl_config_gles &&
-			r_worldentity.model && (r_worldentity.model->engineflags & MDLF_SOURCEBSP) &&
-			(shaderstate.tex_reflectiondepth[0] || BE_ShaderReadsReflectionDepth(cs)))
+		BE_CaptureTexture(&shaderstate.tex_reflection[r_refdef.recurse], "***tex_reflection***", BE_CaptureColourFormat(true), GL_RGBA, GL_LINEAR, r_refdef.pxrect.width, r_refdef.pxrect.height);
+		if (BE_ReflectionDepthWanted(cs))
 			refldepth = GLBE_ReflectionDepthTarget(shaderstate.tex_reflection[0]->width, shaderstate.tex_reflection[0]->height);
 		oldfbo = GLBE_FBO_Update(&shaderstate.fbo_reflectrefrac[r_refdef.recurse], FBO_RB_DEPTH, &shaderstate.tex_reflection[r_refdef.recurse], 1, refldepth, shaderstate.tex_reflection[r_refdef.recurse]->width, shaderstate.tex_reflection[r_refdef.recurse]->height, 0);
 		r_refdef.pxrect.maxheight = shaderstate.fbo_reflectrefrac[r_refdef.recurse].rb_size[1];
@@ -8183,48 +8181,10 @@ static qboolean GLBE_GenerateBatchTextures(batch_t *batch, shader_t *bs)
 			pxrect_t oprect = r_refdef.pxrect;
 			fbostate_t *refractfbo;
 			BE_WaterCaptureRect(renderscale, (cf & SHADER_HASPORTAL) != 0);
-
-			if (!shaderstate.tex_refraction[r_refdef.recurse])
-			{
-				shaderstate.tex_refraction[r_refdef.recurse] = Image_CreateTexture("***tex_refraction***", NULL, 0);
-				if (!shaderstate.tex_refraction[r_refdef.recurse]->num)
-					qglGenTextures(1, &shaderstate.tex_refraction[r_refdef.recurse]->num);
-			}
-			if (shaderstate.tex_refraction[r_refdef.recurse]->width != r_refdef.pxrect.width || shaderstate.tex_refraction[r_refdef.recurse]->height != r_refdef.pxrect.height)
-			{
-				shaderstate.tex_refraction[r_refdef.recurse]->width = r_refdef.pxrect.width;
-				shaderstate.tex_refraction[r_refdef.recurse]->height = r_refdef.pxrect.height;
-				GL_MTBind(0, GL_TEXTURE_2D, shaderstate.tex_refraction[r_refdef.recurse]);
-				if ((vid.flags&VID_FP16) && sh_config.texfmt[PTI_RGBA16F])
-					qglTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, r_refdef.pxrect.width, r_refdef.pxrect.height, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
-				else if ((vid.flags&(VID_SRGBAWARE|VID_FP16)) && sh_config.texfmt[PTI_RGBA16F])
-					qglTexImage2D(GL_TEXTURE_2D, 0, GL_SRGB8_ALPHA8_EXT, r_refdef.pxrect.width, r_refdef.pxrect.height, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
-				else
-					qglTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, r_refdef.pxrect.width, r_refdef.pxrect.height, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
-				qglTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-				qglTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-				qglTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-				qglTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-			}
+			BE_CaptureTexture(&shaderstate.tex_refraction[r_refdef.recurse], "***tex_refraction***", BE_CaptureColourFormat(false), GL_RGBA, GL_LINEAR, r_refdef.pxrect.width, r_refdef.pxrect.height);
 			if (cf & SHADER_HASREFRACTDEPTH)
 			{
-				if (!shaderstate.tex_refractiondepth[r_refdef.recurse])
-				{
-					shaderstate.tex_refractiondepth[r_refdef.recurse] = Image_CreateTexture("***tex_refractiondepth***", NULL, 0);
-					if (!shaderstate.tex_refractiondepth[r_refdef.recurse]->num)
-						qglGenTextures(1, &shaderstate.tex_refractiondepth[r_refdef.recurse]->num);
-				}
-				if (shaderstate.tex_refractiondepth[r_refdef.recurse]->width != r_refdef.pxrect.width || shaderstate.tex_refractiondepth[r_refdef.recurse]->height != r_refdef.pxrect.height)
-				{
-					shaderstate.tex_refractiondepth[r_refdef.recurse]->width = r_refdef.pxrect.width;
-					shaderstate.tex_refractiondepth[r_refdef.recurse]->height = r_refdef.pxrect.height;
-					GL_MTBind(0, GL_TEXTURE_2D, shaderstate.tex_refractiondepth[r_refdef.recurse]);
-					qglTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT24_ARB, r_refdef.pxrect.width, r_refdef.pxrect.height, 0, GL_DEPTH_COMPONENT, GL_UNSIGNED_BYTE, NULL);
-					qglTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-					qglTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-					qglTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-					qglTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-				}
+				BE_CaptureTexture(&shaderstate.tex_refractiondepth[r_refdef.recurse], "***tex_refractiondepth***", GL_DEPTH_COMPONENT24_ARB, GL_DEPTH_COMPONENT, GL_NEAREST, r_refdef.pxrect.width, r_refdef.pxrect.height);
 				refractfbo = &shaderstate.fbo_refract[r_refdef.recurse][0];
 				oldfbo = GLBE_FBO_Update(refractfbo, FBO_TEX_DEPTH, &shaderstate.tex_refraction[r_refdef.recurse], 1, shaderstate.tex_refractiondepth[r_refdef.recurse], r_refdef.pxrect.width, r_refdef.pxrect.height, 0);
 			}
@@ -8434,6 +8394,110 @@ static qboolean GLBE_GenerateBatchTextures(batch_t *batch, shader_t *bs)
 			be_capkeep.frame = -1;	//another capture overwrote the level's targets
 	}
 	return true;
+}
+//FTESurf Patch 1575: the main view's water capture targets made and cleared while the map loads, at the size its first
+//capture will ask for, so the driver allocates their storage behind the loading screen and not on the first sight of
+//water (the reflection's multisampled pair: 29-53 ms frames on surf_chateau/boreas in P1574's census). The size is a
+//full-screen view's at r_renderscale (GLR_RenderView); any other is rebuilt by the capture, as before.
+static struct {int rw, rh, samples, fw, fh, texbuilds, aabuilds;} be_capwarm;
+static int BE_ReflectMSAA_Builds(void)
+{
+#ifndef GL_STATIC
+	return be_reflmsaa.builds;
+#else
+	return 0;
+#endif
+}
+static void BE_CaptureWarmClear(void)
+{
+	if (be_scissoron)
+		qglDisable(GL_SCISSOR_TEST);
+	GL_ForceDepthWritable();
+	qglClearColor(0, 0, 0, 1);
+	qglClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+	if (be_scissoron)
+		qglEnable(GL_SCISSOR_TEST);
+}
+void GLBE_CaptureTargets_MapActive(void)
+{
+	const shader_t *s, *refl = NULL, *refldepth = NULL, *refr[2] = {NULL, NULL};	//refr[0] reads refraction depth, [1] not
+	vrect_t orect = r_refdef.vrect;
+	pxrect_t oprect = r_refdef.pxrect;
+	int ow = vid.fbpwidth, oh = vid.fbpheight, oldfbo, k;
+	float rs = fabs(r_renderscale.value);
+	unsigned int i;
+	memset(&be_capwarm, 0, sizeof(be_capwarm));
+	be_capwarm.texbuilds = be_captexbuilds;	//"rebuilt since" counts from activation either way
+	be_capwarm.aabuilds = BE_ReflectMSAA_Builds();
+	if (!r_capturewarm.ival || !gl_config.ext_framebuffer_objects || !r_shaders || !cl.worldmodel || r_refdef.recurse)
+		return;
+	for (i = 0; i < r_numshaders; i++)
+	{
+		s = r_shaders[i];
+		if (!s || s->uses <= 0 || (s->flags & SHADER_HASPORTAL))
+			continue;
+		if ((s->flags & SHADER_HASREFLECT) && (!refl || s->portalfboscale > refl->portalfboscale))
+			refl = s;
+		if ((s->flags & SHADER_HASREFLECT) && !refldepth && BE_ShaderReadsReflectionDepth(s))
+			refldepth = s;
+		k = (s->flags & SHADER_HASREFRACTDEPTH) ? 0 : ((s->flags & SHADER_HASREFRACT) && r_refract_fboival) ? 1 : -1;	//the capture's FBO choice
+		if (k >= 0 && (!refr[k] || s->portalfboscale > refr[k]->portalfboscale))
+			refr[k] = s;
+	}
+	vid.fbpwidth = vid.framebuffer ? vid.framebuffer->width : vid.pixelwidth;
+	vid.fbpheight = vid.framebuffer ? vid.framebuffer->height : vid.pixelheight;
+	if (rs != 1)
+	{	//GLR_RenderView's post-process target
+		vid.fbpwidth *= rs;
+		vid.fbpheight *= rs;
+		vid.fbpwidth = bound(1, vid.fbpwidth, sh_config.texture2d_maxsize);
+		vid.fbpheight = bound(1, vid.fbpheight, sh_config.texture2d_maxsize);
+	}
+	if (refl)
+	{
+		texid_t depth = r_nulltex;
+		qboolean aa;
+		BE_WaterCaptureRect(refl->portalfboscale, false);
+		BE_CaptureTexture(&shaderstate.tex_reflection[0], "***tex_reflection***", BE_CaptureColourFormat(true), GL_RGBA, GL_LINEAR, r_refdef.pxrect.width, r_refdef.pxrect.height);
+		if (BE_ReflectionDepthWanted(refldepth ? refldepth : refl))
+			depth = GLBE_ReflectionDepthTarget(r_refdef.pxrect.width, r_refdef.pxrect.height);
+		oldfbo = GLBE_FBO_Update(&shaderstate.fbo_reflectrefrac[0], FBO_RB_DEPTH, &shaderstate.tex_reflection[0], 1, depth, r_refdef.pxrect.width, r_refdef.pxrect.height, 0);
+		aa = GLBE_ReflectMSAA_Begin(shaderstate.tex_reflection[0], depth);
+		BE_CaptureWarmClear();
+		be_capwarm.samples = GLBE_ReflectMSAA_Samples();
+		if (aa)
+			GLBE_ReflectMSAA_End();	//its resolve writes the texture too
+		GLBE_FBO_Pop(oldfbo);
+		be_capwarm.rw = r_refdef.pxrect.width;
+		be_capwarm.rh = r_refdef.pxrect.height;
+	}
+	for (k = 0; k < 2; k++)
+	{
+		if (!refr[k])
+			continue;
+		BE_WaterCaptureRect(min(1, refr[k]->portalfboscale), false);
+		BE_CaptureTexture(&shaderstate.tex_refraction[0], "***tex_refraction***", BE_CaptureColourFormat(false), GL_RGBA, GL_LINEAR, r_refdef.pxrect.width, r_refdef.pxrect.height);
+		if (!k)
+			BE_CaptureTexture(&shaderstate.tex_refractiondepth[0], "***tex_refractiondepth***", GL_DEPTH_COMPONENT24_ARB, GL_DEPTH_COMPONENT, GL_NEAREST, r_refdef.pxrect.width, r_refdef.pxrect.height);
+		oldfbo = GLBE_FBO_Update(&shaderstate.fbo_refract[0][k], k ? FBO_RB_DEPTH : FBO_TEX_DEPTH, &shaderstate.tex_refraction[0], 1,
+			k ? r_nulltex : shaderstate.tex_refractiondepth[0], r_refdef.pxrect.width, r_refdef.pxrect.height, 0);
+		BE_CaptureWarmClear();
+		GLBE_FBO_Pop(oldfbo);
+		be_capwarm.fw = r_refdef.pxrect.width;
+		be_capwarm.fh = r_refdef.pxrect.height;
+	}
+	vid.fbpwidth = ow;
+	vid.fbpheight = oh;
+	r_refdef.vrect = orect;
+	r_refdef.pxrect = oprect;
+	be_capwarm.texbuilds = be_captexbuilds;
+	be_capwarm.aabuilds = BE_ReflectMSAA_Builds();
+}
+void GLBE_CaptureTargets_Info(void)
+{
+	Con_Printf("mapready: capture targets reflect %ix%i samples %i refract %ix%i; rebuilt since: textures %i AA %i\n",
+		be_capwarm.rw, be_capwarm.rh, be_capwarm.samples, be_capwarm.fw, be_capwarm.fh,
+		be_captexbuilds - be_capwarm.texbuilds, BE_ReflectMSAA_Builds() - be_capwarm.aabuilds);
 }
 /*
 FTESurf Patch 831 -- INSTANCED PROPS.  After r_batchsort, a run of alias batches with the same

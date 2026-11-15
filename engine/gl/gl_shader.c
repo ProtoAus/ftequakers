@@ -5824,7 +5824,14 @@ void R_MapReadyInfo_f(void)
 		mapready.lateseconds*1000, mapready.lastprogram, mapready.lastperm);
 	Con_Printf("mapready: late image completions %u failed %u upload-ms %.3f last %s\n",
 		mapready.lateimages, mapready.lateimagefailed, mapready.lateimageseconds*1000, mapready.lastimage);
-	Con_Printf("mapready: closure excludes future registrations, render targets, audio, driver first-draw and route coverage; NOT timer admission\n");
+#ifdef GLQUAKE
+	if (qrenderer == QR_OPENGL)
+	{
+		void GLBE_CaptureTargets_Info(void);
+		GLBE_CaptureTargets_Info();	//FTESurf Patch 1575
+	}
+#endif
+	Con_Printf("mapready: closure excludes future registrations, render targets other than the water captures, audio, driver first-draw and route coverage; NOT timer admission\n");
 }
 
 //one permutation of an active program at activation: counted, compiled unless already there or past the budget

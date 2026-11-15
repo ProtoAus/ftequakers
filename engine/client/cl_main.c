@@ -492,6 +492,14 @@ void CL_MakeActive(char *gamename)
 		SCR_LoadTimesStage("shader warm list");
 		GLSLWarm_MapActive();
 	}
+#ifdef GLQUAKE
+	if (qrenderer == QR_OPENGL)
+	{	//FTESurf Patch 1575: the water capture targets, so the first sight of water allocates nothing
+		void GLBE_CaptureTargets_MapActive(void);
+		SCR_LoadTimesStage("capture targets");
+		GLBE_CaptureTargets_MapActive();
+	}
+#endif
 #ifdef CSQC_DAT
 	SCR_LoadTimesStage("qc collector buffers");	//FTESurf Patch 1451: their pages here, not in the first collection
 	CSQC_PrewarmGC();
