@@ -102,6 +102,7 @@ static struct
 {
 	qboolean observing, warming, invalidated, budgethit, overflow;
 	int programs, eligible, available, compiled, failed, pending, unavailable;
+	int unlisted;	//FTESurf Patch 1574: programs no list knew, warmed whole (GLSLWarm_MapActive)
 	int models, modelpending, modelfailed, modelunrequested;
 	int images, imagepending, imagefailed, imageunrequested;
 	unsigned int latecompiles, latefailed, lateimages, lateimagefailed;
@@ -5811,8 +5812,9 @@ void R_MapReadyInfo_f(void)
 	Con_Printf("mapready: %s activation %s time %.3f budget-hit %i overflow %i\n",
 		state ? state : "not-started", mapready.state ? mapready.state : "not-started",
 		mapready.seconds, mapready.budgethit, mapready.overflow);
-	Con_Printf("mapready: programs %i unavailable %i eligible %i available %i compiled %i failed %i pending %i\n",
-		mapready.programs, mapready.unavailable, mapready.eligible, mapready.available, mapready.compiled, mapready.failed, mapready.pending);
+	Con_Printf("mapready: programs %i unavailable %i eligible %i available %i compiled %i failed %i pending %i unlisted %i\n",
+		mapready.programs, mapready.unavailable, mapready.eligible, mapready.available, mapready.compiled, mapready.failed, mapready.pending,
+		mapready.unlisted);
 	Con_Printf("mapready: other requested models still loading %i\n", mapready.otherpending);	//FTESurf Patch 1501
 	Con_Printf("mapready: activation models %i pending %i failed %i unrequested %i images %i pending %i failed %i unrequested %i\n",
 		mapready.models, mapready.modelpending, mapready.modelfailed, mapready.modelunrequested,
@@ -5824,10 +5826,43 @@ void R_MapReadyInfo_f(void)
 	Con_Printf("mapready: closure excludes future registrations, render targets, audio, driver first-draw and route coverage; NOT timer admission\n");
 }
 
+//one permutation of an active program at activation: counted, compiled unless already there or past the budget
+static void MapReady_WarmPerm(program_t *prog, unsigned int p, unsigned int *seen, double deadline)
+{
+	if (!p || (seen[p >> 5] & (1u << (p & 31))))
+		return;
+	seen[p >> 5] |= 1u << (p & 31);
+	mapready.eligible++;
+	if (prog->permu[p])
+	{
+		if (prog->permu[p] == prog->permu[0])
+			mapready.failed++;
+		else
+			mapready.available++;
+		return;
+	}
+	if (Sys_DoubleTime() >= deadline)
+	{
+		mapready.budgethit = true;
+		mapready.pending++;
+		return;
+	}
+	MapReady_KeepAlive();
+	prog->permu[p] = Shader_LoadPermutation(prog, p);
+	if (!prog->permu[p])
+	{
+		prog->permu[p] = prog->permu[0];
+		mapready.failed++;
+	}
+	else
+		mapready.compiled++;
+}
+//FTESurf Patch 1574: an unlisted program with at most this many permutation bits warms every combination of them
+#define GLSLWARM_UNLISTED_BITS 3
 // CL_MakeActive: bounded known closure, not a universal loading/residency promise.
 void GLSLWarm_MapActive(void)
 {
-	unsigned int i, j, perm, p;
+	unsigned int i, j, perm;
 	int count = 0, capacity;
 	unsigned int seen[(PERMUTATIONS + 31) / 32];
 	shader_t *s;
@@ -5884,42 +5919,24 @@ void GLSLWarm_MapActive(void)
 					continue;
 				}
 				w = Hash_Get(&glslwarm_hash, prog->name);
-				if (!w)
-					continue;
 				memset(seen, 0, sizeof(seen));
-				for (perm = 1; perm < PERMUTATIONS; perm++)
-				{
-					if (!(w->bits[perm >> 5] & (1u << (perm & 31))))
+				if (!w)
+				{	//FTESurf Patch 1574: a water material's defines are part of its program's name, so on a map not played
+					//before no list knows its water, which compiled mid-run on first sight (38 ms cold a permutation).
+					//Water declares 2-3 bits; a world or model program up to 11 is left to the list.
+					unsigned int sp = prog->supportedpermutations, sub, bits = 0;
+					for (sub = sp; sub; sub &= sub - 1)
+						bits++;
+					if (!sp || bits > GLSLWARM_UNLISTED_BITS)
 						continue;
-					p = perm & prog->supportedpermutations;
-					if (!p || (seen[p >> 5] & (1u << (p & 31))))
-						continue;
-					seen[p >> 5] |= 1u << (p & 31);
-					mapready.eligible++;
-					if (prog->permu[p])
-					{
-						if (prog->permu[p] == prog->permu[0])
-							mapready.failed++;
-						else
-							mapready.available++;
-						continue;
-					}
-					if (Sys_DoubleTime() >= deadline)
-					{
-						mapready.budgethit = true;
-						mapready.pending++;
-						continue;
-					}
-					MapReady_KeepAlive();
-					prog->permu[p] = Shader_LoadPermutation(prog, p);
-					if (!prog->permu[p])
-					{
-						prog->permu[p] = prog->permu[0];
-						mapready.failed++;
-					}
-					else
-						mapready.compiled++;
+					mapready.unlisted++;
+					for (sub = sp; sub; sub = (sub - 1) & sp)
+						MapReady_WarmPerm(prog, sub, seen, deadline);
+					continue;
 				}
+				for (perm = 1; perm < PERMUTATIONS; perm++)
+					if (w->bits[perm >> 5] & (1u << (perm & 31)))
+						MapReady_WarmPerm(prog, perm & prog->supportedpermutations, seen, deadline);
 			}
 		}
 		free(programs);
