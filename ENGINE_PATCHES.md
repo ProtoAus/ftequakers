@@ -42,17 +42,31 @@ healthy listings retain their query. Pending completion ownership is private;
 no historical orphan adoption or REC/native-cert/rank/movement policy change.
 
 **Verified.** Production-source hash/VM controls match Python at1/4093/65536-byte
-budgets; quota/error/seek/close and sparse Windows4GiB+3 controls act. Both
-independent review P1s were corrected; fresh frozen integration review is clear.
-Three VMs compile0warnings; full Windows client/server/five-plugin diagnostics
-exactly match the inspected pre-change baseline (74existing warnings). Current
-CSQC metadata binding also links with0new warnings. A real154-tick TAS finish
-used authenticated list2/get2/ack2 and saved all31822bytes identically, without
-auto replay. Reader952/0; actual paired CLI retains366faulty reports and368
-diagnostics on the same578REC/184VIEW bytes under both readers (0new). Published
-HL2 maintenance was integrated without changing any of the9 IO/API source files.
-Final clean restamp, genuine large-body runtime and destination delivery remain
-pending; source/unit/small checks are not arbitrary-size or installed proof.
+budgets; quota/error/seek/close and sparse Windows4GiB+3 controls act. Frozen
+native/QC and final merged-integration reviews are clear. Clean published
+cc562/tag1568 Windows client/server/five-plugin and canonical Git-blob ARM64
+builds match all74/16 respective baseline warnings, zero new diagnostics. Both
+actual dedicated images passed1831map-free selfchecks, zero failures. Final
+clean5abe QC compiles three VMs with0warnings; later475858 product-source bytes
+are identical. Genuine final-build184-tick TAS completion, account proof and
+list2/get2 copied all32353bytes identically and passed strict reading; no auto
+replay. Actual paired CLI retains366faulty reports/368diagnostics on identical
+578REC/184VIEW bytes under both readers (0new). A clearly synthetic17MiB+3 body
+completed production recovery/sealing/transfer/ACK/client-hash/promotion from a
+modeled pending promise; not a genuine large completion or certification. Both
+Windows installs and all12Pi native actors are destination-verified; original
+postcopy receipt failure remains separate from read-only Windows acceptance.
+Qualified QW/CS then swapped across all12 with both real preservation boundaries,
+10-second warning and ordinary.prev. Original normal F.post UDP timeout remains
+FAILED/incomplete; separate read-only10:46–10:48UTC acceptance verified all12
+resident/checksum/history states and64842 cold protected entries/204 selected
+members by full bytes+metadata. Nonleased one-status-window scope, no second
+F observation or guessed timeout cause; no redeploy/retry to turn failure green.
+Owner specifically accepted3 missing old resume members before fresh capture,
+old207 archive retained/no restore; known published peer config/backend preserved.
+See mod tools/p1568-delivery.md for exact UTC/source/preservation and limits.
+Genuine >8MiB completion and healthy >30s query remain unmeasured; no unlimited-
+size, memory/performance, human UI/production-posting or release claim.
 
 ## Patch 1565 - Preserve exact server angle-operation context
 
