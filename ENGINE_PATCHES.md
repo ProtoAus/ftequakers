@@ -1,5 +1,32 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1574 - Warm small GLSL programs whole at activation (water on maps not played yet)
+
+**Problem.** The activation warm-up (Patches 1277, 1441, 1442) compiles the permutations a warm list remembers by
+full program name. A Source water material's defines are part of its program's name
+(`vmt/wateranim#DEPTH#FOGSTART=...`), so on a map not played before no list -- the PC's or the release's seed --
+knows its water, and each permutation compiled in the frame that first showed it. A program only ever drawn at
+permutation 0 is never listed either (GLSLWarm_Add). A first-play census on the PC (i9-9900K, RTX 2080 SUPER;
+seed-only list, a cold driver cache per exe, six maps' board replays from a fresh launch) found every late compile
+during play on surf_chateau, surf_nova, surf_boreas and surf_null to be water, 31-40 ms each, in frames of 41-78 ms.
+
+**Change.** `GLSLWarm_MapActive` runs two passes. The first is the old one (the listed permutations, moved into
+`MapReady_WarmPerm` unchanged). The second, with what is left of the budget, compiles every non-zero combination of
+the supported bits of each active program declaring at most 3 (water 2-3, sky and sprites 1-2; world and model
+programs declare up to 8 and stay with the list). Its counts are separate (`r_mapready_info`: `whole programs ...`),
+so `ready-closure` still describes the listed closure; a missing list still runs it.
+tools/test_mapreadiness.py (whose stubs had not compiled since Patches 1442/1501) covers both passes: 38 checks.
+
+**Verified.** Same diag build with and without the patch (a cold driver cache per exe each), seed-only warm list,
+six maps' board replays from a fresh launch: late compiles during play 7 -> 2, every water one gone; the two left
+(surf_null) are fog variants of listed 4+-bit vertexlit permutations (whole sessions 16 -> 6; the rest are CSQC shaders
+registered after activation). The first-water frame went 77.6 -> 53.4 ms (boreas) and 48.1 -> 29.2 ms (chateau), and surf_nova's
+41 ms one is gone; what is left in it is the reflection MSAA target allocated on first use. The second pass compiled
+13-96 permutations a map, none pending; activation took 0.08-1.05 s longer on a cold cache (bhop_ceaseless 0.10 ->
+1.15 s, 28 small programs), behind the loading screen.
+One review (predicate and flow): no blockers; its should-fix (speculative compiles sharing the budget with listed
+ones in pointer order) is the two-pass order above, and the empty-list and stale-comment notes are fixed.
+
 ## Patch 1573 - No injected clicks and no touchpads on the ranked board
 
 **Problem.** The owner decided on 16 Nov that injected clicks must be blocked and touchpads may not
