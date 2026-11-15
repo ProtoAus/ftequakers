@@ -3607,4 +3607,67 @@ int INS_AppCommand(LPARAM lParam)
 	}
 	return false;
 }
+
+/*FTESurf Patch 1577: DLL tripwire.  Calls back once per module loaded from outside the game's
+  folders and the Windows folder, with its file name only (paths name the user) and where it came
+  from: "program" (Program Files, ProgramData), "user" (the profile) or "other".  Overlays, capture
+  tools and security software land here too; the journal records, the reader never judges.  Anyone
+  can rename or unlist a module, so this only catches tools that do neither.*/
+static qboolean INS_PathUnder(const wchar_t *path, const wchar_t *dir)
+{
+	size_t n;
+	if (!dir || !*dir)
+		return false;
+	n = wcslen(dir);
+	while (n && (dir[n-1] == L'\\' || dir[n-1] == L'/'))
+		n--;
+	return n && !_wcsnicmp(path, dir, n) && (path[n] == L'\\' || path[n] == L'/');
+}
+int INS_ForeignModules(void *ctx, void (*callback)(void *ctx, const char *cls, const char *name))
+{
+	BOOL (WINAPI *pEnum)(HANDLE, HMODULE *, DWORD, LPDWORD);
+	HMODULE mods[1024];
+	DWORD need = 0, n, i;
+	wchar_t path[MAX_PATH], exedir[MAX_PATH], basedir[MAX_PATH], *slash;
+	const wchar_t *sysdir = _wgetenv(L"SystemRoot");
+	const wchar_t *progdirs[] = {_wgetenv(L"ProgramFiles"), _wgetenv(L"ProgramFiles(x86)"), _wgetenv(L"ProgramW6432"), _wgetenv(L"ProgramData")};
+	const wchar_t *userdir = _wgetenv(L"USERPROFILE");
+	char name[64];
+	int foreign = 0, j, k;
+	const char *cls;
+
+	pEnum = (void*)GetProcAddress(GetModuleHandleA("kernel32.dll"), "K32EnumProcessModules");
+	if (!pEnum || !pEnum(GetCurrentProcess(), mods, sizeof(mods), &need))
+		return -1;
+	n = need / sizeof(HMODULE);
+	if (n > countof(mods))
+		n = countof(mods);
+	if (!GetModuleFileNameW(NULL, exedir, countof(exedir)))
+		exedir[0] = 0;
+	if ((slash = wcsrchr(exedir, L'\\')))
+		*slash = 0;
+	if (!MultiByteToWideChar(CP_UTF8, 0, com_gamepath, -1, basedir, countof(basedir)))
+		basedir[0] = 0;
+	for (i = 0; i < n; i++)
+	{
+		if (!GetModuleFileNameW(mods[i], path, countof(path)))
+			continue;
+		if (INS_PathUnder(path, exedir) || INS_PathUnder(path, basedir) || INS_PathUnder(path, sysdir))
+			continue;
+		cls = "other";
+		for (j = 0; j < countof(progdirs); j++)
+			if (INS_PathUnder(path, progdirs[j]))
+				cls = "program";
+		if (*cls == 'o' && INS_PathUnder(path, userdir))
+			cls = "user";
+		slash = wcsrchr(path, L'\\');
+		slash = slash ? slash + 1 : path;
+		for (k = 0; slash[k] && k < countof(name) - 1; k++)	//one printable token
+			name[k] = (slash[k] < 128 && slash[k] > ' ' && slash[k] != '"') ? (char)slash[k] : '_';
+		name[k] = 0;
+		callback(ctx, cls, name);
+		foreign++;
+	}
+	return foreign;
+}
 #endif

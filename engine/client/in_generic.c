@@ -2350,6 +2350,56 @@ void IN_Journal_ViewKeyboard(float dpitch, float dyaw)
   hardware is.  This raises the cost of the cheap end -- SendInput injection has no
   enumerated device at all, and a virtual driver has a name that says so -- and it
   leaves the hardware-replay ceiling exactly where it was.*/
+#if defined(_WIN32) && !defined(WINRT) && !defined(FTE_SDL)
+/*FTESurf Patch 1577: DLL tripwire (INS_ForeignModules, in_win.c).  Header `modules <n>` (-1: could not
+  list them) and one `module <program|user|other> <file>` each as the journal begins; untimestamped
+  `module+` lines beside devmap name those loaded since.  A note for the reader, never a verdict.*/
+int INS_ForeignModules(void *ctx, void (*callback)(void *ctx, const char *cls, const char *name));
+#define MAX_JRN_MODULES 256
+static unsigned int in_jrn_modhash[MAX_JRN_MODULES];
+static int in_jrn_modcount;
+static unsigned int IN_Journal_ModHash(const char *cls, const char *name)
+{
+	unsigned int h = 2166136261u;
+	while (*cls)
+		h = (h ^ (unsigned char)*cls++) * 16777619u;
+	h = (h ^ ' ') * 16777619u;
+	while (*name)
+		h = (h ^ (unsigned char)*name++) * 16777619u;
+	return h;
+}
+static void IN_Journal_Module(void *ctx, const char *cls, const char *name)
+{
+	char line[128];
+	unsigned int h = IN_Journal_ModHash(cls, name);
+	int i;
+	if (ctx)
+	{	//the end's pass: only what the beginning did not list
+		for (i = 0; i < in_jrn_modcount; i++)
+			if (in_jrn_modhash[i] == h)
+				return;
+	}
+	else if (in_jrn_modcount < MAX_JRN_MODULES)
+		in_jrn_modhash[in_jrn_modcount++] = h;
+	Q_snprintfz(line, sizeof(line), "%s %s %s\n", ctx ? "module+" : "module", cls, name);
+	IN_Journal_Raw(line);
+}
+static void IN_Journal_Modules(qboolean atend)
+{
+	char line[32];
+	if (atend)
+	{
+		INS_ForeignModules((void*)"end", IN_Journal_Module);
+		return;
+	}
+	in_jrn_modcount = 0;
+	Q_snprintfz(line, sizeof(line), "modules %i\n", INS_ForeignModules(NULL, IN_Journal_Module));
+	IN_Journal_Raw(line);
+}
+#else
+#define IN_Journal_Modules(atend)
+#endif
+
 static void IN_Journal_DeviceLine(void *vctx, const char *type, const char *devicename, unsigned int *qdevid)
 {
 	const char *tag = vctx;
@@ -2544,6 +2594,7 @@ static void IN_JournalBegin_f(void)
 		}
 	}
 
+	IN_Journal_Modules(false);	/*Patch 1577*/
 	IN_Journal_Raw("anglecause 1\n");
 	IN_Journal_Raw("begin\n");
 	CL_AllowIndependantSendCmd(allowed);
@@ -2637,6 +2688,7 @@ static void IN_JournalEnd_f(void)
 	  dropped by IN_Journal_Raw's own growth check rather than competing for it,
 	  and such a file already says `truncated`, so the loss is announced.*/
 	INS_EnumerateDevices((void*)"devmap", IN_Journal_DeviceLine);
+	IN_Journal_Modules(true);	/*Patch 1577*/
 
 	/*Allow the trailer into a full journal's reserved space, but never lower
 	  the configured limit to the current allocation: an ordinary journal may
