@@ -430,13 +430,13 @@ static qboolean rawmouse_nolegacy;
 static cvar_t in_rawinput_mice = CVARAFD("in_rawinput", "1", "m_rawinput", CVAR_ARCHIVE, "Enables rawinput support for mice in XP onwards. Rawinput permits independant device identification (ie: splitscreen clients can each have their own mouse), and reports mouse motion as the device sends it rather than as an OS-summed and OS-accelerated cursor delta.");
 static cvar_t in_rawinput_keyboard = CVARD("in_rawinput_keyboard", "0", "Enables rawinput support for keyboards in XP onwards as well as just mice.");
 static cvar_t in_rawinput_rdp = CVARD("in_rawinput_rdp", "0", "Activate Remote Desktop Protocol devices too.");
-/*FTESurf Patch 307.  DEFAULT 0 DELIBERATELY: this closes the injected-mouse-button
-  hole, and it costs a Windows precision touchpad every mouse button it has, because
-  such a device is a HID digitizer with no RI_MOUSE_BUTTON_* flags and the legacy
-  message is its only press.  A ranked profile can set it; a default cannot.  Applied
-  only while the mouse is grabbed -- see INS_RawInput_MouseSetLegacy.*/
-static cvar_t in_rawinput_nolegacy = CVARFD("in_rawinput_nolegacy", "0", CVAR_ARCHIVE, "Suppresses legacy mouse messages while the mouse is grabbed, so a synthesized (injected) click cannot reach the game through the legacy path. Before Patch 468 this COST ALL MOUSE BUTTONS on a Windows precision touchpad (it has no raw button reports of its own); with it the pad's clicks arrive through raw input while a finger is on the pad. Off by default; the .hid journal counts uncorroborated legacy presses either way.");
-static cvar_t in_rawinput_touchpad = CVARFD("in_rawinput_touchpad", "1", CVAR_ARCHIVE, "Accept raw mouse reports that carry no device handle while a Windows precision touchpad has reported contact within the last half second. The OS synthesises a touchpad's cursor motion with no handle, which is otherwise rejected as injected input (Patch 306) and never turns the view. 0 restores the rejection.");	//FTESurf Patch 468
+/*FTESurf Patch 307, defaults since Patch 1576: on, and touchpads off (the owner's 16 Nov
+  ranked rule; Patch 468 gave touchpad clicks a raw path).  NOTFROMSERVER: a map's
+  worldspawn `cvar_` key or a server stuffcmd must not hold these apart from what the
+  player set (Patch 1573's open case).  Applied only while the mouse is grabbed -- see
+  INS_RawInput_MouseSetLegacy.*/
+static cvar_t in_rawinput_nolegacy = CVARFD("in_rawinput_nolegacy", "1", CVAR_ARCHIVE|CVAR_NOTFROMSERVER, "Suppresses legacy mouse messages while the mouse is grabbed, so a synthesized (injected) click cannot reach the game through the legacy path. A precision touchpad's clicks arrive through raw input while a finger is on the pad (Patch 468). On by default; 0 lets injected clicks through and runs do not rank.");
+static cvar_t in_rawinput_touchpad = CVARFD("in_rawinput_touchpad", "0", CVAR_ARCHIVE|CVAR_NOTFROMSERVER, "Accept raw mouse reports that carry no device handle while a Windows precision touchpad has reported contact within the last half second. The OS synthesises a touchpad's cursor motion with no handle, which is otherwise rejected as injected input (Patch 306) and never turns the view. Off by default (Patch 1576); runs with it on do not rank.");	//FTESurf Patch 468
 
 void INS_RawInput_MouseDeRegister(void);
 int INS_RawInput_MouseRegister(void);
@@ -1879,6 +1879,63 @@ void INS_ReInit (void)
 #endif
 }
 
+/*FTESurf Patch 1576: injected keys are dropped.  Windows 8+ says where the input message
+  being processed came from; only IMO_HARDWARE passes, so SendInput (IMO_INJECTED), UIAccess
+  tools and on-screen keyboards (IMO_SYSTEM) and posted messages are dropped, and so is a
+  key message sent from another thread.  An in-process hook or a device that presents as a
+  keyboard is not seen here.  The check runs on the window thread inside the message's own
+  dispatch, the only place the answer is current.  P1424's observer still counts them.*/
+static cvar_t in_keyguard = CVARFD("in_keyguard", "1", CVAR_ARCHIVE|CVAR_NOTFROMSERVER, "Drop keyboard messages that Windows does not report as coming from a keyboard: keys sent by other programs, such as macro tools, remappers, remote-play software and on-screen keyboards. 0 accepts them; runs then do not rank.");
+static cvar_t in_guard_live = CVARFD("in_guard_live", "0", CVAR_NOSET|CVAR_NOSAVE|CVAR_NOTFROMSERVER, "Set by the engine: which input guards are applied. 1 injected clicks blocked while the mouse is grabbed, 2 touchpad input off, 4 injected keys blocked.");
+typedef struct {int devicetype, originid;} fs_inputsource_t;	//INPUT_MESSAGE_SOURCE
+#define FS_IMO_HARDWARE 1
+static BOOL (WINAPI *pGetCurrentInputMessageSource)(fs_inputsource_t *src);
+static volatile LONG keyguard_blocked;	//window thread writes, INS_GuardPublish reads
+static LONG keyguard_reported;
+static volatile LONG keyguard_lastorigin = -1;
+
+static qboolean INS_KeyGuardBlocks(void)
+{
+	fs_inputsource_t src;
+
+	if (!in_keyguard.ival || !pGetCurrentInputMessageSource)
+		return false;
+	if (InSendMessage())
+		src.originid = -2;
+	else if (!pGetCurrentInputMessageSource(&src))
+		src.originid = -3;
+	else if (src.originid == FS_IMO_HARDWARE)
+		return false;
+	keyguard_lastorigin = src.originid;
+	InterlockedIncrement(&keyguard_blocked);
+	return true;
+}
+
+//Main thread, once a frame: publish what applies, and say so when a key was dropped.
+static void INS_GuardPublish(void)
+{
+	int live = 0;
+	LONG n;
+#ifdef USINGRAWINPUT
+	if (in_rawinput_nolegacy.ival)
+		live |= 1;
+	if (!in_rawinput_touchpad.ival)
+		live |= 2;
+#endif
+	if (in_keyguard.ival && pGetCurrentInputMessageSource)
+		live |= 4;
+	if (live != in_guard_live.ival)
+		Cvar_ForceSet(&in_guard_live, va("%i", live));
+	n = keyguard_blocked;
+	if (n != keyguard_reported)
+	{
+		if (!keyguard_reported)
+			Con_Printf("Input: dropped a key another program sent (in_keyguard 1). Remappers, macro tools and on-screen keyboards send keys this way; in_keyguard 0 accepts them, and runs then do not rank.\n");
+		Con_DPrintf("in_keyguard: %ld dropped, last origin %ld\n", (long)n, (long)keyguard_lastorigin);
+		keyguard_reported = n;
+	}
+}
+
 void INS_Init (void)
 {
 	//keyboard variables
@@ -1931,6 +1988,9 @@ void INS_Init (void)
 	Cvar_Register (&in_rawinput_nolegacy, "Input Controls");	//FTESurf Patch 307
 	Cvar_Register (&in_rawinput_touchpad, "Input Controls");	//FTESurf Patch 468
 #endif
+	Cvar_Register (&in_keyguard, "Input Controls");	//FTESurf Patch 1576
+	Cvar_Register (&in_guard_live, "Input Controls");
+	pGetCurrentInputMessageSource = (void*)GetProcAddress(GetModuleHandleA("user32.dll"), "GetCurrentInputMessageSource");
 
 	INS_ScreenSaver_Init();
 }
@@ -2172,6 +2232,7 @@ void INS_Move (void)
 	  makes this two compares on a frame where nothing changed.*/
 	INS_RawInput_MouseSetLegacy(mouseactive && in_rawinput_nolegacy.ival);
 #endif
+	INS_GuardPublish();	//FTESurf Patch 1576
 
 	if (vid.activeapp && !Minimized)
 	{
@@ -3232,6 +3293,8 @@ void INS_TranslateKeyEvent(WPARAM wParam, LPARAM lParam, qboolean down, int qdev
 	if (!genkeystate)
 		INS_LegacyKeyObserve(lParam, down);	//FTESurf Patch 1424: only the legacy callers pass false
 #endif
+	if (!genkeystate && INS_KeyGuardBlocks())
+		return;	//FTESurf Patch 1576; the raw opt-in path already drops handle-less reports
 	qcode = MapKey(lParam);
 
 	if (WinNT && !in_builtinkeymap.value)
