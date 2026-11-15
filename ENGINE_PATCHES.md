@@ -12,10 +12,9 @@ on a touchpad, ranked.
 sendevent's six floats) and steps the existing `bad` counter when either goes off-profile (only where
 both cvars exist), so a toggle inside a run reads `changed`. The click block is reported as on only
 for the exact string "1": the engine applies it from `.ival` (Q_atoi) while `cvar()` is Q_atof, so
-`" 1"` or `0.99999999` would otherwise read on with clicks open; and since a worldspawn `cvar_` key (a
-player's own `maps/<map>.ent`) locks the cvar while `cvar_string` returns the player's latched value,
-CSQC also scans worldspawn (the same entity string, walked the engine's way, from CSQC_WorldLoaded;
-the block reads off until it has run) and reports the block off if any token names `in_rawinput`. SV_ProfileWhy adds `clicks`
+`" 1"` or `0.99999999` would otherwise read on with clicks open; and since a map-supplied cvar setting
+can hold the applied value apart from the one `cvar_string` returns, CSQC also reads off the block when
+worldspawn names an `in_rawinput` cvar (from CSQC_WorldLoaded; off until it has run). SV_ProfileWhy adds `clicks`
 (nolegacy not exactly 1) and `touchpad` (touchpad not exactly 0) after the reported profile; no
 `inguard` report is `silent`, and a missing cvar is a fault. Demotion is the existing quiet
 TF_NOPROFILE with the reason on the finish line and in the `.rec` `inprof`/`prof` words (format
@@ -26,22 +25,20 @@ words (older readers note them, never fault). `cmd timer` prints an `inguard` li
 **Verified.** Three QuakeC VMs build with 0 warnings (fteqcc 1f2efd06). `tools/p1573guard.py`
 (cfg/test/p1573guard.cfg), dedicated server and fresh-basedir client on surf_dune: the defaults move
 lands; nolegacy 0, `" 1"` and `0.99999999` each read `clicks`; touchpad 1 reads `touchpad`; a nolegacy
-toggle inside a running clean run reads `changed` with the start latch intact -- 8/8. `--latch` with a
-pk3 `maps/surf_dune.ent` adding `"cvar_in_rawinput_nolegacy" " 1"`: the engine's effective value is
-`" 1"` (clicks open); the round-1 build reports the block on and would rank, this build reads `clicks`, also
-for a variant opening with `"{ "` and an empty value before the key, which got past round 2's scan.
+toggle inside a running clean run reads `changed` with the start latch intact -- 8/8. `--latch` (a
+private-tree fixture): the engine's effective value is off while the round-1 and round-2 builds report the
+block on and would rank; this build reads `clicks`.
 The final build passes 8/8 on the installed client and on the 0.1.45 release client. The first cut
 passed 6/6 on the installed client exe 065f20d7 and on the 0.1.45 release client; on it the two
 review cases fail (it reported nolegacy 1). Control, installed pre-patch progs: no move, no `inguard`
 line, both settings still rank. `tools/test_reccheck.py` passes; with the two words removed the new
 checks fail. Two independent reviews (predicate/flow with a coverage table; evidence and honest
 players), then an integrity review of each fix: round 1 found the Q_atof/Q_atoi gap, round 2 the
-worldspawn latch, round 3 the scan's empty-token, brace and too-early gaps.
+map-supplied setting, round 3 gaps in the first answer to it.
 
 **Limits.** The profile reads the settings, like the rest of it; a patched client can assert them
-(T4). The worldspawn scan uses CSQC's tokeniser, not the engine's, so a .ent crafted to parse
-differently is not covered; the engine-side fix (CVAR_NOTFROMSERVER on both cvars, and the applied
-state as a read-only cvar) is BACKLOG and rides a release. It reports what was asked for, not whether the block applied: the block is grab-scoped, and the
+(T4). The worldspawn check is a partial defence; the engine-side fix (CVAR_NOTFROMSERVER on both
+cvars, and the applied state as a read-only cvar) is BACKLOG and rides a release. It reports what was asked for, not whether the block applied: the block is grab-scoped, and the
 engine's applied state (`in_raw_nolegacy_live`) is in the journal, not in QC. A touchpad that
 presents itself as an ordinary mouse is not stopped by `in_rawinput_touchpad 0`. Each vertical wheel
 notch reached the game twice (raw and legacy); with the block on while grabbed it arrives once, so
