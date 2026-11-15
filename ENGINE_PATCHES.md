@@ -24,8 +24,15 @@ constant first failed on Linux; the independently reviewed correction derives
 exact expected hashes/sizes from authored input bytes before collection. Both
 independent production and test-delta reviews found no P1/P2. These are scoped
 availability/correctness controls, not calibrated detection, global hard time/
-RSS/fairness guarantees or a whole research-leaf completion. Backend delivery is
-separate and recorded in tools/p1570-similarity-source-budget.md (mod tree).
+RSS/fairness guarantees or a whole research-leaf completion. Backend delivered
+15Nov2026 14:39:54UTC; independent14:48:17 readback verifies both85-file cohorts,
+actual accepted actor/namespace, canonical/cron/importer bindings and healthy
+ordinary service. Compatible fallback qualified FIRST against CURRENT data;
+both CLOSED roles preserve all46 table digests/counts, identity8, schema/objects/
+queues and sameinode. Post-OPEN checks are schema-only, not frozen writers. Six
+readers/native unchanged, temporary holds/leases released; no lobby/QC swap or
+new real recording/calibration. Exact limits and delivery are recorded in
+tools/p1570-similarity-source-budget.md (mod tree).
 
 ## Patch 1568 - Bounded large owner-history acquisition
 
