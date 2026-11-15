@@ -125,7 +125,7 @@ static int vmt_miss_reasons;
 //...and how many of them are on something the player can end up looking at.  Published as
 //hl2_unresolved_visible, which is what decides whether the HUD banner is worth drawing.
 static int vmt_miss_visible;
-static qboolean vmt_miss_quiet;	//FTESurf Patch 1560: every load-time miss is listed in data/unshipped.txt
+static qboolean vmt_miss_quiet;	//FTESurf Patch 1560: every load-time miss is listed in scripts/unshipped.txt
 extern char vmt_stat_missing_name[VMT_MISSING_LIST][MAX_QPATH];
 extern int vmt_stat_unparsed;	//FTESurf Patch 181, found but would not parse -- a different fault
 extern char vmt_stat_unparsed_name[VMT_MISSING_LIST][MAX_QPATH];
@@ -173,7 +173,7 @@ qboolean Mat_VMT_CensusMissing(const char *name);
 void Mat_VMT_CensusForget(const char *name);
 void Mat_VMT_MapColoursReset(void);	//FTESurf Patch 1548
 void Mat_VMT_MapColour(const char *name, const float *refl, qboolean warp);
-void Mat_VMT_SetMap(const char *modname);	//FTESurf Patch 1560: data/unshipped.txt's map key
+void Mat_VMT_SetMap(const char *modname);	//FTESurf Patch 1560: scripts/unshipped.txt's map key
 qboolean Mat_VMT_UnshippedLoaded(void);
 qboolean Mat_VMT_Unshipped(const char *name);
 static cvar_t *hl2_bottommaterial;
@@ -9044,7 +9044,7 @@ static void VBSP_BuildBIHMain(void *ctx, void *unusedp, size_t unuseda, size_t u
 		if (!cvarfuncs->GetString("fs_addons_missing", nogame, sizeof(nogame)))
 			*nogame = 0;
 
-		//FTESurf Patch 1560: developer-only when every miss is content data/unshipped.txt proves this map never
+		//FTESurf Patch 1560: developer-only when every miss is content scripts/unshipped.txt proves this map never
 		//shipped, no pack is wanted or the wanted one is mounted (states 0/1), and every game was found -- nothing
 		//a player can do. Anything unlisted (a map newer than the list, a lookup fault) stays loud, and with no
 		//list installed everything is as before. hl2_missing and data/missing keep the names either way.
@@ -9079,7 +9079,7 @@ static void VBSP_BuildBIHMain(void *ctx, void *unusedp, size_t unuseda, size_t u
 			break;
 		case 0:	//no pack wanted: mapdeps.txt has no line for this map (censused or not -- P1560)
 		case 1:	//its pack is mounted from disk
-			if (!haslist)	//P1560: no data/unshipped.txt -- the pre-P1560 wording, unchanged
+			if (!haslist)	//P1560: no scripts/unshipped.txt -- the pre-P1560 wording, unchanged
 			{
 				if (state == 0)
 					Con_Printf(CON_WARNING
@@ -9097,11 +9097,11 @@ static void VBSP_BuildBIHMain(void *ctx, void *unusedp, size_t unuseda, size_t u
 				say(CON_WARNING "  \"%s\" is already mounted for this map, so these are missing from it too.\n", spec);
 			if (allshipped)
 				say(CON_WARNING
-					"  None of these ever shipped with this map (data/unshipped.txt, from tools/mapdeps.py):\n"
+					"  None of these ever shipped with this map (scripts/unshipped.txt, from tools/mapdeps.py):\n"
 					"  nothing to mount and nothing to fix.\n");
 			else
 				Con_Printf(CON_WARNING
-					"  %i of these are not on data/unshipped.txt, the list of content this map never shipped,\n"
+					"  %i of these are not on scripts/unshipped.txt, the list of content this map never shipped,\n"
 					"  so why they are missing is not established: the map may be newer than the list, or\n"
 					"  they failed to load.  `hl2_missing` lists them.\n", vmt_stat_missing - listed);
 			break;
@@ -14381,7 +14381,7 @@ static void VBSP_Missing_f(void)
 			"the rest are named by the map and drawn by nothing.\n",
 			vmt_miss_visible, vmt_census_atload);
 		if (vmt_miss_quiet)	//FTESurf Patch 1560
-			Con_Printf("Every one is on data/unshipped.txt as never shipped with this map, so the banner's\n"
+			Con_Printf("Every one is on scripts/unshipped.txt as never shipped with this map, so the banner's\n"
 				"count (hl2_unresolved_visible) is published as 0 and the load-time list was developer-only.\n");
 	}
 	if (vmt_stat_unparsed)
@@ -14713,7 +14713,7 @@ qboolean VBSP_Init(void)
 		hl2_refract = cvarfuncs->GetNVFDG("hl2_refract", "2", CVAR_SHADERSYSTEM, "How Source's Refract materials (glass, windows) are drawn.\n0: no framebuffer copy -- what is behind the pane tinted by $refracttint (and its tint texture), plus its $envmap reflection: Source's look without the warp.\n1: Source's refraction, which copies the framebuffer once per batch.\n2: dithered flat (default) -- the pane keeps its own texture, $alpha sets the coverage, and it becomes opaque geometry that writes depth. A pane with no texture of its own draws as 0.", MAPOPTIONS);
 		hl2_vertexcolor = cvarfuncs->GetNVFDG("hl2_vertexcolor", "1", CVAR_SHADERSYSTEM, "FTESurf Patch 232: $vertexcolor / $vertexalpha on LightmappedGeneric and WorldVertexTransition materials -- the per-vertex tint and opacity a mapper paints onto a DISPLACEMENT (every other surface carries white at alpha 1, so this cannot change them).\n0: ignore both keys, which is what every build before P232 did.\n1: draw what the material asks for (default). 41 transition materials in 20 maps and 494 LightmappedGeneric ones in 111 maps carry them; surf_rise's ivy is the reported case.", MAPOPTIONS);
 		hl2_bottommaterial = cvarfuncs->GetNVFDG("hl2_bottommaterial", "1", CVAR_SHADERSYSTEM, "FTESurf Patch 233: a water material's $bottommaterial -- the underside of the water -- when the map names one and does not ship it.\n0: leave it unresolved, which is what every build before P233 did; the underside draws with the default wall shader and the map reports a missing material.\n1: draw it as the water material that names it (default). surf_aesthetic's water/clear_beneath is 325 faces and surf_demise's water_tar_beneath 7; neither exists in any pack, in either spelling.", MAPOPTIONS);
-		hl2_missingtint = cvarfuncs->GetNVFDG("hl2_missingtint", "1", 0, "FTESurf Patch 1191: a world face whose material has no VMT (or one that would not parse) draws one flat colour: the map's own record of that texture's average colour (dtexdata reflectivity), lit by the lightmap, as Momentum draws a map whose game is not installed.\n0: the missing checker (hl2_missinggrid). FTESurf Patch 1548: also a VMT whose image is missing (the map's colour, else data/matcolours.txt), a model material the index lists, and water (a see-through plane of its fog colour). Takes effect for materials loaded after the change (the next map load).", MAPOPTIONS);
+		hl2_missingtint = cvarfuncs->GetNVFDG("hl2_missingtint", "1", 0, "FTESurf Patch 1191: a world face whose material has no VMT (or one that would not parse) draws one flat colour: the map's own record of that texture's average colour (dtexdata reflectivity), lit by the lightmap, as Momentum draws a map whose game is not installed.\n0: the missing checker (hl2_missinggrid). FTESurf Patch 1548: also a VMT whose image is missing (the map's colour, else scripts/matcolours.txt), a model material the index lists, and water (a see-through plane of its fog colour). Takes effect for materials loaded after the change (the next map load).", MAPOPTIONS);
 		hl2_missinggrid = cvarfuncs->GetNVFDG("hl2_missinggrid", "32", 0, "FTESurf Patch 780: the size, in world units, of one square of the missing-texture checker on a world face whose material did not resolve.\n0: scale it like the texture it stands in for, which is what every build before P780 did (a 1024 texture at 0.25 drew 128-unit squares).\n32 (default): one square per 32 units -- Hammer's grid -- whatever the face's texture scale. Takes effect on the next map load.", MAPOPTIONS);
 		hl2_skinfallback = cvarfuncs->GetNVFDG("hl2_skinfallback", "1", CVAR_SHADERSYSTEM, "FTESurf Patch 234: what a model does when one of its skins names a material that was never shipped.\n0: nothing -- that skin draws with the default wall shader, and the map reports a missing material.\n1: use another skin of the same slot that did resolve (default). surf_demise ships three of its four bone skins and one of its two fir-branch skins; no prop on the map selects the missing ones, so this silences two reports and changes nothing on screen.", MAPOPTIONS);
 		hl2_translucent = cvarfuncs->GetNVFDG("hl2_translucent", "1", CVAR_SHADERSYSTEM, "$translucent world materials (windows, grates, railings).\n0: draw them OPAQUE -- they keep their texture and lightmap but stop being sorted, which is what they actually cost on a map with a lot of glazing.\n1: as the material author wrote them (default).", MAPOPTIONS);
@@ -14874,7 +14874,7 @@ qboolean VBSP_Init(void)
 		cvarfuncs->GetNVFDG("hl2_unresolved_first", "", CVAR_NOSAVE, "The first material the loaded map failed to resolve, as a hint at which asset pack it wants.", MAPOPTIONS);
 		//FTESurf Patch 233: ...and how many of them are on a face or a prop rather than only
 		//in the texdata string table.  The HUD banner draws on THIS, not on the raw count.
-		cvarfuncs->GetNVFDG("hl2_unresolved_visible", "0", CVAR_NOSAVE, "How many of hl2_unresolved are on something you can actually look at -- a drawn world face, or a prop skin. A material named in the map's texdata table that no face uses cannot be seen and does not count. `hl2_missing` says which is which. FTESurf Patch 1560: 0 when data/unshipped.txt lists every miss as content the map never shipped.", MAPOPTIONS);
+		cvarfuncs->GetNVFDG("hl2_unresolved_visible", "0", CVAR_NOSAVE, "How many of hl2_unresolved are on something you can actually look at -- a drawn world face, or a prop skin. A material named in the map's texdata table that no face uses cannot be seen and does not count. `hl2_missing` says which is which. FTESurf Patch 1560: 0 when scripts/unshipped.txt lists every miss as content the map never shipped.", MAPOPTIONS);
 
 		/*
 		FTESurf Patch 254: the loaded map's underwater fog, read out of the first

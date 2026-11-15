@@ -661,7 +661,7 @@ static qboolean VMT_ParseColour(const char *in, float *c)
 FTESurf Patch 1548: a material whose image will not load draws its average colour under its own lighting
 (lightmap, vertex light), not the missing checker. The map's own record first: dtexdata reflectivity, the
 linear average VBSP read from the VTF, which mod_vbsp.c hands over for each world texture before its
-shader loads (Mat_VMT_MapColour). Then data/matcolours.txt (tools/matcolours.py), every material of the
+shader loads (Mat_VMT_MapColour). Then scripts/matcolours.txt (tools/matcolours.py), every material of the
 games fs_addons mounts, sorted: "<path> <RRGGBB sRGB> <flags> [<tint RRGGBB>]". hl2_missingtint 0 keeps
 the checker everywhere.
 */
@@ -748,7 +748,7 @@ static void VMT_IndexLoad(void)
 	size_t sz = 0, n = 1;
 	char *p, *e, *nl;
 	vmt_idxtried = true;
-	vmt_idx = (char*)fsfuncs->LoadFile("data/matcolours.txt", &sz);
+	vmt_idx = (char*)fsfuncs->LoadFile("scripts/matcolours.txt", &sz);
 	if (!vmt_idx)
 		return;
 	for (p = vmt_idx, e = vmt_idx + sz; p < e; p++)
@@ -879,7 +879,7 @@ static int VMT_FallbackColour(const char *name, const char *tex, float *rgb, cha
 }
 
 /*
-FTESurf Patch 1560: data/unshipped.txt (tools/mapdeps.py --unshipped), "<map>\t<key>" byte-sorted: every material
+FTESurf Patch 1560: scripts/unshipped.txt (tools/mapdeps.py --unshipped), "<map>\t<key>" byte-sorted: every material
 and texture of a library map that no pack, mount or the map's own pakfile supplies -- proven never shipped with it,
 which fs_automount_state 0 is not (that is any map wanting no pack, censused or not). mod_vbsp.c keeps the map-load
 warning and the banner quiet when every miss is listed. A map or name missing from the list (a new map, an engine
@@ -911,7 +911,7 @@ static void VMT_UnshippedLoad(void)
 	size_t sz = 0, n = 1;
 	char *p, *e, *nl;
 	vmt_unshiptried = true;
-	vmt_unship = (char*)fsfuncs->LoadFile("data/unshipped.txt", &sz);
+	vmt_unship = (char*)fsfuncs->LoadFile("scripts/unshipped.txt", &sz);
 	if (!vmt_unship)
 		return;
 	for (p = vmt_unship, e = vmt_unship + sz; p < e; p++)
@@ -927,7 +927,7 @@ static void VMT_UnshippedLoad(void)
 	}
 }
 
-//TRUE once data/unshipped.txt has loaded with entries; without it every caller behaves as before P1560.
+//TRUE once scripts/unshipped.txt has loaded with entries; without it every caller behaves as before P1560.
 qboolean Mat_VMT_UnshippedLoaded(void)
 {
 	if (!vmt_unshiptried)

@@ -1,5 +1,34 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1571 - Keep appearance tables compatible with existing updaters
+
+**Problem.** The generated material-colour and never-shipped-material tables
+were declared as release inputs under `data/`, but released signed-update
+readers reject those names before installing anything. Adding exceptions to
+new readers would still strand existing clients on the old policy.
+
+**Change.** Relocate only these two authored asset tables to the existing
+managed `scripts/` namespace. Update the plugin's read-only load paths,
+diagnostic references, generator defaults/help, explicit required ship entries,
+exact generated-file ignores and current preparation instructions. Preserve
+old developer `data/` copies; change no table format, missing-table fallback,
+updater policy, signature check, path guard or player-data ownership rule.
+
+**Verified.** The publisher's 21 signed-object/manifest tests pass, including
+byte-identical round trips of both new paths and denial of their old DATA
+names. The actual native policy compiles with `-Wall -Wextra -Werror`, accepts
+the authored asset paths and refuses 26 neighboring/player paths; removing
+the existing scripts prefix acts separately for each table. That policy body
+is identical to released 0.1.45 engine 9aa225a8f. The actual Rust policy is also
+identical to released launcher 1538d9c; its exact repository test compiles with
+warnings denied, passes unchanged policy and fails both prefix-omission arms.
+The public-default Windows full build passes for the client, dedicated server
+and all five plugins, with no warning messages new to the prior default full
+build. All three release-version QuakeC VMs compile with zero warnings. These
+are build and source-bound policy controls, not complete old installer or
+plugin load acceptance. Actual staged table loads, Linux qualification and
+final prepared-candidate acceptance remain required before publication.
+
 ## Patch 1570 - Admit owned similarity sources without unused prefetch
 
 **Problem.** A valid first comparison could become unavailable under a selected
