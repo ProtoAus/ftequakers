@@ -1,5 +1,32 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1568 - Bounded large owner-history acquisition
+
+**Problem.** Owner history refused bodies over8MiB. Raising that constant alone
+would still materialize whole recordings and round odd byte counts above16MiB.
+
+**Change.** Opt-in loose-disk read-stream10, int64 size and VM-owned incremental
+SHA256 keep I/O/work bounded. Existing sandbox/legacy modes remain intact; the
+Win32 stream is explicitly unmapped/full-width. Account-bound v2 uses private
+snapshots, integer decimal totals (at most1073741823bytes), write-through parts
+and independent full client hashing. Uncached write-path guards preserve known
+occupants/errors; they require one writer, not external-race atomicity. Long
+healthy listings retain their query. Pending completion ownership is private;
+no historical orphan adoption or REC/native-cert/rank/movement policy change.
+
+**Verified.** Production-source hash/VM controls match Python at1/4093/65536-byte
+budgets; quota/error/seek/close and sparse Windows4GiB+3 controls act. Both
+independent review P1s were corrected; fresh frozen integration review is clear.
+Three VMs compile0warnings; full Windows client/server/five-plugin diagnostics
+exactly match the inspected pre-change baseline (74existing warnings). Current
+CSQC metadata binding also links with0new warnings. A real154-tick TAS finish
+used authenticated list2/get2/ack2 and saved all31822bytes identically, without
+auto replay. Reader952/0; actual paired CLI retains366faulty reports and368
+diagnostics on the same578REC/184VIEW bytes under both readers (0new). Published
+HL2 maintenance was integrated without changing any of the9 IO/API source files.
+Final clean restamp, genuine large-body runtime and destination delivery remain
+pending; source/unit/small checks are not arbitrary-size or installed proof.
+
 ## Patch 1565 - Preserve exact server angle-operation context
 
 **Problem.** A whole-view change does not identify its source. Historical body

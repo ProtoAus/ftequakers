@@ -2611,8 +2611,96 @@ typedef struct {
 	size_t ofs;
 	pubprogfuncs_t *prinst;
 	long accessmode;
+	void *sha256context;
+	qofs_t sha256length, sha256count;
+	qboolean sha256failed;
 } pf_fopen_files_t;
 static pf_fopen_files_t pf_fopen_files[MAX_QC_FILES];
+
+static void PF_FileHashFail(pf_fopen_files_t *f)
+{
+	if (f->sha256context)
+		BZ_Free(f->sha256context);
+	f->sha256context = NULL;
+	f->sha256failed = true;
+}
+
+//An interrupted hash is terminal for this open handle, even after seeking back.
+static void PF_FileHashInterrupt(pf_fopen_files_t *f)
+{
+	if (f->sha256context)
+		PF_FileHashFail(f);
+}
+
+void QCBUILTIN PF_file_sha256_step(pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
+{
+	float handle = G_FLOAT(OFS_PARM0);
+	int fnum, budget = G_INT(OFS_PARM1), count, i;
+	pf_fopen_files_t *f;
+	qofs_t length, cursor;
+	qbyte buffer[4096], digest[32];
+	char hex[65];
+	static const char digits[] = "0123456789abcdef";
+
+	RETURN_TSTRING("!");
+	if (!(handle >= FIRST_QC_FILE_INDEX && handle < FIRST_QC_FILE_INDEX + MAX_QC_FILES))
+		return;
+	fnum = (int)handle - FIRST_QC_FILE_INDEX;
+	if (handle != fnum + FIRST_QC_FILE_INDEX)
+		return;
+	f = &pf_fopen_files[fnum];
+	if (f->prinst != prinst || !f->file || f->accessmode != FRIK_FILE_READSTREAM)
+		return;
+	if (f->sha256failed)
+		return;
+	if (prinst->callargc != 2 || budget <= 0 || budget > 65536)
+		goto fail;
+	length = VFS_GETLEN(f->file);
+	cursor = VFS_TELL(f->file);
+	//Conservative API ceiling below the shared SHA256 implementation's 32-bit block-count limit.
+	if (length > 2147483647u || cursor == qofs_ErrorValue())
+		goto fail;
+	if (!f->sha256context)
+	{
+		if (cursor != 0 || !VFS_SEEK(f->file, 0))
+			goto fail;
+		f->sha256length = length;
+		f->sha256count = 0;
+		f->sha256context = BZ_Malloc(hash_sha2_256.contextsize);
+		hash_sha2_256.init(f->sha256context);
+	}
+	if (length != f->sha256length || cursor != f->sha256count)
+		goto fail;
+	while (budget > 0 && f->sha256count < length)
+	{
+		count = min((qofs_t)min((size_t)budget, sizeof(buffer)), length - f->sha256count);
+		if (VFS_READ(f->file, buffer, count) != count)
+			goto fail;
+		hash_sha2_256.process(f->sha256context, buffer, count);
+		f->sha256count += count;
+		budget -= count;
+	}
+	if (VFS_GETLEN(f->file) != length || VFS_TELL(f->file) != f->sha256count)
+		goto fail;
+	if (f->sha256count != length)
+	{
+		RETURN_TSTRING("");
+		return;
+	}
+	hash_sha2_256.terminate(digest, f->sha256context);
+	BZ_Free(f->sha256context);
+	f->sha256context = NULL;
+	for (i = 0; i < 32; i++)
+	{
+		hex[i*2] = digits[digest[i] >> 4];
+		hex[i*2+1] = digits[digest[i] & 15];
+	}
+	hex[64] = 0;
+	RETURN_TSTRING(hex);
+	return;
+fail:
+	PF_FileHashFail(f);
+}
 
 static qboolean QC_PathRequiresSandbox(const char *name)
 {
@@ -2840,21 +2928,21 @@ void QCBUILTIN PF_fopen (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals
 		return;
 	}
 	if (fmode != FRIK_FILE_READ && fmode != FRIK_FILE_READNL && fmode != FRIK_FILE_MMAP_READ
-	    && fmode != FRIK_FILE_READ_DELAY && QC_CfgChangeDenied(prinst, name))
+	    && fmode != FRIK_FILE_READ_DELAY && fmode != FRIK_FILE_READSTREAM && QC_CfgChangeDenied(prinst, name))
 		return;
 	if (QC_TasprojDenied(prinst, name, false) || QC_TasprojDenied(prinst, fallbackread, false))
 		return;
 #if defined(CSQC_DAT) && !defined(SERVERONLY)
 	//ftesurf (P1102): any VM reads a map table only from the gamedir's own loose files, and
-	//only as FILE_READ (all ours use): a package, downloads/ or a server's path could hold one.
-	if (QC_MenuTable(name) && (fmode == FRIK_FILE_READ || fmode == FRIK_FILE_READ_DELAY
+	//only as FILE_READ or FILE_READSTREAM: a package, downloads/ or a server's path could hold one.
+	if (QC_MenuTable(name) && (fmode == FRIK_FILE_READ || fmode == FRIK_FILE_READ_DELAY || fmode == FRIK_FILE_READSTREAM
 	                           || fmode == FRIK_FILE_READNL || fmode == FRIK_FILE_MMAP_READ || fmode == FRIK_FILE_MMAP_RW))
 	{
-		if (fmode != FRIK_FILE_READ && fmode != FRIK_FILE_READ_DELAY)
+		if (fmode != FRIK_FILE_READ && fmode != FRIK_FILE_READ_DELAY && fmode != FRIK_FILE_READSTREAM)
 			return;
 		Q_strncpyz(pf_fopen_files[i].name, name, sizeof(pf_fopen_files[i].name));
-		pf_fopen_files[i].accessmode = FRIK_FILE_READ_DELAY;
-		pf_fopen_files[i].file = FS_OpenTableVFS(name);
+		pf_fopen_files[i].accessmode = fmode == FRIK_FILE_READSTREAM ? FRIK_FILE_READSTREAM : FRIK_FILE_READ_DELAY;
+		pf_fopen_files[i].file = FS_OpenTableVFS(name, fmode == FRIK_FILE_READSTREAM);
 		pf_fopen_files[i].ofs = 0;
 		if (pf_fopen_files[i].file)
 		{
@@ -2902,6 +2990,17 @@ void QCBUILTIN PF_fopen (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals
 
 			pf_fopen_files[i].len = pf_fopen_files[i].bufferlen;
 			pf_fopen_files[i].ofs = 0;
+			G_FLOAT(OFS_RETURN) = i + FIRST_QC_FILE_INDEX;
+			pf_fopen_files[i].prinst = prinst;
+		}
+		break;
+	case FRIK_FILE_READSTREAM:
+		//Loose writable gamedir only: never enter packed/decompression backends or file: URIs.
+		if (!strncmp(name, "file:", 5))
+			break;
+		pf_fopen_files[i].file = FS_OpenVFS(name, "rbn", FS_GAMEONLY);
+		if (pf_fopen_files[i].file)
+		{
 			G_FLOAT(OFS_RETURN) = i + FIRST_QC_FILE_INDEX;
 			pf_fopen_files[i].prinst = prinst;
 		}
@@ -3140,6 +3239,7 @@ void PF_fclose_i (int fnum)
 		break;
 
 	case FRIK_FILE_STREAM:
+	case FRIK_FILE_READSTREAM:
 	case FRIK_FILE_READ_DELAY:
 		VFS_CLOSE(pf_fopen_files[fnum].file);
 		break;
@@ -3165,9 +3265,9 @@ void PF_fclose_i (int fnum)
 	case FRIK_FILE_INVALID:
 		break;
 	}
-	pf_fopen_files[fnum].file = NULL;
-	pf_fopen_files[fnum].data = NULL;
-	pf_fopen_files[fnum].prinst = NULL;
+	if (pf_fopen_files[fnum].sha256context)
+		BZ_Free(pf_fopen_files[fnum].sha256context);
+	memset(&pf_fopen_files[fnum], 0, sizeof(pf_fopen_files[fnum]));
 }
 
 void QCBUILTIN PF_fclose (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
@@ -3221,8 +3321,9 @@ void QCBUILTIN PF_fgets (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals
 		return;	//this just isn't ours.
 	}
 
-	if (pf_fopen_files[fnum].accessmode == FRIK_FILE_STREAM)
+	if (pf_fopen_files[fnum].accessmode == FRIK_FILE_STREAM || pf_fopen_files[fnum].accessmode == FRIK_FILE_READSTREAM)
 	{
+		PF_FileHashInterrupt(&pf_fopen_files[fnum]);
 		if (VFS_GETS(pf_fopen_files[fnum].file, pr_string_temp, sizeof(pr_string_temp)))
 			RETURN_TSTRING(pr_string_temp);
 		else
@@ -3399,8 +3500,11 @@ static int PF_fread_internal (pubprogfuncs_t *prinst, int fnum, char *buf, size_
 		return 0;	//this just isn't ours.
 	}
 
-	if (pf_fopen_files[fnum].accessmode == FRIK_FILE_STREAM)
+	if (pf_fopen_files[fnum].accessmode == FRIK_FILE_STREAM || pf_fopen_files[fnum].accessmode == FRIK_FILE_READSTREAM)
+	{
+		PF_FileHashInterrupt(&pf_fopen_files[fnum]);
 		return VFS_READ(pf_fopen_files[fnum].file, buf, len);
+	}
 	if (pf_fopen_files[fnum].accessmode == FRIK_FILE_READ_DELAY)
 	{	//on first read, convert into a regular file.
 		pf_fopen_files[fnum].accessmode = FRIK_FILE_READ;
@@ -3499,7 +3603,10 @@ void QCBUILTIN PF_fseek64 (pubprogfuncs_t *prinst, struct globalvars_s *pr_globa
 	{
 		G_INT64(OFS_RETURN) = VFS_TELL(pf_fopen_files[fnum].file);
 		if (prinst->callargc>1 && G_INT64(OFS_PARM1) >= 0)
+		{
+			PF_FileHashInterrupt(&pf_fopen_files[fnum]);
 			VFS_SEEK(pf_fopen_files[fnum].file, G_INT64(OFS_PARM1));
+		}
 	}
 	else
 	{
@@ -8946,6 +9053,7 @@ qc_extension_t QSG_Extensions[] = {
 
 
 	{"FTE_QC_BASEFRAME",				NULL,	0,{NULL}, "Specifies that .basebone and .baseframe exist in ssqc. These fields affect all bones in the entity's model with a lower index than the .basebone field, allowing you to give separate control to the legs of a skeletal model, without affecting the torso animations, from ssqc."},
+	{"FTESURF_QC_FILESTREAM_HASH", NULL, 2, {"fopen", "file_sha256_step"}, "Provides loose writable-gamedir-only FILE_READSTREAM=10 (no packed files, file: URIs or fallback roots) and bounded SHA256 steps on the same VM-owned handle. Hash budgets are strictly 1..65536 bytes; lengths above 2147483647 bytes are terminal errors. No whole-file QC buffer or immutable snapshot is created."},
 	{"FTE_QC_FILE_BINARY",				NULL,	4,{"fread","fwrite","fseek","fsize"}, "Extends FRIK_FILE with binary read+write, as well as allowing seeking. Requires pointers."},
 	{"FTE_QC_CHANGELEVEL_HUB",			NULL,	0,{NULL}, "Adds an extra argument to changelevel which is carried over to the next map in the 'startspot' global. Maps will be saved+reloaded until the extra argument is omitted again, purging all saved maps. Saved games will contain a copy of each preserved map. parm1-parm64 globals can be used, giving more space to transfer more player data."},
 	{"FTE_QC_CHECKCOMMAND",				NULL,	1,{"checkcommand"}, "Provides a way to test if a console command exists, and whether its a command/alias/cvar. Does not say anything about the expected meanings of any arguments or values."},

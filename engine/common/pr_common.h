@@ -387,6 +387,7 @@ int PR_QCFile_From_WriteStream(pubprogfuncs_t *prinst, const char *name, vfsfile
 vfsfile_t *PR_QCFile_StreamVFS(pubprogfuncs_t *prinst, int handle, const char *name);
 int PR_QCFile_From_Buffer (pubprogfuncs_t *prinst, const char *name, void *buffer, size_t offset, size_t len);
 void QCBUILTIN PF_fopen (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals);
+void QCBUILTIN PF_file_sha256_step (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals);
 
 void QCBUILTIN PF_fcopy (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals);
 void QCBUILTIN PF_fcopyrange (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals);	//FTESurf Patch 375
@@ -1007,6 +1008,8 @@ typedef enum
   which COM_WriteFile does and which a tcp:// stream must never do.
 */
 #define FRIK_FILE_WRITESTREAM (9) /*write-only, no buffering: every fputs is a VFS_WRITE. For a writer that runs for a long time and does not know its final size.*/
+//P1568: loose writable-gamedir read only; no whole-file buffer, writes or resizing.
+#define FRIK_FILE_READSTREAM (10)
 
 #define MASK_DELTA 1
 #define MASK_STDVIEWMODEL 2

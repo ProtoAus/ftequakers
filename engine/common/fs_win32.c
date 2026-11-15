@@ -307,6 +307,30 @@ static qofs_t QDECL VFSW32_GetSize (struct vfsfile_s *file)
 	lo = GetFileSize(intfile->hand, &hi);
 	return qofs_Make(lo,hi);
 }
+//P1568: opt-in unmapped readers need full-width positions and unambiguous errors.
+static qboolean QDECL VFSW32_StreamSeek(vfsfile_t *file, qofs_t pos)
+{
+	LARGE_INTEGER offset;
+	offset.QuadPart = pos;
+	if (offset.QuadPart < 0 || (qofs_t)offset.QuadPart != pos)
+		return false;
+	return SetFilePointerEx(((vfsw32file_t*)file)->hand, offset, NULL, FILE_BEGIN) != 0;
+}
+static qofs_t QDECL VFSW32_StreamTell(vfsfile_t *file)
+{
+	LARGE_INTEGER zero, pos;
+	zero.QuadPart = 0;
+	if (SetFilePointerEx(((vfsw32file_t*)file)->hand, zero, &pos, FILE_CURRENT) && pos.QuadPart >= 0)
+		return (qofs_t)pos.QuadPart;
+	return qofs_ErrorValue();
+}
+static qofs_t QDECL VFSW32_StreamGetSize(vfsfile_t *file)
+{
+	LARGE_INTEGER size;
+	if (GetFileSizeEx(((vfsw32file_t*)file)->hand, &size) && size.QuadPart >= 0)
+		return (qofs_t)size.QuadPart;
+	return qofs_ErrorValue();
+}
 static qboolean QDECL VFSW32_Close(vfsfile_t *file)
 {
 	vfsw32file_t *intfile = (vfsw32file_t*)file;
@@ -415,6 +439,7 @@ static vfsfile_t *QDECL VFSW32_OpenInternal(vfsw32path_t *handle, const char *qu
 	qboolean write = !!strchr(mode, 'w');
 	qboolean append = !!strchr(mode, 'a');
 	qboolean text = !!strchr(mode, 't');
+	qboolean unmapped = !strcmp(mode, "rbn");
 	//qboolean persistent = !!strchr(mode, 'p');	//save to long-term storage
 	write |= append;
 	create = write;
@@ -485,7 +510,8 @@ static vfsfile_t *QDECL VFSW32_OpenInternal(vfsw32path_t *handle, const char *qu
 
 
 	fsize = GetFileSize(h, NULL);
-	if (write || append || text || fsize > 1024*1024*5)
+	//P1568: rbn is an opt-in raw stream; cached 32-bit mmap lengths are not safe here.
+	if (unmapped || write || append || text || fsize > 1024*1024*5)
 	{
 		fsize = 0;
 		mh = INVALID_HANDLE_VALUE;
@@ -517,9 +543,9 @@ static vfsfile_t *QDECL VFSW32_OpenInternal(vfsw32path_t *handle, const char *qu
 #endif
 	file->funcs.ReadBytes = read?VFSW32_ReadBytes:NULL;
 	file->funcs.WriteBytes = (write||append)?VFSW32_WriteBytes:NULL;
-	file->funcs.Seek = VFSW32_Seek;
-	file->funcs.Tell = VFSW32_Tell;
-	file->funcs.GetLen = VFSW32_GetSize;
+	file->funcs.Seek = unmapped?VFSW32_StreamSeek:VFSW32_Seek;
+	file->funcs.Tell = unmapped?VFSW32_StreamTell:VFSW32_Tell;
+	file->funcs.GetLen = unmapped?VFSW32_StreamGetSize:VFSW32_GetSize;
 	file->funcs.Close = VFSW32_Close;
 	file->funcs.Flush = VFSW32_Flush;
 	file->hand = h;

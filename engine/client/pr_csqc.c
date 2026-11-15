@@ -7197,6 +7197,7 @@ static struct {
 	{"fclose",					PF_fclose,	111},				// #111 void(float fnum) fclose (FRIK_FILE)
 	{"fgets",					PF_fgets,	112},				// #112 string(float fnum) fgets (FRIK_FILE)
 	{"fputs",					PF_fputs,	113},				// #113 void(float fnum, string str) fputs (FRIK_FILE)
+	{"file_sha256_step",		PF_file_sha256_step, 0},
 	{"fread",					PF_fread,	0},
 	{"fwrite",					PF_fwrite,	0},
 	{"fseek",					PF_fseek32,	0},
@@ -7879,6 +7880,7 @@ static struct {
 //	{NULL,						PF_Fixme,					649},
 	{"fcopy",					PF_fcopy,					650},
 	{"frename",					PF_frename,					651},
+	{"fwritepathstatus",		PF_fwritepathstatus,			0}, // P1568: uncached own write-path metadata, same sandbox
 	{"fremove",					PF_fremove,					652},
 	{"fexists",					PF_fexists,					653},
 	{"rmtree",					PF_rmtree,					654},

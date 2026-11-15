@@ -2794,6 +2794,7 @@ static struct {
 	{"fclose",					PF_fclose,					49},
 	{"fgets",					PF_fgets,					50},
 	{"fputs",					PF_fputs,					51},
+	{"file_sha256_step",		PF_file_sha256_step,			0},
 	{"fread",					PF_fread,					0},
 	{"fwrite",					PF_fwrite,					0},
 	{"fseek",					PF_fseek32,					0},

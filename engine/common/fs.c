@@ -4299,7 +4299,7 @@ vfsfile_t *QDECL FS_OpenVFS(const char *filename, const char *mode, enum fs_rela
 		return NULL;
 
 #ifdef _DEBUG
-	if (strcmp(mode, "rb"))
+	if (strcmp(mode, "rb") && strcmp(mode, "rbn"))
 		if (strcmp(mode, "r+b"))
 			if (strcmp(mode, "wb"))
 				if (strcmp(mode, "w+b"))
@@ -12339,13 +12339,13 @@ void FS_AutoUnmountStale(void)
 //ftesurf (P1102): a data/map* table, read only from the gamedir's own loose files -- FS_GAMEONLY
 //tries the home dir, then the install's -- never a package, downloads/ or a server's pure path,
 //any of which a server can make hold one.
-vfsfile_t *FS_OpenTableVFS(const char *name)
+vfsfile_t *FS_OpenTableVFS(const char *name, qboolean unmapped)
 {
-	return FS_OpenVFS(name, "rb", FS_GAMEONLY);
+	return FS_OpenVFS(name, unmapped ? "rbn" : "rb", FS_GAMEONLY);
 }
 static char *FS_LoadTable(const char *name)
 {
-	vfsfile_t *f = FS_OpenTableVFS(name);
+	vfsfile_t *f = FS_OpenTableVFS(name, false);
 	qofs_t len;
 	char *buf = NULL;
 	if (!f)
