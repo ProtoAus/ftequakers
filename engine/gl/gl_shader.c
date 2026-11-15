@@ -83,7 +83,7 @@ cvar_t r_forceprogramify = CVARAFD("r_forceprogramify", "0", "dpcompat_makeshitu
 cvar_t dpcompat_nopremulpics = CVARFD("dpcompat_nopremulpics", "0", CVAR_SHADERSYSTEM, "By default FTE uses premultiplied alpha for hud/2d images, while DP does not (which results in halos with low-res content). Unfortunately DDS files would need to be recompressed, resulting in visible issues.");
 #endif
 cvar_t r_glsl_precache = CVARFD("r_glsl_precache", "0", CVAR_SHADERSYSTEM, "Force all relevant glsl permutations to load upfront.");
-cvar_t r_glsl_warm = CVARFD("r_glsl_warm", "1", CVAR_ARCHIVE, "FTESurf Patch 1277: while a map loads, compile the shader permutations earlier play had to compile mid-run (remembered in data/glslwarm.txt), so a shader the driver has not cached does not stall a frame while you surf. 0 compiles each permutation when it is first drawn, as before.");
+cvar_t r_glsl_warm = CVARFD("r_glsl_warm", "1", CVAR_ARCHIVE, "FTESurf Patch 1277: while a map loads, compile the shader permutations earlier play had to compile mid-run (remembered in data/glslwarm.txt), then every permutation of each program declaring at most 3 permutation bits (Patch 1574: water, sky, sprites), so a shader the driver has not cached does not stall a frame while you surf. 0 compiles each permutation when it is first drawn, as before.");
 
 //FTESurf Patch 1277: the warm list. A program permutation first drawn mid-run compiles in that frame: 25-190 ms when
 //the driver's shader cache lacks it (the first play after an update changes the GLSL; NVIDIA's OpenGL cache also
@@ -97,12 +97,12 @@ cvar_t r_glsl_warm = CVARFD("r_glsl_warm", "1", CVAR_ARCHIVE, "FTESurf Patch 127
 #define GLSLWARM_BYTES (4*1024*1024)		//written and read, at most
 #define GLSLWARM_SEED "glsl/warmseed.txt"	//FTESurf Patch 1282: the release's starter list, read beside this PC's
 #define GLSLWARM_MAX 65536					//permutations kept, all programs together
-cvar_t r_mapready_budget = CVARFD("r_mapready_budget", "6", CVAR_ARCHIVE, "Soft seconds (0..10) for registered models/images and remembered active GLSL permutations at activation. A single upload/driver compile cannot be preempted. Expiry is incomplete, NOT server timer admission; see r_mapready_info. (FTESurf Patch 1442: 6, was 2; the window stays responsive meanwhile.)");
+cvar_t r_mapready_budget = CVARFD("r_mapready_budget", "6", CVAR_ARCHIVE, "Soft seconds (0..10) for registered models/images and remembered active GLSL permutations at activation, then every permutation of the small programs (Patch 1574). A single upload/driver compile cannot be preempted. Expiry is incomplete, NOT server timer admission; see r_mapready_info. (FTESurf Patch 1442: 6, was 2; the window stays responsive meanwhile.)");
 static struct
 {
 	qboolean observing, warming, invalidated, budgethit, overflow;
 	int programs, eligible, available, compiled, failed, pending, unavailable;
-	int unlisted;	//FTESurf Patch 1574: programs no list knew, warmed whole (GLSLWarm_MapActive)
+	int whole, wholeeligible, wholeavailable, wholecompiled, wholefailed, wholepending;	//FTESurf Patch 1574: small programs warmed whole, after the list
 	int models, modelpending, modelfailed, modelunrequested;
 	int images, imagepending, imagefailed, imageunrequested;
 	unsigned int latecompiles, latefailed, lateimages, lateimagefailed;
@@ -5812,9 +5812,10 @@ void R_MapReadyInfo_f(void)
 	Con_Printf("mapready: %s activation %s time %.3f budget-hit %i overflow %i\n",
 		state ? state : "not-started", mapready.state ? mapready.state : "not-started",
 		mapready.seconds, mapready.budgethit, mapready.overflow);
-	Con_Printf("mapready: programs %i unavailable %i eligible %i available %i compiled %i failed %i pending %i unlisted %i\n",
-		mapready.programs, mapready.unavailable, mapready.eligible, mapready.available, mapready.compiled, mapready.failed, mapready.pending,
-		mapready.unlisted);
+	Con_Printf("mapready: programs %i unavailable %i eligible %i available %i compiled %i failed %i pending %i\n",
+		mapready.programs, mapready.unavailable, mapready.eligible, mapready.available, mapready.compiled, mapready.failed, mapready.pending);
+	Con_Printf("mapready: whole programs %i eligible %i available %i compiled %i failed %i pending %i\n", mapready.whole,	//Patch 1574
+		mapready.wholeeligible, mapready.wholeavailable, mapready.wholecompiled, mapready.wholefailed, mapready.wholepending);
 	Con_Printf("mapready: other requested models still loading %i\n", mapready.otherpending);	//FTESurf Patch 1501
 	Con_Printf("mapready: activation models %i pending %i failed %i unrequested %i images %i pending %i failed %i unrequested %i\n",
 		mapready.models, mapready.modelpending, mapready.modelfailed, mapready.modelunrequested,
@@ -5827,24 +5828,25 @@ void R_MapReadyInfo_f(void)
 }
 
 //one permutation of an active program at activation: counted, compiled unless already there or past the budget
-static void MapReady_WarmPerm(program_t *prog, unsigned int p, unsigned int *seen, double deadline)
+//whole: Patch 1574's speculative pass, counted apart so the listed closure (ready-closure) means what it did
+static void MapReady_WarmPerm(program_t *prog, unsigned int p, unsigned int *seen, double deadline, qboolean whole)
 {
 	if (!p || (seen[p >> 5] & (1u << (p & 31))))
 		return;
 	seen[p >> 5] |= 1u << (p & 31);
-	mapready.eligible++;
+	(*(whole ? &mapready.wholeeligible : &mapready.eligible))++;
 	if (prog->permu[p])
 	{
 		if (prog->permu[p] == prog->permu[0])
-			mapready.failed++;
+			(*(whole ? &mapready.wholefailed : &mapready.failed))++;
 		else
-			mapready.available++;
+			(*(whole ? &mapready.wholeavailable : &mapready.available))++;
 		return;
 	}
 	if (Sys_DoubleTime() >= deadline)
 	{
 		mapready.budgethit = true;
-		mapready.pending++;
+		(*(whole ? &mapready.wholepending : &mapready.pending))++;
 		return;
 	}
 	MapReady_KeepAlive();
@@ -5852,13 +5854,13 @@ static void MapReady_WarmPerm(program_t *prog, unsigned int p, unsigned int *see
 	if (!prog->permu[p])
 	{
 		prog->permu[p] = prog->permu[0];
-		mapready.failed++;
+		(*(whole ? &mapready.wholefailed : &mapready.failed))++;
 	}
 	else
-		mapready.compiled++;
+		(*(whole ? &mapready.wholecompiled : &mapready.compiled))++;
 }
-//FTESurf Patch 1574: an unlisted program with at most this many permutation bits warms every combination of them
-#define GLSLWARM_UNLISTED_BITS 3
+//FTESurf Patch 1574: a program declaring at most this many permutation bits warms every combination of them
+#define GLSLWARM_WHOLE_BITS 3
 // CL_MakeActive: bounded known closure, not a universal loading/residency promise.
 void GLSLWarm_MapActive(void)
 {
@@ -5882,7 +5884,7 @@ void GLSLWarm_MapActive(void)
 		MapReady_Drain(deadline, start + (deadline - start) * 0.5);	//Patch 1501: props get half; the rest stays the compiles'
 		capacity = min(r_numshaders, 32768) * (SHADER_PASS_MAX + 1);
 		programs = malloc(max(1, capacity) * sizeof(*programs));
-		if (!programs || !glslwarm_mem)
+		if (!programs)
 			mapready.overflow = true;
 		else
 		{
@@ -5907,6 +5909,8 @@ void GLSLWarm_MapActive(void)
 					break;
 			}
 			qsort(programs, count, sizeof(*programs), MapReady_ComparePrograms);
+			if (!glslwarm_mem)	//no list: nothing known to close over; set after the walk above, which stops at overflow
+				mapready.overflow = true;
 			for (i = 0; i < (unsigned int)count; i++)
 			{
 				prog = programs[i];
@@ -5918,25 +5922,34 @@ void GLSLWarm_MapActive(void)
 					mapready.unavailable++;
 					continue;
 				}
-				w = Hash_Get(&glslwarm_hash, prog->name);
-				memset(seen, 0, sizeof(seen));
+				w = glslwarm_mem ? Hash_Get(&glslwarm_hash, prog->name) : NULL;
 				if (!w)
-				{	//FTESurf Patch 1574: a water material's defines are part of its program's name, so on a map not played
-					//before no list knows its water, which compiled mid-run on first sight (38 ms cold a permutation).
-					//Water declares 2-3 bits; a world or model program up to 11 is left to the list.
-					unsigned int sp = prog->supportedpermutations, sub, bits = 0;
-					for (sub = sp; sub; sub &= sub - 1)
-						bits++;
-					if (!sp || bits > GLSLWARM_UNLISTED_BITS)
-						continue;
-					mapready.unlisted++;
-					for (sub = sp; sub; sub = (sub - 1) & sp)
-						MapReady_WarmPerm(prog, sub, seen, deadline);
 					continue;
-				}
+				memset(seen, 0, sizeof(seen));
 				for (perm = 1; perm < PERMUTATIONS; perm++)
 					if (w->bits[perm >> 5] & (1u << (perm & 31)))
-						MapReady_WarmPerm(prog, perm & prog->supportedpermutations, seen, deadline);
+						MapReady_WarmPerm(prog, perm & prog->supportedpermutations, seen, deadline, false);
+			}
+			/*FTESurf Patch 1574: then, with what is left of the budget, every combination of each small program's bits.
+			  A water material's defines are part of its program's name, so on a map not played before no list knows its
+			  water, which compiled mid-run on first sight (38 ms cold a permutation); and a program only ever drawn at
+			  permutation 0 is never listed (GLSLWarm_Add). Water, sky and sprites declare 1-3 bits; world and model
+			  programs up to 8, left to the list.*/
+			for (i = 0; i < (unsigned int)count; i++)
+			{
+				unsigned int sp, sub, bits = 0;
+				prog = programs[i];
+				if ((i && prog == programs[i-1]) || !prog->name || !prog->permu[0])
+					continue;
+				sp = prog->supportedpermutations;
+				for (sub = sp; sub; sub &= sub - 1)
+					bits++;
+				if (!sp || bits > GLSLWARM_WHOLE_BITS)
+					continue;
+				mapready.whole++;
+				memset(seen, 0, sizeof(seen));
+				for (sub = sp; sub; sub = (sub - 1) & sp)
+					MapReady_WarmPerm(prog, sub, seen, deadline, true);
 			}
 		}
 		free(programs);
