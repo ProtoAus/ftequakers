@@ -1,5 +1,42 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1590 - Groups on the leaderboards, one mode row, the server beside the board, a map family counted once
+
+QC + surfd (FTESurf main 03922e48); no engine change. ftesurf-06, root C:\FTESurf-worktrees\groups-20261116-c7.
+
+**Problem.** Lex, 16 Nov: Momentum/KSF-style Groups on the leaderboards -- coloured lines where the group
+changes, your own group as a badge on Main/stages/bonuses -- based on Momentum's or KSF's times because ours are
+too few; the board filters as one exclusive mode row (Segmented in blue, TAS in purple, then the directions; TAS
+was a tab and Segmented a switch beside the directions); the server's players floating right of the TAB board
+with their main time in their colour; the Stats page counting surf_borderlands and its CS:S build once.
+
+**Change.**
+- surfd `game_groups` (`/api/board?groups=<map>&style=<s>&me=<mark|handle>`): per leg, the larger imported
+  board (Momentum, else KSF; Momentum imports Normal only, KSF all four directions; Segmented and TAS have none).
+  Ranks from Lex's calculator with its defaults: Top 10; G1 ends at max(15, 10 + round(2% X)); cutoff
+  C = min(X, max(100, round(67% X))); G2-G5 log-spaced from G1's end to C, G6 ends at C; each group at least 5
+  ranks, capped at C (reproduces 50 / 150 / 50,000 exactly). Cut times are the millis at those ranks
+  (`ORDER BY millis LIMIT 1 OFFSET r-1` on runs_board), cached 600 s keyed by the import base. The asker's group
+  is their ranked (TAS: community) time on the leg against the cuts. Its own request because test_momindex.py
+  holds the ranked board's body identical across an import.
+- surfd `_tier_table` / `_tier_maps`: a map and its second builds (variant_base's catalogue) are one family; a
+  finish on any build credits it, in the map pool or not; the family's tier is the base's.
+- csprogs cl_groups.qc stores the answer (one map|mode); cl_scores.qc draws a group strip per row, a line and a
+  pill where consecutive rows' groups differ, a badge per leg and "groups from <source>, N times" in the footer;
+  Scores_Mode / Scores_ModeSet make the mode row exclusive (tabs Online / Local keep it; the finish follow and the
+  console words go through it); Scores_RoomFloat lists the server's players (Players_Need split from Players_Draw).
+- menu m_board.qc: the same mode row (TAS as tier community, its own leg counts `nt`), lines and badges.
+
+**Verified.** surfd test_groups 10/10; test_board, test_web, test_completion_pool, test_home_completion,
+test_mapcards, test_profile_*, test_variants pass. tools/p1590groups.py (this checkout's surfd over a scratch
+database, the game driven by `scores mode`, graded on `scores status`): 14/14, screenshots inspected; the
+first runs failed on stale fixtures (rec_terms 4, no listen-client mark) and were fixed in the arm. Read-only
+timing on the Pi's database: cold worst 0.3 s (surf_rookie, 19 legs). One review round each lens (QC state,
+surfd cost/consistency): map-name case loop, console paths lighting Segmented over segmented_sw, the follow
+bypassing the mode, unindexed sort, per-map scan, out-of-pool finishes -- all fixed and re-measured.
+Limits: the surfd half needs a guarded backend generation; a partly crawled KSF board's X is a lower bound;
+ui_native_scores draws no group lines (BACKLOG).
+
 ## Patch 1588 - A game this PC hosts predicts save loads and holds, as a remote one does
 
 **Problem.** Lex (16 Nov, after 0.1.47): `map surf_colin_blaster_69000` from the console, then a load: "Loading save"
