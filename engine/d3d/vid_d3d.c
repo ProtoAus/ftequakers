@@ -327,7 +327,7 @@ static LRESULT WINAPI D3D9_WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARA
 		// Its delta is either positive or neg, and we generate the proper
 		// Event.
 		case WM_MOUSEWHEEL:
-			if (!vid_initializing && !INS_PointerGuardBlocks())	//FTESurf Patch 1576
+			if (!vid_initializing && !INS_PointerGuardBlocks(1))	//FTESurf Patch 1576
 			{
 				if ((short) HIWORD(wParam) > 0)
 				{

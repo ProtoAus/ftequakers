@@ -348,6 +348,7 @@ static const unsigned short padbtn_up[5] = {RI_MOUSE_BUTTON_1_UP, RI_MOUSE_BUTTO
   the L/R twins sharing a byte can vouch for each other, which costs less than a quirk
   counting an honest key.*/
 #define RAWKEY_WINDOW 0.1
+static qboolean rawrdp_bound;	//FTESurf Patch 1576: a Remote Desktop device was bound (sticks for the session)
 static qboolean rawkbd_observe;
 static qboolean rawkbd_nolegacy;
 // Owner-only gate: the caller may mutate the entire cohort only between QUIESCE/RESUME.
@@ -1629,6 +1630,8 @@ static void INS_RawInput_InitQuiesced(void)
 
 		if (!(in_rawinput_rdp.value) && INS_RawInput_IsRDPDevice(dname)) // use rdp (cvar)
 			continue;
+		if (INS_RawInput_IsRDPDevice(dname))
+			rawrdp_bound = true;	//FTESurf Patch 1576: INS_GuardPublish
 
 		switch (pRawInputDeviceList[i].dwType)
 		{
@@ -1692,6 +1695,8 @@ static void INS_RawInput_InitQuiesced(void)
 
 		if (!(in_rawinput_rdp.value) && INS_RawInput_IsRDPDevice(dname)) // use rdp (cvar)
 			continue;
+		if (INS_RawInput_IsRDPDevice(dname))
+			rawrdp_bound = true;	//FTESurf Patch 1576: INS_GuardPublish
 
 		switch (pRawInputDeviceList[i].dwType)
 		{
@@ -1902,13 +1907,17 @@ static cvar_t in_guard_rev = CVARFD("in_guard_rev", "0", CVAR_ARCHIVE|CVAR_NOTFR
 #define GUARD_WEAKEN_DELAY 1.0
 #define GUARD_TAINT_TIME 1.5	//an injected release let through keeps bit 4 off this long, so a run reads `changed`
 #define KEYGUARD_SUSPEND_AFTER 8	//drops with no hardware key yet: every key is coming from another program
+static cvar_t in_guard_lapses = CVARFD("in_guard_lapses", "0", CVAR_NOSET|CVAR_NOSAVE|CVAR_NOTFROMSERVER, "Set by the engine: counts every moment an input guard was not in force or other software reached the game anyway (a guard switched off, a key no keyboard vouched for, a held key's release let through, a console command from another program). The ranked check reads a change during a run as `changed`.");
+int in_extcommands;	//console commands from another program (stdin, WM_COPYDATA): each is a lapse
 typedef struct {int devicetype, originid;} fs_inputsource_t;	//INPUT_MESSAGE_SOURCE
 #define FS_IMO_HARDWARE 1
+static int guard_lastlive;	//main thread
 static BOOL (WINAPI *pGetCurrentInputMessageSource)(fs_inputsource_t *src);
 static volatile LONG guard_applied = GUARD_CLICKS|GUARD_TOUCH|GUARD_KEYS;
 //window thread writes, INS_GuardPublish reads
 static volatile LONG keyguard_blocked, keyguard_heldrelease, keyguard_hwseen, keyguard_apifail;
-static volatile LONG pointer_blocked, pad_rejected, keyguard_lastorigin = -1;
+static volatile LONG pointer_blocked, pad_rejected, keyguard_lastorigin = -1, guard_lapse_events;
+static qboolean keyguard_dropheld[256];	//window thread: a press dropped and not yet released, so repeats count once
 extern int in_raw_keydropped;	//in_generic.c: the .hid's 'kd' record
 
 //0 a hardware device's, 1 another program's, -1 cannot tell (passed, and the guard reports itself off).
@@ -1928,9 +1937,9 @@ static int INS_MessageSource(void)
 	return 1;
 }
 
-static qboolean INS_KeyGuardBlocks(qboolean down, int qcode)
+static qboolean INS_KeyGuardBlocks(qboolean down, int qcode, LPARAM lParam, qboolean journal)
 {
-	int from;
+	int from, sc = (lParam >> 16) & 0xff;
 	if (!(guard_applied & GUARD_KEYS) || !pGetCurrentInputMessageSource)
 		return false;
 	from = INS_MessageSource();
@@ -1944,17 +1953,47 @@ static qboolean INS_KeyGuardBlocks(qboolean down, int qcode)
 		return false;
 	}
 	InterlockedIncrement(&keyguard_blocked);
-	if (down)
+	if (!journal)
+		return true;
+#ifdef USINGRAWINPUT
+	if (down && rawkey_pending[sc] >= 0)
+	{	//P1424's observer counted it as reaching the game; it did not ('y' is what reached it)
+		rawkey_pending[sc] = -1;
+		rawkey_npending--;
+	}
+#endif
+	if (!down)
+		keyguard_dropheld[sc] = false;
+	else if (!keyguard_dropheld[sc])
+	{
+		keyguard_dropheld[sc] = true;
 		in_raw_keydropped++;
+	}
+	return true;
+}
+
+//The low-level hook's own keys (sys_win.c: Print Screen, and the Windows/menu keys under
+//sys_disableWinKeys) never become window messages; the hook's flags say who sent them.
+qboolean INS_HookKeyBlocks(unsigned int llflags, qboolean down, int qkey)
+{
+	if (!(guard_applied & GUARD_KEYS) || !(llflags & (LLKHF_INJECTED|LLKHF_LOWER_IL_INJECTED)))
+		return false;
+	if (!down && qkey > 0 && qkey < K_MAX && keydown[qkey])
+	{
+		InterlockedIncrement(&keyguard_heldrelease);
+		return false;
+	}
+	InterlockedIncrement(&keyguard_blocked);
 	return true;
 }
 
 //The window procedures' clicks, wheel and app commands.
-qboolean INS_PointerGuardBlocks(void)
+qboolean INS_PointerGuardBlocks(int changed)
 {
 	if (!(guard_applied & GUARD_CLICKS) || !pGetCurrentInputMessageSource || INS_MessageSource() != 1)
 		return false;
-	InterlockedIncrement(&pointer_blocked);
+	if (changed)	//a move Windows made itself (SetCursorPos, activation) is not a click
+		InterlockedIncrement(&pointer_blocked);
 	return true;
 }
 qboolean INS_TouchAllowed(void)
@@ -1988,10 +2027,11 @@ static void INS_GuardMigrate(void)
 static void INS_GuardPublish(void)
 {
 	static qboolean first = true, migrated, suspended, padsaid;
-	static LONG blockreported, heldreported, pointerreported;
+	static LONG blockreported, heldreported, pointerreported, lapsereported;
+	static int extreported, legkeyreported, lapses;
 	static double offsince[3] = {-1, -1, -1}, taintuntil;
 	double now = Sys_DoubleTime();
-	int want = 0, live, applied, b;
+	int want = 0, cannot = 0, live, applied, b, n;
 	char livestr[16];
 
 	if (!migrated && cls.state >= ca_connected)
@@ -2005,20 +2045,24 @@ static void INS_GuardPublish(void)
 		Con_Printf("Input: every key so far came from another program (remote play?), so keys are no longer dropped this session. Runs do not rank until the game is restarted with a keyboard.\n");
 	}
 #ifdef USINGRAWINPUT
-	if (in_rawinput_nolegacy.ival && pGetCurrentInputMessageSource && !keyguard_apifail)
+	if (in_rawinput_nolegacy.ival)
 		want |= GUARD_CLICKS;
 	if (!in_rawinput_touchpad.ival)
 		want |= GUARD_TOUCH;
-#endif
-	if (in_keyguard.ival && pGetCurrentInputMessageSource && !suspended && !keyguard_apifail)
+	//the key guard is the source check plus P1424's observer (or the raw opt-in path's handle test)
+	if (in_keyguard.ival && (rawkbd_observe || rawkbd_nolegacy))
 		want |= GUARD_KEYS;
+#endif
+	//what defeats them is read from what is running, not from settings that apply at in_restart
+	if (!pGetCurrentInputMessageSource || keyguard_apifail || suspended || GetSystemMetrics(SM_REMOTESESSION))
+		cannot = GUARD_CLICKS|GUARD_KEYS;
 #ifdef AVAIL_DINPUT
-	if (in_dinput.ival)
-		want &= ~GUARD_CLICKS;	//DirectInput reads the mouse with no source to check
+	if (dinput)
+		cannot |= GUARD_CLICKS;	//DirectInput reads the mouse with no source to check
 #endif
 #ifdef USINGRAWINPUT
-	if (in_rawinput_rdp.ival)
-		want &= ~(GUARD_CLICKS|GUARD_KEYS);	//a remote session's devices pass as hardware
+	if (rawrdp_bound)
+		cannot |= GUARD_CLICKS|GUARD_KEYS;	//a remote session's devices pass as hardware
 #endif
 
 	applied = first ? want : guard_applied;
@@ -2038,13 +2082,39 @@ static void INS_GuardPublish(void)
 		}
 	}
 	InterlockedExchange(&guard_applied, applied);
-	if (first && (applied & GUARD_KEYS) && in_raw_keydropped < 0)
-		in_raw_keydropped = 0;
 	first = false;
 
-	live = want;
-	if (in_keyguard.ival && !(want & GUARD_KEYS))
+	//Lapses: a published bit leaving, a held release let through, a key no keyboard vouched for
+	//(Windows passes a UIAccess program's SendInput as hardware; P1424 still sees no device behind it),
+	//a console command from another program. CSQC steps `bad` on any change.
+	live = want & ~cannot;
+	if (cannot && in_keyguard.ival)
 		live |= GUARD_KEYSNA;
+	for (b = 0; b < 3; b++)
+		if ((guard_lastlive & (1<<b)) && !(live & (1<<b)))
+			lapses++;
+	guard_lastlive = live;
+	if (keyguard_heldrelease != lapsereported)
+	{
+		lapses += keyguard_heldrelease - lapsereported;
+		lapsereported = keyguard_heldrelease;
+	}
+	n = (in_raw_legacykey < 0) ? 0 : in_raw_legacykey;
+	if (n != legkeyreported)
+	{
+		if (n > legkeyreported)
+			lapses += n - legkeyreported;
+		legkeyreported = n;
+	}
+	n = in_extcommands;
+	if (n != extreported)
+	{
+		lapses += n - extreported;
+		extreported = n;
+	}
+	Q_snprintfz(livestr, sizeof(livestr), "%i", lapses);
+	if (strcmp(in_guard_lapses.string, livestr))
+		Cvar_ForceSet(&in_guard_lapses, livestr);
 	if (keyguard_heldrelease != heldreported)
 	{
 		heldreported = keyguard_heldrelease;
@@ -2132,7 +2202,11 @@ void INS_Init (void)
 	Cvar_Register (&in_guard_live, "Input Controls");
 	Cvar_ForceSet(&in_guard_live, "0");	//a launch +set made before this is not the engine's word
 	Cvar_Register (&in_guard_rev, "Input Controls");
+	Cvar_Register (&in_guard_lapses, "Input Controls");
+	Cvar_ForceSet(&in_guard_lapses, "0");
 	pGetCurrentInputMessageSource = (void*)GetProcAddress(GetModuleHandleA("user32.dll"), "GetCurrentInputMessageSource");
+	if (pGetCurrentInputMessageSource && in_raw_keydropped < 0)
+		in_raw_keydropped = 0;	//before any message can be dropped
 
 	INS_ScreenSaver_Init();
 }
@@ -2182,8 +2256,11 @@ void INS_MouseEvent (int mstate)
 {
 	int		i;
 
-	if (INS_PointerGuardBlocks())
-		return;	//FTESurf Patch 1576
+	if (INS_PointerGuardBlocks(mstate != sysmouse.oldbuttons))
+	{	//FTESurf Patch 1576; and a button it pressed stays up until released (P1410's latch)
+		legacyactivateclick |= mstate & ~sysmouse.oldbuttons;
+		return;
+	}
 
 	legacyactivateclick &= mstate;	//FTESurf Patch 1410: held at its old state until released
 	mstate = (mstate & ~legacyactivateclick) | (sysmouse.oldbuttons & legacyactivateclick);
@@ -3441,7 +3518,7 @@ void INS_TranslateKeyEvent(WPARAM wParam, LPARAM lParam, qboolean down, int qdev
 		INS_LegacyKeyObserve(lParam, down);	//FTESurf Patch 1424: only the legacy callers pass false
 #endif
 	qcode = MapKey(lParam);
-	if (!genkeystate && INS_KeyGuardBlocks(down, qcode))
+	if (!genkeystate && INS_KeyGuardBlocks(down, qcode, lParam, true))
 		return;	//FTESurf Patch 1576; the raw opt-in path already drops handle-less reports
 
 	if (WinNT && !in_builtinkeymap.value)
@@ -3577,7 +3654,7 @@ int INS_AppCommand(LPARAM lParam)
 {
 	const char *b;
 	int qkey = 0;
-	if (INS_KeyGuardBlocks(true, 0))
+	if (INS_KeyGuardBlocks(true, 0, 0, false))
 		return true;	//FTESurf Patch 1576: posted or injected; swallowed
 	switch(HIWORD(lParam)&0xfff)
 	{
@@ -3628,13 +3705,14 @@ int INS_ForeignModules(void *ctx, void (*callback)(void *ctx, const char *cls, c
 	BOOL (WINAPI *pEnum)(HANDLE, HMODULE *, DWORD, LPDWORD);
 	HMODULE mods[1024];
 	DWORD need = 0, n, i;
-	wchar_t path[MAX_PATH], exedir[MAX_PATH], basedir[MAX_PATH], *slash;
-	const wchar_t *sysdir = _wgetenv(L"SystemRoot");
-	const wchar_t *progdirs[] = {_wgetenv(L"ProgramFiles"), _wgetenv(L"ProgramFiles(x86)"), _wgetenv(L"ProgramW6432"), _wgetenv(L"ProgramData")};
-	const wchar_t *userdir = _wgetenv(L"USERPROFILE");
+	wchar_t path[MAX_PATH], exedir[MAX_PATH], basedir[MAX_PATH], sysdir[MAX_PATH], *slash;
+	wchar_t progdirs[3][MAX_PATH], userdir[MAX_PATH];
+	HRESULT (WINAPI *pSHGetFolderPathW)(HWND, int, HANDLE, DWORD, LPWSTR);
+	static const int progcsidl[3] = {0x26, 0x2a, 0x23};	//CSIDL_PROGRAM_FILES, _PROGRAM_FILESX86, _COMMON_APPDATA
 	char name[64];
 	int foreign = 0, j, k;
 	const char *cls;
+	HMODULE shell;
 
 	pEnum = (void*)GetProcAddress(GetModuleHandleA("kernel32.dll"), "K32EnumProcessModules");
 	if (!pEnum || !pEnum(GetCurrentProcess(), mods, sizeof(mods), &need))
@@ -3648,6 +3726,16 @@ int INS_ForeignModules(void *ctx, void (*callback)(void *ctx, const char *cls, c
 		*slash = 0;
 	if (!MultiByteToWideChar(CP_UTF8, 0, com_gamepath, -1, basedir, countof(basedir)))
 		basedir[0] = 0;
+	//From Windows, not the environment, which the player sets (SystemRoot=... hides a folder).
+	if (!GetSystemWindowsDirectoryW(sysdir, countof(sysdir)))
+		sysdir[0] = 0;
+	shell = LoadLibraryA("shell32.dll");
+	pSHGetFolderPathW = shell ? (void*)GetProcAddress(shell, "SHGetFolderPathW") : NULL;
+	for (j = 0; j < countof(progdirs); j++)
+		if (!pSHGetFolderPathW || pSHGetFolderPathW(NULL, progcsidl[j], NULL, 0, progdirs[j]) != S_OK)
+			progdirs[j][0] = 0;
+	if (!pSHGetFolderPathW || pSHGetFolderPathW(NULL, 0x28 /*CSIDL_PROFILE*/, NULL, 0, userdir) != S_OK)
+		userdir[0] = 0;
 	for (i = 0; i < n; i++)
 	{
 		if (!GetModuleFileNameW(mods[i], path, countof(path)))
@@ -3668,6 +3756,8 @@ int INS_ForeignModules(void *ctx, void (*callback)(void *ctx, const char *cls, c
 		callback(ctx, cls, name);
 		foreign++;
 	}
+	if (shell)
+		FreeLibrary(shell);
 	return foreign;
 }
 #endif

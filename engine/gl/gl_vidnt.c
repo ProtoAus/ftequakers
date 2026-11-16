@@ -3046,6 +3046,7 @@ void MainThreadWndProc(void *ctx, void *data, size_t msg, size_t ex)
 	switch(msg)
 	{
 	case WM_COPYDATA:
+		in_extcommands++;	//FTESurf Patch 1576: another program's request is a guard lapse
 		Host_RunFile(data, ex, NULL);
 		Z_Free(data);
 		break;
@@ -3305,7 +3306,7 @@ static LONG WINAPI GLMainWndProc (
 		// Its delta is either positive or neg, and we generate the proper
 		// Event.
 		case WM_MOUSEWHEEL:
-			if (!vid_initializing && !INS_PointerGuardBlocks())	//FTESurf Patch 1576
+			if (!vid_initializing && !INS_PointerGuardBlocks(1))	//FTESurf Patch 1576
 			{
 				if ((short) HIWORD(wParam&0xffffffff) > 0)
 				{

@@ -1098,26 +1098,30 @@ LRESULT CALLBACK LowLevelKeyboardProc (INT nCode, WPARAM wParam, LPARAM lParam)
 		//Trap the Left Windowskey
 			if (pkbhs->vkCode == VK_SNAPSHOT)
 			{
-				IN_KeyEvent (0, !(pkbhs->flags & LLKHF_UP), K_PRINTSCREEN, 0);
+				if (!INS_HookKeyBlocks(pkbhs->flags, !(pkbhs->flags & LLKHF_UP), K_PRINTSCREEN))	//FTESurf Patch 1576
+					IN_KeyEvent (0, !(pkbhs->flags & LLKHF_UP), K_PRINTSCREEN, 0);
 				return 1;
 			}
 			if (sys_disableWinKeys.ival)
 			{
 				if (pkbhs->vkCode == VK_LWIN)
 				{
-					IN_KeyEvent (0, !(pkbhs->flags & LLKHF_UP), K_LWIN, 0);
+					if (!INS_HookKeyBlocks(pkbhs->flags, !(pkbhs->flags & LLKHF_UP), K_LWIN))
+						IN_KeyEvent (0, !(pkbhs->flags & LLKHF_UP), K_LWIN, 0);
 					return 1;
 				}
 			//Trap the Right Windowskey
 				if (pkbhs->vkCode == VK_RWIN)
 				{
-					IN_KeyEvent(0, !(pkbhs->flags & LLKHF_UP), K_RWIN, 0);
+					if (!INS_HookKeyBlocks(pkbhs->flags, !(pkbhs->flags & LLKHF_UP), K_RWIN))
+						IN_KeyEvent(0, !(pkbhs->flags & LLKHF_UP), K_RWIN, 0);
 					return 1;
 				}
 			//Trap the Application Key (what a pointless key)
 				if (pkbhs->vkCode == VK_APPS)
 				{
-					IN_KeyEvent (0, !(pkbhs->flags & LLKHF_UP), K_APP, 0);
+					if (!INS_HookKeyBlocks(pkbhs->flags, !(pkbhs->flags & LLKHF_UP), K_APP))
+						IN_KeyEvent (0, !(pkbhs->flags & LLKHF_UP), K_APP, 0);
 					return 1;
 				}
 			}
@@ -3258,6 +3262,7 @@ void Sys_SendKeyEvents (void)
 #endif
 				else
 				{
+					in_extcommands++;	//FTESurf Patch 1576: another program's command is a guard lapse
 					Cbuf_AddText(text, RESTRICT_LOCAL);
 					Cbuf_AddText("\n", RESTRICT_LOCAL);
 				}

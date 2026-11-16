@@ -121,7 +121,9 @@ void INS_UpdateGrabs(int fullscreen, int activeapp);
 void INS_RestoreOriginalMouseState (void);
 void INS_SetQuakeMouseState (void);
 void INS_MouseEvent (int mstate);
-qboolean INS_PointerGuardBlocks(void);	//FTESurf Patch 1576
+qboolean INS_PointerGuardBlocks(int changed);	//FTESurf Patch 1576
+qboolean INS_HookKeyBlocks(unsigned int llflags, qboolean down, int qkey);
+extern int in_extcommands;
 qboolean INS_TouchAllowed(void);
 void INS_MouseActivateClick (int buttons);
 void INS_RawInput_Read(HANDLE in_device_handle);

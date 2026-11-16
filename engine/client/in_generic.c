@@ -1642,7 +1642,7 @@ static void IN_Journal_Bypassed(double when)
 static void IN_Journal_Keys(void)
 {
 	char tail[64];
-	int lk, nh;
+	int lk, nh, kd;
 
 	if (!in_jrn_buf || in_jrn_full)
 		return;
@@ -1652,12 +1652,14 @@ static void IN_Journal_Keys(void)
 		Q_snprintfz(tail, sizeof(tail), "%i", in_rawkbd_observe);
 		IN_Journal_Line(in_jrn_last, "o", tail);
 	}
-	/*Patch 1576: 'kd <n>', dt 0, presses the key guard dropped since the last one.  They are
-	  also among the 'y' legacy presses (P1424's observer counts before the guard drops).*/
-	if (in_raw_keydropped > in_jrn_kdreported)
+	/*Patch 1576: 'kd <n>', dt 0, presses the key guard dropped since the last one (a held key's
+	  repeats count once).  The guard takes them out of the observer's pending set, so 'y' is only
+	  what reached the game.*/
+	kd = in_raw_keydropped;	//once: the window thread increments it
+	if (kd > in_jrn_kdreported)
 	{
-		Q_snprintfz(tail, sizeof(tail), "%i", in_raw_keydropped - in_jrn_kdreported);
-		in_jrn_kdreported = in_raw_keydropped;
+		Q_snprintfz(tail, sizeof(tail), "%i", kd - in_jrn_kdreported);
+		in_jrn_kdreported = kd;
 		IN_Journal_Line(in_jrn_last, "kd", tail);
 	}
 	lk = (in_raw_legacykey < 0) ? 0 : in_raw_legacykey;
