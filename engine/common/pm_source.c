@@ -2685,16 +2685,19 @@ float PMSrc_MaxSpeedForInputs (int pm_type, int buttons, float stamina)
 	if (!spec && movevars.walkspeed > 0 && (buttons & BUTTON_SPEED))
 		ms *= movevars.walkspeed;
 
+	//Patch 1589: HL2 sprints on +speed, HL2_SPRINT_SPEED / HL2_NORM_SPEED of whatever maxspeed is.
+	if (!spec && PM_ProfileHL2(movevars.profilekind) && (buttons & BUTTON_SPEED))
+		ms = ms * 320 / 190;
+
 	return ms;
 }
 
 static float PMSrc_EffectiveMaxSpeed (void)
 {
-	//Patch 1589: HL2 profiles sprint on +speed (HL2_SPRINT_SPEED), not while fully ducked.
-	if (PM_ProfileHL2(movevars.profilekind) && (pmove.cmd.buttons & BUTTON_SPEED) && !pmove.ducked &&
-		pmove.pm_type != PM_SPECTATOR && pmove.pm_type != PM_OLD_SPECTATOR)
-		return 320;
-	return PMSrc_MaxSpeedForInputs(pmove.pm_type, pmove.cmd.buttons, pmove.stamina);
+	int buttons = pmove.cmd.buttons;
+	if (PM_ProfileHL2(movevars.profilekind) && pmove.ducked)
+		buttons &= ~BUTTON_SPEED;	//Patch 1589: HL2's CanSprint refuses while fully ducked
+	return PMSrc_MaxSpeedForInputs(pmove.pm_type, buttons, pmove.stamina);
 }
 
 /*
@@ -5255,6 +5258,18 @@ static void PMSrc_TestBankStartGravity(void)
 			PMSrc_CheckJumpButton();
 			PMSrc_Check(hl2[h].name, pmove.velocity[0], hl2[h].want, 0.001f);
 		}
+		{	/* P1589: HL2 sprint is 320/190 of maxspeed on +speed, refused fully ducked */
+			float savems = movevars.maxspeed;
+			int savebuttons = pmove.cmd.buttons;
+			movevars.profilekind = PMPROFILE_HL2POST; movevars.maxspeed = 190;
+			pmove.cmd.buttons = BUTTON_SPEED; pmove.pm_type = PM_NORMAL; pmove.ducked = false;
+			PMSrc_Check("P1589 HL2 sprint maxspeed", PMSrc_EffectiveMaxSpeed(), 320, 0.001f);
+			pmove.ducked = true;
+			PMSrc_Check("P1589 HL2 no sprint fully ducked", PMSrc_EffectiveMaxSpeed(), 190, 0.001f);
+			movevars.profilekind = PMPROFILE_NONE;
+			PMSrc_Check("P1589 default +speed unchanged", PMSrc_EffectiveMaxSpeed(), 190 * (movevars.walkspeed > 0 ? movevars.walkspeed : 1), 0.001f);
+			pmove.ducked = false; movevars.maxspeed = savems; pmove.cmd.buttons = savebuttons;
+		}
 		movevars.profilekind = PMPROFILE_NONE;
 		pms_forwardmove = 0;
 	}
@@ -6324,6 +6339,7 @@ static void PMSrc_SelfTest_f (void)
 
 	VectorCopy (pmove.velocity, save_vel);
 	VectorCopy (pmove.origin, save_org);
+	movevars.profilekind = PMPROFILE_NONE;	//Patch 1589: the live server's profile is not under test
 
 	pms_test_fails = 0;
 	pms_frametime = dt;

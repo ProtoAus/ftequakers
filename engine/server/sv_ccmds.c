@@ -4399,6 +4399,8 @@ static void SV_DetPinMover(model_t *world, int fixrampbugs, int sourceversion, q
 	pmove.surfacefriction = 1.0f;
 
 	movevars.physicsmode   = PHYSMODE_SOURCE;
+	movevars.agprofile     = 0;
+	movevars.profilekind   = PMPROFILE_NONE;	//Patch 1589
 	movevars.ticrate       = PMDET_TICRATE;	//Patch 325: the mover is a function of it
 	movevars.gravity       = 800;
 	movevars.friction      = 4;
