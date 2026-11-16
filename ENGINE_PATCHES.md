@@ -1,5 +1,27 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1581 - pm_verify names the prop models a run's lobby lacked beside a state/physents HOLD
+
+**Problem.** A lobby that missed newly installed content collides with a placeholder where the content should be,
+so replays of its runs HOLD on `state`/`physents`, and nothing said that the lobby was missing models rather than
+the run being doctored.
+
+**Change.** The lobby's QC (FTESurf P1581) probes the model file of every prop the map asks to be solid and writes an
+additive `.rec` header `propmiss <n> [<model>...]`. pm_verify parses it and, when the reason it is about to print is
+`state:` or `physents:`, appends "; lobby lacked N prop model file(s): ... (may be content skew)". A hint from the file
+being judged, never an excuse: the verdict is unchanged. `why` widened to 320 for the tail.
+
+**Verified.** tools/p1581skew.py with a real lobby run (bhop_1n5an3, 5,817 ticks) and its lobby zone file: unchanged
+the run PASSes; one mid-run sample moved by 0.01 HOLDs at row 2781; with a `propmiss` header the HOLD carries the
+names and "may be content skew", the PASS does not; the installed engine (control) prints the same verdicts with no
+such text. The lobby's detector on a generated map: one solid prop with a missing model file counted once, a
+non-solid one not listed. Two review rounds (the first found that a missing model loads as a 32-unit placeholder,
+so an empty-bounds test never saw one, and that "not tampering" overclaimed; the second that the .phy rule turned
+contentless solid-6 props non-solid before the probe).
+
+**Limits.** Live on the lobbies only once the Pi's server engine carries this patch; static props built by the hl2
+plugin are not covered; a resumed run keeps its first session's line.
+
 ## Patch 1578 - Warm the other fog variant of listed permutations at activation
 
 **Problem.** After Patch 1574, surf_null still compiled three GLSL permutations mid-run on its first play (first-play
