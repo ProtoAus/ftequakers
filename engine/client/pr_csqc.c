@@ -66,6 +66,16 @@ static qboolean csqc_isdarkplaces;
 #endif
 static qboolean csqc_nogameaccess;	/*the module is not trusted by the server, so isn't allowed to access origins+stuffcmds+etc*/
 static qboolean csqc_singlecheats;	/*single player or cheats active, allowing custom addons*/
+//FTESurf Patch 1576: connected without cheats, no debugger may change the client's game code -- the ranked
+//input report lives there. poke_csqc's own rule, for every other way in (pipe, breakpoints, editor).
+qboolean CSQC_DebugAllowed(void)
+{
+	return csqc_singlecheats || !cls.state;
+}
+static int CSQC_DebugWriteBlocked(void *ppf)
+{
+	return ppf && ppf == (void*)csqcprogs && !CSQC_DebugAllowed();
+}
 static qboolean csqc_mayread;		/*csqc is allowed to ReadByte();*/
 static qboolean csqc_worldchanged;	/*make sure any caches are rebuilt properly before the next renderscene*/
 
@@ -9244,16 +9254,6 @@ void CSQC_Breakpoint_f(void)
 //	Cvar_Set(Cvar_FindVar("pr_debugger"), "1");
 }
 
-//FTESurf Patch 1576: connected without cheats, no debugger may change the client's game code -- the ranked
-//input report lives there. poke_csqc's own rule, for every other way in (pipe, breakpoints, editor).
-qboolean CSQC_DebugAllowed(void)
-{
-	return csqc_singlecheats || !cls.state;
-}
-static int CSQC_DebugWriteBlocked(void *ppf)
-{
-	return ppf && ppf == (void*)csqcprogs && !CSQC_DebugAllowed();
-}
 
 static void CSQC_Poke_f(void)
 {
