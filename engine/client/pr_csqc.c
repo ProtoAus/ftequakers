@@ -10383,6 +10383,7 @@ qboolean CSQC_Parse_SetAngles(int seat, vec3_t newangles, qboolean wasdelta)
 extern cvar_t cl_predict_qchook;
 extern cvar_t cl_predict_angleexact, cl_predict_angledebug;	/*cl_pred.c, Patch 396*/
 extern cvar_t cl_predict_listen;	/*cl_pred.c, Patch 862*/
+extern cvar_t cl_predict_listenops;	/*cl_pred.c, Patch 1588*/
 
 /*FTESurf Patch 862: the trigger mirror (this hook and its carrier ring) also runs on a
   listen server.  Patch 335 gated it off as Patch 240's double apply, but nothing it
@@ -10390,12 +10391,27 @@ extern cvar_t cl_predict_listen;	/*cl_pred.c, Patch 862*/
   and basevelocity, and SV_RunCmd reloads all four from the edict for every command
   (sv_user.c; basevelocity from run_basevelocity or cleared), while CSQC's state is
   its own VM.  The view snap goes through the same Patch 396 reconciliation as against
-  a remote server.  The warp-op pre-move hook keeps its gate: on, a local !r/!m would
-  take the server's impulse path instead of its stringcmd.*/
+  a remote server.  The warp-op pre-move hook and the hold gate are Patch 1588's, below.*/
 static qboolean CSQC_PredictListenGated(void)
 {
 #ifdef HAVE_SERVER
 	return sv.state != ss_dead && !cl_predict_listen.ival;
+#else
+	return false;
+#endif
+}
+
+/*FTESurf Patch 1588: the warp-op pre-move hook and the predicted hold also run on a listen
+  server, so a local load rides the command's impulse as a remote one has since P753/P1544
+  instead of a stringcmd whose release waits for the server (every local load showed
+  "Loading save"; under sv_minping the body froze a round trip).  Same argument as 862: the
+  hook writes only the client's pmove (origin, velocity, onground, pm_type, duck), which
+  SV_RunCmd reloads from the edict for every command, and movevars.entgravity, which
+  sv_user.c sets per client before each command and cl_pred.c resets after this piece.*/
+static qboolean CSQC_PredictListenOpsGated(void)
+{
+#ifdef HAVE_SERVER
+	return sv.state != ss_dead && !cl_predict_listenops.ival;
 #else
 	return false;
 #endif
@@ -10904,10 +10920,8 @@ qboolean CSQC_PredictsHeld(void)
 		return false;
 	if (!csqcg.predinput_held || !*csqcg.predinput_held || cls.demoplayback)
 		return false;
-#ifdef HAVE_SERVER
-	if (sv.state != ss_dead)
+	if (CSQC_PredictListenOpsGated())
 		return false;
-#endif
 	return true;
 }
 
@@ -10921,10 +10935,8 @@ int CSQC_PredictPlayerPreMove(int seat, const usercmd_t *cmd, float offsetmsec)
 
 	if (!csqcprogs || !csqcg.CSQC_PredictPlayerPreMove || !csqcg.predinput_apply || !cl_predict_qchook.ival)
 		return 0;
-#ifdef HAVE_SERVER
-	if (sv.state != ss_dead)
+	if (CSQC_PredictListenOpsGated())
 		return 0;
-#endif
 	if ((unsigned int)seat >= MAX_SPLITS)
 		return 0;
 
