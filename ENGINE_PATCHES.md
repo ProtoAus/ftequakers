@@ -1,5 +1,73 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1577 - DLL tripwire: the input journal names modules from outside the game and Windows folders
+
+**Problem.** A public cheat loaded into the game as a DLL left no trace in any record.
+
+**Change.** At `in_journal_begin` the `.hid` header gains `modules <n>` and one `module <program|user|other>
+<file>` line per module loaded from outside the exe's folder, the base directory and the Windows folder
+(`INS_ForeignModules`, K32EnumProcessModules; folders from GetSystemWindowsDirectoryW and SHGetFolderPathW, not
+the environment). File names only, since a path names the user. Beside `devmap` at the end, untimestamped
+`module+` lines name those loaded during the journal. hidcheck lists them as a note, never a fault; older readers
+note the lines as unknown.
+
+**Verified.** `tools/p1577journal.py`: a journal from this build lists one module on the PC
+(`program graphics-hook64.dll`, OBS's capture hook), and this tree's and origin/main's hidcheck read it with
+no fault; the installed engine (control) writes no module lines. `test_hidcheck.py` case_modules_tripwire
+covers count/name agreement, `-1`, malformed lines and `module+` after `end`.
+
+**Limits.** Anything can rename or unlist itself, and modules under the game's own folders are not listed
+(a proxy DLL there needs in-process code to catch). Overlays, recorders and security software land in the
+list too; it is never the headline claim.
+
+## Patch 1576 - Input other programs make does not reach the game; the guard settings refuse map and server sets
+
+**Problem.** The owner decided on 16 Nov to block all injected input. P1424 only counted injected keys; P307's
+click block missed posted messages and was grab-scoped; P1573's QC reads could be held apart from what the
+engine applied by a map-supplied setting.
+
+**Change.** Every Windows renderer's keyboard, click, wheel and app-command messages ask
+GetCurrentInputMessageSource during their own dispatch: only IMO_HARDWARE passes (SendInput, system-injected,
+posted and cross-thread-sent messages are dropped), under `in_keyguard` (keys, default 1) and
+`in_rawinput_nolegacy` (pointer; now default 1). The low-level hook's own keys are dropped when
+LLKHF_INJECTED. `in_rawinput_touchpad` defaults to 0 and also turns WM_TOUCH off. The guard cvars, `in_dinput`
+and `in_rawinput_rdp` are CVAR_NOTFROMSERVER. The window thread enforces a copy that INS_GuardPublish (main
+thread, once a frame) changes: a guard switched on applies at once, one switched off applies 1 s after the
+read-only `in_guard_live` (1 clicks, 2 touchpad off, 4 keys, 8 cannot run) has said so. A non-hardware release
+of a held key passes (no stuck key). With no hardware key seen, the 8th drop stops the key guard for the
+session; an API failure, DirectInput running, a bound Remote Desktop device or a remote session report the
+defeated guards off with 8. The read-only `in_guard_lapses` counts every lapse: a published guard leaving, a
+held release let through, a legacy key no keyboard device corroborated when SendInput's handle-less raw report
+sat beside it (Windows passes a UIAccess program's SendInput as hardware; AltGr's synthesized Ctrl has no such
+report), and each line another program sends (-plugin stdin, WM_COPYDATA). A session that drove the QC
+debugger over that pipe (it can write game-code globals) reports cannot-run. The P1573 defaults move runs in the engine once per config after a connection (`in_guard_rev`):
+FTE saves every archived cvar, so configs pinned the old defaults, and NOTFROMSERVER refuses the QC's
+localcmd. The `.hid` gains `kd` (dropped presses, dt 0; they leave the observer's pending set, so `y` is what
+reached the game) and `in_keyguard` in its input table. QuakeC (FTESurf P1576) reads `in_guard_live` only as
+the engine's own read-only digits, steps `bad` on any change of `in_guard_lapses`, reports keys on `inguard`
+(now `ffff`), demotes `keys`/`keyguard`, and writes an additive `.rec` header `inguard`.
+
+**Verified.** `tools/p1576keys.py` (posted WM_KEYDOWN to the rig client, origin 0): dropped with the guard on,
+delivered off; still dropped in the 1 s after switching off, delivered after; a held key's posted release
+passes and `in_guard_live` loses 4 for the taint time; the no-hardware fallback stops dropping (keys arrive,
+`in_guard_live` 10); a stdin command raises `in_guard_lapses` -- 13/13. `p1573guard.py --live`: defaults rank;
+`keys`, `clicks`, `touchpad` each demote with their word; `in_guard_live` cannot be set; an `in_keyguard` toggle
+inside a running clean run reads `changed` -- 8/8 (CSQC also reports from CSQC_Input_Frame once the view
+frame has sent, so a minimized window still reports). `--latch --live`: the P1573 map-lock fixture locks
+nolegacy on the installed engine ("Effective value is ' 1'") and not on this one, and the run ranks. P1576's QC
+on the installed engine passes P1573's 8 cases unchanged and reads `keyguard` with `sv_rank_keyguard 1`.
+Three review rounds (predicate/threading, completeness at the config level, honest players and evidence);
+each fix was re-reviewed.
+
+**Limits.** In-process code, a device presenting itself as a keyboard or mouse, and gamepads (owner: they
+rank) are outside it. A UIAccess program's keys reach the game but mark the run `changed`; an uncorroborated
+press is decided 100 ms after it, so one in the last ~100 ms plus a round trip before a finish is judged
+late. The 1 s delay and the lapse count reach the server on the reliable channel; a report
+delayed past the finish is judged late, as P840's are. Older engines rank until the lobbies set
+`sv_rank_keyguard 1` after a release carrying this one. `in_dinput 1` crashes the client at input init
+(0xC0000374) on this build and the installed one, so its case could not be driven. No real hardware key or
+UIAccess injector was driven on the rig; the owner's own play is the hardware-key check.
+
 ## Patch 1574 - Warm small GLSL programs whole at activation (water on maps not played yet)
 
 **Problem.** The activation warm-up (Patches 1277, 1441, 1442) compiles the permutations a warm list remembers by
