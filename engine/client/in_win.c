@@ -356,6 +356,8 @@ static qboolean rawinput_quiesced;
 static int rawinput_readdepth;
 static double rawkey_time[256];
 static double rawkey_pending[256];
+static double rawkey_nohandletime[256];	//FTESurf Patch 1576: last handle-less raw report per scancode
+int in_raw_injectedkey;	//FTESurf Patch 1576: uncorroborated presses SendInput's raw report sat beside (a lapse)
 static qboolean rawkey_rawheld[256], rawkey_legheld[256];
 static int rawkey_npending;
 
@@ -365,10 +367,20 @@ static void INS_RawKeyReset(void)
 
 	for (i = 0; i < (int)countof(rawkey_time); i++)
 	{
-		rawkey_time[i] = rawkey_pending[i] = -1;
+		rawkey_time[i] = rawkey_pending[i] = rawkey_nohandletime[i] = -1;
 		rawkey_rawheld[i] = rawkey_legheld[i] = false;
 	}
 	rawkey_npending = 0;
+}
+
+/*FTESurf Patch 1576: an uncorroborated legacy press reached the game.  Windows makes some from real
+  keyboards (AltGr's Ctrl, Shift around NumLock keypad keys) with no raw report at all; SendInput from a
+  UIAccess program, which Windows reports as hardware, leaves a handle-less raw report for its key.
+  Only the second is a guard lapse.*/
+static void INS_RawKeyUncorroborated(int sc)
+{
+	if (rawkey_nohandletime[sc] >= 0 && fabs(rawkey_pending[sc] - rawkey_nohandletime[sc]) <= 2*RAWKEY_WINDOW)
+		in_raw_injectedkey++;
 }
 
 static void INS_RawKeyExpire(double now)
@@ -381,6 +393,7 @@ static void INS_RawKeyExpire(double now)
 	{
 		if (rawkey_pending[i] >= 0 && now - rawkey_pending[i] > RAWKEY_WINDOW)
 		{
+			INS_RawKeyUncorroborated(i);
 			rawkey_pending[i] = -1;
 			rawkey_npending--;
 			in_raw_legacykey++;
@@ -1460,6 +1473,8 @@ static void INS_RawInput_KeyObserve(void)
 	if (!raw->header.hDevice)
 	{	//SendInput's: its legacy copy is what reaches the game, and nothing vouches for it
 		in_raw_kbdnohandle++;
+		if (!(raw->data.keyboard.Flags & RI_KEY_BREAK))
+			rawkey_nohandletime[raw->data.keyboard.MakeCode & 0xff] = Sys_DoubleTime();
 		return;
 	}
 	sc = raw->data.keyboard.MakeCode & 0xff;
@@ -1502,6 +1517,7 @@ static void INS_LegacyKeyObserve(LPARAM lParam, qboolean down)
 	rawkey_legheld[sc] = true;
 	if (rawkey_pending[sc] >= 0)
 	{	//pressed again before a raw down vouched for the last press
+		INS_RawKeyUncorroborated(sc);
 		rawkey_pending[sc] = -1;
 		rawkey_npending--;
 		in_raw_legacykey++;
@@ -1909,6 +1925,7 @@ static cvar_t in_guard_rev = CVARFD("in_guard_rev", "0", CVAR_ARCHIVE|CVAR_NOTFR
 #define KEYGUARD_SUSPEND_AFTER 8	//drops with no hardware key yet: every key is coming from another program
 static cvar_t in_guard_lapses = CVARFD("in_guard_lapses", "0", CVAR_NOSET|CVAR_NOSAVE|CVAR_NOTFROMSERVER, "Set by the engine: counts every moment an input guard was not in force or other software reached the game anyway (a guard switched off, a key no keyboard vouched for, a held key's release let through, a console command from another program). The ranked check reads a change during a run as `changed`.");
 int in_extcommands;	//console commands from another program (stdin, WM_COPYDATA): each is a lapse
+int in_qcdebugged;	//the -plugin pipe drove the QC debugger (it can write game-code globals): cannot run
 typedef struct {int devicetype, originid;} fs_inputsource_t;	//INPUT_MESSAGE_SOURCE
 #define FS_IMO_HARDWARE 1
 static int guard_lastlive;	//main thread
@@ -1916,7 +1933,7 @@ static BOOL (WINAPI *pGetCurrentInputMessageSource)(fs_inputsource_t *src);
 static volatile LONG guard_applied = GUARD_CLICKS|GUARD_TOUCH|GUARD_KEYS;
 //window thread writes, INS_GuardPublish reads
 static volatile LONG keyguard_blocked, keyguard_heldrelease, keyguard_hwseen, keyguard_apifail;
-static volatile LONG pointer_blocked, pad_rejected, keyguard_lastorigin = -1, guard_lapse_events;
+static volatile LONG pointer_blocked, pad_rejected, keyguard_lastorigin = -1;
 static qboolean keyguard_dropheld[256];	//window thread: a press dropped and not yet released, so repeats count once
 extern int in_raw_keydropped;	//in_generic.c: the .hid's 'kd' record
 
@@ -2054,7 +2071,7 @@ static void INS_GuardPublish(void)
 		want |= GUARD_KEYS;	//suspended: stop dropping, or a remote-play player has no keyboard
 #endif
 	//what defeats them is read from what is running, not from settings that apply at in_restart
-	if (!pGetCurrentInputMessageSource || keyguard_apifail || suspended || GetSystemMetrics(SM_REMOTESESSION))
+	if (!pGetCurrentInputMessageSource || keyguard_apifail || suspended || in_qcdebugged || GetSystemMetrics(SM_REMOTESESSION))
 		cannot = GUARD_CLICKS|GUARD_KEYS;
 #ifdef AVAIL_DINPUT
 	if (dinput)
@@ -2088,18 +2105,19 @@ static void INS_GuardPublish(void)
 	//(Windows passes a UIAccess program's SendInput as hardware; P1424 still sees no device behind it),
 	//a console command from another program. CSQC steps `bad` on any change.
 	live = want & ~cannot;
-	if (cannot && in_keyguard.ival)
-		live |= GUARD_KEYSNA;
+	if (in_keyguard.ival && (cannot || !(want & GUARD_KEYS)))
+		live |= GUARD_KEYSNA;	//asked for and not running: no setting the player can change helps
 	for (b = 0; b < 3; b++)
 		if ((guard_lastlive & (1<<b)) && !(live & (1<<b)))
 			lapses++;
 	guard_lastlive = live;
-	if (keyguard_heldrelease != lapsereported)
+	n = keyguard_heldrelease;	//once: two threads increment it
+	if (n != lapsereported)
 	{
-		lapses += keyguard_heldrelease - lapsereported;
-		lapsereported = keyguard_heldrelease;
+		lapses += n - lapsereported;
+		lapsereported = n;
 	}
-	n = (in_raw_legacykey < 0) ? 0 : in_raw_legacykey;
+	n = in_raw_injectedkey;
 	if (n != legkeyreported)
 	{
 		if (n > legkeyreported)

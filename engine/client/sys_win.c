@@ -3247,6 +3247,7 @@ void Sys_SendKeyEvents (void)
 			if (nl)
 			{
 				*nl++ = 0;
+				in_extcommands++;	//FTESurf Patch 1576: every line another program sends is a guard lapse
 				if (qrenderer <= QR_NONE && !strncmp(text, "vid_recenter ", 13))
 				{
 					Cmd_TokenizeString(text, false, false);
@@ -3258,11 +3259,13 @@ void Sys_SendKeyEvents (void)
 				}
 #if !defined(CLIENTONLY) || defined(CSQC_DAT) || defined(MENU_DAT)
 				else if (QCExternalDebuggerCommand(text))
-					/*handled elsewhere*/;
+				{	//FTESurf Patch 1576: the debugger can write QC globals, so the guards cannot vouch for this session
+					if (strncmp(text, "debuggerwnd ", 12))
+						in_qcdebugged = 1;
+				}
 #endif
 				else
 				{
-					in_extcommands++;	//FTESurf Patch 1576: another program's command is a guard lapse
 					Cbuf_AddText(text, RESTRICT_LOCAL);
 					Cbuf_AddText("\n", RESTRICT_LOCAL);
 				}
