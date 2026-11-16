@@ -947,9 +947,11 @@ cvar_t r_glsl_emissive						= CVARFD  ("r_glsl_emissive", "1", CVAR_SHADERSYSTEM
 cvar_t r_fastturbcolour						= CVARFD ("r_fastturbcolour", "0.1 0.2 0.3", CVAR_ARCHIVE, "The colour to use for water surfaces draw with r_waterstyle 0.");
 // Renderer-owned opt-in: the plugin API deliberately masks CVAR_SHADERSYSTEM,
 // and Cvar_Get2 does not add it to an existing variable. Keep the policy narrow.
-static cvar_t hl2_water_shaderpolicy = CVARFD("hl2_water", "3", CVAR_SHADERSYSTEM,
-	"Source water mode. 0: flat translucent, no captures. 1: live refraction with baked reflection. "
-	"2: live refraction/reflection. 3: depth-writing dither (default). "
+//FTESurf Patch 1587 (Lex, 16 Nov): water and glass default to the transparent plane and translucent glass. These
+//registrations are the defaults players get (the plugin's GetNVFDG returns them); the csprogs moves old configs once.
+static cvar_t hl2_water_shaderpolicy = CVARFD("hl2_water", "0", CVAR_SHADERSYSTEM,
+	"Source water mode. 0: flat translucent, no captures (default, Patch 1587). 1: live refraction with baked reflection. "
+	"2: live refraction/reflection. 3: depth-writing dither. "
 	"4: budget animated, translucent fog colour/normals/approximate baked reflection, no captures or screen copy. "
 	"5: screen-space (Patch 1020): refraction from a copy of the view, reflection marched through its depth; no extra scene render, reflects only what is on screen. "
 	"Budget water is not depth-correct or Source-exact. Changes rebuild materials without restarting the map.");
@@ -959,8 +961,8 @@ static cvar_t hl2_dither_force_shaderpolicy = CVARFD("hl2_dither_force", "0", CV
 	"Explicit coverage for dithered Source surfaces; 0 uses each material's derived coverage.");
 // Patch 894: the rest of the hud_gfx material rows, read only while a .vmt is turned into a shader,
 // so a change rebuilds materials without restarting the map. Default, help and group as the plugin's.
-static cvar_t hl2_refract_shaderpolicy = CVARFD("hl2_refract", "2", CVAR_SHADERSYSTEM,
-	"How Source's Refract materials (glass, windows) are drawn.\n0: no framebuffer copy -- what is behind the pane tinted by $refracttint (and its tint texture), plus its $envmap reflection: Source's look without the warp.\n1: Source's refraction, which copies the framebuffer once per batch.\n2: dithered flat (default) -- the pane keeps its own texture, $alpha sets the coverage, and it becomes opaque geometry that writes depth. A pane with no texture of its own draws as 0.");
+static cvar_t hl2_refract_shaderpolicy = CVARFD("hl2_refract", "0", CVAR_SHADERSYSTEM,
+	"How Source's Refract materials (glass, windows) are drawn.\n0: translucent (default, Patch 1587), no framebuffer copy -- what is behind the pane tinted by $refracttint (and its tint texture), plus its $envmap reflection: Source's look without the warp.\n1: Source's refraction, which copies the framebuffer once per batch.\n2: dithered flat -- the pane keeps its own texture, $alpha sets the coverage, and it becomes opaque geometry that writes depth. A pane with no texture of its own draws as 0.");
 static cvar_t hl2_translucent_shaderpolicy = CVARFD("hl2_translucent", "1", CVAR_SHADERSYSTEM,
 	"$translucent world materials (windows, grates, railings).\n0: draw them OPAQUE -- they keep their texture and lightmap but stop being sorted, which is what they actually cost on a map with a lot of glazing.\n1: as the material author wrote them (default).");
 static cvar_t hl2_animated_shaderpolicy = CVARFD("hl2_animated", "0", CVAR_SHADERSYSTEM,

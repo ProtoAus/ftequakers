@@ -1,5 +1,22 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1587 - Water and glass default to the transparent plane and translucent glass
+
+**Problem.** Lex (16 Nov): water should draw as the transparent plane by default and glass translucent without
+refraction; the dithered modes buy nothing he can see, and the refracting/reflecting ones stay for players who want
+them. The hl2 plugin registered `hl2_water 3` and `hl2_refract 2` (both dithered) as its defaults. default.cfg had
+set `hl2_water 0` for new installs since Patch 1402, but glass had no cfg line, so every install drew it dithered,
+and the cvar help still called the dithered modes the defaults.
+
+**Change.** The defaults players get are the engine's own registrations in renderer.c, made before any config or
+plugin (the plugin's GetNVFDG returns them): `hl2_water 0` and `hl2_refract 0`, and their help says so, naming this
+patch. The plugin's registrations say the same. The FTESurf side sets `hl2_refract 0` beside P1402's water line in
+default.cfg and defaultuser.cfg, and moves a config still on 3 / 2 to 0 once (r_video_rev 1587, gated on that help
+text, as P1402 did for surf_view). Every mode stays in the graphics panel.
+
+**Verified.** Engine, plugin and csprogs build clean (QC 0 warnings, the engine's warning set unchanged). A config on
+`hl2_water 3`, `hl2_refract 2`, `r_video_rev 1402` prints "water: a transparent plane now" and "glass: translucent now"
+and reads 0 / 0 / 1587 after load (artifacts/p1587_arm.py); the same arm on an engine without this patch moved nothing.
 ## Patch 1586 - The input journal names patches below it: exe code, input APIs, import slots, window procedure
 
 **Problem.** A tool inside the game process that edits input before the journal records it was invisible: P1576
