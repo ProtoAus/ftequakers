@@ -275,4 +275,33 @@ static void CS16(void)
 	Reset(); pmove.cmd.sidemove=450; pmove.cmd.upmove=200; PMAg_PlayerMove(1); NEAR(fabsf(pmove.velocity[1]),32,0.001f);
 	puts("PASS uncropped moves ignore the clamp: held-jump upmove 200 leaves the side wish at 320");
 }
-int main(void) {Dry();Clock();CollisionAndNoEquipment();CS16();Duck();WaterLadder();ReviewedControls();puts("PASS AG world solver fixtures (not BSP/socket/oracle acceptance)");return 0;}
+// Patch 1591: under pm_autobunny a held jump leaves on the first grounded tick; off, one press is one jump.
+static int HeldHops(int commands, int *ground, float *apex)
+{
+	int i, hops=0, run=0; float vz;
+	*ground=0; pmove.cmd.buttons=BUTTON_JUMP;
+	for (i=0;i<commands;i++)
+	{
+		vz=pmove.velocity[2]; PMAg_PlayerMove(1);
+		if (vz<=0 && pmove.velocity[2]>0) hops++;
+		if (apex && hops && hops<=2 && pmove.origin[2]-36>apex[hops-1]) apex[hops-1]=pmove.origin[2]-36;
+		run=pmove.onground ? run+1 : 0; if (run>*ground) *ground=run;
+	}
+	return hops;
+}
+static void Autohop(void)
+{
+	int ground,hops; float apex[2]={0,0};
+	Reset(); hops=HeldHops(200,&ground,NULL); CHECK(hops==1); CHECK(ground>100);
+	printf("PASS autobunny off: 2 s held = %d jump, then %d grounded ticks\n",hops,ground);
+	Reset(); movevars.autobunny=true; hops=HeldHops(200,&ground,NULL); CHECK(hops>=3); CHECK(ground==1);
+	printf("PASS autobunny 100 Hz: 2 s held = %d jumps, longest ground %d tick\n",hops,ground);
+	Reset(); movevars.autobunny=true; movevars.ticrate=0.001f; movevars.agprofile=1000; pmove.cmd.msec=1;
+	hops=HeldHops(2000,&ground,NULL); CHECK(hops>=3); CHECK(ground==1);
+	printf("PASS autobunny 1000 Hz: 2 s held = %d jumps, longest ground %d tick\n",hops,ground);
+	Reset(); movevars.autobunny=true; movevars.profilekind=PMPROFILE_CS16; movevars.maxspeed=250; movevars.accelerate=5; movevars.stopspeed=75;
+	pmove.velocity[0]=400; hops=HeldHops(200,&ground,apex); CHECK(hops>=2); CHECK(ground==1);
+	NEAR(apex[0],45,0.5f); CHECK(apex[1]>20 && apex[1]<apex[0]*0.9f); NEAR(pmove.velocity[0],240,1);
+	printf("PASS CS16 autohop: %d jumps, apex %.2f then %.2f (fuser2), speed %.2f after the 400 cap\n",hops,apex[0],apex[1],pmove.velocity[0]);
+}
+int main(void) {Dry();Clock();CollisionAndNoEquipment();CS16();Autohop();Duck();WaterLadder();ReviewedControls();puts("PASS AG world solver fixtures (not BSP/socket/oracle acceptance)");return 0;}

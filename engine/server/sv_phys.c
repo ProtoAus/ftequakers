@@ -60,7 +60,7 @@ cvar_t	sv_airaccelerate	 = CVAR( "sv_airaccelerate", "0.7");
 cvar_t	sv_wateraccelerate	 = CVAR( "sv_wateraccelerate", "10");
 static int sv_agprofile; //map-spawn authority, never derived from raw pm_physicsmode
 static int sv_profilekind; //Patch 1589: PMPROFILE_* applied at map spawn
-static cvar_t sv_movementprofile = CVARFD("sv_movementprofile", "", CVAR_NOTFROMSERVER|CVAR_MAPLATCH, "Experimental unranked movement, applied only on map spawn: default (or empty); ag-100, ag-250, ag-1000 and cs16 (GoldSrc-style, CS 1.6 with its jump stamina and bhop cap); hl2-pre and hl2-post (Source mover with HL2 settings and its jump boost before/after the limiter; +speed sprints). Ladder intent uses analog signs; no longjump equipment.");
+static cvar_t sv_movementprofile = CVARFD("sv_movementprofile", "", CVAR_NOTFROMSERVER|CVAR_MAPLATCH, "Experimental unranked movement, applied only on map spawn: default (or empty); ag-100, ag-250, ag-1000 and cs16 (GoldSrc-style, CS 1.6 with its jump stamina and bhop cap); hl2-pre and hl2-post (Source mover with HL2 settings and its jump boost before/after the limiter; +speed sprints). Every profile autohops under pm_autobunny. Ladder intent uses analog signs; no longjump equipment.");
 
 static cvar_t pm_sourceversion = CVARFD("pm_sourceversion", STRINGIFY(PMSRC_VERSION), CVAR_SERVERINFO|CVAR_NOSET, "Source mover version used by this server (read-only). 3 adds swimming; 4 linked portals; 5 keeps a linked portal landing exact; 6 keeps moving as the hull clears a linked door; 7 traces a static prop's collision hull as its convex pieces; 8 recovers a surfer pinned to the face it is sliding along; 9 traces a prop hull whose indices overflowed as it really is; 10 honours Momentum's limitmovement and slide triggers; 11 adds Source's ceiling eye clearance and water-lip assist; 12 meets a prop hull's pieces where they really are, so a crease between two pieces no longer snags a surfer. Old clients need updating to predict them correctly.");
 cvar_t	sv_friction			 = CVAR( "sv_friction", "4");
@@ -4250,6 +4250,7 @@ static void SV_ApplyMovementProfile(void)
 	sv_profilekind = 0;
 	InfoBuf_SetValueForStarKey(&svs.info, "*movementprofile", "");
 	InfoBuf_SetValueForKey(&svs.info, "pm_agversion", "");
+	InfoBuf_SetValueForKey(&svs.info, "pm_agautohop", "");
 	if (!*sv_movementprofile.string || !strcmp(sv_movementprofile.string, "default")) return;
 	p = PM_ProfileBySelector(sv_movementprofile.string);
 	if (!p)
@@ -4269,7 +4270,7 @@ static void SV_ApplyMovementProfile(void)
 		SV_AGOverride("pm_standheight", "72"); SV_AGOverride("pm_duckheight", "36");
 		SV_AGOverride("pm_viewheight", "64"); SV_AGOverride("pm_duckviewheight", "28");
 		SV_AGOverride("pm_duckspeed", "0.333"); SV_AGOverride("pm_viewscale", "1");
-		SV_AGOverride("pm_maxairspeed", "30"); SV_AGOverride("pm_autobunny", "0");
+		SV_AGOverride("pm_maxairspeed", "30");	// pm_autobunny stays the server's (Patch 1591)
 		SV_AGOverride("pm_normalizejump", "0"); SV_AGOverride("pm_jumpaddrise", "0");
 		SV_AGOverride("pm_jumpzoffset", "0"); SV_AGOverride("pm_stamina", "0");
 		SV_AGOverride("pm_walkspeed", "0"); SV_AGOverride("pm_groundtracedist", "2");
@@ -4288,6 +4289,7 @@ static void SV_ApplyMovementProfile(void)
 		SV_AGOverride("pm_standheight", "72"); SV_AGOverride("pm_duckheight", "36");
 		SV_AGOverride("pm_viewheight", cs ? "17" : "28"); SV_AGOverride("pm_duckviewheight", "12");
 		InfoBuf_SetValueForKey(&svs.info, "pm_agversion", "1");
+		InfoBuf_SetValueForKey(&svs.info, "pm_agautohop", "1");	// Patch 1591: this AG mover honours pm_autobunny
 	}
 	InfoBuf_SetValueForStarKey(&svs.info, "*movementprofile", p->identity);
 	sv_profilekind = p->kind;

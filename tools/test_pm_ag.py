@@ -81,6 +81,7 @@ def main():
         ('wrong-capped-product', '* wishspeed * dt * surfacefriction;', '* target * dt * surfacefriction;'),
         ('wrong-autobhop', 'return fresh && move->onground', 'return pressed && move->onground'),
         ('wrong-airborne-latch', 'move->jump_held = pressed;', 'move->jump_held = pressed && move->onground;'),
+        ('wrong-no-autohop', '(!move->jump_held || vars->autobunny)', '!move->jump_held'),
         ('wrong-clock', 'move->cmd.msec * 0.001', '0.01f'),
         ('wrong-jump-fixup', 'move->stamina = 1315.789429f;\n\t\t}\n\t\tPMAg_HalfGravity(move, vars);',
          'move->stamina = 1315.789429f;\n\t\t}'),

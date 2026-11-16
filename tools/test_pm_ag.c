@@ -92,31 +92,45 @@ static void JumpEdges(void)
 	state.ducktime = 123; state.ducked = true;
 	state.cmd.buttons = BUTTON_JUMP | BUTTON_ATTACK;
 	expected = state; expected.jump_held = true;
-	CHECK(PMAg_JumpEdge(&state));
+	CHECK(PMAg_JumpEdge(&state, &vars));
 	CHECK(!memcmp(&state, &expected, sizeof(state))); /* only jump history changes */
 
 	Reset(); state.onground = true;
 	state.cmd.buttons = BUTTON_JUMP | BUTTON_ATTACK;
-	CHECK(PMAg_JumpEdge(&state));
+	CHECK(PMAg_JumpEdge(&state, &vars));
 	CHECK(state.jump_held);
-	CHECK(!PMAg_JumpEdge(&state)); /* held on ground is not autobhop */
+	CHECK(!PMAg_JumpEdge(&state, &vars)); /* held on ground is not autobhop */
 	state.cmd.buttons = BUTTON_ATTACK;
-	CHECK(!PMAg_JumpEdge(&state)); CHECK(!state.jump_held);
+	CHECK(!PMAg_JumpEdge(&state, &vars)); CHECK(!state.jump_held);
 	state.cmd.buttons |= BUTTON_JUMP;
-	CHECK(PMAg_JumpEdge(&state));
+	CHECK(PMAg_JumpEdge(&state, &vars));
 
 	Reset(); state.cmd.buttons = BUTTON_JUMP;
-	CHECK(!PMAg_JumpEdge(&state)); CHECK(state.jump_held);
+	CHECK(!PMAg_JumpEdge(&state, &vars)); CHECK(state.jump_held);
 	state.onground = true;
-	CHECK(!PMAg_JumpEdge(&state)); /* airborne attempt latched */
+	CHECK(!PMAg_JumpEdge(&state, &vars)); /* airborne attempt latched */
 	state.cmd.buttons = 0;
-	CHECK(!PMAg_JumpEdge(&state));
+	CHECK(!PMAg_JumpEdge(&state, &vars));
 	state.cmd.buttons = BUTTON_JUMP;
-	CHECK(PMAg_JumpEdge(&state));
+	CHECK(PMAg_JumpEdge(&state, &vars));
 	state.jump_held = false; state.pm_type = PM_DEAD;
-	CHECK(!PMAg_JumpEdge(&state)); CHECK(state.jump_held);
+	CHECK(!PMAg_JumpEdge(&state, &vars)); CHECK(state.jump_held);
 	CHECK(state.cmd.buttons == BUTTON_JUMP); /* history only, no command mutation */
 	puts("PASS fresh/held/release, airborne press then landing, dead press and unrelated buttons");
+
+	/* Patch 1591: pm_autobunny jumps on every grounded command the button is held. */
+	Reset(); vars.autobunny = true; state.onground = true; state.cmd.buttons = BUTTON_JUMP;
+	CHECK(PMAg_JumpEdge(&state, &vars)); CHECK(state.jump_held);
+	CHECK(PMAg_JumpEdge(&state, &vars)); /* held on ground jumps again */
+	state.onground = false;
+	CHECK(!PMAg_JumpEdge(&state, &vars)); CHECK(state.jump_held); /* never airborne */
+	state.onground = true;
+	CHECK(PMAg_JumpEdge(&state, &vars)); /* held through the air, jumps on landing */
+	state.cmd.buttons = 0;
+	CHECK(!PMAg_JumpEdge(&state, &vars)); CHECK(!state.jump_held);
+	state.cmd.buttons = BUTTON_JUMP; state.pm_type = PM_DEAD;
+	CHECK(!PMAg_JumpEdge(&state, &vars));
+	puts("PASS autobunny: held on ground and held through landing jump; airborne, released and dead do not");
 }
 
 /* Clear-space fixture integration, not a collision/categorization surrogate.

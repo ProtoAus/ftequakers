@@ -123,6 +123,11 @@ def main():
     # render path, so a headless client never compares a prediction.
     ap.add_argument('--rendered',action='store_true')
     ap.add_argument('--netfps',type=int,default=100)
+    # P1591: hold +jump from 0.8 s to the walk's stop instead of two taps; needs --rendered (the ring).
+    ap.add_argument('--autohop',action='store_true')
+    ap.add_argument('--min-hops',type=int,help='server takeoffs the ring must show (default 3 with --autohop)')
+    ap.add_argument('--max-hops',type=int)
+    ap.add_argument('--refusal-text',help='with --expect-missing-capability: the exact refusal that must fire')
     ap.add_argument('--rec-stream',type=int,choices=(0,1),default=0)
     ap.add_argument('--held-metadata',type=int,choices=(0,1),default=0)
     ap.add_argument('--review-controls',action='store_true')
@@ -142,6 +147,9 @@ def main():
     ap.add_argument('--port',type=int,required=True)
     ap.add_argument('--expect-missing-capability',action='store_true',help='client input must be an independently inspected native binary without AG capability')
     args=ap.parse_args()
+    if (args.autohop or args.min_hops is not None or args.max_hops is not None) and not args.rendered:
+        ap.error('hop counts come from the rendered client\'s prediction ring: add --rendered')
+    if args.min_hops is None and args.autohop:args.min_hops=3
     if args.review_controls and args.selector_cycle:
         ap.error('review-controls and selector-cycle require separate cases: map resets interrupt the timed review phases')
     root=args.runtime.resolve()
@@ -536,12 +544,13 @@ float(string cmd) CSQC_ConsoleCommand =
             stopped_walk=False
             deadline=time.monotonic()+35
             jumps=[(0.8,b'+jump'),(0.9,b'-jump'),(1.6,b'+jump'),(1.7,b'-jump')]
+            if args.autohop:jumps=[(0.8,b'+jump')]
             while server.poll() is None and time.monotonic()<deadline:
                 while jumps and time.monotonic()-walk_started>jumps[0][0]:
                     client.stdin.write(jumps.pop(0)[1]+b'\n');client.stdin.flush()
                 # cs16's landing slowdown (~77 u/s for a second after each jump) needs a longer walk to the finish.
                 if not stopped_walk and time.monotonic()-walk_started>(4.5 if args.profile=='cs16' else 2.5):
-                    client.stdin.write(b'-forward; prederr_dump ag-walk.txt; cl_prederror_count; echo AGINPUT_STOP\n')
+                    client.stdin.write((b'-jump; ' if args.autohop else b'')+b'-forward; prederr_dump ag-walk.txt; cl_prederror_count; echo AGINPUT_STOP\n')
                     client.stdin.flush()
                     stopped_walk=True
                 if args.review_controls:
@@ -636,6 +645,7 @@ float(string cmd) CSQC_ConsoleCommand =
         rate_logs=initial
     if args.expect_missing_capability:
         assert 'requires an AG-v1 capable client' in logs or 'movement profile needs a newer client' in logs
+        if args.refusal_text:assert args.refusal_text in logs, 'a different refusal fired'
     else:
         assert 'AGSOCKET player' in logs and 'AGSOCKET FAIL' not in logs
         if optional:
@@ -659,12 +669,25 @@ float(string cmd) CSQC_ConsoleCommand =
             # (rr-default, 16 Nov), so the profile claim is the airborne commands: jumps, boosts.
             assert rows and rows[-1] > 0, 'rendered client made no prediction comparison'
             ring=[line.split() for line in (clientgame/'data/prederr/ag-walk.txt').read_text().splitlines() if line[:1].isdigit()]
-            air=[r for r in ring if r[14]=='0' or r[15]=='0']
-            # Per axis: origins print %.2f. The base engine's own ag-250 shows a one-row 0.02 z transient
-            # (ctl-ag-250, 16 Nov); the cs16 stamina miss this catches was 0.26-0.65 per command.
-            airerr=max((max(abs(float(r[2+i])-float(r[5+i])) for i in range(3)) for r in air),default=None)
-            print('P1589 airborne comparisons %d, max airborne per-axis prediction error %s' % (len(air), airerr))
-            assert len(air) >= 10 and airerr < 0.025, 'airborne commands mispredicted or never measured'
+            # Per axis: origins print %.2f; the cs16 stamina miss this catches was 0.26-0.65 per command.
+            # A row catching up a client stall (> 10 commands since the last row) reads 0.02-0.03 z in every
+            # AG build since P1588 (ctl/rz/rf-ag-250, ah-ag-250); every other airborne row reads <= 0.01.
+            err=lambda r:max(abs(float(r[2+i])-float(r[5+i])) for i in range(3))
+            air=[(err(b),int(b[1])-int(a[1])>10) for a,b in zip(ring,ring[1:]) if b[14]=='0' or b[15]=='0']
+            airerr=max((e for e,catch in air if not catch),default=None)
+            catcherr=max((e for e,catch in air if catch),default=0.0)
+            print('P1589 airborne comparisons %d, max airborne per-axis prediction error %s (stall catch-up rows %d, max %s)'
+                  % (len(air), airerr, sum(c for _,c in air), catcherr))
+            assert len(air) >= 10 and airerr is not None and airerr < 0.025 and catcherr < 0.05, 'airborne commands mispredicted or never measured'
+            # A takeoff is the server's vertical speed rising (gravity only lowers it, <= ~10 u/s a row); at
+            # 1000 Hz a landing and its re-jump can share one command. HL2 leaves its first tick at 146.5;
+            # a landing also rises (to 0), so the row must end moving up.
+            hops=sum(1 for a,b in zip(ring,ring[1:]) if float(b[13])>100 and float(b[13])-float(a[13])>100)
+            print('P1591 server takeoffs in the ring %d (autohop arm %s)' % (hops, args.autohop))
+            if args.min_hops is not None:
+                assert hops>=args.min_hops, 'held jump did not chain hops on the server'
+            if args.max_hops is not None:
+                assert hops<=args.max_hops, 'the server hopped more than this arm allows'
         if hl2:
             assert peak > 200, "HL2 jump boost never raised server speed above the 190 walk"
         assert re.search(r'AGSOCKET timer state=2 .*body=[1-9]', logs), 'timer never ran through real walking'

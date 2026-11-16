@@ -3381,6 +3381,9 @@ void CL_CheckServerInfo(void)
 			if (!movevars.agprofile && *id && !(prof && PM_ProfileHL2(prof->kind) && movevars.physicsmode == PHYSMODE_SOURCE))
 				movevars.agprofile = -1;
 		}
+		//Patch 1591: an older server publishes pm_autobunny 1 but its AG mover never autohops.
+		if (movevars.physicsmode == PHYSMODE_AG && !Q_atoi(InfoBuf_ValueForKey(&cl.serverinfo, "pm_agautohop")))
+			movevars.autobunny = false;
 		s = InfoBuf_ValueForKey(&cl.serverinfo, "pm_maxairspeed");
 		movevars.maxairspeed = *s?Q_atof(s):30;
 		s = InfoBuf_ValueForKey(&cl.serverinfo, "pm_jumpvelocity");
@@ -6158,7 +6161,7 @@ void CL_Init (void)
 		cls.userinfo[seat].ChangeCB = CL_UserinfoChanged;
 		InfoBuf_SetStarKey (&cls.userinfo[seat], "*ver", ver);
 		InfoBuf_SetStarKey (&cls.userinfo[seat], "*agmove", "1");
-		InfoBuf_SetStarKey (&cls.userinfo[seat], "*pmprofile", STRINGIFY(PMPROFILE_CLIENTVERSION));	//Patch 1589
+		InfoBuf_SetStarKey (&cls.userinfo[seat], "*pmprofile", STRINGIFY(PMPROFILE_CLIENTVERSION));	//Patch 1589; 1591 = AG autohop
 	}
 
 	InitValidation();

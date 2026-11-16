@@ -775,6 +775,14 @@ void SV_New_f (void)
 			SV_DropClient(host_client);
 			return;
 		}
+		//Patch 1591: an older AG mover never autohops, so it would mispredict every held-jump landing.
+		if (prof && PM_ProfileGoldSrc(prof->kind) && pm_autobunny.value &&
+			atoi(InfoBuf_ValueForKey(&host_client->userinfo, "*pmprofile")) < PMAG_AUTOHOPVERSION)
+		{
+			SV_ClientPrintf(host_client, PRINT_HIGH, "The %s movement profile needs a newer client (autohop).\n", prof->selector);
+			SV_DropClient(host_client);
+			return;
+		}
 	}
 	if (movevars.physicsmode == PHYSMODE_AG &&
 		strcmp(InfoBuf_ValueForKey(&host_client->userinfo, "*agmove"), "1"))

@@ -21,7 +21,8 @@ typedef struct
 	float tick;
 	int since;				//engine patch whose clients know it (server gate on *pmprofile)
 } pmprofile_t;
-#define PMPROFILE_CLIENTVERSION 1589	//this client's *pmprofile
+#define PMPROFILE_CLIENTVERSION 1591	//this client's *pmprofile
+#define PMAG_AUTOHOPVERSION 1591		//first *pmprofile whose AG mover honours pm_autobunny
 const pmprofile_t *PM_ProfileByIdentity(const char *identity);
 const pmprofile_t *PM_ProfileBySelector(const char *selector);
 #define PM_ProfileGoldSrc(kind) ((kind) == PMPROFILE_AG || (kind) == PMPROFILE_CS16)
@@ -37,7 +38,7 @@ double PMAg_CommandSlot(float tick, double wantedfps, double serverfps);
 void PMAg_PlayerMove(float gamespeed);
 void PMAg_Accelerate(playermove_t *move, const movevars_t *vars,
 	const vec3_t wishdir, float wishspeed, float surfacefriction);
-qboolean PMAg_JumpEdge(playermove_t *move);
+qboolean PMAg_JumpEdge(playermove_t *move, const movevars_t *vars);
 
 /* Dry ordinary-jump command phases, with no carrier/longjump entitlement.
  * Start runs initial gravity, jump and grounded friction; accelerate follows.

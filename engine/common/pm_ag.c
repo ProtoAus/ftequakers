@@ -95,12 +95,12 @@ void PMAg_Accelerate(playermove_t *move, const movevars_t *vars,
 		move->velocity[axis] += budget * wishdir[axis];
 }
 
-/* Even an airborne press consumes the edge. Uncapped speed is not autobhop.
+/* Even an airborne press consumes the edge; pm_autobunny lets a held button jump on landing (Patch 1591).
  * This is only the button decision; the dry jump/gravity phases own impulse. */
-qboolean PMAg_JumpEdge(playermove_t *move)
+qboolean PMAg_JumpEdge(playermove_t *move, const movevars_t *vars)
 {
 	qboolean pressed = (move->cmd.buttons & BUTTON_JUMP) != 0;
-	qboolean fresh = pressed && !move->jump_held;
+	qboolean fresh = pressed && (!move->jump_held || vars->autobunny);
 
 	move->jump_held = pressed;
 	return fresh && move->onground && move->pm_type != PM_DEAD;
@@ -147,7 +147,7 @@ qboolean PMAg_DryStart(playermove_t *move, const movevars_t *vars,
 	qboolean jumped;
 
 	PMAg_HalfGravity(move, vars);
-	jumped = PMAg_JumpEdge(move) && !move->waterjumptime;
+	jumped = PMAg_JumpEdge(move, vars) && !move->waterjumptime;
 	if (jumped)
 	{
 		move->onground = false;

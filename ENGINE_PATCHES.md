@@ -1,5 +1,41 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1591 - Autohop under every movement profile
+
+**Problem.** Lex: "add autohop to every game mode". The default mode autohops (`pm_autobunny 1`, canonical in
+default.cfg), but P1589's hl2-pre/hl2-post forced `pm_autobunny 0`, and the AG mover (ag-100/250/1000, cs16) never
+read it: PMAg_JumpEdge jumped only on a fresh press.
+
+**Change.**
+- PMAg_JumpEdge takes the movevars; with `vars->autobunny` a held button counts as a press, so a held jump leaves on
+  the first grounded tick. Airborne presses, release and death behave as before; autobunny 0 is the old predicate.
+- SV_ApplyMovementProfile no longer overrides `pm_autobunny` for HL2, so every profile runs the server's value.
+  PMSrc_HL2JumpBoost applies on each autohop takeoff.
+- GoldSrc profiles publish `pm_agautohop 1`. A client predicts AG autohop only with it: an older server publishes
+  `pm_autobunny 1` too, but its AG mover never autohops (both reviewers).
+- Clients advertise `*pmprofile 1591`; SV_New_f refuses a client below PMAG_AUTOHOPVERSION from a GoldSrc profile
+  while `pm_autobunny` is on ("needs a newer client (autohop)"): its AG mover would predict a landing where the
+  server jumps, every hop. That includes 0.1.48 on ag-100/ag-250. HL2 needs no gate: P1589 clients already predict
+  PMSrc's autobunny from serverinfo.
+- CS 1.6 under autohop is ReGameDLL's `sv_autobunnyhopping 1`: the jump leaves on the landing tick, so PM_WalkMove's
+  fuser2 slowdown never runs, but each jump still pays the stamina impulse cut and PreventMegaBunnyJumping.
+
+**Verified.** test_pm_ag.c's autobunny block passes and test_pm_ag.py rejects 7/7 mutants (the new
+`wrong-no-autohop` at line 124). World solver: 2 s held = 3 jumps at 100 Hz and 4 at 1000 Hz, longest ground 1 tick;
+CS16 apex 44.99 then 34.63 (stamina), 239.99 u/s after the bunny cap. Rendered dedicated/client arms, held +jump
+(test_ag_profile_runtime.py `--autohop`; server takeoffs in the ring / max airborne per-axis prediction error):
+ag-100 3/0.01, ag-250 3/0.01, ag-1000 3/0.01, cs16 7/0.01, hl2-pre 4/0.00 (peak 475), hl2-post 4/0.00 (peak 285),
+default 3/0.00; the tapped ag-250 arm still passes. Controls: a P1589 server+client gives 1 takeoff (the arm fails);
+a P1589 server with this client 1 takeoff, 0.01; the same server with this patch before `pm_agautohop` 12.42 u and 47
+prediction-error lines. This server refuses a P1589 client from ag-100 with the "(autohop)" text and admits it on
+hl2-post (4/0.00). pm_dettest and pm_selftest pass under cs16 and hl2-post. The arm now grades rows that catch up a
+client stall (> 10 commands) apart: they read 0.02-0.03 z in every AG build since P1588 and every other airborne row
+<= 0.01; the first ag-250 run read 0.03 on one and failed the old single bound.
+
+**Limits.** The gate runs at connect and map change only (a mid-map pm_autobunny flip, lock off, is not re-gated).
+AG physics changed under the same identities and pin; nothing replays AG today (BACKLOG). Under hl2-* a ceiling
+within 2 units re-jumps every tick and the boost adds each time: stock Source rules with a free press (BACKLOG).
+
 ## Patch 1590 - Groups on the leaderboards, one mode row, the server beside the board, a map family counted once
 
 QC + surfd (FTESurf main 03922e48); no engine change. ftesurf-06, root C:\FTESurf-worktrees\groups-20261116-c7.
