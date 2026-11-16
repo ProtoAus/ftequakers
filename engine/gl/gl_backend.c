@@ -8419,7 +8419,9 @@ static void BE_CheckModeChange(void)
 	GLBE_DestroyFBOs();
 	shaderstate.oldwidth = vid.pixelwidth;
 	shaderstate.oldheight = vid.pixelheight;
-	be_capwarm.rw = be_capwarm.rh = be_capwarm.samples = be_capwarm.fw = be_capwarm.fh = 0;	//r_mapready_info: none survived
+	be_capwarm.rw = be_capwarm.rh = be_capwarm.samples = be_capwarm.fw = be_capwarm.fh = 0;	//r_mapready_info: none survived,
+	be_capwarm.texbuilds = be_captexbuilds;	//and rebuilds count from here (GLBE_Init zeroes the MSAA count)
+	be_capwarm.aabuilds = BE_ReflectMSAA_Builds();
 
 	while(shaderstate.lastpasstmus>0)
 	{
@@ -8431,14 +8433,9 @@ static void BE_CheckModeChange(void)
 }
 static void BE_CaptureWarmClear(void)
 {
-	GLboolean sc = qglIsEnabled ? qglIsEnabled(GL_SCISSOR_TEST) : be_scissoron;	//GL's own: gl_screen.c/gl_draw.c disable it behind be_scissoron
-	if (sc)
-		qglDisable(GL_SCISSOR_TEST);
 	GL_ForceDepthWritable();
 	qglClearColor(0, 0, 0, 1);
 	qglClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-	if (sc)
-		qglEnable(GL_SCISSOR_TEST);
 }
 void GLBE_CaptureTargets_MapActive(void)
 {
@@ -8448,13 +8445,21 @@ void GLBE_CaptureTargets_MapActive(void)
 	int ow = vid.fbpwidth, oh = vid.fbpheight, oldfbo, k;
 	float rs = fabs(r_renderscale.value);
 	unsigned int i;
+	GLboolean scissor;
+	qboolean scissorflag = be_scissoron;
 	memset(&be_capwarm, 0, sizeof(be_capwarm));
 	be_capwarm.texbuilds = be_captexbuilds;	//"rebuilt since" counts from activation either way
 	be_capwarm.aabuilds = BE_ReflectMSAA_Builds();
 	if (!r_capturewarm.ival || !gl_config.ext_framebuffer_objects || gl_config_gles || r_portalrecursion.ival <= 0 ||
 		!r_shaders || !cl.worldmodel || r_refdef.recurse)
-		return;	//GLES: BE_CaptureTexture's formats are desktop GL's (see the skyroom's at GLBE_DrawWorld)
+		return;	//GLES: BE_CaptureTexture's formats are desktop GL's (GLBE_DrawSkyroomScaled's note); its first sight stays as it was
 	BE_CheckModeChange();
+	//no scissor for the clears and the MSAA resolve, which trusts be_scissoron; gl_screen.c and gl_draw.c switch GL's
+	//off behind the flag, so GL's own state is what comes back
+	scissor = qglIsEnabled ? qglIsEnabled(GL_SCISSOR_TEST) : be_scissoron;
+	if (scissor)
+		qglDisable(GL_SCISSOR_TEST);
+	be_scissoron = false;
 	for (i = 0; i < r_numshaders; i++)
 	{
 		s = r_shaders[i];
@@ -8516,6 +8521,9 @@ void GLBE_CaptureTargets_MapActive(void)
 	vid.fbpheight = oh;
 	r_refdef.vrect = orect;
 	r_refdef.pxrect = oprect;
+	be_scissoron = scissorflag;
+	if (scissor)
+		qglEnable(GL_SCISSOR_TEST);
 	be_capwarm.texbuilds = be_captexbuilds;
 	be_capwarm.aabuilds = BE_ReflectMSAA_Builds();
 }
