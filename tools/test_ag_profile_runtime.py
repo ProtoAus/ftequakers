@@ -539,7 +539,8 @@ float(string cmd) CSQC_ConsoleCommand =
             while server.poll() is None and time.monotonic()<deadline:
                 while jumps and time.monotonic()-walk_started>jumps[0][0]:
                     client.stdin.write(jumps.pop(0)[1]+b'\n');client.stdin.flush()
-                if not stopped_walk and time.monotonic()-walk_started>2.5:
+                # cs16's landing slowdown (~77 u/s for a second after each jump) needs a longer walk to the finish.
+                if not stopped_walk and time.monotonic()-walk_started>(4.5 if args.profile=='cs16' else 2.5):
                     client.stdin.write(b'-forward; prederr_dump ag-walk.txt; cl_prederror_count; echo AGINPUT_STOP\n')
                     client.stdin.flush()
                     stopped_walk=True
@@ -556,7 +557,7 @@ float(string cmd) CSQC_ConsoleCommand =
                     # External test-only variants are not written through the game's
                     # FS cache invalidation path. Use documented direct lookups.
                     commands=['fs_cache 0','pm_recsim '+relative]
-                    if args.profile.startswith('ag-'):
+                    if optional and not hl2:
                         original=records[0].read_text()
                         agpin=next(line for line in original.splitlines() if line.startswith('pmpin '))[6:]
                         withoutpin='\n'.join(line for line in original.splitlines() if not line.startswith('pmpin '))+'\n'
@@ -661,7 +662,8 @@ float(string cmd) CSQC_ConsoleCommand =
             air=[r for r in ring if r[14]=='0' or r[15]=='0']
             airerr=max((sum((float(r[2+i])-float(r[5+i]))**2 for i in range(3))**0.5 for r in air),default=None)
             print('P1589 airborne comparisons %d, max airborne prediction error %s' % (len(air), airerr))
-            assert len(air) >= 10 and airerr < 0.01, 'airborne commands mispredicted or never measured'
+            # The ring prints origins with %.2f: 0.01 is one print step, not a measured gap.
+            assert len(air) >= 10 and airerr < 0.015, 'airborne commands mispredicted or never measured'
         if hl2:
             assert peak > 200, "HL2 jump boost never raised server speed above the 190 walk"
         assert re.search(r'AGSOCKET timer state=2 .*body=[1-9]', logs), 'timer never ran through real walking'
