@@ -6040,23 +6040,35 @@ char *FS_GetGamedir(qboolean publicpathonly)
 		return gamedirfile;
 }
 
-//FTESurf P1593: `ftesurf` and `worldofsurf` are one game; the lobbies keep announcing `ftesurf`.
-//Returns this install's basegame when dir is its other name, else NULL.
+//FTESurf P1593: `ftesurf` and `worldofsurf` are one game. The first is the wire spelling (what servers
+//announce, demos record and download URLs name); the local folder may be either.
+static const char *fs_gamedir_aliases[] = {"ftesurf", "worldofsurf"};
+
+//this install's basegame when dir is its other name, else NULL.
 const char *FS_GamedirAlias(const char *dir)
 {
-	static const char *names[] = {"ftesurf", "worldofsurf"};
 	size_t i, j;
 	if (!fs_manifest || !dir)
 		return NULL;
-	for (j = 0; j < countof(names) && Q_strcasecmp(dir, names[j]); j++)
+	for (j = 0; j < countof(fs_gamedir_aliases) && Q_strcasecmp(dir, fs_gamedir_aliases[j]); j++)
 		;
-	if (j == countof(names))
+	if (j == countof(fs_gamedir_aliases))
 		return NULL;
 	for (i = 0; i < countof(fs_manifest->gamepath); i++)
 		if (fs_manifest->gamepath[i].path && (fs_manifest->gamepath[i].flags & GAMEDIR_BASEGAME) &&
-			!Q_strcasecmp(fs_manifest->gamepath[i].path, names[!j]))
-			return names[!j];	//not the manifest's string: COM_Gamedir may free that manifest
+			!Q_strcasecmp(fs_manifest->gamepath[i].path, fs_gamedir_aliases[!j]))
+			return fs_gamedir_aliases[!j];	//not the manifest's string: COM_Gamedir may free that manifest
 	return NULL;
+}
+
+//the wire spelling of a local gamedir: `ftesurf` for either name, else dir.
+const char *FS_GamedirWireName(const char *dir)
+{
+	size_t j;
+	for (j = 0; dir && j < countof(fs_gamedir_aliases); j++)
+		if (!Q_strcasecmp(dir, fs_gamedir_aliases[j]))
+			return fs_gamedir_aliases[0];
+	return dir;
 }
 
 //returns the commandline arguments required to duplicate the fs details
@@ -6300,7 +6312,7 @@ void COM_Gamedir (const char *dir, const struct gamepacks *packagespaths)
 #ifdef HAVE_SERVER
 	if (!*dir)
 		dir = FS_GetGamedir(true);
-	InfoBuf_SetStarKey (&svs.info, "*gamedir", dir);
+	InfoBuf_SetStarKey (&svs.info, "*gamedir", FS_GamedirWireName(dir));	//FTESurf P1593: older clients mount what this names
 #endif
 }
 

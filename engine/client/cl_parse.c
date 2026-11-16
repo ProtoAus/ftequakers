@@ -979,13 +979,13 @@ void CL_DownloadFinished(qdownload_t *dl)
 }
 
 //FTESurf P1593: a server announcing our basegame's other name (FS_GamedirAlias) is our own game:
-//no mount, no config reload, files land in our folder. Its spelling is kept for web downloads,
-//which ask for <dlURL>/<its gamedir>/ (surfd/maps.nginx serves /ftesurf/maps/).
+//no mount, no config reload, files land in our folder. Web downloads ask for <dlURL>/<gamedir>/ in
+//the server's spelling while connected, else the wire spelling (surfd/maps.nginx serves /ftesurf/maps/).
 static char cl_servergamedir[MAX_QPATH];
 static const char *CL_ServerGamedir(const char *str)
 {
 	const char *own = FS_GamedirAlias(str);
-	Q_strncpyz(cl_servergamedir, own?str:"", sizeof(cl_servergamedir));
+	Q_strncpyz(cl_servergamedir, str, sizeof(cl_servergamedir));
 	if (!own)
 		return str;
 	Con_DPrintf("Server gamedir \"%s\" is \"%s\" here\n", str, own);
@@ -1113,7 +1113,7 @@ qboolean	CL_CheckOrEnqueDownloadFile (const char *filename, const char *localnam
 				filename += 8;
 #endif
 			Q_snprintfz(weburl, sizeof(weburl), "%s%s%s/%s", dlURL, ((dlURL[strlen(dlURL)-1]=='/')?"":"/"),
-				(cls.state != ca_disconnected && *cl_servergamedir)?cl_servergamedir:FS_GetGamedir(true), filename);
+				(cls.state != ca_disconnected && *cl_servergamedir)?cl_servergamedir:FS_GamedirWireName(FS_GetGamedir(true)), filename);
 			filename = weburl;
 			flags |= DLLF_TRYWEB|DLLF_ALLOWWEB;
 		}

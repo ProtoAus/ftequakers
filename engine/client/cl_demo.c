@@ -1275,7 +1275,7 @@ static void CLQW_RecordServerData(sizebuf_t *buf, int *seq)
 	}
 	MSG_WriteLong (buf, PROTOCOL_VERSION_QW);
 	MSG_WriteLong (buf, cl.servercount);
-	MSG_WriteString (buf, gamedirfile);
+	MSG_WriteString (buf, FS_GamedirWireName(gamedirfile));	//FTESurf P1593: older engines mount what this names
 
 	if (cls.fteprotocolextensions2 & PEXT2_MAXPLAYERS)
 	{
@@ -1436,7 +1436,7 @@ void CLNQ_WriteServerData(sizebuf_t *buf)	//for demo recording
 		MSG_WriteLong (buf, protfl);
 
 	if (cls.fteprotocolextensions2 & PEXT2_PREDINFO)
-		MSG_WriteString(buf, FS_GetGamedir(true));
+		MSG_WriteString(buf, FS_GamedirWireName(FS_GetGamedir(true)));	//FTESurf P1593
 	MSG_WriteByte (buf, cl.allocated_client_slots);
 	MSG_WriteByte (buf, cl.deathmatch?GAME_DEATHMATCH:GAME_COOP);
 	MSG_WriteString (buf, cl.levelname);
