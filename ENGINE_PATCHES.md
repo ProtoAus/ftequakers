@@ -1,5 +1,31 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1593 - World of Surf names, stage 1: the updater and the game folder accept both identities
+
+**Problem.** Lex: the player's exe and game folder should be World of Surf (WorldofSurf.exe / worldofsurf64,
+`worldofsurf/`). Players' launchers and every shipped engine refuse a feed whose game, exec or paths are not
+`ftesurf`, and the launcher cannot update itself, so the rename needs readers that understand both names first.
+
+**Change.**
+- qkupdate.c: exactly two identities (legacy ftesurf / new worldofsurf), never mixed in one feed; the new allowlist
+  is the legacy one with the folder respelled; identity from the manifest BASEGAME, agreeing with the launcher's
+  `.ftesurf-updater/identity` marker when present, else the BASEGAME folder must hold 2 of the 3 .dat files and the
+  other must not; the signed updater and install lock also switch on for GAME "WorldofSurf"; per-identity feed URL
+  (`ftesurf/worldofsurf.json`); envelopes strict JSON (depth <= 32, exactly payload + signature, no duplicate,
+  dotted or escaped keys, 128 lowercase hex) checked before any parse; lock taken before the identity is read.
+- fs.c / cl_parse.c / cl_demo.c / cl_main.c / sv_main.c: `ftesurf` and `worldofsurf` are one game on an identity
+  install -- a server gamedir naming either (any case, trailing dots/spaces) is the client's own base, lists and
+  non-plain names fall back to the base, the alias also applies per manifest gamedir name, to //paknames download
+  folders and FS_GenCachedPakName; `~` and over-63-byte pack folders refused on identity installs; `ftesurf` stays
+  the wire/recorded spelling (*gamedir, demos, getinfo modname, offline download URLs). Other games unchanged.
+
+**Verified.** tools/test_update_identity.py 102/102 on win64 and linux64 with 35 mutant controls each;
+test_update_tiers.py; the launcher (58+7 tests, 23 mutants) and tools/updatefeed.py (26 tests, 34 mutants) carry
+the same contract. Alias rig: forward (`Server gamedir "ftesurf" is "worldofsurf" here`, /ftesurf/maps 200),
+`ftesurf;worldofsurf` -> own base, offline download into worldofsurf/, controls on the previous builds mount or
+create the other folder. Five review rounds on the contract, two on the alias. The launcher folder move (stage 2)
+and the release (stage 3) are not in this patch.
+
 ## Patch 1594 - The journal times each key press and release against the keyboard's own raw report
 
 **Problem.** P1576 drops key messages Windows says another program made, and P1586 notes patched code, but a
