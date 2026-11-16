@@ -97,12 +97,13 @@ cvar_t r_glsl_warm = CVARFD("r_glsl_warm", "1", CVAR_ARCHIVE, "FTESurf Patch 127
 #define GLSLWARM_BYTES (4*1024*1024)		//written and read, at most
 #define GLSLWARM_SEED "glsl/warmseed.txt"	//FTESurf Patch 1282: the release's starter list, read beside this PC's
 #define GLSLWARM_MAX 65536					//permutations kept, all programs together
-cvar_t r_mapready_budget = CVARFD("r_mapready_budget", "6", CVAR_ARCHIVE, "Soft seconds (0..10) for registered models/images and remembered active GLSL permutations at activation, then every permutation of the small programs (Patch 1574). A single upload/driver compile cannot be preempted. Expiry is incomplete, NOT server timer admission; see r_mapready_info. (FTESurf Patch 1442: 6, was 2; the window stays responsive meanwhile.)");
+cvar_t r_mapready_budget = CVARFD("r_mapready_budget", "6", CVAR_ARCHIVE, "Soft seconds (0..10) for registered models/images and remembered active GLSL permutations at activation, then every permutation of the small programs (Patch 1574), then on a fogged map the fog variants of the listed ones (Patch 1578). A single upload/driver compile cannot be preempted. Expiry is incomplete, NOT server timer admission; see r_mapready_info. (FTESurf Patch 1442: 6, was 2; the window stays responsive meanwhile.)");
 static struct
 {
 	qboolean observing, warming, invalidated, budgethit, overflow;
 	int programs, eligible, available, compiled, failed, pending, unavailable;
 	int whole, wholeeligible, wholeavailable, wholecompiled, wholefailed, wholepending;	//FTESurf Patch 1574: small programs warmed whole, after the list
+	int fogged, fog, fogeligible, fogavailable, fogcompiled, fogfailed, fogpending;	//FTESurf Patch 1578: fog variants on a fogged map, last
 	int models, modelpending, modelfailed, modelunrequested;
 	int images, imagepending, imagefailed, imageunrequested;
 	unsigned int latecompiles, latefailed, lateimages, lateimagefailed;
@@ -5816,6 +5817,8 @@ void R_MapReadyInfo_f(void)
 		mapready.programs, mapready.unavailable, mapready.eligible, mapready.available, mapready.compiled, mapready.failed, mapready.pending);
 	Con_Printf("mapready: whole programs %i eligible %i available %i compiled %i failed %i pending %i\n", mapready.whole,	//Patch 1574
 		mapready.wholeeligible, mapready.wholeavailable, mapready.wholecompiled, mapready.wholefailed, mapready.wholepending);
+	Con_Printf("mapready: fog variants fogged %i programs %i eligible %i available %i compiled %i failed %i pending %i\n",	//Patch 1578
+		mapready.fogged, mapready.fog, mapready.fogeligible, mapready.fogavailable, mapready.fogcompiled, mapready.fogfailed, mapready.fogpending);
 	Con_Printf("mapready: other requested models still loading %i\n", mapready.otherpending);	//FTESurf Patch 1501
 	Con_Printf("mapready: activation models %i pending %i failed %i unrequested %i images %i pending %i failed %i unrequested %i\n",
 		mapready.models, mapready.modelpending, mapready.modelfailed, mapready.modelunrequested,
@@ -5835,25 +5838,27 @@ void R_MapReadyInfo_f(void)
 }
 
 //one permutation of an active program at activation: counted, compiled unless already there or past the budget
-//whole: Patch 1574's speculative pass, counted apart so the listed closure (ready-closure) means what it did
-static void MapReady_WarmPerm(program_t *prog, unsigned int p, unsigned int *seen, double deadline, qboolean whole)
+//pass 0 is the list; 1 (Patch 1574, small programs whole) and 2 (Patch 1578, fog variants) are speculative and counted
+//apart, so the listed closure (ready-closure) means what it did
+#define MAPREADY_COUNT(n) (*(pass == 2 ? &mapready.fog##n : pass ? &mapready.whole##n : &mapready.n))++
+static void MapReady_WarmPerm(program_t *prog, unsigned int p, unsigned int *seen, double deadline, int pass)
 {
 	if (!p || (seen[p >> 5] & (1u << (p & 31))))
 		return;
 	seen[p >> 5] |= 1u << (p & 31);
-	(*(whole ? &mapready.wholeeligible : &mapready.eligible))++;
+	MAPREADY_COUNT(eligible);
 	if (prog->permu[p])
 	{
 		if (prog->permu[p] == prog->permu[0])
-			(*(whole ? &mapready.wholefailed : &mapready.failed))++;
+			MAPREADY_COUNT(failed);
 		else
-			(*(whole ? &mapready.wholeavailable : &mapready.available))++;
+			MAPREADY_COUNT(available);
 		return;
 	}
 	if (Sys_DoubleTime() >= deadline)
 	{
 		mapready.budgethit = true;
-		(*(whole ? &mapready.wholepending : &mapready.pending))++;
+		MAPREADY_COUNT(pending);
 		return;
 	}
 	MapReady_KeepAlive();
@@ -5861,10 +5866,20 @@ static void MapReady_WarmPerm(program_t *prog, unsigned int p, unsigned int *see
 	if (!prog->permu[p])
 	{
 		prog->permu[p] = prog->permu[0];
-		(*(whole ? &mapready.wholefailed : &mapready.failed))++;
+		MAPREADY_COUNT(failed);
 	}
 	else
-		(*(whole ? &mapready.wholecompiled : &mapready.compiled))++;
+		MAPREADY_COUNT(compiled);
+}
+#undef MAPREADY_COUNT
+//FTESurf Patch 1578: the frame's fog (gl_rmain.c, gl_warp.c) is one of these, so any of them can draw PERMUTATION_FOG
+static qboolean MapReady_Fogged(void)
+{
+	int t;
+	for (t = 0; t < FOGTYPE_COUNT; t++)
+		if (cl.fog[t].density > 0)
+			return true;
+	return false;
 }
 //FTESurf Patch 1574: a program declaring at most this many permutation bits warms every combination of them
 #define GLSLWARM_WHOLE_BITS 3
@@ -5935,7 +5950,7 @@ void GLSLWarm_MapActive(void)
 				memset(seen, 0, sizeof(seen));
 				for (perm = 1; perm < PERMUTATIONS; perm++)
 					if (w->bits[perm >> 5] & (1u << (perm & 31)))
-						MapReady_WarmPerm(prog, perm & prog->supportedpermutations, seen, deadline, false);
+						MapReady_WarmPerm(prog, perm & prog->supportedpermutations, seen, deadline, 0);
 			}
 			/*FTESurf Patch 1574: then, with what is left of the budget, every combination of each small program's bits.
 			  A water material's defines are part of its program's name, so on a map not played before no list knows its
@@ -5956,7 +5971,31 @@ void GLSLWarm_MapActive(void)
 				mapready.whole++;
 				memset(seen, 0, sizeof(seen));
 				for (sub = sp; sub; sub = (sub - 1) & sp)
-					MapReady_WarmPerm(prog, sub, seen, deadline, true);
+					MapReady_WarmPerm(prog, sub, seen, deadline, 1);
+			}
+			/*FTESurf Patch 1578: last, on a fogged map, the fog variant of each listed permutation of the larger programs,
+			  and the fog-only one (permutation 0 is never listed). The list is every map's, so a permutation seen only
+			  unfogged compiled mid-run on a fogged map's first play (surf_null: vmt/vertexlit 0x128/0x328, vmt/refract 0x20,
+			  10-16 ms each). CSQC_WorldLoaded's fog command has run by now: it is queued frames before activation.*/
+			mapready.fogged = MapReady_Fogged();
+			for (i = 0; mapready.fogged && i < (unsigned int)count; i++)
+			{
+				unsigned int sp, sub, bits = 0;
+				prog = programs[i];
+				if ((i && prog == programs[i-1]) || !prog->name || !prog->permu[0])
+					continue;
+				sp = prog->supportedpermutations;
+				for (sub = sp; sub; sub &= sub - 1)
+					bits++;
+				if (!(sp & PERMUTATION_FOG) || bits <= GLSLWARM_WHOLE_BITS)
+					continue;	//no fog, or every combination warmed above
+				mapready.fog++;
+				memset(seen, 0, sizeof(seen));
+				MapReady_WarmPerm(prog, PERMUTATION_FOG, seen, deadline, 2);
+				w = glslwarm_mem ? Hash_Get(&glslwarm_hash, prog->name) : NULL;
+				for (perm = 1; w && perm < PERMUTATIONS; perm++)
+					if (w->bits[perm >> 5] & (1u << (perm & 31)))
+						MapReady_WarmPerm(prog, (perm & sp) | PERMUTATION_FOG, seen, deadline, 2);
 			}
 		}
 		free(programs);
