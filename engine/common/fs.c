@@ -6389,7 +6389,7 @@ qboolean FS_GenCachedPakName(const char *pname, const char *crc, char *local, in
 	}
 	{	//FTESurf P1593: the folder is the server's word. A long one or `~` (8.3 names: WORLDO~1) is
 		//refused; either identity in any spelling is this install's base, for the download and the mount.
-		char dir[MAX_QPATH];
+		char dir[64];	//MAX_QPATH is 128 here
 		const char *own;
 		if ((size_t)(fn - pname) > sizeof(dir) || memchr(pname, '~', fn - pname))
 		{

@@ -994,7 +994,7 @@ static const char *CL_ServerGamedir(const char *str)
 		if (!((*c >= 'a' && *c <= 'z') || (*c >= 'A' && *c <= 'Z') || (*c >= '0' && *c <= '9') ||
 			*c == '_' || *c == '-' || *c == '.'))
 			break;
-	if (*c || c - str >= MAX_QPATH || *str == '.')
+	if (*c || c - str >= 64 || *str == '.')
 	{
 		Con_DPrintf("Server gamedir \"%s\" is not one plain name: our own base\n", str);
 		return "";
@@ -1062,7 +1062,7 @@ qboolean	CL_CheckOrEnqueDownloadFile (const char *filename, const char *localnam
 		//identity in any spelling is our base: no second identity folder.
 		static char pkglocal[MAX_OSPATH];	//not va(): filename holds one of its two buffers
 		const char *rest = localname?strchr(localname, '/'):NULL, *own = NULL;
-		char dir[MAX_QPATH];
+		char dir[64];	//MAX_QPATH is 128 here
 		if (!strchr(filename, ':'))
 			filename = va("package/%s", filename);
 		if (rest)
