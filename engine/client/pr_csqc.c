@@ -10405,13 +10405,15 @@ static qboolean CSQC_PredictListenGated(void)
   server, so a local load rides the command's impulse as a remote one has since P753/P1544
   instead of a stringcmd whose release waits for the server (every local load showed
   "Loading save"; under sv_minping the body froze a round trip).  Same argument as 862: the
-  hook writes only the client's pmove (origin, velocity, onground, pm_type, duck), which
-  SV_RunCmd reloads from the edict for every command, and movevars.entgravity, which
-  sv_user.c sets per client before each command and cl_pred.c resets after this piece.*/
+  hook writes only pmove fields (body, pm_type, duck state, cmd.msec, basevelocity,
+  safeorigin_known, oldbuttons) that CL_PredictUsercmdPart and PM_PlayerMove already write on
+  every listen piece and SV_RunCmd reloads per client, and movevars.entgravity, which sv_user.c
+  sets before each command.  Only with the trigger mirror on: without cl_predict_listen the
+  post-move hook never runs, so a save would capture a stale posture (WarpOp_PostMove).*/
 static qboolean CSQC_PredictListenOpsGated(void)
 {
 #ifdef HAVE_SERVER
-	return sv.state != ss_dead && !cl_predict_listenops.ival;
+	return sv.state != ss_dead && (!cl_predict_listenops.ival || !cl_predict_listen.ival);
 #else
 	return false;
 #endif
@@ -11189,7 +11191,7 @@ void CSQC_PredictPlayerMove(int seat, const usercmd_t *cmd, const float *preorig
 	VectorCopy(pmove.origin, csqcg.predmove_org);
 	VectorCopy(pmove.velocity, csqcg.predmove_vel);
 	*csqcg.predmove_onground = pmove.onground;
-	if (csqcg.predmove_wasground)	//FTESurf P1025: the pre-move hook does not run on a listen server
+	if (csqcg.predmove_wasground)	//FTESurf P1025: the pre-move hook may not run on a listen server (cl_predict_listenops 0, P1588)
 		*csqcg.predmove_wasground = preground;
 	if (csqcg.predmove_mins)
 		VectorCopy(pmove.player_mins, csqcg.predmove_mins);
