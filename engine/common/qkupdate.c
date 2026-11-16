@@ -354,6 +354,135 @@ static qboolean QKU_FSIsGameFile(const char *p, const char *leaf)
 	return !strncmp(p, qku_id->dir, d) && !strcmp(p + d, leaf);
 }
 
+static int QKU_JSONHex4(const unsigned char *s)
+{
+	int i, v = 0;
+	for (i = 0; i < 4; i++)
+	{
+		int c = s[i];
+		int h = c >= '0' && c <= '9' ? c - '0' : c >= 'a' && c <= 'f' ? c - 'a' + 10 : c >= 'A' && c <= 'F' ? c - 'A' + 10 : -1;
+		if (h < 0) return -1;
+		v = v << 4 | h;
+	}
+	return v;
+}
+
+//One JSON string at *sp (on its opening quote): escapes as RFC 8259, paired surrogates only,
+//no raw control character, valid UTF-8 without overlongs, surrogates or anything past U+10FFFF.
+static qboolean QKU_JSONStrictString(const unsigned char **sp)
+{
+	const unsigned char *s = *sp + 1;
+	for (;;)
+	{
+		unsigned c = *s++;
+		if (c == '"') { *sp = s; return true; }
+		if (c < 0x20) return false;	//includes the terminating NUL
+		if (c == '\\')
+		{
+			int u, v;
+			c = *s++;
+			if (c && strchr("\"\\/bfnrt", c)) continue;
+			if (c != 'u' || (u = QKU_JSONHex4(s)) < 0) return false;
+			s += 4;
+			if (u >= 0xDC00 && u <= 0xDFFF) return false;
+			if (u >= 0xD800 && u <= 0xDBFF)
+			{
+				if (s[0] != '\\' || s[1] != 'u' || (v = QKU_JSONHex4(s + 2)) < 0xDC00 || v > 0xDFFF) return false;
+				s += 6;
+			}
+			continue;
+		}
+		if (c >= 0x80)
+		{
+			int n = c >= 0xC2 && c <= 0xDF ? 1 : c >= 0xE0 && c <= 0xEF ? 2 : c >= 0xF0 && c <= 0xF4 ? 3 : 0;
+			unsigned lo = c == 0xE0 ? 0xA0 : c == 0xF0 ? 0x90 : 0x80, hi = c == 0xED ? 0x9F : c == 0xF4 ? 0x8F : 0xBF;
+			if (!n || *s < lo || *s > hi) return false;
+			for (s++; --n > 0; s++) if (*s < 0x80 || *s > 0xBF) return false;
+		}
+	}
+}
+
+static qboolean QKU_JSONStrictNumber(const unsigned char **sp)
+{
+	const unsigned char *s = *sp;
+	if (*s == '-') s++;
+	if (*s == '0') s++;
+	else if (*s >= '1' && *s <= '9') while (*s >= '0' && *s <= '9') s++;
+	else return false;
+	if (*s == '.')
+	{
+		if (*++s < '0' || *s > '9') return false;
+		while (*s >= '0' && *s <= '9') s++;
+	}
+	if (*s == 'e' || *s == 'E')
+	{
+		if (*++s == '+' || *s == '-') s++;
+		if (*s < '0' || *s > '9') return false;
+		while (*s >= '0' && *s <= '9') s++;
+	}
+	*sp = s;
+	return true;
+}
+
+//P1593: strict RFC 8259 text with an object at the top and at most QKU_JSONDEPTH levels, which is
+//what the launcher's serde reads, minus what JSON_Parse also takes (comments, trailing commas, a
+//BOM, text after the value, bare words). Iterative, so it runs BEFORE JSON_Parse recurses per
+//level on the 256 KB loader thread.
+#define QKU_JSONDEPTH 32
+static qboolean QKU_JSONStrict(const char *text)
+{
+	const unsigned char *s = (const unsigned char *)text;
+	char stack[QKU_JSONDEPTH];
+	int depth = 0;
+	enum { WANT_VALUE, WANT_VALUE_OR_END, WANT_KEY, WANT_KEY_OR_END, WANT_COLON, WANT_NEXT, WANT_NOTHING } want = WANT_VALUE;
+	for (;;)
+	{
+		while (*s == ' ' || *s == '\t' || *s == '\n' || *s == '\r') s++;
+		if (!*s) return want == WANT_NOTHING;
+		switch (want)
+		{
+		case WANT_NOTHING:
+			return false;	//text after the value
+		case WANT_COLON:
+			if (*s++ != ':') return false;
+			want = WANT_VALUE;
+			break;
+		case WANT_NEXT:
+			if (*s == ',') { s++; want = stack[depth-1] == '{' ? WANT_KEY : WANT_VALUE; break; }
+			if (*s++ != (stack[depth-1] == '{' ? '}' : ']')) return false;
+			want = --depth ? WANT_NEXT : WANT_NOTHING;
+			break;
+		case WANT_KEY:
+		case WANT_KEY_OR_END:
+			if (*s == '}' && want == WANT_KEY_OR_END) { s++; want = --depth ? WANT_NEXT : WANT_NOTHING; break; }
+			if (*s != '"' || !QKU_JSONStrictString(&s)) return false;
+			want = WANT_COLON;
+			break;
+		case WANT_VALUE_OR_END:
+			if (*s == ']') { s++; want = --depth ? WANT_NEXT : WANT_NOTHING; break; }
+			want = WANT_VALUE;
+			break;
+		case WANT_VALUE:
+			if (*s == '{' || *s == '[')
+			{
+				if ((!depth && *s != '{') || depth == QKU_JSONDEPTH) return false;
+				stack[depth++] = *s;
+				want = *s++ == '{' ? WANT_KEY_OR_END : WANT_VALUE_OR_END;
+				break;
+			}
+			if (!depth) return false;	//an object at the top
+			if (*s == '"') { if (!QKU_JSONStrictString(&s)) return false; }
+			else if (*s == '-' || (*s >= '0' && *s <= '9')) { if (!QKU_JSONStrictNumber(&s)) return false; }
+			else if (!strncmp((const char *)s, "true", 4)) s += 4;
+			else if (!strncmp((const char *)s, "false", 5)) s += 5;
+			else if (!strncmp((const char *)s, "null", 4)) s += 4;
+			else return false;
+			want = WANT_NEXT;
+			break;
+		}
+	}
+}
+
 static int QKU_JSONNameCmp(const void *a, const void *b)
 {
 	return strcmp(*(const char *const *)a, *(const char *const *)b);
@@ -908,7 +1037,7 @@ static json_t *QKU_FSParseSigned(const char *text, char **payloadout)
 	char sighex[129], *payload = NULL;
 	size_t n;
 	*payloadout = NULL;
-	if (strlen(text) > 2*1024*1024) return NULL;
+	if (strlen(text) > 2*1024*1024 || !QKU_JSONStrict(text)) return NULL;
 	envelope = JSON_Parse(text);
 	if (!envelope || !QKU_FSEnvelopeKeys(envelope)) goto done;
 	body = JSON_FindChild(envelope, "payload");
@@ -920,7 +1049,7 @@ static json_t *QKU_FSParseSigned(const char *text, char **payloadout)
 	if (!QKU_FSJSONNoNul(payload, payload+strlen(payload))) goto done;
 	JSON_GetString(envelope, "signature", sighex, sizeof(sighex), "");
 	if (!QKU_DecodeHex(QKU_FSKEY, pk, sizeof(pk)) || !QKU_DecodeHex(sighex, sig, sizeof(sig)) || !Ed25519_Verify(sig, (const qbyte *)payload, strlen(payload), pk)) goto done;
-	payloadroot = JSON_Parse(payload);
+	payloadroot = QKU_JSONStrict(payload) ? JSON_Parse(payload) : NULL;
 	if (payloadroot) { *payloadout = payload; payload = NULL; }
  done:
 	if (payload) Z_Free(payload);
@@ -1130,8 +1259,9 @@ static void QKU_Work_Check(void *ctx, void *data, size_t a, size_t b)
 	maxfiles = (update_max_files.ival > 0) ? (unsigned)update_max_files.ival : 400;
 	maxbytes = (quint64_t)((update_max_mb.value > 0) ? update_max_mb.value : 512) * 1024u * 1024u;
 
-	root = JSON_Parse(args->text);
-	if (!root)
+	//FTESurf: unsigned network text reaches JSON_Parse only through QKU_FSParseSigned's checks.
+	root = qku_ftesurf ? NULL : JSON_Parse(args->text);
+	if (!root && !qku_ftesurf)
 	{	//JSON_Parse returns NULL for anything at all, including a cloudflare html error page
 		Q_strncpyz(plan->reason, "manifest is not valid JSON (a proxy error page?)", sizeof(plan->reason));
 		goto done;
@@ -1139,7 +1269,6 @@ static void QKU_Work_Check(void *ctx, void *data, size_t a, size_t b)
 
 	if (qku_ftesurf)
 	{
-		JSON_Destroy(root);
 		root = QKU_FSParseSigned(args->text, &payload);
 		if (!root) { Q_strncpyz(plan->reason, "update manifest signature is invalid", sizeof(plan->reason)); goto done; }
 		if (!QKU_FSValidateManifest(root)) { Q_strncpyz(plan->reason, "signed update format/policy is invalid", sizeof(plan->reason)); goto done; }
@@ -2348,9 +2477,9 @@ void QKU_ReplayJournal(void)
 	alreadyran = true;
 	// Public gamedir is assigned only when paths mount, AFTER this recovery hook.
 	qku_ftesurf = fs_manifest->installation && (!Q_strcasecmp(fs_manifest->installation, "FTESurf") || !Q_strcasecmp(fs_manifest->installation, "WorldofSurf"));
+	if (qku_ftesurf) QKU_FSLock();	//before reading the marker and gamedirs
 	qku_id = qku_ftesurf ? QKU_FSIdentity(fs_manifest) : NULL;	//P1593
 	qku_profileknown = true;
-	if (qku_ftesurf) QKU_FSLock();
 	if (qku_initialised) QKU_ConfigureProfile();
 
 	QKU_SweepOld();		//displaced originals from a previous session; nothing holds them now

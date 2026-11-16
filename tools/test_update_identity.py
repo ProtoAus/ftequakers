@@ -119,6 +119,20 @@ int main(int argc, char **argv)
 		printf("%s\n", id ? id->game : "none");
 		return 0;
 	}
+	if (argc == 3 && (!strcmp(argv[1], "strict") || !strcmp(argv[1], "envelope")))
+	{	//strict <file>: QKU_JSONStrict. envelope <file>: QKU_FSEnvelopeKeys on JSON_Parse's tree.
+		char *text = readall(argv[2]);
+		json_t *root;
+		if (!text) return 2;
+		if (!strcmp(argv[1], "strict"))
+		{
+			printf("%s\n", QKU_JSONStrict(text) ? "strict" : "refused");
+			return 0;
+		}
+		root = JSON_Parse(text);
+		printf("%s\n", root && QKU_FSEnvelopeKeys(root) ? "envelope" : "refused");
+		return 0;
+	}
 	if (argc == 3 && !strcmp(argv[1], "feed"))
 	{
 		const qku_identity_t *id = named(argv[2]);
@@ -185,6 +199,20 @@ MUTANTS = {
     'escapes-allowed': (" || strchr(names[i], '\\\\')", '', {'escaped duplicate key'}),
     'dots-allowed': ("strchr(names[i], '.') || ", '', {'dotted key'}),
     'no-key-cap': ('if (++n > 8192) return true;', '++n;', {'object over the key cap'}),
+    'deeper-nesting': ('#define QKU_JSONDEPTH 32', '#define QKU_JSONDEPTH 40', {'strict: 33 levels'}),
+    'trailing-text-allowed': ('\t\t\treturn false;\t//text after the value', '\t\t\treturn true;',
+                              {'strict: text after the value', 'strict: second object'}),
+    'trailing-comma-allowed': (" && want == WANT_KEY_OR_END) {", ") {", {'strict: trailing comma in an object'}),
+    'control-chars-allowed': ('\t\tif (c < 0x20) return false;\t//includes the terminating NUL', '\t\tif (!c) return false;',
+                              {'strict: raw control character in a string'}),
+    'lone-surrogate-allowed': ('\t\t\tif (u >= 0xDC00 && u <= 0xDFFF) return false;\n', '', {'strict: lone trailing surrogate'}),
+    'overlong-allowed': ('int n = c >= 0xC2 && c <= 0xDF', 'int n = c >= 0xC0 && c <= 0xDF', {'strict: overlong UTF-8'}),
+    'array-top-allowed': ("if ((!depth && *s != '{') || depth == QKU_JSONDEPTH)", 'if (depth == QKU_JSONDEPTH)',
+                          {'strict: array at the top'}),
+    'envelope-extra-allowed': ('if (bit == 4u || (seen & bit)) return false;', 'if (bit == 4u) { continue; } if (seen & bit) { return false; }',
+                               {'envelope: extra key'}),
+    'envelope-repeat-allowed': ('if (bit == 4u || (seen & bit)) return false;', 'if (bit == 4u) return false;',
+                                {'envelope: repeated payload'}),
 }
 
 
@@ -293,7 +321,42 @@ def cases(platform, roots):
         'dotted key': (dotted, 'ftesurf', 'refuse'),
         'object over the key cap': (capped, 'ftesurf', 'refuse'),
     }
-    out = {name: (('validate', ident, payload), want) for name, (payload, ident, want) in feeds.items()}
+    strict = {
+        'strict: a signed feed': (legacy_text, 'strict'),
+        'strict: an envelope': ('{"payload":"{\\"a\\":1}","signature":"00"}', 'strict'),
+        'strict: 32 levels': ('{"a":' + '[' * 31 + ']' * 31 + '}', 'strict'),
+        'strict: 33 levels': ('{"a":' + '[' * 32 + ']' * 32 + '}', 'refused'),
+        'strict: 100000 levels': ('{"a":' + '[' * 100000 + ']' * 100000 + '}', 'refused'),
+        'strict: text after the value': (legacy_text + 'x', 'refused'),
+        'strict: second object': (legacy_text + '{}', 'refused'),
+        'strict: trailing comma in an object': ('{"a":1,}', 'refused'),
+        'strict: trailing comma in an array': ('{"a":[1,]}', 'refused'),
+        'strict: comment': ('{"a":1 // c\n}', 'refused'),
+        'strict: block comment': ('{"a":1 /* c */}', 'refused'),
+        'strict: byte order mark': ('\ufeff' + legacy_text, 'refused'),
+        'strict: bare word': ('{"a":yes}', 'refused'),
+        'strict: unquoted key': ('{a:1}', 'refused'),
+        'strict: single quotes': ("{'a':1}", 'refused'),
+        'strict: raw control character in a string': ('{"a":"x\x01"}', 'refused'),
+        'strict: bad escape': ('{"a":"\\x41"}', 'refused'),
+        'strict: lone trailing surrogate': ('{"a":"\\udc00"}', 'refused'),
+        'strict: lone leading surrogate': ('{"a":"\\ud800x"}', 'refused'),
+        'strict: paired surrogates': ('{"a":"\\ud83d\\ude00"}', 'strict'),
+        'strict: overlong UTF-8': (b'{"a":"\xc0\xaf"}', 'refused'),
+        'strict: UTF-8 surrogate': (b'{"a":"\xed\xa0\x80"}', 'refused'),
+        'strict: valid UTF-8': ('{"a":"\u00e9\u20ac\U0001F600"}', 'strict'),
+        'strict: leading zero': ('{"a":01}', 'refused'),
+        'strict: number forms': ('{"a":[-0,1.5e-3,2E+10,0.0]}', 'strict'),
+        'strict: array at the top': ('[1]', 'refused'),
+        'envelope: payload and signature': ('{"payload":"x","signature":"y"}', 'envelope'),
+        'envelope: extra key': ('{"payload":"x","signature":"y","note":"z"}', 'refused'),
+        'envelope: repeated payload': ('{"payload":"x","payload":"x","signature":"y"}', 'refused'),
+        'envelope: missing signature': ('{"payload":"x"}', 'refused'),
+    }
+    for name, (text_in, want) in strict.items():
+        feeds[name] = (text_in, 'strict' if name.startswith('strict') else 'envelope', want)
+    out = {name: ((ident, payload) if ident in ('strict', 'envelope') else ('validate', ident, payload), want)
+           for name, (payload, ident, want) in feeds.items()}
     out.update({
         'legacy path under new': (('managed', 'worldofsurf', 'ftesurf/menu.dat'), 'refused'),
         'new path under legacy': (('managed', 'ftesurf', 'worldofsurf/menu.dat'), 'refused'),
@@ -354,10 +417,11 @@ def build(work, name, code, platform, cc, env):
 def run(binary, table, work, env):
     got = {}
     for name, (argv, _) in table.items():
-        if argv[0] == 'validate':
+        if argv[0] in ('validate', 'strict', 'envelope'):
+            data = argv[-1] if isinstance(argv[-1], (str, bytes)) else json.dumps(argv[-1])
             payload = work / 'payload.json'
-            payload.write_text(argv[2] if isinstance(argv[2], str) else json.dumps(argv[2]))
-            argv = (argv[0], argv[1], str(payload))
+            payload.write_bytes(data if isinstance(data, bytes) else data.encode())
+            argv = (*argv[:-1], str(payload))
         r = subprocess.run([str(binary), *argv], capture_output=True, text=True, env=env)
         assert r.returncode == 0, (name, r.returncode, r.stderr)
         got[name] = r.stdout.strip()
