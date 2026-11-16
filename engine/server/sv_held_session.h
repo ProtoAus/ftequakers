@@ -5,6 +5,8 @@
 
 void SV_HeldSessionInit(void);
 int SV_HeldSessionAvailable(void); /* Pure query, never a namespace/sink constructor. */
+/* P1592: the run-leaf word the close expects first for a QC RT_* tag ("" outside 1..6). */
+const char *SV_HeldRunTagWord(unsigned int tag);
 
 /* Internal ownership/lifetime only. None of these functions grants a profile. */
 int SV_HeldSessionBegin(client_t *client, const char *generation, const char *identity);

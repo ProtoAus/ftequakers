@@ -52,13 +52,19 @@ static int Held_PrepareWho(const held_session_t *s, const char *who)
 	Held_SessionWipe(digest,sizeof(digest)); Held_SessionWipe(id,sizeof(id));
 	return valid;
 }
+/* QC RT_* -> the run leaf's tag word (sh_defs.qc FS_TagName). P1592: RT_SHADOW (3) is written
+ * "segmented" by a progs that asked SV_HeldRunTagWord; an older progs still writes "shadow". */
+static const char *const held_run_tags[] = {NULL,"pb","last","segmented","cheat","run","lobby"};
+const char *SV_HeldRunTagWord(unsigned int tag)
+{
+	return tag >= 1 && tag < countof(held_run_tags) ? held_run_tags[tag] : "";
+}
 static int Held_PrepareCloseNamespace(const held_session_t *s)
 {
-	static const char *tags[] = {NULL,"pb","last","shadow","cheat","run","lobby"};
-	const char *who, *rid, *nonce, *destination;
+	const char *who, *rid, *nonce, *destination, *word;
 	char expected[MAX_OSPATH], directory[80], leaf[160], stamp[32];
 	float value, tag, ticks;
-	int archived;
+	int archived, pass;
 	if (!Held_SessionScalar(s->entity,"rec_hm_track",&value) || value != s->track ||
 		!Held_SessionScalar(s->entity,"rec_hm_leg",&value) || value != s->leg ||
 		!Held_SessionScalar(s->entity,"rec_hm_ticks",&ticks) || ticks != s->claimed_ticks ||
@@ -81,14 +87,17 @@ static int Held_PrepareCloseNamespace(const held_session_t *s)
 	else Q_snprintfz(directory,sizeof(directory),"bonus_%u_stage_%u",s->track,s->leg);
 	archived = tag == 1 || tag == 3 || tag == 5 || tag == 6;
 	if (!Held_SessionScalar(s->entity,"rec_hm_stamp",&value) || value != (archived ? ticks:-1) || (archived && ticks < 0)) return 0;
-	if (archived)
+	if (archived) Q_snprintfz(stamp,sizeof(stamp),"%07u",(unsigned int)floor(ticks));
+	for (pass = 0; pass < 2; ++pass)
 	{
-		Q_snprintfz(stamp,sizeof(stamp),"%07u",(unsigned int)floor(ticks));
-		Q_snprintfz(leaf,sizeof(leaf),"%s_%s%s%s.rec",stamp,who,*who ? "_":"",tags[(unsigned int)tag]);
+		word = pass ? (tag == 3 ? "shadow" : NULL) : held_run_tags[(unsigned int)tag];
+		if (!word) break;
+		if (archived) Q_snprintfz(leaf,sizeof(leaf),"%s_%s%s%s.rec",stamp,who,*who ? "_":"",word);
+		else Q_snprintfz(leaf,sizeof(leaf),"%s%s%s.rec",who,*who ? "_":"",word);
+		Q_snprintfz(expected,sizeof(expected),"data/runs/%s/%s/%s",s->map,directory,leaf);
+		if (!strcmp(expected,s->destination)) return 1;
 	}
-	else Q_snprintfz(leaf,sizeof(leaf),"%s%s%s.rec",who,*who ? "_":"",tags[(unsigned int)tag]);
-	Q_snprintfz(expected,sizeof(expected),"data/runs/%s/%s/%s",s->map,directory,leaf);
-	return !strcmp(expected,s->destination);
+	return 0;
 }
 typedef struct
 {
