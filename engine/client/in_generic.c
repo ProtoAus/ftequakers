@@ -1666,9 +1666,19 @@ static void IN_Journal_KeyTimes(void)
 			Q_snprintfz(num, sizeof(num), " %i", in_raw_keytime[up][i] - in_jrn_ktbase[up][i]);
 			Q_strncatz(line, num, sizeof(line));
 		}
-	Q_snprintfz(num, sizeof(num), " %i %i %i %i\n", in_raw_keyupalone - in_jrn_kubase, in_raw_keylegfirst[0] - in_jrn_klfbase[0],
-		in_raw_keylegfirst[1] - in_jrn_klfbase[1], in_raw_keyrawalone - in_jrn_krabase);
-	Q_strncatz(line, num, sizeof(line));
+	{
+		int tail[4];
+		tail[0] = in_raw_keyupalone - in_jrn_kubase;
+		tail[1] = in_raw_keylegfirst[0] - in_jrn_klfbase[0];
+		tail[2] = in_raw_keylegfirst[1] - in_jrn_klfbase[1];
+		tail[3] = in_raw_keyrawalone - in_jrn_krabase;
+		for (i = 0; i < 4; i++)
+		{
+			Q_snprintfz(num, sizeof(num), " %i", tail[i]);
+			Q_strncatz(line, num, sizeof(line));
+		}
+	}
+	Q_strncatz(line, "\n", sizeof(line));
 	if (in_jrn_len + strlen(line) + 256 <= in_jrn_max)
 		IN_Journal_Raw(line);
 }

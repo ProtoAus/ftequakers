@@ -373,6 +373,14 @@ static int rawkey_npending;
 static double rawkey_uptime[256];
 static double rawkey_uppending[256];
 static int rawkey_nuppending, rawkey_nrawpending;
+/*What the last legacy key message found, after expiry decided what was due: the key guard puts it back when it
+  drops that message, so a dropped message is one the observer never saw.*/
+static struct
+{
+	qboolean valid, legheld;
+	int sc, npending, nuppending, nrawpending, legacykey, injectedkey, upalone, legfirst[2], keytime[2][IN_KEYTIME_BUCKETS];
+	double time, pending, uptime, uppending;
+} rawkey_undo;
 static void INS_KeyTime(int up, double gap)	//gap: legacy time minus raw time
 {
 	static const double edge[IN_KEYTIME_BUCKETS - 1] = {0.0005, 0.001, 0.002, 0.005, 0.01, 0.02, 0.05};
@@ -385,13 +393,10 @@ static void INS_KeyTime(int up, double gap)	//gap: legacy time minus raw time
 	in_raw_keytime[up][b]++;
 }
 
-static void INS_RawKeyExpire(double now);
 static void INS_RawKeyReset(void)
 {
 	int i;
 
-	if (rawkey_ready)
-		INS_RawKeyExpire(Sys_DoubleTime());	//Patch 1594: decide what is already past its window first
 	for (i = 0; i < (int)countof(rawkey_time); i++)
 	{
 		if (rawkey_ready && rawkey_pending[i] >= 0)
@@ -401,10 +406,11 @@ static void INS_RawKeyReset(void)
 				in_raw_legacykey++;
 		}
 		rawkey_time[i] = rawkey_pending[i] = rawkey_nohandletime[i] = rawkey_legup[i] = -1;
-		rawkey_uptime[i] = rawkey_uppending[i] = -1;	//Patch 1594: one past its window was counted by the expiry above
+		rawkey_uptime[i] = rawkey_uppending[i] = -1;	//Patch 1594: dropped, not counted (QUIESCE decides what is due first)
 		rawkey_rawheld[i] = rawkey_legheld[i] = false;
 	}
 	rawkey_npending = rawkey_nuppending = rawkey_nrawpending = 0;
+	rawkey_undo.valid = false;
 	rawkey_ready = true;
 }
 
@@ -1434,6 +1440,7 @@ int INS_RawInput_KeyboardControl(rawkbdop_t op)
 		// A reentrant SendMessage must not acknowledge a read still on this stack.
 		if (rawinput_readdepth || rawinput_quiesced)
 			return 1;
+		INS_RawKeyExpire(Sys_DoubleTime());	//Patch 1594: decide what is already past its window first
 		rawinput_quiesced = true;
 		INS_RawKeyReset();	// Unmatched work cannot survive discarded corroboration.
 		INS_RawInput_KeyObserveAvailability();
@@ -1534,9 +1541,9 @@ static void INS_RawInput_KeyObserve(void)
 			in_raw_injectedkey++;	//FTESurf Patch 1576: SendInput released a key the game held (UIAccess or not)
 		return;
 	}
-	if (raw->data.keyboard.VKey == 0xff)
-		return;	//Patch 1594: Windows' fake shift round gray keys and Print Screen: no keystroke of its own
 	sc = raw->data.keyboard.MakeCode & 0xff;
+	if (raw->data.keyboard.VKey == 0xff && (raw->data.keyboard.Flags & RI_KEY_E0) && (sc == 0x2a || sc == 0x36))
+		return;	//Patch 1594: Windows' fake shift round gray keys and Print Screen: no keystroke of its own
 	now = Sys_DoubleTime();
 	if (raw->data.keyboard.Flags & RI_KEY_BREAK)
 	{
@@ -1565,6 +1572,8 @@ static void INS_RawInput_KeyObserve(void)
 	}
 	if (rawkey_time[sc] < 0)
 		rawkey_nrawpending++;	//Patch 1594
+	else
+		in_raw_keyrawalone++;	//Patch 1594: pressed again before a legacy press met the last one
 	rawkey_time[sc] = now;
 }
 
@@ -1574,10 +1583,26 @@ static void INS_LegacyKeyObserve(LPARAM lParam, qboolean down)
 	int sc = (lParam >> 16) & 0xff;
 	double now;
 
+	rawkey_undo.valid = false;
 	if (rawinput_quiesced || !raw || !rawkbd_observe)
 		return;
 	now = Sys_DoubleTime();
 	INS_RawKeyExpire(now);
+	rawkey_undo.valid = true;	//Patch 1594: see rawkey_undo
+	rawkey_undo.sc = sc;
+	rawkey_undo.legheld = rawkey_legheld[sc];
+	rawkey_undo.time = rawkey_time[sc];
+	rawkey_undo.pending = rawkey_pending[sc];
+	rawkey_undo.uptime = rawkey_uptime[sc];
+	rawkey_undo.uppending = rawkey_uppending[sc];
+	rawkey_undo.npending = rawkey_npending;
+	rawkey_undo.nuppending = rawkey_nuppending;
+	rawkey_undo.nrawpending = rawkey_nrawpending;
+	rawkey_undo.legacykey = in_raw_legacykey;
+	rawkey_undo.injectedkey = in_raw_injectedkey;
+	rawkey_undo.upalone = in_raw_keyupalone;
+	memcpy(rawkey_undo.legfirst, in_raw_keylegfirst, sizeof(rawkey_undo.legfirst));
+	memcpy(rawkey_undo.keytime, in_raw_keytime, sizeof(rawkey_undo.keytime));
 	if (!down)
 	{
 		if (!rawkey_legheld[sc])
@@ -2063,18 +2088,24 @@ static qboolean INS_KeyGuardBlocks(qboolean down, int qcode, LPARAM lParam, qboo
 	if (!journal)
 		return true;
 #ifdef USINGRAWINPUT
-	if (down && rawkey_pending[sc] >= 0)
-	{	//P1424's observer counted it as reaching the game; it did not ('y' is what reached it)
-		rawkey_pending[sc] = -1;
-		rawkey_npending--;
+	if (rawkey_undo.valid && rawkey_undo.sc == sc)
+	{	//P1424/P1594: the observer saw a message that never reached the game ('y' and keytimes are what did).
+		//Put back exactly what it changed for this message; what expiry decided before it stands.
+		rawkey_legheld[sc] = rawkey_undo.legheld;
+		rawkey_time[sc] = rawkey_undo.time;
+		rawkey_pending[sc] = rawkey_undo.pending;
+		rawkey_uptime[sc] = rawkey_undo.uptime;
+		rawkey_uppending[sc] = rawkey_undo.uppending;
+		rawkey_npending = rawkey_undo.npending;
+		rawkey_nuppending = rawkey_undo.nuppending;
+		rawkey_nrawpending = rawkey_undo.nrawpending;
+		in_raw_legacykey = rawkey_undo.legacykey;
+		in_raw_injectedkey = rawkey_undo.injectedkey;
+		in_raw_keyupalone = rawkey_undo.upalone;
+		memcpy(in_raw_keylegfirst, rawkey_undo.legfirst, sizeof(in_raw_keylegfirst));
+		memcpy(in_raw_keytime, rawkey_undo.keytime, sizeof(in_raw_keytime));
 	}
-	if (down)
-		rawkey_legheld[sc] = false;	//Patch 1594: so its release is not judged, nor a real press taken for a repeat
-	else if (rawkey_uppending[sc] >= 0)
-	{	//Patch 1594: a dropped release is the guard's ('kd'), not a lone release that reached the game
-		rawkey_uppending[sc] = -1;
-		rawkey_nuppending--;
-	}
+	rawkey_undo.valid = false;
 #endif
 	if (!down)
 		keyguard_dropheld[sc] = false;
