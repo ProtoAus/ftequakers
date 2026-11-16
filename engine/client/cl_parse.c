@@ -978,14 +978,29 @@ void CL_DownloadFinished(qdownload_t *dl)
 	}
 }
 
-//FTESurf P1593: a server announcing any spelling of either name (FS_GamedirAlias) is our own game:
-//no mount, no config reload, files land in our folder. Web downloads ask for <dlURL>/<gamedir>/ in
-//the server's spelling while connected, else the wire spelling (surfd/maps.nginx serves /ftesurf/maps/).
+//FTESurf P1593: the gamedir a server announced, as this client mounts it. Anything but one plain name
+//([A-Za-z0-9_.-], under 64 bytes, no leading dot) is our own base: FS_Manifest_ChangeGameDir splits on
+//';', whitespace, control and high bytes, and `~` reaches a folder by its 8.3 name. Any spelling of either
+//identity is our base too (FS_GamedirAlias): no mount, no config reload, files land in our folder.
+//Only a valid spelling is kept, for web downloads: <dlURL>/<gamedir>/ (surfd/maps.nginx serves /ftesurf/maps/).
 static char cl_servergamedir[MAX_QPATH];
 static const char *CL_ServerGamedir(const char *str)
 {
-	const char *own = FS_GamedirAlias(str);
+	const char *own, *c;
+	*cl_servergamedir = 0;
+	if (!*str)
+		return str;
+	for (c = str; *c; c++)
+		if (!((*c >= 'a' && *c <= 'z') || (*c >= 'A' && *c <= 'Z') || (*c >= '0' && *c <= '9') ||
+			*c == '_' || *c == '-' || *c == '.'))
+			break;
+	if (*c || c - str >= MAX_QPATH || *str == '.')
+	{
+		Con_DPrintf("Server gamedir \"%s\" is not one plain name: our own base\n", str);
+		return "";
+	}
 	Q_strncpyz(cl_servergamedir, str, sizeof(cl_servergamedir));
+	own = FS_GamedirAlias(str);
 	if (!own)
 		return str;
 	if (strcmp(str, own))
@@ -1043,14 +1058,20 @@ qboolean	CL_CheckOrEnqueDownloadFile (const char *filename, const char *localnam
 	{
 		/*pak/pk3 downloads have an explicit leading package/ as an internal/network marker*/
 		//FTESurf P1593: these land under the install root in a folder the server names (//paknames,
-		//redirects). One named for our base's other spelling is our base: no second identity folder.
+		//redirects; FS_GenCachedPakName applies the same rule). A long one or `~` is refused; either
+		//identity in any spelling is our base: no second identity folder.
 		static char pkglocal[MAX_OSPATH];	//not va(): filename holds one of its two buffers
 		const char *rest = localname?strchr(localname, '/'):NULL, *own = NULL;
 		char dir[MAX_QPATH];
 		if (!strchr(filename, ':'))
 			filename = va("package/%s", filename);
-		if (rest && (size_t)(rest - localname) < sizeof(dir))
+		if (rest)
 		{
+			if ((size_t)(rest - localname) >= sizeof(dir) || memchr(localname, '~', rest - localname))
+			{
+				Con_DPrintf("Refusing package download to \"%s\"\n", localname);
+				return true;
+			}
 			Q_strncpyz(dir, localname, rest - localname + 1);
 			own = FS_GamedirAlias(dir);
 		}
@@ -4181,10 +4202,7 @@ static void CLQ2_ParseServerData (void)
 	// game directory
 	str = MSG_ReadString ();
 	// set gamedir
-	if (!*str)
-		COM_Gamedir("baseq2", NULL);
-	else
-		COM_Gamedir(str, NULL);
+	COM_Gamedir(CL_ServerGamedir(*str?str:"baseq2"), NULL);	//FTESurf P1593
 
 	Cvar_Get("timescale", "1", 0, "Q2Admin hacks");	//Q2Admin will kick players who have a timescale set to something other than 1
 													//FTE doesn't actually have a timescale cvar, so create one to 'fool' q2admin.

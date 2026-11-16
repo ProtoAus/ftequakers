@@ -1401,7 +1401,7 @@ void SV_GeneratePublicServerinfo(char *info, const char *endinfo)
 	*resp = 0;
 	Info_SetValueForKey(resp, "gamename", protocolname, endinfo - resp);//distinguishes it from other types of games
 	Info_SetValueForKey(resp, "protocol", SV_GetProtocolVersionString(), endinfo - resp);
-	Info_SetValueForKey(resp, "modname", FS_GetGamedir(true), endinfo - resp);
+	Info_SetValueForKey(resp, "modname", FS_GamedirWireName(FS_GetGamedir(true)), endinfo - resp);	//FTESurf P1593
 	Info_SetValueForKey(resp, "clients", va("%d", numclients), endinfo - resp);
 	Info_SetValueForKey(resp, "sv_maxclients", maxclients.string, endinfo - resp);
 	Info_SetValueForKey(resp, "mapname", InfoBuf_ValueForKey(&svs.info, "map"), endinfo - resp);
