@@ -41,6 +41,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #ifndef CLIENTONLY
 
 #include "pr_common.h"
+#include "pm_ag.h"
 #include "sv_held_file.h"
 #include "sv_held_session.h"
 #include "sv_held_session.h"
@@ -11512,7 +11513,7 @@ static void QCBUILTIN PF_held_metadata(pubprogfuncs_t *prinst, struct globalvars
 	profile = PF_HeldString(prinst, ent, "rec_agprofile");
 	if (!profile) profile = ""; // unchanged QC may omit the additive namespace field
 	if (strcmp(profile, InfoBuf_ValueForKey(&svs.info, "*movementprofile")) ||
-		(*profile && strcmp(profile, "ag-100-v1") && strcmp(profile, "ag-250-v1"))) return;
+		(*profile && !PM_ProfileByIdentity(profile))) return;
 	if (*profile) Q_snprintfz(ordinaryroot, sizeof(ordinaryroot), "data/experimental/%s/parts/", profile);
 	else Q_strncpyz(ordinaryroot, "data/parts/", sizeof(ordinaryroot));
 	if (partlob == 1)

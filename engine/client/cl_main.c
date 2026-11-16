@@ -3373,8 +3373,14 @@ void CL_CheckServerInfo(void)
 			movevars.sourceversion = Q_atoi(InfoBuf_ValueForKey(&cl.serverinfo, "pm_agversion"));
 		s = InfoBuf_ValueForKey(&cl.serverinfo, "pm_ticrate");
 		movevars.ticrate = *s?Q_atof(s):0.015;
-		movevars.agprofile = PMAg_ProfileRate(InfoBuf_ValueForKey(&cl.serverinfo, "*movementprofile"), movevars.sourceversion, movevars.ticrate);
-		if (!movevars.agprofile && *InfoBuf_ValueForKey(&cl.serverinfo, "*movementprofile")) movevars.agprofile = -1;
+		{	//Patch 1589: HL2 kinds predict PMSrc with agprofile 0; any other unrated identity refuses (-1).
+			const char *id = InfoBuf_ValueForKey(&cl.serverinfo, "*movementprofile");
+			const pmprofile_t *prof = PM_ProfileByIdentity(id);
+			movevars.profilekind = prof ? prof->kind : PMPROFILE_NONE;
+			movevars.agprofile = PMAg_ProfileRate(id, movevars.sourceversion, movevars.ticrate);
+			if (!movevars.agprofile && *id && !(prof && PM_ProfileHL2(prof->kind) && movevars.physicsmode == PHYSMODE_SOURCE))
+				movevars.agprofile = -1;
+		}
 		s = InfoBuf_ValueForKey(&cl.serverinfo, "pm_maxairspeed");
 		movevars.maxairspeed = *s?Q_atof(s):30;
 		s = InfoBuf_ValueForKey(&cl.serverinfo, "pm_jumpvelocity");

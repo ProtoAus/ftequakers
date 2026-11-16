@@ -49,11 +49,14 @@ float ag_probe_next;
 float ag_probe_seeded;
 float ag_probe_saved;
 float ag_probe_restored;
+float ag_probe_maxh;
 void() StartFrame =
 {
     local entity p;
     local float guard, savedok;
     AGOriginalStartFrame();
+    p = find(world, classname, "player");
+    if (p != world && vlen([p.velocity_x, p.velocity_y, 0]) > ag_probe_maxh) ag_probe_maxh = vlen([p.velocity_x, p.velocity_y, 0]);
     if (ag_probe_done || time < ag_probe_next) return;
     ag_probe_next = time + 1;
     p = find(world, classname, "player");
@@ -95,6 +98,7 @@ void() StartFrame =
         bprint(PRINT_HIGH, sprintf("AGSOCKET pbguard raw=%g read=%g\n", run_pb_ticks[0], SV_PBGet(0, 0)));
         bprint(PRINT_HIGH, sprintf("AGSOCKET player origin=%v velocity=%v hull=%v/%v eye=%v ticks=%g rate=%.9g\n",
             p.origin, p.velocity, p.mins, p.maxs, p.view_ofs, p.run_movetick, p.run_movetickrate));
+        bprint(PRINT_HIGH, sprintf("AGSOCKET peak horizontal speed %.3f\n", ag_probe_maxh));
         bprint(PRINT_HIGH, sprintf("AGSOCKET timer state=%g flags=%g identity=%s body=%g rec=%g pb=%g split=%g\n",
             p.run_t_state, p.run_t_flags, p.run_agprofile, p.run_t_ticks, p.rec_rec_bytes, p.run_t_pb, p.run_t_delta));
         bprint(PRINT_HIGH, sprintf("AGSOCKET cp=%g input=%v buttons=%g submissions=%g\n", p.run_t_cpdelta, p.movement, p.button2, lobby_run_sent));
@@ -115,8 +119,9 @@ def main():
         ap.add_argument('--'+name, type=Path, required=True)
     ap.add_argument('--profile',default='ag-100')
     ap.add_argument('--expect-refused-profile',action='store_true')
-    # Headless-only CLI; rendered validation requires a separately authorized rig.
-    ap.set_defaults(rendered=False)
+    # P1589: --rendered runs a small GL client (under rig.lock): CL_PredictMove runs only from the
+    # render path, so a headless client never compares a prediction.
+    ap.add_argument('--rendered',action='store_true')
     ap.add_argument('--netfps',type=int,default=100)
     ap.add_argument('--rec-stream',type=int,choices=(0,1),default=0)
     ap.add_argument('--held-metadata',type=int,choices=(0,1),default=0)
@@ -161,7 +166,9 @@ def main():
                 record.update(status='stopped',exit=process.returncode)
         (root/'processes.json').write_text(json.dumps(registry,indent=2))
     game=root/'ftesurf';(game/'maps').mkdir(parents=True);(game/'cfg').mkdir()
-    recordroot=game/('data/experimental/'+args.profile+'-v1/runs/ag_profile_test/main' if args.profile.startswith('ag-') else 'data/runs/ag_profile_test/main')
+    optional=args.profile not in ('','default')
+    hl2=args.profile.startswith('hl2-')
+    recordroot=game/('data/experimental/'+args.profile+'-v1/runs/ag_profile_test/main' if optional else 'data/runs/ag_profile_test/main')
     canonical={}
     protected={};removed=[];staged=[];residual_staged=[];residual_evidence=[]
     if args.review_controls:
@@ -186,7 +193,7 @@ def main():
             for ext in ('view','hid'):
                 leaf=digit*32+'.'+ext
                 staged.append((leaf,digit!='0'))
-    if args.profile.startswith('ag-'):
+    if optional:
         for namespace in ('runs','parts','saves','resume','staged','evidence'):
             sentinel=game/'data'/namespace/'owned-normal-sentinel.bin'
             sentinel.parent.mkdir(parents=True,exist_ok=True);sentinel.write_bytes(b'owned normal namespace sentinel')
@@ -402,7 +409,7 @@ float(string cmd) CSQC_ConsoleCommand =
     (game/'ag-server.cfg').write_text(servercfg)
     localpb=clientgame/'data/runs/ag_profile_test/main'
     localpb.mkdir(parents=True)
-    tick=1/int(args.profile[3:]) if args.profile.startswith('ag-') else 0.015
+    tick=1/int(args.profile[3:]) if args.profile.startswith('ag-') else 0.01 if args.profile=='cs16' else 0.015
     poison=localpb/'0000777_lobby.rec'
     poison.write_text('FTESURF-REC 5\ntickrate '+str(tick)+'\nflags 0\nsamples 0\n')
     if args.review_controls:
@@ -419,7 +426,8 @@ float(string cmd) CSQC_ConsoleCommand =
         for name,(content,mtime) in protected.items():
             if Path(name).is_relative_to(game/'data') and not Path(name).is_relative_to(game/'data/experimental'):canonical[name]=content
     canonical_mtime={name:Path(name).stat().st_mtime_ns for name in canonical}
-    cfg=(safety+'cfg_save_auto 0\nlog_enable 1\nlog_name ag-client\nvid_renderer headless\n'
+    renderer='gl\nvid_fullscreen 0\nvid_width 640\nvid_height 480' if args.rendered else 'headless'
+    cfg=(safety+'cfg_save_auto 0\nlog_enable 1\nlog_name ag-client\nvid_renderer '+renderer+'\n'
          'set lobby_enable 0\nset lobby_dir "http://127.0.0.1:1"\ncl_download 0\n'
          'cl_netfps '+str(args.netfps)+'\ncl_idlefps 0\ncl_maxfps 100\nset vid_headless_sleep 0\nsetinfo spectator 0\n'
          +
@@ -427,7 +435,8 @@ float(string cmd) CSQC_ConsoleCommand =
     (clientgame/'ag-client.cfg').write_text(cfg)
     common=['-plugin','-noreset','-nobrowse','-nohome','-nosound','-ip','127.0.0.1','+set','forceqmenu','0','+set','update_enabled','0','+set','update_autocheck','0']
     servercmd=[str(args.engine.resolve()),*common,'-basedir',str(root),'-manifest',str(root/'default.fmf'),'-port',str(args.port),'+exec','ag-server.cfg']
-    clientcmd=[str(args.client.resolve()),*common,'-basedir',str(clientroot),'-manifest',str(clientroot/'default.fmf'),'-port',str(args.port+1),'+set','vid_renderer','headless','+exec','ag-client.cfg']
+    clientcmd=[str(args.client.resolve()),*common,'-basedir',str(clientroot),'-manifest',str(clientroot/'default.fmf'),'-port',str(args.port+1),'+set','vid_renderer','gl' if args.rendered else 'headless',
+               *(['+set','vid_fullscreen','0','+set','vid_width','640','+set','vid_height','480'] if args.rendered else []),'+exec','ag-client.cfg']
     receipts={'server_argv':servercmd,'client_argv':clientcmd,'profile':args.profile,'netfps':args.netfps,
               'inputs':{str(p):hashlib.sha256(p.read_bytes()).hexdigest() for p in (args.engine,args.client,args.compiler,game/'qwprogs.dat',game/'maps/ag_profile_test.bsp')}}
     (root/'inputs.json').write_text(json.dumps(receipts,indent=2))
@@ -526,7 +535,10 @@ float(string cmd) CSQC_ConsoleCommand =
             walk_started=time.monotonic()
             stopped_walk=False
             deadline=time.monotonic()+35
+            jumps=[(0.8,b'+jump'),(0.9,b'-jump'),(1.6,b'+jump'),(1.7,b'-jump')]
             while server.poll() is None and time.monotonic()<deadline:
+                while jumps and time.monotonic()-walk_started>jumps[0][0]:
+                    client.stdin.write(jumps.pop(0)[1]+b'\n');client.stdin.flush()
                 if not stopped_walk and time.monotonic()-walk_started>2.5:
                     client.stdin.write(b'-forward; prederr_dump ag-walk.txt; cl_prederror_count; echo AGINPUT_STOP\n')
                     client.stdin.flush()
@@ -625,24 +637,44 @@ float(string cmd) CSQC_ConsoleCommand =
         assert 'requires an AG-v1 capable client' in logs
     else:
         assert 'AGSOCKET player' in logs and 'AGSOCKET FAIL' not in logs
-        if args.profile.startswith('ag-'):
+        if optional:
             assert 'identity='+args.profile+'-v1' in logs
-            expected=1/int(args.profile[3:])
             observed=list(map(float,re.findall(r'AGSOCKET player .* rate=([0-9.e-]+)',rate_logs)))
-            assert observed and all(abs(rate-expected)<1e-8 for rate in observed)
-            assert 'UNSUPPORTED physics mode 2' in logs, 'native reader did not explicitly refuse AG physics'
-            assert 'in pm restatement: Source-only verifier, no physics verdict' in logs
-            assert logs.count('UNSUPPORTED physics mode') >= 4
+            assert observed and all(abs(rate-tick)<1e-8 for rate in observed)
+            if hl2:
+                assert 'UNSUPPORTED physics mode 1: this verifier replays Source only' in logs, 'native reader gave HL2 a verdict'
+            else:
+                assert 'UNSUPPORTED physics mode 2' in logs, 'native reader did not explicitly refuse AG physics'
+                assert 'in pm restatement: Source-only verifier, no physics verdict' in logs
+                assert logs.count('UNSUPPORTED physics mode') >= 4
+        peak=max(map(float,re.findall(r'AGSOCKET peak horizontal speed ([0-9.]+)',logs)))
+        prederr=re.findall(r'"cl_prederror_count" is "([0-9]+)"',logs)
+        print('P1589 peak horizontal speed %.3f, client prediction-error lines %s' % (peak, prederr))
+        assert prederr, 'client never reported its prediction-error count'
+        rows=list(map(int,re.findall(r'prederr_dump: ([0-9]+) rows',logs)))
+        print('P1589 prediction comparisons (ring rows) %s' % rows)
+        if args.rendered:
+            # The default profile's own walk shows a ~1-2 u sideways error near the walk's start
+            # (rr-default, 16 Nov), so the profile claim is the airborne commands: jumps, boosts.
+            assert rows and rows[-1] > 0, 'rendered client made no prediction comparison'
+            ring=[line.split() for line in (clientgame/'data/prederr/ag-walk.txt').read_text().splitlines() if line[:1].isdigit()]
+            air=[r for r in ring if r[14]=='0' or r[15]=='0']
+            airerr=max((sum((float(r[2+i])-float(r[5+i]))**2 for i in range(3))**0.5 for r in air),default=None)
+            print('P1589 airborne comparisons %d, max airborne prediction error %s' % (len(air), airerr))
+            assert len(air) >= 10 and airerr < 0.01, 'airborne commands mispredicted or never measured'
+        if hl2:
+            assert peak > 200, "HL2 jump boost never raised server speed above the 190 walk"
         assert re.search(r'AGSOCKET timer state=2 .*body=[1-9]', logs), 'timer never ran through real walking'
         recordings=list(recordroot.rglob('*.rec'))
         assert recordings, 'no retained diagnostic recording in actual run archive'
         for rec in recordings:
             text=rec.read_text()
-            if args.profile.startswith('ag-'):
+            if optional:
                 assert 'movementprofile '+args.profile+'-v1' in text
-                assert 'physmode=2' in text and 'pmsrcver=1' in text
+                if hl2:assert 'physmode=1' in text
+                else:assert 'physmode=2' in text and 'pmsrcver=1' in text
                 assert 'in ' in text and 'seed ' in text
-        if args.profile.startswith('ag-'):
+        if optional:
             assert 'pbguard raw=999 read=0' in logs
             assert 'actual profile-bound save/prefix PASS' in logs
             assert 'actual profile-bound restore PASS' in logs

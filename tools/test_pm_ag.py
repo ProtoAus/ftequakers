@@ -82,8 +82,8 @@ def main():
         ('wrong-autobhop', 'return fresh && move->onground', 'return pressed && move->onground'),
         ('wrong-airborne-latch', 'move->jump_held = pressed;', 'move->jump_held = pressed && move->onground;'),
         ('wrong-clock', 'move->cmd.msec * 0.001', '0.01f'),
-        ('wrong-jump-fixup', 'move->velocity[2] = sqrtf(2.0f * 800.0f * 45.0f);\n\t\tPMAg_HalfGravity(move, vars);',
-         'move->velocity[2] = sqrtf(2.0f * 800.0f * 45.0f);'),
+        ('wrong-jump-fixup', 'move->stamina = 1315.789429f;\n\t\t}\n\t\tPMAg_HalfGravity(move, vars);',
+         'move->stamina = 1315.789429f;\n\t\t}'),
         ('wrong-takeoff-cap', 'move->onground = false;',
          'move->onground = false;\n\t\tif (move->velocity[0] > 544) move->velocity[0] *= 0.65f;'),
     )

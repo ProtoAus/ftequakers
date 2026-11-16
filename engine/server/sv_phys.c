@@ -59,7 +59,8 @@ cvar_t	sv_accelerate		 = CVAR( "sv_accelerate", "10");
 cvar_t	sv_airaccelerate	 = CVAR( "sv_airaccelerate", "0.7");
 cvar_t	sv_wateraccelerate	 = CVAR( "sv_wateraccelerate", "10");
 static int sv_agprofile; //map-spawn authority, never derived from raw pm_physicsmode
-static cvar_t sv_movementprofile = CVARFD("sv_movementprofile", "", CVAR_NOTFROMSERVER|CVAR_MAPLATCH, "Experimental unranked movement, applied only on map spawn: default (or empty), ag-100, ag-250. ag-1000 is not acceptance-qualified. Ladder intent uses analog signs; v1 has no longjump equipment.");
+static int sv_profilekind; //Patch 1589: PMPROFILE_* applied at map spawn
+static cvar_t sv_movementprofile = CVARFD("sv_movementprofile", "", CVAR_NOTFROMSERVER|CVAR_MAPLATCH, "Experimental unranked movement, applied only on map spawn: default (or empty); ag-100, ag-250, ag-1000 and cs16 (GoldSrc-style, CS 1.6 with its jump stamina and bhop cap); hl2-pre and hl2-post (Source mover with HL2 settings and its jump boost before/after the limiter; +speed sprints). Ladder intent uses analog signs; no longjump equipment.");
 
 static cvar_t pm_sourceversion = CVARFD("pm_sourceversion", STRINGIFY(PMSRC_VERSION), CVAR_SERVERINFO|CVAR_NOSET, "Source mover version used by this server (read-only). 3 adds swimming; 4 linked portals; 5 keeps a linked portal landing exact; 6 keeps moving as the hull clears a linked door; 7 traces a static prop's collision hull as its convex pieces; 8 recovers a surfer pinned to the face it is sliding along; 9 traces a prop hull whose indices overflowed as it really is; 10 honours Momentum's limitmovement and slide triggers; 11 adds Source's ceiling eye clearance and water-lip assist; 12 meets a prop hull's pieces where they really are, so a crease between two pieces no longer snags a surfer. Old clients need updating to predict them correctly.");
 cvar_t	sv_friction			 = CVAR( "sv_friction", "4");
@@ -2966,9 +2967,18 @@ void SV_SetSourceMoveVars(void)
 	movevars.ladderangle		= pm_ladderangle.value ? pm_ladderangle.value : -0.707;
 	movevars.slide				= pm_slide.value;					//Patch 280
 	movevars.agprofile = 0;
-	if (sv.state == ss_active && (movevars.physicsmode == PHYSMODE_AG || sv_agprofile || *InfoBuf_ValueForKey(&svs.info, "*movementprofile")))
+	movevars.profilekind = 0;
+	if (sv.state == ss_active && PM_ProfileHL2(sv_profilekind))
+	{
+		const pmprofile_t *p = PM_ProfileByIdentity(InfoBuf_ValueForKey(&svs.info, "*movementprofile"));
+		if (!p || p->kind != sv_profilekind || movevars.physicsmode != PHYSMODE_SOURCE)
+			Host_Error("Refusing movement: unbound or mismatched HL2 profile");
+		movevars.profilekind = sv_profilekind;
+	}
+	else if (sv.state == ss_active && (movevars.physicsmode == PHYSMODE_AG || sv_agprofile || *InfoBuf_ValueForKey(&svs.info, "*movementprofile")))
 	{
 		movevars.agprofile = PMAg_ProfileRate(InfoBuf_ValueForKey(&svs.info, "*movementprofile"), movevars.sourceversion, movevars.ticrate);
+		movevars.profilekind = sv_profilekind;
 		if (!sv_agprofile || sv_agprofile != movevars.agprofile || !PMAg_ContextValid(&movevars))
 			Host_Error("Refusing movement: unbound or mismatched AG profile/model/version/rate");
 	}
@@ -4234,30 +4244,55 @@ static void SV_AGOverride(const char *name, const char *value)
 
 static void SV_ApplyMovementProfile(void)
 {
-	const char *tick, *identity;
+	const pmprofile_t *p;
+	char tick[16];
 	sv_agprofile = 0;
+	sv_profilekind = 0;
 	InfoBuf_SetValueForStarKey(&svs.info, "*movementprofile", "");
 	InfoBuf_SetValueForKey(&svs.info, "pm_agversion", "");
 	if (!*sv_movementprofile.string || !strcmp(sv_movementprofile.string, "default")) return;
-	if (!strcmp(sv_movementprofile.string, "ag-100")) { tick = "0.01"; identity = "ag-100-v1"; }
-	else if (!strcmp(sv_movementprofile.string, "ag-250")) { tick = "0.004"; identity = "ag-250-v1"; }
-	else
+	p = PM_ProfileBySelector(sv_movementprofile.string);
+	if (!p)
 	{
 		Host_Error("Refusing map: unknown sv_movementprofile %s", sv_movementprofile.string);
 		return;
 	}
-	SV_AGOverride("pm_physicsmode", "2"); SV_AGOverride("pm_ticrate", tick);
-	SV_AGOverride("sv_gravity", "800"); SV_AGOverride("pm_stepheight", "18");
-	SV_AGOverride("sv_friction", "4"); SV_AGOverride("sv_stopspeed", "100");
-	SV_AGOverride("pm_edgefriction", "2"); SV_AGOverride("sv_accelerate", "10");
-	SV_AGOverride("sv_airaccelerate", "10"); SV_AGOverride("sv_maxspeed", "320");
-	SV_AGOverride("sv_maxvelocity", "2000"); SV_AGOverride("pm_maxvelocity", "2000");
-	SV_AGOverride("pm_standheight", "72"); SV_AGOverride("pm_duckheight", "36");
-	SV_AGOverride("pm_viewheight", "28"); SV_AGOverride("pm_duckviewheight", "12");
-	InfoBuf_SetValueForStarKey(&svs.info, "*movementprofile", identity);
-	InfoBuf_SetValueForKey(&svs.info, "pm_agversion", "1");
-	sv_agprofile = PMAg_ProfileRate(identity, PMAG_VERSION, atof(tick));
-	Con_Printf("Experimental AG-derived %s: UNRANKED, %gs steps, eight-step cap; analog-sign ladder, no longjump equipment.\n", identity, atof(tick));
+	Q_snprintfz(tick, sizeof(tick), "%g", p->tick);
+	SV_AGOverride("pm_ticrate", tick); SV_AGOverride("pm_stepheight", "18");
+	SV_AGOverride("sv_friction", "4"); SV_AGOverride("sv_airaccelerate", "10");
+	if (PM_ProfileHL2(p->kind))
+	{	// Stock HL2 (SDK gamemovement + hl2_player speeds) with Momentum's surf fixes off.
+		SV_AGOverride("pm_physicsmode", "1"); SV_AGOverride("sv_gravity", "600");
+		SV_AGOverride("sv_stopspeed", "100"); SV_AGOverride("sv_accelerate", "10");
+		SV_AGOverride("sv_maxspeed", "190"); SV_AGOverride("pm_jumpvelocity", "160");
+		SV_AGOverride("sv_maxvelocity", "3500"); SV_AGOverride("pm_maxvelocity", "3500");
+		SV_AGOverride("pm_standheight", "72"); SV_AGOverride("pm_duckheight", "36");
+		SV_AGOverride("pm_viewheight", "64"); SV_AGOverride("pm_duckviewheight", "28");
+		SV_AGOverride("pm_duckspeed", "0.333"); SV_AGOverride("pm_viewscale", "1");
+		SV_AGOverride("pm_maxairspeed", "30"); SV_AGOverride("pm_autobunny", "0");
+		SV_AGOverride("pm_normalizejump", "0"); SV_AGOverride("pm_jumpaddrise", "0");
+		SV_AGOverride("pm_jumpzoffset", "0"); SV_AGOverride("pm_stamina", "0");
+		SV_AGOverride("pm_walkspeed", "0"); SV_AGOverride("pm_groundtracedist", "2");
+		SV_AGOverride("pm_bumpcount", "4"); SV_AGOverride("pm_snaptoground", "0");
+		SV_AGOverride("pm_groundquadrants", "0"); SV_AGOverride("pm_fixslopes", "0");
+		SV_AGOverride("pm_fixedges", "0"); SV_AGOverride("pm_fixrampbugs", "0");
+		SV_AGOverride("pm_slide", "0");
+	}
+	else
+	{
+		qboolean cs = p->kind == PMPROFILE_CS16;
+		SV_AGOverride("pm_physicsmode", "2"); SV_AGOverride("sv_gravity", "800");
+		SV_AGOverride("sv_stopspeed", cs ? "75" : "100"); SV_AGOverride("sv_accelerate", cs ? "5" : "10");
+		SV_AGOverride("pm_edgefriction", "2"); SV_AGOverride("sv_maxspeed", cs ? "250" : "320");
+		SV_AGOverride("sv_maxvelocity", "2000"); SV_AGOverride("pm_maxvelocity", "2000");
+		SV_AGOverride("pm_standheight", "72"); SV_AGOverride("pm_duckheight", "36");
+		SV_AGOverride("pm_viewheight", cs ? "17" : "28"); SV_AGOverride("pm_duckviewheight", "12");
+		InfoBuf_SetValueForKey(&svs.info, "pm_agversion", "1");
+	}
+	InfoBuf_SetValueForStarKey(&svs.info, "*movementprofile", p->identity);
+	sv_profilekind = p->kind;
+	sv_agprofile = PMAg_ProfileRate(p->identity, PMAG_VERSION, p->tick);
+	Con_Printf("Experimental %s: UNRANKED, %gs steps; analog-sign ladder, no longjump equipment.\n", p->identity, p->tick);
 }
 
 void SV_ApplyGamemode(const char *mapname)
@@ -4317,7 +4352,7 @@ void SV_Movement_f(void)
 								 :"pm_lockmovement's default is 0");
 
 	if (*InfoBuf_ValueForKey(&svs.info, "*movementprofile"))
-		Con_Printf("  optional %s: experimental AG-derived UNRANKED, version 1; analog-sign ladder intent, no longjump equipment, eight-step cap\n", InfoBuf_ValueForKey(&svs.info, "*movementprofile"));
+		Con_Printf("  optional %s: experimental UNRANKED, version 1; analog-sign ladder intent, no longjump equipment\n", InfoBuf_ValueForKey(&svs.info, "*movementprofile"));
 	/*Patch 313: print the published key rather than re-deriving it here, so
 	  this line is a test of what QC will actually read and not a second opinion
 	  that could agree while the key was stale.*/

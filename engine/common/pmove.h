@@ -342,6 +342,7 @@ typedef struct {
 	float	slide;				//FTESurf Patch 280. pm_slide: honour func_slide. 0 leaves every slide
 								//physent's flag byte unread, which is the pre-280 mover exactly.
 	int		sourceversion;		//Patch 538: live serverinfo or replay pmsrcver. <3 retains the old water drift.
+	int		profilekind;		//Patch 1589: PMPROFILE_* of *movementprofile, 0 for none
 } movevars_t;
 
 #define PHYSMODE_QUAKEWORLD	0

@@ -3282,7 +3282,7 @@ void CL_SendCmd (double frametime, qboolean mainloop)
 				Host_EndGame("Refusing AG commands: profile/model/version/rate mismatch (model=%i version=%i profile=%i tick=%.9g identity=%s)", movevars.physicsmode, movevars.sourceversion, movevars.agprofile, movevars.ticrate, InfoBuf_ValueForKey(&cl.serverinfo, "*movementprofile"));
 			snapms = PMAg_CommandSlot(movevars.ticrate, wantfps, cls.maxfps);
 			if (!snapms)
-				Host_EndGame("Refusing AG commands: server packet ceiling exceeds eight-tick budget");
+				Host_EndGame("Refusing AG commands: server packet ceiling exceeds the profile's tick budget");
 		}
 		else if (cl_netfps_snap.ival && wantfps > 0 &&
 			movevars.physicsmode == PHYSMODE_SOURCE && movevars.ticrate > 0)
