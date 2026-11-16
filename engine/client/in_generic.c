@@ -2422,7 +2422,7 @@ static void IN_Journal_Hooks(qboolean discard)
 	char blk[IN_JRN_HOOKBLOCK];
 	*blk = 0;
 	INS_HookJournalEnd(discard ? NULL : blk, discard ? NULL : IN_Journal_HookLine);
-	if (!discard && *blk && !in_jrn_full && in_jrn_len + strlen(blk) <= in_jrn_max)
+	if (!discard && *blk && !in_jrn_full && in_jrn_len + strlen(blk) + 256 <= in_jrn_max)	//256: the `end` line, kept
 		IN_Journal_Raw(blk);
 }
 #else
