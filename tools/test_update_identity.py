@@ -48,6 +48,7 @@ unsigned int utf8_encode(void *out, unsigned int unicode, int maxlen);
 #define Q_snprintfz snprintf
 #define Z_Malloc(n) calloc(1, (n))
 #define Z_Free free
+#define BZ_Free free
 #define QKU_HEXLEN 64
 enum { GAMEDIR_BASEGAME=1u<<0, GAMEDIR_PRIVATE=1u<<1, GAMEDIR_USEBASEDIR=1u<<3, GAMEDIR_STEAMGAME=1u<<4,
 	GAMEDIR_SPECIAL=GAMEDIR_USEBASEDIR|GAMEDIR_STEAMGAME };
@@ -59,6 +60,15 @@ static char harness_root[1024];
 static void QKU_InstallPath(char *out, size_t outsize, const char *rel)
 {
 	snprintf(out, outsize, "%s/%s", harness_root, rel);
+}
+static char *QKU_ReadTextFile(const char *abspath, size_t maxsize)	//the engine's, over stdio
+{
+	FILE *f = fopen(abspath, "rb");
+	char *buf = calloc(1, maxsize + 1);
+	size_t n = f ? fread(buf, 1, maxsize, f) : 0;
+	if (f) fclose(f);
+	if (!f || n >= maxsize || strlen(buf) != n) { free(buf); return NULL; }
+	return buf;
 }
 '''
 
@@ -151,15 +161,30 @@ MUTANTS = {
                                  {'special basegame skipped'}),
     'casefold-identity': ('\t\tif (!strcmp(last, qku_identities[i].game))\n', '\t\tif (!Q_strcasecmp(last, qku_identities[i].game))\n',
                           {'basegame matched exactly'}),
-    'identity-without-gamedir': ('\treturn id && QKU_FSGamedirCounts(id) ? id : NULL;', '\treturn id;',
+    'fallback-without-gamedir': ('\t\tif (QKU_FSGamedirCounts(&qku_identities[i]) != (&qku_identities[i] == id)) return NULL;\n', '\t\t;\n',
                                  {'no gamedir', 'stray folder', 'one required file', 'linked gamedir', 'required file is a directory',
-                                  'basegame names a different gamedir'}),
+                                  'basegame names a different gamedir', 'half-moved without marker'}),
+    'half-moved-allowed': ('\t\tif (QKU_FSGamedirCounts(&qku_identities[i]) != (&qku_identities[i] == id)) return NULL;\n',
+                           '\t\tif (&qku_identities[i] == id && !QKU_FSGamedirCounts(id)) return NULL;\n', {'half-moved without marker'}),
+    'marker-ignored': ('\tm = QKU_FSMarker(&marked);\n\tif (m) return m > 0 && marked == id ? id : NULL;\n', '\tm = 0; (void)marked; (void)m;\n',
+                       {'marker disagrees', 'marker over files', 'marker over half-moved', 'marker in other case',
+                        'marker with CRLF', 'marker with two newlines', 'marker is a directory', 'linked marker'}),
+    'marker-disagreement-allowed': ('\tif (m) return m > 0 && marked == id ? id : NULL;', '\tif (m) return m > 0 ? id : NULL;',
+                                    {'marker disagrees'}),
+    'marker-damage-falls-back': ('\tif (m) return m > 0 && marked == id ? id : NULL;', '\tif (m > 0) return marked == id ? id : NULL;',
+                                 {'marker in other case', 'marker with CRLF', 'marker with two newlines', 'marker is a directory',
+                                  'linked marker'}),
+    'marker-loose': ("\tif (n && text[n-1] == '\\n') text[--n] = 0;", "\twhile (n && (text[n-1] == '\\n' || text[n-1] == '\\r')) text[--n] = 0;",
+                     {'marker with CRLF', 'marker with two newlines'}),
     'any-file-counts': ('\treturn have >= 2;', '\treturn have >= 1;', {'one required file', 'required file is a directory'}),
     'all-three-required': ('\treturn have >= 2;', '\treturn have >= 3;', {'mid-apply, two files'}),
     'links-count': ('if (QKU_FSNoLinks(rel) && QKU_FSRegular(abs) == 1)', 'if (QKU_FSRegular(abs) == 1)', {'linked gamedir'}),
-    'repeats-allowed': ('\tif (QKU_JSONRepeatsKey(root)) return false;\n', '',
-                        {'repeated top-level key', 'repeated nested key', 'escaped duplicate key'}),
-    'escapes-allowed': ("\t\t\tif (strchr(a->name, '\\\\')) return true;\n", '', {'escaped duplicate key'}),
+    'keys-unchecked': ('\tif (QKU_JSONBadKeys(root)) return false;\n', '',
+                       {'repeated top-level key', 'repeated nested key', 'escaped duplicate key', 'dotted key',
+                        'object over the key cap'}),
+    'escapes-allowed': (" || strchr(names[i], '\\\\')", '', {'escaped duplicate key'}),
+    'dots-allowed': ("strchr(names[i], '.') || ", '', {'dotted key'}),
+    'no-key-cap': ('if (++n > 8192) return true;', '++n;', {'object over the key cap'}),
 }
 
 
@@ -202,12 +227,36 @@ def fixtures(work):
         (target / leaf).write_bytes(leaf.encode())
     roots['linked'] = work / 'roots/linked'
     roots['linked'].mkdir()
-    if os.name == 'nt':
-        subprocess.run(['cmd', '/C', 'mklink', '/J', str(roots['linked'] / 'worldofsurf'), str(target)],
-                       check=True, capture_output=True)
-    else:
-        os.symlink(target, roots['linked'] / 'worldofsurf')
+    link(target, roots['linked'] / 'worldofsurf')
+    # marker layouts: every gamedir qualifies where a fallback would otherwise give an identity
+    full = ['menu.dat', 'csprogs.dat', 'qwprogs.dat']
+    markers = {'agrees': (['ftesurf'], b'ftesurf\n'), 'disagrees': (['ftesurf'], b'worldofsurf\n'),
+               'overfiles': (['ftesurf'], b'worldofsurf\n'), 'halfmoved': (['ftesurf', 'worldofsurf'], b'worldofsurf\n'),
+               'bare': (['worldofsurf'], b'worldofsurf'), 'case': (['worldofsurf'], b'WorldofSurf\n'),
+               'crlf': (['worldofsurf'], b'worldofsurf\r\n'), 'twonl': (['worldofsurf'], b'worldofsurf\n\n'),
+               'dirmarker': (['worldofsurf'], None), 'linkmarker': (['worldofsurf'], None),
+               'halfnomarker': (['ftesurf', 'worldofsurf'], False)}
+    for name, (gamedirs, marker) in markers.items():
+        root = work / 'roots' / name
+        for gamedir in gamedirs:
+            (root / gamedir).mkdir(parents=True)
+            for leaf in full:
+                (root / gamedir / leaf).write_bytes(leaf.encode())
+        (root / '.ftesurf-updater').mkdir()
+        if marker:
+            (root / '.ftesurf-updater/identity').write_bytes(marker)
+        roots[name] = root
+    (roots['dirmarker'] / '.ftesurf-updater/identity').mkdir()
+    (work / 'roots/elsewhere/marker').mkdir()
+    link(work / 'roots/elsewhere/marker', roots['linkmarker'] / '.ftesurf-updater' / 'identity')
     return roots
+
+
+def link(target, at):
+    if os.name == 'nt':
+        subprocess.run(['cmd', '/C', 'mklink', '/J', str(at), str(target)], check=True, capture_output=True)
+    else:
+        os.symlink(target, at)
 
 
 def cases(platform, roots):
@@ -218,6 +267,8 @@ def cases(platform, roots):
     legacy_text = json.dumps(feed_for('ftesurf'), separators=(',', ':'))
     nested = legacy_text.replace('"hash":"', f'"hash":"{HASH}","hash":"', 1)
     escaped = '{"g\\u0061me":"worldofsurf",' + legacy_text[1:]
+    dotted = '{"game.":"ftesurf",' + text[1:]  # JSON_FindChild("game") matches "game.": ftesurf
+    capped = legacy_text[:-1] + ',"big":{' + ','.join(f'"k{i}":0' for i in range(8193)) + '}}'
     relabelled = dict(feed_for('worldofsurf'), game='ftesurf')
     legacy_as_new = dict(feed_for('ftesurf'), game='worldofsurf')
     legacy_exec = json.loads(json.dumps(feed_for('worldofsurf')))
@@ -239,6 +290,8 @@ def cases(platform, roots):
         'repeated top-level key': (first_game, 'ftesurf', 'refuse'),
         'repeated nested key': (nested, 'ftesurf', 'refuse'),
         'escaped duplicate key': (escaped, 'ftesurf', 'refuse'),
+        'dotted key': (dotted, 'ftesurf', 'refuse'),
+        'object over the key cap': (capped, 'ftesurf', 'refuse'),
     }
     out = {name: (('validate', ident, payload), want) for name, (payload, ident, want) in feeds.items()}
     out.update({
@@ -266,6 +319,17 @@ def cases(platform, roots):
         'linked gamedir': (('identity', str(roots['linked']), 'worldofsurf'), 'none'),
         'required file is a directory': (('identity', str(roots['dirfile']), 'worldofsurf'), 'none'),
         'basegame names a different gamedir': (('identity', str(roots['full']), 'worldofsurf'), 'none'),
+        'marker agrees': (('identity', str(roots['agrees']), 'ftesurf'), 'ftesurf'),
+        'marker disagrees': (('identity', str(roots['disagrees']), 'ftesurf'), 'none'),
+        'marker over files': (('identity', str(roots['overfiles']), 'worldofsurf'), 'worldofsurf'),
+        'marker over half-moved': (('identity', str(roots['halfmoved']), 'worldofsurf'), 'worldofsurf'),
+        'half-moved without marker': (('identity', str(roots['halfnomarker']), 'worldofsurf'), 'none'),
+        'marker without newline': (('identity', str(roots['bare']), 'worldofsurf'), 'worldofsurf'),
+        'marker in other case': (('identity', str(roots['case']), 'worldofsurf'), 'none'),
+        'marker with CRLF': (('identity', str(roots['crlf']), 'worldofsurf'), 'none'),
+        'marker with two newlines': (('identity', str(roots['twonl']), 'worldofsurf'), 'none'),
+        'marker is a directory': (('identity', str(roots['dirmarker']), 'worldofsurf'), 'none'),
+        'linked marker': (('identity', str(roots['linkmarker']), 'worldofsurf'), 'none'),
         'legacy feed url': (('feed', 'ftesurf'), 'https://proto.bar/ftesurf/update.json'),
         'worldofsurf feed url': (('feed', 'worldofsurf'), 'https://proto.bar/ftesurf/worldofsurf.json'),
     })

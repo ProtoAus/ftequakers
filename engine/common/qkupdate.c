@@ -354,22 +354,49 @@ static qboolean QKU_FSIsGameFile(const char *p, const char *leaf)
 	return !strncmp(p, qku_id->dir, d) && !strcmp(p + d, leaf);
 }
 
-//serde and Python keep a repeated key's last value, JSON_FindChild the first: refuse instead.
-//A raw name is compared, so an escaped key (JSON_CreateNode keeps escapes) is refused too.
-static qboolean QKU_JSONRepeatsKey(json_t *t)
+static int QKU_JSONNameCmp(const void *a, const void *b)
 {
-	json_t *a, *b;
-	for (a = t ? t->child : NULL; a; a = a->sibling)
+	return strcmp(*(const char *const *)a, *(const char *const *)b);
+}
+
+//serde and Python keep a repeated key's last value; JSON_FindChild takes the first and lets
+//"name." match "name". Refuse repeated, dotted and escaped keys (names are raw, escapes kept),
+//and objects over 8192 keys. Sorted, so a large object costs n log n.
+static qboolean QKU_JSONBadKeys(json_t *t)
+{
+	json_t *a;
+	const char **names;
+	size_t n = 0, i;
+	qboolean bad = false;
+	if (!t) return false;
+	if (t->type == json_type_object)
 	{
-		if (t->type == json_type_object)
-		{
-			if (strchr(a->name, '\\')) return true;
-			for (b = a->sibling; b; b = b->sibling)
-				if (!strcmp(a->name, b->name)) return true;
-		}
-		if (QKU_JSONRepeatsKey(a)) return true;
+		for (a = t->child; a; a = a->sibling) if (++n > 8192) return true;
+		names = Z_Malloc(sizeof(*names) * (n + 1));
+		for (n = 0, a = t->child; a; a = a->sibling) names[n++] = a->name;
+		qsort(names, n, sizeof(*names), QKU_JSONNameCmp);
+		for (i = 0; i < n && !bad; i++)
+			bad = strchr(names[i], '.') || strchr(names[i], '\\') || (i && !strcmp(names[i-1], names[i]));
+		Z_Free(names);
+		if (bad) return true;
 	}
+	for (a = t->child; a; a = a->sibling) if (QKU_JSONBadKeys(a)) return true;
 	return false;
+}
+
+//The unsigned envelope is exactly "payload" and "signature", once each; checked before any walk.
+static qboolean QKU_FSEnvelopeKeys(json_t *envelope)
+{
+	json_t *a;
+	unsigned seen = 0, bit;
+	if (envelope->type != json_type_object) return false;
+	for (a = envelope->child; a; a = a->sibling)
+	{
+		bit = !strcmp(a->name, "payload") ? 1u : !strcmp(a->name, "signature") ? 2u : 4u;
+		if (bit == 4u || (seen & bit)) return false;
+		seen |= bit;
+	}
+	return seen == 3u;
 }
 
 static qboolean QKU_FSLegacyIs(const char *p, const char *legacyname)
@@ -447,7 +474,7 @@ static qboolean QKU_FSValidateManifest(json_t *root)
 	qboolean ok = false;
 	char buf[MAX_OSPATH];
 	const char *exe = qku_id ? qku_id->exe[!!strcmp(QKU_PLATFORM, "win64")] : "";
-	if (QKU_JSONRepeatsKey(root)) return false;
+	if (QKU_JSONBadKeys(root)) return false;
 	JSON_GetString(root, "game", buf, sizeof(buf), ""); if (!qku_id || strcmp(buf, qku_id->game)) return false;
 	JSON_GetString(root, "channel", buf, sizeof(buf), ""); if (strcmp(buf, "stable")) return false;
 	JSON_GetString(root, "version", buf, sizeof(buf), ""); if (!QKU_FSVersion(buf, ver)) return false;
@@ -740,11 +767,44 @@ static qboolean QKU_FSGamedirCounts(const qku_identity_t *id)
 	return have >= 2;
 }
 
-//P1593: BASEGAME names the identity, valid only while its gamedir counts; otherwise none (fail closed).
+#define QKU_MARKER ".ftesurf-updater/identity"	//the launcher's MARKER
+static char *QKU_ReadTextFile(const char *abspath, size_t maxsize);
+
+//The launcher's identity marker. 1: names *out; 0: absent; -1: unusable (a link, not a regular
+//file, unreadable, or anything but one identity word and an optional newline).
+static int QKU_FSMarker(const qku_identity_t **out)
+{
+	char abs[MAX_OSPATH], *text;
+	size_t i, n;
+	int r;
+	*out = NULL;
+	if (!QKU_FSNoLinks(QKU_MARKER)) return -1;
+	QKU_InstallPath(abs, sizeof(abs), QKU_MARKER);
+	r = QKU_FSRegular(abs);
+	if (r <= 0) return r;
+	text = QKU_ReadTextFile(abs, 64);
+	if (!text) return -1;
+	n = strlen(text);
+	if (n && text[n-1] == '\n') text[--n] = 0;
+	for (i = 0; i < countof(qku_identities); i++)
+		if (!strcmp(text, qku_identities[i].game)) *out = &qku_identities[i];
+	BZ_Free(text);
+	return *out ? 1 : -1;
+}
+
+//P1593: BASEGAME names the identity. A marker, when present, must agree; without one this
+//gamedir must count and the other must not (the launcher's half-moved refusal). Else none.
 static const qku_identity_t *QKU_FSIdentity(const ftemanifest_t *man)
 {
-	const qku_identity_t *id = QKU_FSSelectIdentity(man);
-	return id && QKU_FSGamedirCounts(id) ? id : NULL;
+	const qku_identity_t *id = QKU_FSSelectIdentity(man), *marked;
+	size_t i;
+	int m;
+	if (!id) return NULL;
+	m = QKU_FSMarker(&marked);
+	if (m) return m > 0 && marked == id ? id : NULL;
+	for (i = 0; i < countof(qku_identities); i++)
+		if (QKU_FSGamedirCounts(&qku_identities[i]) != (&qku_identities[i] == id)) return NULL;
+	return id;
 }
 
 // Missing content can be repaired; unreadable content cannot be classified.
@@ -850,7 +910,7 @@ static json_t *QKU_FSParseSigned(const char *text, char **payloadout)
 	*payloadout = NULL;
 	if (strlen(text) > 2*1024*1024) return NULL;
 	envelope = JSON_Parse(text);
-	if (!envelope || QKU_JSONRepeatsKey(envelope)) goto done;
+	if (!envelope || !QKU_FSEnvelopeKeys(envelope)) goto done;
 	body = JSON_FindChild(envelope, "payload");
 	if (!body || body->type != json_type_string || !QKU_FSJSONNoNul(body->bodystart, body->bodyend)) goto done;
 	n = JSON_ReadBody(body, NULL, 0); // escaped-length upper bound, NOT decoded length
