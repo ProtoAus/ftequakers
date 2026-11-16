@@ -52,7 +52,7 @@ void Host_FinishLoading(void);
 
 
 cvar_t	cl_crypt_rcon = CVARFD("cl_crypt_rcon", "1", CVAR_ARCHIVE|CVAR_NOTFROMSERVER, "Controls whether to send a hash instead of sending your rcon password as plain-text. Set to 1 for security, or 0 for backwards compatibility.\nYour command and any responses will still be sent as plain text.\nInstead, it is recommended to use rcon ONLY via dtls/tls/wss connections.");	//CVAR_NOTFROMSERVER prevents evil servers from degrading it to send plain-text passwords.
-cvar_t	rcon_password = CVARF("rcon_password", "", CVAR_NOUNSAFEEXPAND);
+cvar_t	rcon_password = CVARF("rcon_password", "", CVAR_NOUNSAFEEXPAND|CVAR_NOTFROMSERVER);	//FTESurf P1598: a server may not set it
 
 cvar_t	rcon_address = CVARF("rcon_address", "", CVAR_NOUNSAFEEXPAND);
 

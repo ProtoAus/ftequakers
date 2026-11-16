@@ -24,7 +24,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include "cl_master.h"
 
 cvar_t ruleset_allow_in		= CVAR("ruleset_allow_in", "1");
-cvar_t rcon_level			= CVAR("rcon_level", "20");
+cvar_t rcon_level			= CVARF("rcon_level", "20", CVAR_NOTFROMSERVER);	//FTESurf P1598: a server may not set it
 cvar_t cmd_maxbuffersize	= CVAR("cmd_maxbuffersize", "65536");
 #ifdef HAVE_LEGACY
 cvar_t dpcompat_set         = CVAR("dpcompat_set", "0");

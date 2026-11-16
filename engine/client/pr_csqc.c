@@ -5767,12 +5767,24 @@ static void QCBUILTIN PF_cs_movetogoal (pubprogfuncs_t *prinst, struct globalvar
 	World_MoveToGoal (&csqc_world, ent, dist);
 }
 
+/*FTESurf P1598: the level of the console command csprogs is running, -1 outside one.  A builtin that must
+  answer only to the player (movementprofile_switch) reads it: a registered command runs for any source.*/
+static int csqc_cmdlevel = -1;
 static void CS_ConsoleCommand_f(void)
 {
 	char cmd[2048];
 	int seat = CL_TargettedSplit(false);
+	int was = csqc_cmdlevel;
 	Q_snprintfz(cmd, sizeof(cmd), "%s %s", Cmd_Argv(0), Cmd_Args());
+	csqc_cmdlevel = Cmd_ExecLevel;
 	CSQC_ConsoleCommand(seat, cmd);
+	csqc_cmdlevel = was;
+}
+/*FTESurf P1598: float() cmdlevel_local -- inside a console command the player ran (their console, their binds)?
+  The mode picker refuses `open` otherwise: a server's bind could open it under the player's digit.*/
+static void QCBUILTIN PF_cs_cmdlevel_local (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
+{
+	G_FLOAT(OFS_RETURN) = csqc_cmdlevel == RESTRICT_LOCAL;
 }
 static void QCBUILTIN PF_cs_registercommand (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
 {
@@ -7016,6 +7028,7 @@ static void QCBUILTIN PF_cl_acct_sign (pubprogfuncs_t *prinst, struct globalvars
 static void QCBUILTIN PF_cl_acct_random (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals);
 static void QCBUILTIN PF_cl_acct_browse (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals);
 static void QCBUILTIN PF_cl_tasrev_sign (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals);
+static void QCBUILTIN PF_cs_movementprofile_switch (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals);
 void CL_Receipt_VM(qboolean made);
 void CL_Receipt_VMCode(const void *data, size_t len);
 static qboolean csqc_realkey;	/*and its two budgets: see CSQC_KeyPress*/
@@ -7512,6 +7525,8 @@ static struct {
 	{"acct_random",				PF_cl_acct_random,			0},		//FTESurf Patch 625: string(float bytes)
 	{"acct_browse",				PF_cl_acct_browse,			0},		//FTESurf Patch 625: float(string opener)
 	{"tasrev_sign",				PF_cl_tasrev_sign,			0},		//FTESurf P1090: string(string sha, string parent, string mapcrc, float from, float to)
+	{"movementprofile_switch",	PF_cs_movementprofile_switch,	0},		//FTESurf P1598: float(string mode)
+	{"cmdlevel_local",		PF_cs_cmdlevel_local,		0},		//FTESurf P1598: float()
 
 	{"getinputstate",			PF_cs_getinputstate,			345},	// #345 float(float framenum) getinputstate (EXT_CSQC)
 	{"setsensitivityscaler",	PF_cs_setsensitivityscaler, 	346},	// #346 void(float sens) setsensitivityscaler (EXT_CSQC)
@@ -8166,6 +8181,7 @@ void CSQC_Shutdown(void)
 	int i;
 	r2d_coverage = 0;	/*Patch 871: an aborted VM can leave it set inside its target*/
 	csqc_realkey = false;	/*Patch 625: no VM inherits a key press*/
+	csqc_cmdlevel = -1;
 	csqc_pastevm++;	/*Patch 667: nor a question about the clipboard*/
 	CL_PasteDrop(CSQC_PasteGive);
 	csqc_realkey_signs = csqc_realkey_browses = csqc_realkey_pastes = 0;
@@ -9794,6 +9810,7 @@ static qboolean CSQC_RealKey(void)
 void CSQC_RealKeyAbort(void)
 {
 	csqc_realkey = false;
+	csqc_cmdlevel = -1;	/*P1598: a QC error inside a command*/
 	csqc_realkey_signs = csqc_realkey_browses = csqc_realkey_pastes = 0;
 	IN_RealKeyAbort();
 }
@@ -9846,6 +9863,28 @@ static void QCBUILTIN PF_cl_tasrev_sign (pubprogfuncs_t *prinst, struct globalva
 		RETURN_TSTRING(out);
 	else
 		RETURN_TSTRING("");
+}
+
+/*FTESurf Patch 1598: float(string mode) movementprofile_switch, the hud_gamemode picker's switch.  Text cannot
+  reach the console command, so the picker calls this.  It acts for the player only: under a device's key press
+  or click (CSQC_RealKey), or inside a console command run at RESTRICT_LOCAL -- the install's own csprogs can be
+  driven by server text too (review) -- and only while this process hosts the game (SV_MovementProfileSwitch).
+  -> 1 switched (the map reloads), 0 refused (it prints why).*/
+static void QCBUILTIN PF_cs_movementprofile_switch (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
+{
+#ifdef HAVE_SERVER
+	extern const char *SV_MovementProfileSwitch(const char *sel);
+	const char *why;
+	if (!CSQC_RealKey() && csqc_cmdlevel != RESTRICT_LOCAL)
+		why = "only from your own key press, click or console";
+	else
+		why = SV_MovementProfileSwitch(PR_GetStringOfs(prinst, OFS_PARM0));
+	if (why)
+		Con_Printf("movementprofile: %s\n", why);
+	G_FLOAT(OFS_RETURN) = why ? 0 : 1;
+#else
+	G_FLOAT(OFS_RETURN) = 0;
+#endif
 }
 /*string(float bytes) acct_random: that many bytes from the system, as hex; "" if it has none.*/
 static void QCBUILTIN PF_cl_acct_random (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)

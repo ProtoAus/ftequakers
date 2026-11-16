@@ -1,5 +1,35 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1598 - movementprofile: the in-game mode picker's switch, for the player only
+
+**Problem.** Lex: a small in-game UI to switch game mode, the modes 1-7, click or press the number. The modes are
+P1589's movement profiles, chosen by `sv_movementprofile` and applied at map spawn. The cvar is CVAR_NOTFROMSERVER,
+PF_cvar_set refuses that flag, and every QC `localcmd` runs at RESTRICT_INSECURE, so no QC -- the csprogs panel
+included -- can set it. Whatever lets the panel do it must not let server-supplied text do it.
+
+**Change.**
+- SV_MovementProfileSwitch (sv_phys.c): only while this process hosts an active server and not under rcon
+  (sv_redirected); a known selector is Cvar_ForceSet (it also clears a pending latch) and `map_restart` is queued at
+  RESTRICT_LOCAL.
+- Console `movementprofile [<mode>]`: exactly RESTRICT_LOCAL, i.e. the player's console, binds and cfgs. Text a
+  server can supply runs above that level, or below it (its binds replay at bindlevel 30).
+- CSQC builtin `movementprofile_switch(mode)` (pr_csqc.c, by name): only under a device press or click
+  (CSQC_RealKey) or inside a console command run at RESTRICT_LOCAL -- CS_ConsoleCommand_f now records the level
+  (csqc_cmdlevel, cleared on abort and VM start) because a registered command runs for any source. `cmdlevel_local()`
+  exposes that test to the panel, which refuses to open from anything else.
+- rcon_password is CVAR_NOTFROMSERVER (rcon_level too, where it is a cvar: a client exe fixes it at 20).
+- The panel is QC P1598 (`hud_gamemode`, src/client/cl_gamemode.qc).
+
+**Verified.** FTESurf tools/p1598gamemode.py on bhop_1n5an3. Local game (rendered): digits 2 and 4 and a click on row
+5 switch to hl2-pre, ag-100 and ag-250, the console to cs16, each a map_restart with `*movementprofile` following;
+the running mode's digit closes with no reload and its repeat and release stay the panel's (no save). While hosting,
+the listen server stuffing its own client: `hud_gamemode 7` and `hud_gamemode open` are refused by the panel, a
+stuffed digit into the open panel and `movementprofile cs16` by the engine, `rcon_password` by its flag; rcon to the
+same server is refused; the mode never moves. Not hosting (dedicated server): the panel and the console say so.
+An engine without the builtins: the panel says it needs this engine. Mutants: the builtin's source check compiled
+out, a stuffed `hud_gamemode 7` switches to cs16; the console level check out, rcon switches to ag-1000. Three
+review rounds (the first two each found a way for server text in; details in the private notes).
+
 ## Patch 1593 - World of Surf names, stage 1: the updater and the game folder accept both identities
 
 **Problem.** Lex: the player's exe and game folder should be World of Surf (WorldofSurf.exe / worldofsurf64,

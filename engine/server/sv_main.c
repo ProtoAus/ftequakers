@@ -80,7 +80,7 @@ cvar_t	sv_rconlim					= CVARFD("sv_rconlim", "4", CVAR_ARCHIVE, "Blocks repeated
 cvar_t	sv_crypt_rcon				= CVARFD("sv_crypt_rcon", "", CVAR_ARCHIVE, "Controls whether the rcon password must be hashed or not. Hashed passwords also partially prevent replay attacks, but does NOT prevent malicious actors from reading the commands/results.\n0: completely insecure. ONLY allows plain-text passwords. Do not use.\n1: Mandatory hashing (recommended).\nEmpty: Allow either, whether the password is secure or not is purely the client's responsibility/fault. Only use this for comptibility with old clients.");
 cvar_t	sv_crypt_rcon_clockskew		= CVARFD("sv_timestamplen", "60", CVAR_ARCHIVE, "Limits clock skew to reduce (delayed) replay attacks");
 #ifdef SERVERONLY
-cvar_t	rcon_password				= CVARF("rcon_password", "", CVAR_NOUNSAFEEXPAND);	// password for remote server commands
+cvar_t	rcon_password				= CVARF("rcon_password", "", CVAR_NOUNSAFEEXPAND|CVAR_NOTFROMSERVER);	//FTESurf P1598	// password for remote server commands
 cvar_t	password					= CVARF("password", "", CVAR_NOUNSAFEEXPAND);	// password for entering the game
 #else
 extern cvar_t	rcon_password;

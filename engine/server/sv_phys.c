@@ -142,6 +142,53 @@ cvar_t	pm_rampretrace		 = CVARFD("pm_rampretrace", "0.2", CVAR_SERVERINFO, "Mome
 cvar_t	pm_walkspeed		 = CVARFD("pm_walkspeed", "0", CVAR_SERVERINFO, "CS:S's CS_PLAYER_SPEED_WALK_MODIFIER: while the speed button is held, maxspeed is scaled by this. 0.52 is CS:S. 0 disables it, which is what every non-Source game on this engine wants - they use Quake's clientside cl_movespeedkey instead. Needs the client's in_speedbutton set, or the button never reaches the server.");
 cvar_t	pm_lockmovement		 = CVARFD("pm_lockmovement", "0", CVAR_NOTFROMSERVER, "Lock the movement ruleset. Every cvar that feeds the mover is restored to this game's default at each map load, and refused thereafter unless sv_cheats is 1. The engine default is 0, so this does nothing until a game asks for it in its default.cfg.");
 
+/*
+  Patch 1598: switch the movement profile of a game this process hosts, then reload the map.  NULL when it
+  switched, else why not.  sv_movementprofile is CVAR_NOTFROMSERVER and every QC localcmd is insecure, so no
+  QC can set it; the two ways in are the console command below and csprogs' movementprofile_switch
+  (pr_csqc.c).  ForceSet also clears a pending latch, so the reload applies it on any build.
+*/
+const char *SV_MovementProfileSwitch(const char *sel)
+{
+	if (sv.state != ss_active)
+		return "only in a game you host";
+	if (sv_redirected != RD_NONE)
+		return "not over rcon";
+	if (!sel || (strcmp(sel, "default") && !PM_ProfileBySelector(sel)))
+		return "unknown mode";
+	Con_Printf("movementprofile: %s, reloading the map\n", sel);
+	Cvar_ForceSet(&sv_movementprofile, strcmp(sel, "default") ? sel : "");
+	Cbuf_AddText("map_restart\n", RESTRICT_LOCAL);
+	return NULL;
+}
+
+/*
+  `movementprofile [<mode>]`, from the player's own console and binds only (exactly RESTRICT_LOCAL).  Text
+  a server could have supplied runs above it (stufftext, game-code localcmd, timers it queued) or below it
+  (its binds come back at bindlevel 30), so a hosting test alone would not keep it out (review).
+*/
+static void SV_MovementProfile_f(void)
+{
+	const char *why;
+
+	if (Cmd_Argc() < 2)
+	{
+		Con_Printf("movementprofile <default|hl2-pre|hl2-post|ag-100|ag-250|ag-1000|cs16>: set %s, running %s\n",
+				   *sv_movementprofile.string ? sv_movementprofile.string : "default",
+				   sv.state == ss_active && *InfoBuf_ValueForKey(&svs.info, "*movementprofile") ?
+				   InfoBuf_ValueForKey(&svs.info, "*movementprofile") : "default");
+		return;
+	}
+	if (Cmd_ExecLevel != RESTRICT_LOCAL)
+	{
+		Con_Printf("movementprofile: only from your own console or binds\n");
+		return;
+	}
+	why = SV_MovementProfileSwitch(Cmd_Argv(1));
+	if (why)
+		Con_Printf("movementprofile: %s\n", why);
+}
+
 #define cvargroup_serverphysics  "server physics variables"
 void WPhys_Init(void)
 {
@@ -154,6 +201,7 @@ void WPhys_Init(void)
 	Cvar_Register (&sv_airaccelerate,					cvargroup_serverphysics);
 	Cvar_Register (&sv_wateraccelerate,					cvargroup_serverphysics);
 	Cvar_Register (&sv_movementprofile, cvargroup_serverphysics);
+	Cmd_AddCommandD ("movementprofile", SV_MovementProfile_f, "Patch 1598: set sv_movementprofile for a game you host and reload the map (the hud_gamemode picker). Not hosting: refused.");
 	Cvar_Register (&pm_sourceversion,					cvargroup_serverphysics);
 	//Early +set survives registration even for NOSET cvars. Never advertise
 	//a mover different from SV_SetSourceMoveVars or the recorder's pin.
