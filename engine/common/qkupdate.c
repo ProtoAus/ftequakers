@@ -250,8 +250,18 @@ static qboolean QKU_ValidPath(const char *p)
 	return true;
 }
 
+//P1593: the two install identities, picked from the running manifest's BASEGAME
+//(QKU_FSSelectIdentity); must agree with updatefeed.py and the launcher. worldofsurf is the
+//ftesurf policy below with the gamedir and exe respelled (QKU_FSLegacySpelling), so they cannot drift.
+typedef struct { const char *game, *dir, *exe[2]; } qku_identity_t;	//exe: win64, linux64
+static const qku_identity_t qku_identities[] = {
+	{"ftesurf", "ftesurf/", {"ftesurf64.exe", "ftesurf64"}},
+	{"worldofsurf", "worldofsurf/", {"WorldofSurf.exe", "worldofsurf"}},
+};
+static const qku_identity_t *qku_id;	//NULL refuses every signed manifest
+
 // FTESurf's disk policy is also enforced by updatefeed.py and the native launcher.
-static qboolean QKU_FSManaged(const char *p)
+static qboolean QKU_FSManagedLegacy(const char *p)
 {
 	static const char *roots[] = {"default.fmf", "ftesurf.bat", "ftesurf.sh", "ftesurf_debug.bat", "LICENSE", "INSTALL.txt", "VERSION.txt", "SOURCE.txt", "THIRD-PARTY.txt", "ftesurf64.exe", "ftesurf64", "fteplug_hl2_x64.dll", "fteplug_ui_imgui_x64.dll", "fteplug_hl2_amd64.so", "ftesurf/csprogs.dat", "ftesurf/qwprogs.dat", "ftesurf/menu.dat", "ftesurf/fs_addons.default.txt", "ftesurf/fs_addons.txt", "ftesurf/data/mapmeta.txt", "ftesurf/data/mapdeps.txt", "ftesurf/data/mapmeta_override.txt", "ftesurf/data/mapparticles.txt", "ftesurf/data/mapwr.txt", "ftesurf/data/mapdl.txt", "ftesurf/data/mapmanifest.txt", "ftesurf/maps/tiers.txt", "ftesurf/textures/no_texture.png"};
 	static const char *prefixes[] = {"ftesurf/gfx/", "ftesurf/glsl/", "ftesurf/particles/", "ftesurf/scripts/", "ftesurf/models/", "ftesurf/sound/"};
@@ -284,14 +294,76 @@ static qboolean QKU_FSManaged(const char *p)
 	return false;
 }
 
+//p as the ftesurf policy spells it; false for the other identity's gamedir or exe, or no identity.
+static qboolean QKU_FSLegacySpelling(const char *p, char *out, size_t outsize)
+{
+	const qku_identity_t *old = &qku_identities[0];
+	size_t i, n = strlen(p), dir, olddir = strlen(old->dir);
+	if (!qku_id || n >= outsize) return false;
+	if (qku_id != old)
+	{
+		if (!strcmp(p, old->exe[0]) || !strcmp(p, old->exe[1]) || !strncmp(p, old->dir, olddir)) return false;
+		for (i = 0; i < 2; i++)
+			if (!strcmp(p, qku_id->exe[i]))
+			{
+				p = old->exe[i];
+				n = strlen(p);
+				break;
+			}
+		dir = strlen(qku_id->dir);
+		if (!strncmp(p, qku_id->dir, dir))
+		{
+			if (olddir + n - dir >= outsize) return false;
+			memcpy(out, old->dir, olddir);
+			memcpy(out + olddir, p + dir, n - dir + 1);
+			return true;
+		}
+	}
+	memcpy(out, p, n + 1);
+	return true;
+}
+
+//This install's disk policy. The 240 limit is on the real path, before respelling.
+static qboolean QKU_FSManaged(const char *p)
+{
+	char legacy[MAX_OSPATH];
+	return strlen(p) < 240 && QKU_FSLegacySpelling(p, legacy, sizeof(legacy)) && QKU_FSManagedLegacy(legacy);
+}
+
 static qboolean QKU_FSInGame(const char *p)
 {
+	char legacy[MAX_OSPATH];
+	if (!QKU_FSLegacySpelling(p, legacy, sizeof(legacy))) return false;
+	p = legacy;
 	return !strncmp(p, "ftesurf/", 8) || !strncmp(p, "notices/", 8) || !strcmp(p, "LICENSE") || !strcmp(p, "INSTALL.txt") || !strcmp(p, "VERSION.txt") || !strcmp(p, "SOURCE.txt") || !strcmp(p, "THIRD-PARTY.txt");
 }
 
 static qboolean QKU_FSProtected(const char *p)
 {
+	char legacy[MAX_OSPATH];
+	if (!QKU_FSLegacySpelling(p, legacy, sizeof(legacy))) return false;
+	p = legacy;
 	return !strcmp(p, "ftesurf/fs_addons.txt") || !strncmp(p, "ftesurf/maps/zones/local/", 25);
+}
+
+static qboolean QKU_FSLegacyIs(const char *p, const char *legacyname)
+{
+	char legacy[MAX_OSPATH];
+	return QKU_FSLegacySpelling(p, legacy, sizeof(legacy)) && !strcmp(legacy, legacyname);
+}
+
+//The gamedir FS_BASEGAMEONLY writes to (the last non-special BASEGAME), matched exactly.
+static const qku_identity_t *QKU_FSSelectIdentity(const ftemanifest_t *man)
+{
+	const char *last = NULL;
+	size_t i;
+	for (i = 0; i < countof(man->gamepath); i++)
+		if ((man->gamepath[i].flags & GAMEDIR_BASEGAME) && !(man->gamepath[i].flags & GAMEDIR_SPECIAL) && man->gamepath[i].path)
+			last = man->gamepath[i].path;
+	for (i = 0; last && i < countof(qku_identities); i++)
+		if (!strcmp(last, qku_identities[i].game))
+			return &qku_identities[i];
+	return NULL;
 }
 
 static qboolean QKU_DecodeHex(const char *h, qbyte *out, size_t len)
@@ -348,8 +420,8 @@ static qboolean QKU_FSValidateManifest(json_t *root)
 	unsigned ver[3], must = 0;
 	qboolean ok = false;
 	char buf[MAX_OSPATH];
-	const char *exe = !strcmp(QKU_PLATFORM, "win64") ? "ftesurf64.exe" : "ftesurf64";
-	JSON_GetString(root, "game", buf, sizeof(buf), ""); if (strcmp(buf, "ftesurf")) return false;
+	const char *exe = qku_id ? qku_id->exe[!!strcmp(QKU_PLATFORM, "win64")] : "";
+	JSON_GetString(root, "game", buf, sizeof(buf), ""); if (!qku_id || strcmp(buf, qku_id->game)) return false;
 	JSON_GetString(root, "channel", buf, sizeof(buf), ""); if (strcmp(buf, "stable")) return false;
 	JSON_GetString(root, "version", buf, sizeof(buf), ""); if (!QKU_FSVersion(buf, ver)) return false;
 	list = JSON_FindChild(root, "removed"); if (!list || list->type != json_type_array || JSON_GetCount(list)) return false;
@@ -389,9 +461,9 @@ static qboolean QKU_FSValidateManifest(json_t *root)
 		{
 			if (!strcmp(rows[i].path, exe)) must |= 1u;
 			if (!strcmp(rows[i].path, "default.fmf")) must |= 2u;
-			if (!strcmp(rows[i].path, "ftesurf/menu.dat")) must |= 4u;
-			if (!strcmp(rows[i].path, "ftesurf/csprogs.dat")) must |= 8u;
-			if (!strcmp(rows[i].path, "ftesurf/qwprogs.dat")) must |= 16u;
+			if (QKU_FSLegacyIs(rows[i].path, "ftesurf/menu.dat")) must |= 4u;
+			if (QKU_FSLegacyIs(rows[i].path, "ftesurf/csprogs.dat")) must |= 8u;
+			if (QKU_FSLegacyIs(rows[i].path, "ftesurf/qwprogs.dat")) must |= 16u;
 			for (j = 0; rows[i].path[j]; j++) if (rows[i].path[j] >= 'A' && rows[i].path[j] <= 'Z') rows[i].path[j] += 'a'-'A';
 			if (Hash_Get(&native, rows[i].path)) goto done;
 			Hash_Add(&native, rows[i].path, &rows[i], &rows[i].bynative);
@@ -910,7 +982,7 @@ static enum qku_preserve_e QKU_FSPreserveFile(qku_state_t *st, const char *path,
 		return QKUP_UNREADABLE;
 	}
 	old = Hash_Get(&st->ht, path);
-	return (!strcmp(path, "ftesurf/fs_addons.txt") || (strcmp(have, hash) && (!old || !QKU_StateHashEquals(old, have)))) ? QKUP_PRESERVE : QKUP_INSTALL;
+	return (QKU_FSLegacyIs(path, "ftesurf/fs_addons.txt") || (strcmp(have, hash) && (!old || !QKU_StateHashEquals(old, have)))) ? QKUP_PRESERVE : QKUP_INSTALL;
 }
 
 struct qku_checkargs_s
@@ -966,7 +1038,7 @@ static void QKU_Work_Check(void *ctx, void *data, size_t a, size_t b)
 		if (maxfiles > 512) maxfiles = 512;
 		if (maxbytes > 16*1024*1024) maxbytes = 16*1024*1024;
 		JSON_GetString(root, "game", buf, sizeof(buf), "");
-		if (strcmp(buf, "ftesurf") || JSON_GetCount(JSON_FindChild(root, "removed")))
+		if (!qku_id || strcmp(buf, qku_id->game) || JSON_GetCount(JSON_FindChild(root, "removed")))
 		{ Q_strncpyz(plan->reason, "wrong game or unsupported file deletion", sizeof(plan->reason)); goto done; }
 		JSON_GetString(root, "channel", buf, sizeof(buf), "");
 		if (strcmp(buf, "stable")) { Q_strncpyz(plan->reason, "wrong update channel", sizeof(plan->reason)); goto done; }
@@ -2167,7 +2239,8 @@ void QKU_ReplayJournal(void)
 		return;
 	alreadyran = true;
 	// Public gamedir is assigned only when paths mount, AFTER this recovery hook.
-	qku_ftesurf = fs_manifest->installation && !Q_strcasecmp(fs_manifest->installation, "FTESurf");
+	qku_ftesurf = fs_manifest->installation && (!Q_strcasecmp(fs_manifest->installation, "FTESurf") || !Q_strcasecmp(fs_manifest->installation, "WorldofSurf"));
+	qku_id = qku_ftesurf ? QKU_FSSelectIdentity(fs_manifest) : NULL;	//P1593
 	qku_profileknown = true;
 	if (qku_ftesurf) QKU_FSLock();
 	if (qku_initialised) QKU_ConfigureProfile();
@@ -2210,7 +2283,7 @@ void QKU_ReplayJournal(void)
 		if (!signedroot || !QKU_FSValidateManifest(signedroot) || !count || count > 8192 || !files || files->type != json_type_array) Sys_Error("Update recovery lacks a valid signed manifest. Run the launcher to repair.");
 		JSON_GetString(signedroot, "version", version, sizeof(version), "");
 		JSON_GetString(signedroot, "game", game, sizeof(game), "");
-		if (strcmp(version, jver) || strcmp(game, "ftesurf")) Sys_Error("Update journal does not match its signed manifest. Run the launcher to repair.");
+		if (strcmp(version, jver) || !qku_id || strcmp(game, qku_id->game)) Sys_Error("Update journal does not match its signed manifest. Run the launcher to repair.");
 		if (!QKU_LoadState(&state))
 		{ QKU_FreeState(&state); Sys_Error("Cannot read the update recovery ledger. Run the launcher to repair; nothing installed."); }
 		older = *state.version && QKU_FSVersionOlder(version, state.version);

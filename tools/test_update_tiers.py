@@ -35,6 +35,7 @@ int main(int argc, char **argv) {
     };
     unsigned int i;
     int only_unshipped = argc == 2 && !strcmp(argv[1], "unshipped-only");
+    qku_id = &qku_identities[0];
     if (!QKU_FSManaged("ftesurf/maps/tiers.txt")) return 10;
     if (!QKU_FSManaged("ftesurf/menu.dat")) return 11;
     if (!QKU_FSManaged("ftesurf/maps/zones/local/surf_a.json")) return 12;
