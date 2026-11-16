@@ -1,5 +1,48 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1572 - tas_rollout follows trigger_push
+
+**Problem.** (Lex, 16 Nov: Jargon completes little; does it know push triggers?) tas_rollout ran only the mover:
+any trigger volume QC acts on ended a prediction, and a held push carrier refused the rollout (-9), so a Jargon line
+through a booster scored as a miss and a body inside a push could not be searched at all. 16 of the 108 fastest
+guide lines in data/online cross a trigger_push or basevelocity booster volume (AABB census, 16 of 81 maps).
+
+**Change.** For a body whose QC field `run_tasrollpush` is 1 (QC sets it while its search runs on a live run),
+tas_rollout and tas_rollout_batch follow trigger_push as the live code does. QC describes each push (`tas_rpushk`
+kind, `tas_rpush` the touch's own vector, SV_TASPushPrep). Before each tick's move the rollout cashes out or hands
+over QC's held carrier as SV_BaseVelocityFrame does (SV_TASRollCarrier); after it, every push the hull touches acts
+in World_TouchAllLinks' order (the new World_TriggerTouches mirrors its tests) as trigger_push_touch does: the
+carrier, accumulation within one command, an upward push's ground strip and one-unit lift, one-time kicks (16 a line
+at most), and class-filtered pushes that never move a player. A push whose only outputs disable it on leaving and
+re-enable it later (surf_rookie's 24: "OnEndTouch !self Disable", "!self Enable" a second on) is followed once;
+touched again after leaving, it ends the line. Held in the body's touch slot at the start (kind 6), the start walk
+records whether the body stands in it, and it is followed only while the body stays in it. A push QC cannot describe
+(other outputs, a filter, an edge or delay still owed, named by another entity's output, parented) still ends the
+prediction, and a push refused on a tick outranks a solid met on it. Field lookups are uncached (a static evalc_t
+outlives the progs' field table at a map change, Patch 139). A progs without the fields: no change.
+
+**Verified.** Rigs on the PC's bench (headless client), surf_rookie main (rkm) and surf_tensor2 stage 2 (t2s2):
+- Exact: every played landing bit-equal to its prediction -- surf_rookie stage 1 4/4, t2s2 17/17, rkm with pushes
+  followed 121/121 (before kind 6) and 92/92 (final).
+- Discriminates (same build, tas_jargon_off 4194304 = pushes not followed): rkm with pushes reached stretch 9 of 64
+  in its 20 min, through the stage-1 push and portal; without, each search after the portal stopped before one
+  candidate ("a trigger edge ... is pending" 19 times, "a push ... carrier is armed" twice) and the chain ended stuck
+  at stretch 1. The run before kind 6 stopped 13 times at stretch 4 with "the body starts inside a trigger volume".
+- Control: surf_tensor2 stage 2 (no pushes) finished alike on three builds of this patch (WIP, review 1, final):
+  0:12.165, 4 backtracks, 17/17 bit-equal. The installed-build arm was stopped twice by Claude Code's low-memory
+  guard; it is recorded in tools/p1572-delivery.md when it runs.
+- Speed was the request's other half and is not in this patch. Two debug runs on t2s2 (counters at each early return)
+  showed the search busy 0.6-1.0 s of each second while it runs, each frame running at least one batch (~200 ms); the
+  time between its frames -- 58% of a stretch in the P1483 bench, read as idle -- is the found line's tape playing one
+  tick per client command (9 a second from the bench's headless client). A path running the search's work from QC's
+  StartFrame (rollouts resolving the client outside its command) was built, called the search ~33 times a second and
+  changed nothing (553 frames worked in both builds); it is removed.
+- Reviews: round 1 two reviewers (flow; exactness and evidence); round 2 one reviewer, six findings, all real and fixed
+  (the static field caches above; wildcard and template-spawned output targets missed by QC's push scan, and its
+  outputs x edicts cost; a slotted push waited for and then refused; the budget clock's float milliseconds; a refused
+  push hidden behind a solid). A census of 2204 maps: 264 pushes on 82 maps are named by another entity's output,
+  none only through a wildcard, none on the 84 guided maps (the bench cannot reach one).
+
 ## Patch 1577 - DLL tripwire: the input journal names modules from outside the game and Windows folders
 
 **Problem.** A public cheat loaded into the game as a DLL left no trace in any record.
