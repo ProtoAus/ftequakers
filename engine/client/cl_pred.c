@@ -19,6 +19,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 */
 #include "quakedef.h"
 #include "winquake.h"
+#include "pm_ag.h"
 extern unsigned int r_spikes_pmoves;	//pr_csqc.c, FTESurf Patch 1446
 extern double r_spikes_pmus, r_spikes_hookus;
 
@@ -539,8 +540,13 @@ static int cl_pred_diag_parts, cl_pred_diag_ticks;
 /* P924: packet snapshots never contained msec_carry. A player's last rendered
    prop is not an authoritative command's phase. One string stat keeps its tag
    and value atomic even when the stat sender runs out of packet space. */
+// Patch 1589: cs16's fuser2 after the tagged command, seeded with the phase (never networked otherwise).
+static float cl_srcstamina[MAX_SPLITS][UPDATE_BACKUP];
+static qboolean cl_srcstaminavalid[MAX_SPLITS][UPDATE_BACKUP];
 void CL_CacheSourcePhase(int seat, const char *text)
 {
+	float stamina = 0;
+	qboolean hasstamina = false;
 	unsigned long owner, lo, hi;
 	unsigned int tag, slot;
 	const char *p;
@@ -565,9 +571,18 @@ void CL_CacheSourcePhase(int seat, const char *text)
 	if (*end != ':' || hi > 65535) return;
 	p = end + 1;
 	phase = strtof(p, &end);
+	if (end != p && *end == ':' && movevars.profilekind == PMPROFILE_CS16)
+	{
+		p = end + 1;
+		stamina = strtof(p, &end);
+		if (end == p || IS_NAN(stamina) || stamina < 0 || stamina > 2000) return;
+		hasstamina = true;
+	}
 	if (end == p || *end || IS_NAN(phase) || phase < 0 || phase >= tick) return;
 	tag = ((unsigned int)hi << 16) | (unsigned int)lo;
 	slot = tag & UPDATE_MASK;
+	cl_srcstamina[seat][slot] = stamina;
+	cl_srcstaminavalid[seat][slot] = hasstamina;
 	cl.sourcephase[seat][slot].sequence = tag;
 	cl.sourcephase[seat][slot].owner = owner;
 	cl.sourcephase[seat][slot].carry = phase;
@@ -594,6 +609,8 @@ static qboolean CL_PredictSourcePhase(int seat, int sequence, player_state_t *st
 	phase = cl.sourcephase[seat][slot].carry;
 	if (phase < 0 || phase >= tick) return false;
 	state->pmsrc.msec_carry = phase;
+	if (movevars.profilekind == PMPROFILE_CS16 && cl_srcstaminavalid[seat][slot])
+		state->pmsrc.stamina = cl_srcstamina[seat][slot];
 	return true;
 }
 

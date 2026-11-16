@@ -72,6 +72,7 @@ static evalc_t evalc_tascontactinfo, evalc_tascontactplane, evalc_tascontactpoin
 evalc_t	evalc_forceduck;	//FTESurf Patch 142
 evalc_t	evalc_basevel;		//FTESurf Patch 240
 evalc_t	evalc_mtick, evalc_mtickrate, evalc_mcarry;	//FTESurf Patch 325
+evalc_t	evalc_mstamina;	//Patch 1589
 evalc_t	evalc_pmepoch, evalc_physcrc, evalc_portalx, evalc_portalorg, evalc_portalvel;	//FTESurf Patch 346
 evalc_t	evalc_pmhold;		//FTESurf Patch 380
 evalc_t	evalc_momlimit, evalc_momcool, evalc_momslide;	//FTESurf Patch 882
@@ -110,6 +111,7 @@ void SV_FS_ResetFieldCaches(void)
 	memset(&evalc_mtick,     0, sizeof(evalc_mtick));		//FTESurf Patch 325
 	memset(&evalc_mtickrate, 0, sizeof(evalc_mtickrate));	//FTESurf Patch 325
 	memset(&evalc_mcarry,    0, sizeof(evalc_mcarry));		//FTESurf Patch 325
+	memset(&evalc_mstamina,  0, sizeof(evalc_mstamina));	//Patch 1589
 	memset(&evalc_pmhold,    0, sizeof(evalc_pmhold));		//FTESurf Patch 380
 	memset(&evalc_momlimit,  0, sizeof(evalc_momlimit));	//FTESurf Patch 882
 	memset(&evalc_momcool,   0, sizeof(evalc_momcool));
@@ -385,6 +387,9 @@ void SV_PMPinApply(const float *v)
 	pmove.momslide = (o[0] > 0 && o[0] < 16) ? (int)o[0] : 0;	o++;
 	if (o - v != SV_PMPIN_COUNT)
 		Sys_Error("SV_PMPinApply: %i values for %i names", (int)(o - v), SV_PMPIN_COUNT);
+	//Patch 1589: a pin names no profile; a live server's own must not reach a replay.
+	movevars.agprofile = 0;
+	movevars.profilekind = PMPROFILE_NONE;
 }
 
 //Patch 882: does a state text carry landticks (required for an exact replay at mover 10)?
@@ -9626,6 +9631,10 @@ if (sv_player->v->health > 0 && before && !after )
 			ev = svprogfuncs->GetEdictFieldValue(svprogfuncs, sv_player, "run_movecarry", ev_float, &evalc_mcarry);
 			if (ev)
 				ev->_float = pmove.msec_carry;
+			//Patch 1589: cs16's fuser2, which the phase stat hands the client's replay seed.
+			ev = svprogfuncs->GetEdictFieldValue(svprogfuncs, sv_player, "run_movestamina", ev_float, &evalc_mstamina);
+			if (ev)
+				ev->_float = pmove.stamina;
 			if (tas_step)
 				SV_TASInputComplete(host_client, sv_player, &tas_input,
 					movevars.physicsmode == PHYSMODE_SOURCE && pmove.ticksrun == 1);
