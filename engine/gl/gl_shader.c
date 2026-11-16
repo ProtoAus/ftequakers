@@ -97,13 +97,13 @@ cvar_t r_glsl_warm = CVARFD("r_glsl_warm", "1", CVAR_ARCHIVE, "FTESurf Patch 127
 #define GLSLWARM_BYTES (4*1024*1024)		//written and read, at most
 #define GLSLWARM_SEED "glsl/warmseed.txt"	//FTESurf Patch 1282: the release's starter list, read beside this PC's
 #define GLSLWARM_MAX 65536					//permutations kept, all programs together
-cvar_t r_mapready_budget = CVARFD("r_mapready_budget", "6", CVAR_ARCHIVE, "Soft seconds (0..10) for registered models/images and remembered active GLSL permutations at activation, then every permutation of the small programs (Patch 1574), then on a fogged map the fog variants of the listed ones (Patch 1578). A single upload/driver compile cannot be preempted. Expiry is incomplete, NOT server timer admission; see r_mapready_info. (FTESurf Patch 1442: 6, was 2; the window stays responsive meanwhile.)");
+cvar_t r_mapready_budget = CVARFD("r_mapready_budget", "6", CVAR_ARCHIVE, "Soft seconds (0..10) for registered models/images and remembered active GLSL permutations at activation, then every permutation of the small programs (Patch 1574), then where fog can be drawn the other fog variant of the listed ones (Patch 1578). A single upload/driver compile cannot be preempted. Expiry is incomplete, NOT server timer admission; see r_mapready_info. (FTESurf Patch 1442: 6, was 2; the window stays responsive meanwhile.)");
 static struct
 {
 	qboolean observing, warming, invalidated, budgethit, overflow;
 	int programs, eligible, available, compiled, failed, pending, unavailable;
 	int whole, wholeeligible, wholeavailable, wholecompiled, wholefailed, wholepending;	//FTESurf Patch 1574: small programs warmed whole, after the list
-	int fogged, fog, fogeligible, fogavailable, fogcompiled, fogfailed, fogpending;	//FTESurf Patch 1578: fog variants on a fogged map, last
+	int fogged, fog, fogeligible, fogavailable, fogcompiled, fogfailed, fogpending;	//FTESurf Patch 1578: fog variants where fog can be drawn, last
 	int models, modelpending, modelfailed, modelunrequested;
 	int images, imagepending, imagefailed, imageunrequested;
 	unsigned int latecompiles, latefailed, lateimages, lateimagefailed;
@@ -5872,12 +5872,16 @@ static void MapReady_WarmPerm(program_t *prog, unsigned int p, unsigned int *see
 		MAPREADY_COUNT(compiled);
 }
 #undef MAPREADY_COUNT
-//FTESurf Patch 1578: the frame's fog (gl_rmain.c, gl_warp.c) is one of these, so any of them can draw PERMUTATION_FOG
+//FTESurf Patch 1578: whether this map can draw PERMUTATION_FOG (one site, gl_backend.c). A Source world always can: its
+//fog controllers switch on later (SetFogController; 26 maps start on a disabled one) and its water fogs the view without
+//one (gl_rmain.c's fallback). Otherwise any fog now; non-zero, as the renderer tests (a negative linear end still fogs).
 static qboolean MapReady_Fogged(void)
 {
 	int t;
+	if (cl.worldmodel && (cl.worldmodel->engineflags & MDLF_SOURCEBSP))
+		return true;
 	for (t = 0; t < FOGTYPE_COUNT; t++)
-		if (cl.fog[t].density > 0)
+		if (cl.fog[t].density)
 			return true;
 	return false;
 }
@@ -5973,10 +5977,11 @@ void GLSLWarm_MapActive(void)
 				for (sub = sp; sub; sub = (sub - 1) & sp)
 					MapReady_WarmPerm(prog, sub, seen, deadline, 1);
 			}
-			/*FTESurf Patch 1578: last, on a fogged map, the fog variant of each listed permutation of the larger programs,
-			  and the fog-only one (permutation 0 is never listed). The list is every map's, so a permutation seen only
-			  unfogged compiled mid-run on a fogged map's first play (surf_null: vmt/vertexlit 0x128/0x328, vmt/refract 0x20,
-			  10-16 ms each). CSQC_WorldLoaded's fog command has run by now: it is queued frames before activation.*/
+			/*FTESurf Patch 1578: last, where fog can be drawn, the other fog variant of each listed permutation of the larger
+			  programs (fogged if listed without, and the reverse: no-fog surfaces and fog switched off), and the fog-only
+			  one (permutation 0 is never listed). The list is every map's, so a permutation seen only unfogged compiled
+			  mid-run on a fogged map's first play (surf_null: vmt/vertexlit 0x128/0x328, vmt/refract 0x20, 10-16 ms each).
+			  cl.fog holds the map's fog by now: a Cbuf_Execute runs between CSQC_WorldLoaded's localcmd and activation.*/
 			mapready.fogged = MapReady_Fogged();
 			for (i = 0; mapready.fogged && i < (unsigned int)count; i++)
 			{
@@ -5995,7 +6000,7 @@ void GLSLWarm_MapActive(void)
 				w = glslwarm_mem ? Hash_Get(&glslwarm_hash, prog->name) : NULL;
 				for (perm = 1; w && perm < PERMUTATIONS; perm++)
 					if (w->bits[perm >> 5] & (1u << (perm & 31)))
-						MapReady_WarmPerm(prog, (perm & sp) | PERMUTATION_FOG, seen, deadline, 2);
+						MapReady_WarmPerm(prog, (perm & sp) ^ PERMUTATION_FOG, seen, deadline, 2);
 			}
 		}
 		free(programs);
