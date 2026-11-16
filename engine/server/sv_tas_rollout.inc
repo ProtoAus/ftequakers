@@ -135,11 +135,152 @@ static qboolean SV_TASModelLoaded (world_t *w, int mi)
 	return false;
 }
 
+/* P1572: trigger_push in the prediction, for a body whose run_tasrollpush is 1. QC describes each push it can
+ * (SV_TASPushPrep): tas_rpushk 1 a continuous push with carrier tas_rpush, 2 a one-time kick tas_rpush (3: it also
+ * takes the ground), 4 a push that never moves a player, 5 a continuous push whose only outputs disable it on leaving
+ * and enable it later (once left, a touch again ends the prediction); 0 a push whose touch does more (outputs, a
+ * filter), where the prediction stops as before. QC's held carrier (run_basevel, run_basevel_armed) is cashed out and handed to
+ * the mover as SV_BaseVelocityFrame does before each move, and each push touched after it acts as
+ * trigger_push_touch does, in World_TouchAllLinks' order (a sum of overlapping pushes is order-sensitive in float). */
+#define SV_TAS_ROLL_ONCEMAX 16
+typedef struct
+{
+	int on;
+	vec3_t basevel;
+	int armed;
+	float bvtick;		/* QC's run_bv_tick: the cash-out's (1 + tick/2) */
+	int ofsk, ofsv;		/* byte offsets of tas_rpushk and tas_rpush in an edict's fields */
+	int once[SV_TAS_ROLL_ONCEMAX], nonce;	/* one-time kicks spent this rollout (QC makes each SOLID_NOT) */
+	int stn[SV_TAS_ROLL_ONCEMAX], stk[SV_TAS_ROLL_ONCEMAX], nst;	/* kind 5 pushes touched, and the tick each last was */
+} sv_tasroll_push_t;
+
+static int SV_TASRollPushKind(const sv_tasroll_push_t *ps, wedict_t *t)
+{
+	if (!ps || !ps->on)
+		return 0;
+	return (int)*(float *)((char *)t->v + ps->ofsk);
+}
+
+/* PlayerPreThink's SV_BaseVelocityFrame before this tick's move: an unarmed carrier is paid into the velocity, the
+ * rest handed to the mover, its Z spent there. */
+static void SV_TASRollCarrier(sv_tasroll_push_t *ps)
+{
+	int i;
+	if (!ps->on)
+		return;
+	if (!ps->armed && (ps->basevel[0] || ps->basevel[1] || ps->basevel[2]))
+	{
+		float f = 1.0f + ps->bvtick * 0.5f;
+		for (i = 0; i < 3; ++i)
+			pmove.velocity[i] = pmove.velocity[i] + f * ps->basevel[i];
+		VectorClear(ps->basevel);
+	}
+	ps->armed = 0;
+	VectorCopy(ps->basevel, pmove.basevelocity);
+	ps->basevel[2] = 0;
+}
+
+/* trigger_push_touch for a push QC described (kind 1-6) on tick tick; false when it cannot be followed (too many
+ * kicks, a kind 5 touched again after the body left it: its OnEndTouch disabled it; a kind 6 the body did not stand in
+ * at the start: the end edge its slot owes disables it on the first command). */
+static qboolean SV_TASRollPush(sv_tasroll_push_t *ps, wedict_t *t, int k, int tick)
+{
+	const float *pv = (const float *)((char *)t->v + ps->ofsv);
+	vec3_t push;
+	int i, n = NUM_FOR_EDICT(svprogfuncs, (edict_t *)t);
+	if (k == 4)
+		return true;
+	if (k == 2 || k == 3)
+	{
+		for (i = 0; i < ps->nonce; ++i)
+			if (ps->once[i] == n)
+				return true;		/* spent: the real one is SOLID_NOT by now */
+		if (ps->nonce >= SV_TAS_ROLL_ONCEMAX)
+			return false;
+		ps->once[ps->nonce++] = n;
+		if (k == 3)
+			pmove.onground = false;
+		for (i = 0; i < 3; ++i)
+			pmove.velocity[i] = pmove.velocity[i] + pv[i];
+		return true;
+	}
+	if (k == 5 || k == 6)
+	{
+		for (i = 0; i < ps->nst; ++i)
+			if (ps->stn[i] == n)
+				break;
+		if (i == ps->nst)
+		{
+			if (k == 6 || ps->nst >= SV_TAS_ROLL_ONCEMAX)
+				return false;
+			ps->stn[ps->nst++] = n;
+		}
+		else if (ps->stk[i] < tick - 1)
+			return false;
+		ps->stk[i] = tick;
+	}
+	for (i = 0; i < 3; ++i)
+		push[i] = ps->armed ? pv[i] + ps->basevel[i] : pv[i];
+	if (push[2] > 0 && pmove.onground)
+	{	/* the strip and the one-unit lift */
+		pmove.onground = false;
+		pmove.origin[2] = pmove.origin[2] + 1;
+	}
+	VectorCopy(push, ps->basevel);
+	ps->armed = 1;
+	return true;
+}
+
+/* P1572: every trigger World_TouchAllLinks would touch for the hull at org, in its order: each push QC described acts
+ * (unless start: the body already stands there, its touches done), as all of them do in SV_RunCmd whatever else the
+ * tick met. Returned: a push it could not follow (that always ends the prediction) or 0, with the first other trigger
+ * in *first. -1: a worker met a model it may not load (pm_threadabort is set). */
+static int SV_TASRollTriggers(edict_t *e, sv_tasroll_push_t *ps, qboolean start, int tick, int *first)
+{
+	wedict_t *list[2048];	/* on the stack, as World_TriggerAt's: no thread-local arrays (mingw .refptr, P1467) */
+	vec3_t amin, amax;
+	int num, i, r, k, refused = 0;
+	*first = 0;
+	for (i = 0; i < 3; ++i)
+	{
+		amin[i] = pmove.origin[i] + pmove.player_mins[i] - 1;
+		amax[i] = pmove.origin[i] + pmove.player_maxs[i] + 1;
+	}
+	num = sv_tasroll_worker ? World_AreaEdictsLocal(&sv.world, amin, amax, list, countof(list), AREA_TRIGGER)
+		: World_AreaEdicts(&sv.world, amin, amax, list, countof(list), AREA_TRIGGER);
+	while (num-- > 0)
+	{
+		r = World_TriggerTouches(&sv.world, (wedict_t *)e, list[num], pmove.origin, pmove.player_mins, pmove.player_maxs, true,
+			sv_tasroll_worker ? SV_TASModelLoaded : NULL);
+		if (r < 0)
+			return -1;
+		if (!r)
+			continue;
+		k = list[num]->v->touch ? SV_TASRollPushKind(ps, list[num]) : 0;
+		if (k < 1 || k > 6)
+		{
+			if (!*first)
+				*first = NUM_FOR_EDICT(svprogfuncs, (edict_t *)list[num]);
+		}
+		else if (start)
+		{	/* a kind 6 the body stands in: its touch goes on, so it pushes until the body leaves it */
+			if (k == 6 && ps->nst < SV_TAS_ROLL_ONCEMAX)
+			{
+				ps->stn[ps->nst] = NUM_FOR_EDICT(svprogfuncs, (edict_t *)list[num]);
+				ps->stk[ps->nst++] = tick;
+			}
+		}
+		else if (!SV_TASRollPush(ps, list[num], k, tick) && !refused)
+			refused = NUM_FOR_EDICT(svprogfuncs, (edict_t *)list[num]);
+	}
+	return refused;
+}
+
 /* The first entity per-command QC could act on after this tick (0 none): SV_RunCmd's touch loop
  * (a touched non-world solid whose touch or the player's would run; such a touch also makes the
  * contact kind 3, as SV_RunCmd's observation does), a non-world ground entity (P924 conveyors),
- * then any trigger volume. */
-static int SV_TASRolloutActor(edict_t *e, int *kind)
+ * then any trigger volume (P1572: with ps on every push QC described acts, and is named only when not followed). */
+static int SV_TASRolloutActor(edict_t *e, int *kind, sv_tasroll_push_t *ps, int tick)
 {
 	wedict_t *t;
 	int j, index, rep = 0;
@@ -164,6 +305,13 @@ static int SV_TASRolloutActor(edict_t *e, int *kind)
 	if (!rep && pmove.onground && pmove.groundent >= 0 && pmove.groundent < pmove.numphysent &&
 		pmove.physents[pmove.groundent].info)
 		rep = pmove.physents[pmove.groundent].info;
+	if (ps && ps->on)
+	{	/* SV_RunCmd touches the triggers before its touch loop, so the pushes act on a tick that met something else too */
+		int first, tr = SV_TASRollTriggers(e, ps, false, tick, &first);
+		if (tr < 0)
+			return 0;	/* a worker's abort: its candidate is the main thread's */
+		return tr ? tr : (rep ? rep : first);
+	}
 	if (!rep && (t = (sv_tasroll_worker ? World_TriggerAtLocal(&sv.world, (wedict_t*)e, pmove.origin, pmove.player_mins, pmove.player_maxs, true, SV_TASModelLoaded)
 		: World_TriggerAt(&sv.world, (wedict_t*)e, pmove.origin, pmove.player_mins, pmove.player_maxs, true))))
 		rep = NUM_FOR_EDICT(svprogfuncs, (edict_t*)t);
@@ -174,8 +322,33 @@ static int SV_TASRolloutActor(edict_t *e, int *kind)
  * negative reason it cannot start: -1 no TAS client/arguments, -2 not a plain Source walker,
  * -3 not paused or held, -4 a QC movement limit or forced duck pending, -5 a gravity direction,
  * -6 water/ladder/duck transition, -7 non-default gravity (bank gravity would observe it),
- * -8 the TAS clock, -9 a carrier (QC's run_basevel, or standing on a non-world entity),
+ * -8 the TAS clock, -9 a carrier (QC's run_basevel unless pushes are followed, P1572; or standing on a non-world entity),
  * -10 a row that does not decode. A trigger volume the body starts in is named, negated, on the first tick. */
+/* P1572: the push simulation's inputs (main thread). Off unless the body's run_tasrollpush is 1 and every field it
+ * reads exists (an older progs has none). */
+static void SV_TASRollPushSetup(edict_t *e, sv_tasroll_push_t *ps)
+{
+	eval_t *f, *bv, *ba, *k, *v, *g;
+	memset(ps, 0, sizeof(*ps));
+	/* uncached: a static evalc_t outlives the progs' field table at a map change (Patch 139, sv_user.c:41) */
+	f = SV_TASRewindField(e, "run_tasrollpush", ev_float);
+	if (!f || f->_float != 1)
+		return;
+	bv = SV_TASRewindField(e, "run_basevel", ev_vector);
+	ba = SV_TASRewindField(e, "run_basevel_armed", ev_float);
+	k = SV_TASRewindField(e, "tas_rpushk", ev_float);
+	v = SV_TASRewindField(e, "tas_rpush", ev_vector);
+	g = PR_FindGlobal(svprogfuncs, "run_bv_tick", 0, NULL);
+	if (!bv || !ba || !k || !v || !g)
+		return;
+	ps->on = 1;
+	VectorCopy(bv->_vector, ps->basevel);
+	ps->armed = ba->_float != 0;
+	ps->bvtick = g->_float;
+	ps->ofsk = (char *)k - (char *)e->v;
+	ps->ofsv = (char *)v - (char *)e->v;
+}
+
 /* Patch 1467: the checks every rollout makes, 0 or SV_TASRollout's negative reason. */
 static int SV_TASRollCheck(edict_t *e, client_t **pcl, int *pmsec)
 {
@@ -210,7 +383,12 @@ static int SV_TASRollCheck(edict_t *e, client_t **pcl, int *pmsec)
 	// engine's read-and-clear run_basevelocity, which is always zero while paused.
 	ev = SV_TASRewindField(e, "run_basevel", ev_vector);
 	if (ev && !VectorCompare(ev->_vector, vec3_origin))
-		return -9;
+	{	/* P1572: followed when pushes are (SV_TASRollCarrier) */
+		sv_tasroll_push_t ps;
+		SV_TASRollPushSetup(e, &ps);
+		if (!ps.on)
+			return -9;
+	}
 	if (((int)e->v->flags & FL_ONGROUND) && e->v->groundentity)
 		return -9;
 	*pmsec = msec = SV_TASTickMsec(SV_TASCurrentTick());
@@ -240,8 +418,8 @@ static int SV_TASRollRows(const float *in, int n, const float *aim)
 }
 
 /* Patch 1467: SV_RunCmd's setup into this thread's pmove and movevars (main thread: it may queue a reliable
- * message); returns the trigger volume the body starts in. */
-static int SV_TASRollSetup(edict_t *e, client_t *cl)
+ * message); returns the trigger volume the body starts in. P1572: and fills ps. */
+static int SV_TASRollSetup(edict_t *e, client_t *cl, sv_tasroll_push_t *ps)
 {
 	wedict_t *start;
 	int startrep;
@@ -272,6 +450,12 @@ static int SV_TASRollSetup(edict_t *e, client_t *cl)
 	pmove.world = &sv.world;
 	SV_SetQWClientMoveVars(cl);
 	// A volume the body already stands in: PreThink finds limit/slide volumes by overlap
+	SV_TASRollPushSetup(e, ps);
+	if (ps->on)
+	{	/* P1572: a push's touch there is done (main thread: no abort, nothing refused) */
+		SV_TASRollTriggers(e, ps, true, -1, &startrep);
+		return startrep;
+	}
 	start = World_TriggerAt(&sv.world, (wedict_t*)e, pmove.origin, pmove.player_mins, pmove.player_maxs, true);
 	startrep = start ? NUM_FOR_EDICT(svprogfuncs, (edict_t*)start) : 0;
 	return startrep;
@@ -279,11 +463,12 @@ static int SV_TASRollSetup(edict_t *e, client_t *cl)
 
 /* Patch 1467: the ticks, from this thread's pmove as SV_TASRollSetup left it. */
 static int SV_TASRollRun(edict_t *e, float *in, int n, float *out, const float *aim, float aimgain, const float *aimn, float aimlead,
-	int msec, int startrep)
+	int msec, int startrep, const sv_tasroll_push_t *ps0)
 {
 	vec3_t normal, point;
 	float distance;
 	sv_tas_input_t row;
+	sv_tasroll_push_t ps = *ps0;	/* P1572: this candidate's carrier and spent kicks */
 	int i, k, kind, rep, ran, airk, wall, wallbit, aimheld;
 	float aimside;
 	ran = 0;
@@ -298,6 +483,7 @@ static int SV_TASRollRun(edict_t *e, float *in, int n, float *out, const float *
 		float *r = in + k*SV_TAS_ROLL_IN;
 		float *o = out + k*SV_TAS_ROLL_OUT;
 		int fl = SV_TASRollFlags(r);
+		SV_TASRollCarrier(&ps);	/* P1572: PreThink's cash-out first, so FOLLOW/AIM steer from the velocity the move gets */
 		wallbit = (fl & SV_TAS_ROLL_WALLBIT) != 0;	/* SV_TASRollFollow clears every flag from r[6] */
 		if ((fl & SV_TAS_ROLL_AIM) && airk >= 3)
 		{
@@ -372,7 +558,7 @@ static int SV_TASRollRun(edict_t *e, float *in, int n, float *out, const float *
 		if (pmove.ticksrun != 1 || pmove.portalcrossings || pmove.pm_type != PM_NORMAL ||
 			pmove.srcladder || pmove.waterlevel > 1 || pmove.numtouch < 0 || pmove.numtouch > MAX_PHYSENTS)
 			break;		// a tick the plain case does not cover: stop before it counts
-		rep = SV_TASRolloutActor(e, &kind);
+		rep = SV_TASRolloutActor(e, &kind, &ps, k);
 		if (kind == 0 && wall)
 			kind = 4;
 		if (k == 0 && startrep)
@@ -401,6 +587,7 @@ int SV_TASRollout(edict_t *e, float *in, int n, float *out, const float *aim, fl
 	vec3_t savedmins, savedmaxs;
 	float savedframetime;
 	client_t *cl;
+	sv_tasroll_push_t ps;		/* P1572 */
 	int msec, startrep, ran;
 	if (n < 1 || n > SV_TAS_ROLL_MAX || !in || !out)
 		return -1;
@@ -416,8 +603,8 @@ int SV_TASRollout(edict_t *e, float *in, int n, float *out, const float *aim, fl
 	VectorCopy(pmove_maxs, savedmaxs);
 	savedframetime = frametime;
 
-	startrep = SV_TASRollSetup(e, cl);
-	ran = SV_TASRollRun(e, in, n, out, aim, aimgain, aimn, aimlead, msec, startrep);
+	startrep = SV_TASRollSetup(e, cl, &ps);
+	ran = SV_TASRollRun(e, in, n, out, aim, aimgain, aimn, aimlead, msec, startrep, &ps);
 
 	memcpy(&pmove, &saved, sizeof(pmove));
 	movevars = savedmv;
@@ -442,6 +629,7 @@ typedef struct
 	edict_t *e;
 	float *in, *out, *params;
 	int n, count, nthreads, msec, startrep;
+	sv_tasroll_push_t ps;		/* P1572 */
 	float aimgain;
 	const float *aimn;
 	const playermove_t *pm0;
@@ -493,7 +681,7 @@ static int SV_TASRollWorker(void *arg)
 		movevars = b->mv0;
 		pm_threadabort = false;
 		memcpy(rows, in, b->n * SV_TAS_ROLL_IN * sizeof(float));		/* rows and outputs land only if it finishes */
-		ran = SV_TASRollRun(b->e, rows, b->n, outs, (b->aimgain > 0) ? p : NULL, b->aimgain, b->aimn, p[3], b->msec, b->startrep);
+		ran = SV_TASRollRun(b->e, rows, b->n, outs, (b->aimgain > 0) ? p : NULL, b->aimgain, b->aimn, p[3], b->msec, b->startrep, &b->ps);
 		if (pm_threadabort)
 			continue;		/* p[4] stays -12: the main thread runs it */
 		memcpy(in, rows, b->n * SV_TAS_ROLL_IN * sizeof(float));
@@ -543,7 +731,7 @@ int SV_TASRolloutBatch(edict_t *e, float *in, int n, float *out, int count, floa
 	VectorCopy(pmove_maxs, savedmaxs);
 	savedframetime = frametime;
 
-	b.startrep = SV_TASRollSetup(e, cl);
+	b.startrep = SV_TASRollSetup(e, cl, &b.ps);
 	memcpy(pm0, &pmove, sizeof(pmove));
 	b.e = e; b.in = in; b.out = out; b.params = params; b.n = n; b.count = count; b.msec = msec;
 	b.aimgain = aimgain; b.aimn = aimn; b.pm0 = pm0; b.mv0 = movevars;
@@ -589,7 +777,7 @@ int SV_TASRolloutBatch(edict_t *e, float *in, int n, float *out, int count, floa
 		movevars = b.mv0;
 		pm_threadabort = false;
 		p[4] = SV_TASRollRun(e, in + (size_t)k * n * SV_TAS_ROLL_IN, n, out + (size_t)k * n * SV_TAS_ROLL_OUT,
-			(aimgain > 0) ? p : NULL, aimgain, aimn, p[3], msec, b.startrep);
+			(aimgain > 0) ? p : NULL, aimgain, aimn, p[3], msec, b.startrep, &b.ps);
 	}
 
 	memcpy(&pmove, &saved, sizeof(pmove));

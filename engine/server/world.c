@@ -2283,6 +2283,46 @@ wedict_t *World_TriggerAtLocal (world_t *w, wedict_t *ent, vec3_t org, vec3_t mi
 	return NULL;
 }
 
+/* FTESurf Patch 1572: World_TouchAllLinks' test of one trigger from its area list against ent's hull at org: 1 it
+ * touches (anytrigger: a trigger with no .touch by the box alone, as World_TriggerAt), 0 not, -1 loaded() refused its
+ * model (a worker). The caller walks the list from its end, as World_TouchAllLinks does, and passes the origin a touch
+ * earlier in the walk left (a push's lift moves it for the rest). */
+int World_TriggerTouches (world_t *w, wedict_t *ent, wedict_t *touch, vec3_t org, vec3_t mins, vec3_t maxs, qboolean anytrigger,
+	qboolean (*loaded)(world_t *w, int modelindex))
+{
+	vec3_t amin, amax;
+	int solid, i;
+	if (ED_ISFREE(touch) || touch == ent)
+		return 0;
+	solid = touch->v->solid;
+	if ((!touch->v->touch && !anytrigger) || (solid != SOLID_TRIGGER && solid != SOLID_BSPTRIGGER))
+		return 0;
+	for (i = 0; i < 3; i++)
+	{
+		amin[i] = org[i] + mins[i] - 1;
+		amax[i] = org[i] + maxs[i] + 1;
+	}
+	if (amin[0] > touch->v->absmax[0] || amin[1] > touch->v->absmax[1] || amin[2] > touch->v->absmax[2] ||
+		amax[0] < touch->v->absmin[0] || amax[1] < touch->v->absmin[1] || amax[2] < touch->v->absmin[2])
+		return 0;
+	if (!((int)ent->xv->dimension_solid & (int)touch->xv->dimension_hit))
+		return 0;
+	if (!touch->v->touch)
+		return 1;
+	if (solid == SOLID_BSPTRIGGER)
+	{
+		model_t *tmod;
+		unsigned int tmask;
+		if (loaded && !loaded(w, touch->v->modelindex))
+			return -1;
+		tmod = w->Get_CModel(w, touch->v->modelindex);
+		tmask = (tmod && tmod->fromgame == fg_new) ? ~0u : MASK_WORLDSOLID;
+		if (!World_ClipMoveToEntity(w, touch, touch->v->origin, touch->v->angles, org, mins, maxs, org, 0, false, (ent->xv->geomtype == GEOMTYPE_CAPSULE), tmask).startsolid)
+			return 0;
+	}
+	return 1;
+}
+
 void World_UnlinkEdict (wedict_t *ent)
 {
 	size_t i;
