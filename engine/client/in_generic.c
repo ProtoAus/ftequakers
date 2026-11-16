@@ -2398,8 +2398,17 @@ static void IN_Journal_Modules(qboolean atend)
 	Q_snprintfz(line, sizeof(line), "modules %i\n", INS_ForeignModules(NULL, IN_Journal_Module));
 	IN_Journal_Raw(line);
 }
+/*FTESurf Patch 1586: hooks below the journal (INS_HookScan, in_win.c): `hook`/`hookskip` lines and the
+  `hooks` summary beside module+, in a journal that will be written.*/
+int INS_HookScan(void *ctx, void (*line)(void *ctx, const char *text));
+static void IN_Journal_HookLine(void *ctx, const char *text)
+{
+	IN_Journal_Raw(text);
+}
+#define IN_Journal_Hooks() INS_HookScan(NULL, IN_Journal_HookLine)
 #else
 #define IN_Journal_Modules(atend)
+#define IN_Journal_Hooks()
 #endif
 
 static void IN_Journal_DeviceLine(void *vctx, const char *type, const char *devicename, unsigned int *qdevid)
@@ -2691,6 +2700,8 @@ static void IN_JournalEnd_f(void)
 	  and such a file already says `truncated`, so the loss is announced.*/
 	INS_EnumerateDevices((void*)"devmap", IN_Journal_DeviceLine);
 	IN_Journal_Modules(true);	/*Patch 1577*/
+	if (!discard)
+		IN_Journal_Hooks();	/*Patch 1586: milliseconds, so not for the discarded journal most finishes close*/
 
 	/*Allow the trailer into a full journal's reserved space, but never lower
 	  the configured limit to the current allocation: an ordinary journal may
