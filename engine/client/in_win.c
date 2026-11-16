@@ -2050,8 +2050,8 @@ static void INS_GuardPublish(void)
 	if (!in_rawinput_touchpad.ival)
 		want |= GUARD_TOUCH;
 	//the key guard is the source check plus P1424's observer (or the raw opt-in path's handle test)
-	if (in_keyguard.ival && (rawkbd_observe || rawkbd_nolegacy))
-		want |= GUARD_KEYS;
+	if (in_keyguard.ival && (rawkbd_observe || rawkbd_nolegacy) && !suspended)
+		want |= GUARD_KEYS;	//suspended: stop dropping, or a remote-play player has no keyboard
 #endif
 	//what defeats them is read from what is running, not from settings that apply at in_restart
 	if (!pGetCurrentInputMessageSource || keyguard_apifail || suspended || GetSystemMetrics(SM_REMOTESESSION))
