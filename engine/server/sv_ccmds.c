@@ -6400,6 +6400,13 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify, const
 			Con_Printf("^3UNSUPPORTED physics mode %g in pm restatement: Source-only verifier, no physics verdict.^7\n", pms[i].pin[1]);
 			goto ag_unsupported_cleanup;
 		}
+	/* Patch 1589: an unpinned replay takes this server's movevars, which a live profile has rewritten. */
+	if (!exact && *InfoBuf_ValueForKey(&svs.info, "*movementprofile"))
+	{
+		Con_Printf("^3UNSUPPORTED: no full pmpin, and this server runs optional profile %s; no replay.^7\n",
+			InfoBuf_ValueForKey(&svs.info, "*movementprofile"));
+		goto ag_unsupported_cleanup;
+	}
 	if (filever >= 9 || pinfound || haveseed)
 		Con_Printf("  v9 state  pin %i/%i names, seed %s, %i pm, %i pe, %i portal -- %s\n",
 		           pinfound, SV_PMPinNeed(hdrpin),

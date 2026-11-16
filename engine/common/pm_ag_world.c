@@ -335,12 +335,14 @@ static void PMAg_Tick(void)
 		((pmove.cmd.buttons & BUTTON_DUCK) || pmove.ducking))
 		factor = 0.333f;	// CS 1.6 PM_Duck crops from the first ducking tick, not once fully ducked
 	forwardmove = command.forwardmove; sidemove = command.sidemove; upmove = command.upmove;
-	if (pmove.pm_type != PM_SPECTATOR && pmove.pm_type != PM_OLD_SPECTATOR && movevars.maxspeed > 0)
-	{	// GoldSrc PM_CheckParamters: the move is scaled to maxspeed BEFORE the duck crop (Patch 1589)
-		float spd = sqrtf(forwardmove * forwardmove + sidemove * sidemove + upmove * upmove);
+	if (factor < 1 && pmove.pm_type != PM_SPECTATOR && pmove.pm_type != PM_OLD_SPECTATOR && movevars.maxspeed > 0)
+	{	// GoldSrc PM_CheckParamters clamps to maxspeed BEFORE the duck crop (Patch 1589). Horizontal only:
+		// this client adds upmove 200 while jump is held, which a GoldSrc client never sends. Uncropped
+		// moves skip it; PMAg_Wish's own clamp leaves their direction and result unchanged.
+		float spd = sqrtf(forwardmove * forwardmove + sidemove * sidemove);
 		if (spd > movevars.maxspeed)
 		{
-			forwardmove *= movevars.maxspeed / spd; sidemove *= movevars.maxspeed / spd; upmove *= movevars.maxspeed / spd;
+			forwardmove *= movevars.maxspeed / spd; sidemove *= movevars.maxspeed / spd;
 		}
 	}
 	forwardmove *= factor; sidemove *= factor; upmove *= factor;
