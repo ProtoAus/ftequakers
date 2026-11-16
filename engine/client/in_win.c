@@ -3842,7 +3842,7 @@ typedef struct
 	int prio[INS_HOOKLINES], nlines;
 	char skips[INS_HOOKSKIPS][64];				//"<what> <why>"
 	int nskips;
-	int found, unread, codebytes, funcs, slots, regions, kib, unlisted, dbg, scans;
+	int found, unread, codebytes, funcs, slots, regions, kib, unlisted, dbg, scans, coderuns;
 	double ms;	//the last scan's duration
 } inshookset_t;
 typedef struct
@@ -3892,13 +3892,15 @@ static struct
 	HANDLE (WINAPI *OpenThread)(DWORD, BOOL, DWORD);
 	BOOL (WINAPI *CheckRemoteDebuggerPresent)(HANDLE, PBOOL);
 } insapi;
-//GetProcAddress, only once mod's header and export directory are readable.
-static const void *INS_ProcAddress(HMODULE mod, const char *name)
+//GetProcAddress, only once mod's header and export directory are readable; *refused when they are not.
+//(A forwarded export's target DLL is read unchecked: a known limit.)
+static const void *INS_ProcAddress(HMODULE mod, const char *name, qboolean *refused)
 {
 	unsigned char hdr[4096];
 	const IMAGE_NT_HEADERS64 *nt;
 	const IMAGE_DATA_DIRECTORY *ed;
 	LONG at;
+	*refused = true;
 	if (!INS_ReadSelf(mod, hdr, sizeof(hdr)))
 		return NULL;
 	at = ((const IMAGE_DOS_HEADER*)hdr)->e_lfanew;
@@ -3906,9 +3908,10 @@ static const void *INS_ProcAddress(HMODULE mod, const char *name)
 		return NULL;
 	nt = (const void*)(hdr + at);
 	ed = &nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT];
-	if (nt->OptionalHeader.NumberOfRvaAndSizes <= IMAGE_DIRECTORY_ENTRY_EXPORT || !ed->VirtualAddress
+	if (nt->OptionalHeader.NumberOfRvaAndSizes <= IMAGE_DIRECTORY_ENTRY_EXPORT || !ed->VirtualAddress || !ed->Size
 		|| !INS_Readable((const unsigned char*)mod + ed->VirtualAddress, ed->Size))
 		return NULL;
+	*refused = false;
 	return (const void*)GetProcAddress(mod, name);
 }
 
@@ -3925,6 +3928,7 @@ static const unsigned char *INS_JumpTarget(const unsigned char *p, int *len, qbo
 	size_t avail;
 	if (!len)
 		len = &l;
+	avail = sizeof(b);
 	if (!INS_ReadSelf(p, b, sizeof(b)))
 	{	//a trampoline at the end of a region, before an unreadable one
 		if (!VirtualQuery(p, &mbi, sizeof(mbi)) || (avail = (const unsigned char*)mbi.BaseAddress + mbi.RegionSize - p) < 2
@@ -3932,8 +3936,10 @@ static const unsigned char *INS_JumpTarget(const unsigned char *p, int *len, qbo
 			return NULL;
 		memset(b + avail, 0, sizeof(b) - avail);
 	}
+#define INS_HAVE(n) if ((size_t)(n) > avail) return NULL	//no jump decoded from bytes that were not there
 	if (b[0] == 0xe9 || (calls && b[0] == 0xe8))
 	{
+		INS_HAVE(5);
 		memcpy(&rel, b+1, 4);
 		*len = 5;
 		return p + 5 + rel;
@@ -3946,6 +3952,7 @@ static const unsigned char *INS_JumpTarget(const unsigned char *p, int *len, qbo
 	if ((b[0] == 0xff && b[1] == 0x25) || (b[0] == 0x48 && b[1] == 0xff && b[2] == 0x25))
 	{
 		r = (b[0] == 0x48);
+		INS_HAVE(6+r);
 		memcpy(&rel, b+2+r, 4);
 		*len = rel ? 6+r : 14+r;	//rel 0: the address follows inline
 		return INS_ReadSelf(p + 6 + r + rel, &q, 8) ? (const unsigned char*)(uintptr_t)q : NULL;
@@ -3958,16 +3965,20 @@ static const unsigned char *INS_JumpTarget(const unsigned char *p, int *len, qbo
 			t = (const unsigned char*)(uintptr_t)q, *len = 12;
 		else if (b[0] == 0x49 && b[10] == 0x41 && ((b[11] == 0xff && b[12] == 0xe0 + r) || (b[11] == 0x50 + r && b[12] == 0xc3)))
 			t = (const unsigned char*)(uintptr_t)q, *len = 13;
+		if (t)
+			INS_HAVE(*len);
 		return t;
 	}
 	if (b[0] == 0x68 && b[5] == 0xc7 && b[6] == 0x44 && b[7] == 0x24 && b[8] == 0x04 && b[13] == 0xc3)
 	{
+		INS_HAVE(14);
 		memcpy(&lo, b+1, 4);
 		memcpy(&hi, b+9, 4);
 		*len = 14;
 		return (const unsigned char*)(uintptr_t)(((ULONGLONG)hi << 32) | lo);
 	}
 	return NULL;
+#undef INS_HAVE
 }
 //first if a jump starts there, else the nearest start up to back bytes earlier whose jump covers first
 //(a patch whose leading bytes match the original), else first.
@@ -4052,8 +4063,14 @@ static void INS_HookLine(inshook_t *h, const char *kind, const char *site, const
 }
 static void INS_HookSkip(inshook_t *h, const char *what, const char *why)
 {
+	char text[64];
+	int i;
+	Q_snprintfz(text, sizeof(text), "%s %s", what, why);
+	for (i = 0; i < h->r.nskips; i++)
+		if (!strcmp(h->r.skips[i], text))
+			return;
 	if (h->r.nskips < INS_HOOKSKIPS)
-		Q_snprintfz(h->r.skips[h->r.nskips++], sizeof(h->r.skips[0]), "%s %s", what, why);
+		Q_strncpyz(h->r.skips[h->r.nskips++], text, sizeof(h->r.skips[0]));
 }
 //One finding.  at is patched code (decoded from there) or, with isptr, the address a slot holds; then
 //through further jumps (trampolines, thunks) to the code that runs.
@@ -4189,7 +4206,7 @@ static void INS_PERelocate(const inspe_t *pe, unsigned char *buf, DWORD rva, DWO
 static void INS_HookRun(inshook_t *h, const unsigned char *self, DWORD va, DWORD s, DWORD e)
 {
 	char site[64];
-	if (h->r.found >= 64)
+	if (h->r.coderuns++ >= 64)
 	{	//a debugger's breakpoints, or a rewritten exe: the count is the finding
 		h->r.found++;
 		return;
@@ -4315,6 +4332,7 @@ static void INS_HookImports(inshook_t *h, const unsigned char *base, inspe_t *pe
 	ULONGLONG ent, held;
 	DWORD blen, d, j, k;
 	HMODULE mod;
+	qboolean refused;
 	int i;
 
 	for (i = 0; i < pe->nsec; i++)
@@ -4334,7 +4352,9 @@ static void INS_HookImports(inshook_t *h, const unsigned char *base, inspe_t *pe
 		return;
 	}
 #define INS_INSEC(r,l) ((r) >= s->VirtualAddress && (ULONGLONG)(r) - s->VirtualAddress + (l) <= blen)
-#define INS_STR(r,out) do {for (k = 0; k < sizeof(out) - 1 && INS_INSEC((r)+k, 1) && buf[(r)+k-s->VirtualAddress]; k++) out[k] = buf[(r)+k-s->VirtualAddress]; out[k] = 0;} while(0)
+#define INS_STR(r,out) do {for (k = 0; k < sizeof(out) - 1 && INS_INSEC((r)+k, 1) && buf[(r)+k-s->VirtualAddress]; k++) \
+	{out[k] = (buf[(r)+k-s->VirtualAddress] > ' ' && buf[(r)+k-s->VirtualAddress] < 127 && buf[(r)+k-s->VirtualAddress] != '"') ? buf[(r)+k-s->VirtualAddress] : '_';} \
+	out[k] = 0;} while(0)	//one printable token, as INS_ModToken
 	for (d = 0; d < 1024 && INS_INSEC(dd->VirtualAddress + d*sizeof(imp), sizeof(imp)); d++)
 	{
 		memcpy(&imp, buf + dd->VirtualAddress + d*sizeof(imp) - s->VirtualAddress, sizeof(imp));
@@ -4355,16 +4375,19 @@ static void INS_HookImports(inshook_t *h, const unsigned char *base, inspe_t *pe
 			if (IMAGE_SNAP_BY_ORDINAL64(ent))
 			{
 				Q_snprintfz(fn, sizeof(fn), "#%u", (unsigned)IMAGE_ORDINAL64(ent));
-				want = INS_ProcAddress(mod, MAKEINTRESOURCEA(IMAGE_ORDINAL64(ent)));
+				want = INS_ProcAddress(mod, MAKEINTRESOURCEA(IMAGE_ORDINAL64(ent)), &refused);
 			}
 			else
 			{
 				INS_STR((DWORD)ent + 2, fn);
 				if (!*fn)
 					continue;
+				refused = false;
 				if (!(want = INS_Wanted(h, dll, fn)))
-					want = INS_ProcAddress(mod, fn);
+					want = INS_ProcAddress(mod, fn, &refused);
 			}
+			if (refused)
+				INS_HookSkip(h, dll, "exports");	//its export directory is not readable
 			if (!want)
 				continue;
 			if (importer)
@@ -4494,6 +4517,23 @@ static void INS_HookAPIs(inshook_t *h)
 			if (!ofs || explen < sizeof(IMAGE_EXPORT_DIRECTORY) || explen > (4<<20) || !(exp = malloc(explen)) || !INS_PERead(&pe, ofs, exp, explen))
 				why = "malformed";
 		}
+		if (!why)
+		{
+			unsigned char mh[4096];
+			IMAGE_EXPORT_DIRECTORY med;
+			const IMAGE_EXPORT_DIRECTORY *fed = (const void*)exp;
+			LONG at;
+			Q_snprintfz(text, sizeof(text), "%s!exports", dll);
+			if (!INS_ReadSelf(mod, mh, sizeof(mh)) || (at = ((const IMAGE_DOS_HEADER*)mh)->e_lfanew) < 0 || at > (LONG)(sizeof(mh) - sizeof(IMAGE_NT_HEADERS64))
+				|| !INS_ReadSelf((const unsigned char*)mod + exprva, &med, sizeof(med)))
+				INS_HookLine(h, "noread", text, "-", "-", 0);
+			else if (memcmp(&((const IMAGE_NT_HEADERS64*)(mh + at))->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT],
+					&pe.dir[IMAGE_DIRECTORY_ENTRY_EXPORT], sizeof(IMAGE_DATA_DIRECTORY))
+				|| med.AddressOfFunctions != fed->AddressOfFunctions || med.AddressOfNames != fed->AddressOfNames
+				|| med.AddressOfNameOrdinals != fed->AddressOfNameOrdinals || med.NumberOfFunctions != fed->NumberOfFunctions
+				|| med.NumberOfNames != fed->NumberOfNames)
+				INS_Hook(h, "eat", text, (const unsigned char*)mod + med.AddressOfFunctions, true);
+		}
 		if (why && *why != '-')
 			INS_HookSkip(h, dll, why);
 		for (; *a; a++)
@@ -4513,11 +4553,14 @@ static void INS_HookPointer(inshook_t *h, const char *dll, const char *name, con
 	const void *want = INS_Wanted(h, dll, name);
 	char site[96];
 	HMODULE mod;
+	qboolean refused = false;
 	if (!p)
 		return;
 	Q_snprintfz(site, sizeof(site), "%s.dll", dll);
 	if (!want && (mod = GetModuleHandleA(site)))
-		want = INS_ProcAddress(mod, name);
+		want = INS_ProcAddress(mod, name, &refused);
+	if (refused)
+		INS_HookSkip(h, dll, "exports");
 	if (!want)
 		return;
 	h->r.slots++;
@@ -4555,7 +4598,10 @@ static int INS_HookDebugRegs(void)
 		memset(&ctx, 0, sizeof(ctx));
 		ctx.ContextFlags = CONTEXT_DEBUG_REGISTERS;
 		if (!GetThreadContext(th, &ctx))
-			missed += (GetLastError() == ERROR_ACCESS_DENIED);
+		{	//access denied is also what a thread that is exiting answers
+			DWORD code = 0;
+			missed += (GetLastError() == ERROR_ACCESS_DENIED && GetExitCodeThread(th, &code) && code == STILL_ACTIVE);
+		}
 		else if ((ctx.Dr7 & 0xff) && (ctx.Dr0 || ctx.Dr1 || ctx.Dr2 || ctx.Dr3))
 			armed++;
 		if (te.th32ThreadID != self)
@@ -4659,7 +4705,7 @@ static struct
 {
 	void *mutex, *thread;
 	HANDLE wake;
-	int gen, open;
+	int gen, open, busy;	//busy: the generation a scan is under way for, else 0
 	double next;
 	unsigned int seed;
 	insdirs_t dirs;		//INS_ModDirs, on the main thread
@@ -4707,7 +4753,7 @@ static void INS_HookMerge(const inshookset_t *r)
 static int INS_HookWorker(void *arg)
 {
 	inshook_t *h;
-	qboolean due;
+	qboolean due, open;
 	int gen;
 	double wait;
 	//below the game's threads (Sys_CreateThread ignores its priority on Windows); not idle, which could
@@ -4721,23 +4767,26 @@ static int INS_HookWorker(void *arg)
 			continue;
 		}
 		Sys_LockMutex(inshookst.mutex);
-		wait = inshookst.next - Sys_DoubleTime();
-		due = inshookst.open && wait <= 0;
+		wait = bound(0, inshookst.next - Sys_DoubleTime(), 60);
+		open = inshookst.open;
+		due = open && wait <= 0;
 		gen = inshookst.gen;
 		if (due)
 		{
 			inshookst.next = Sys_DoubleTime() + INS_HookRand(10, 20);
+			inshookst.busy = gen;
 			h->dirs = inshookst.dirs;
 		}
 		Sys_UnlockMutex(inshookst.mutex);
 		if (!due)
 		{	//asleep until the next scan, or until a journal opens
 			free(h);
-			WaitForSingleObject(inshookst.wake, inshookst.open ? (DWORD)(wait * 1000) + 1 : INFINITE);
+			WaitForSingleObject(inshookst.wake, open ? (DWORD)(wait * 1000) + 1 : INFINITE);
 			continue;
 		}
 		INS_HookScan(h);
 		Sys_LockMutex(inshookst.mutex);
+		inshookst.busy = 0;
 		if (gen == inshookst.gen && inshookst.open)
 			INS_HookMerge(&h->r);
 		Sys_UnlockMutex(inshookst.mutex);
@@ -4801,11 +4850,12 @@ void INS_HookJournalEnd(void *ctx, void (*line)(void *ctx, const char *text))
 	inshookset_t a;
 	inshook_t *h;
 	char text[INS_HOOKLINELEN + 2];
-	int i;
+	int i, inflight;
 
 	if (inshookst.mutex)
 		Sys_LockMutex(inshookst.mutex);
 	a = inshookst.acc;
+	inflight = inshookst.busy && inshookst.busy == inshookst.gen;
 	inshookst.open = false;
 	if (inshookst.mutex)
 		Sys_UnlockMutex(inshookst.mutex);
@@ -4833,11 +4883,11 @@ void INS_HookJournalEnd(void *ctx, void (*line)(void *ctx, const char *text))
 	if (a.scans)
 	{
 		Con_DPrintf("hook scans: %i, the last %.1f ms\n", a.scans, a.ms);
-		Q_snprintfz(text, sizeof(text), "hooks %i %i %i %i %i %i %i %i %i %i\n", a.found, a.codebytes, a.funcs, a.slots,
+		Q_snprintfz(text, sizeof(text), "hooks %i %i %i %i %i %i %i %i %i %i 0\n", a.found, a.codebytes, a.funcs, a.slots,
 			a.regions, a.kib, a.dbg, a.scans, a.unread, a.unlisted);
 	}
-	else	//no scan finished while the journal was open
-		Q_snprintfz(text, sizeof(text), "hooks -1 -1 -1 -1 -1 -1 0 0 -1 -1\n");
+	else	//no scan finished while the journal was open; the last field: one was under way
+		Q_snprintfz(text, sizeof(text), "hooks -1 -1 -1 -1 -1 -1 0 0 -1 -1 %i\n", inflight);
 	line(ctx, text);
 }
 #else

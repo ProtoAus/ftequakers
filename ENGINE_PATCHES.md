@@ -1,5 +1,67 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1586 - The input journal names patches below it: exe code, input APIs, import slots, window procedure
+
+**Problem.** A tool inside the game process that edits input before the journal records it was invisible: P1576
+asks Windows where each key came from and the journal records what arrives, so a patched
+GetCurrentInputMessageSource, a redirected import slot, or a jump written into the engine's own input code would
+pass both. P1577 lists DLLs from outside the game and Windows folders, which a stand-in DLL or code mapped
+without the loader skips.
+
+**Change.** in_win.c, Windows x64. While a journal is open a worker thread (below normal priority, asleep on an
+event between scans) scans the process 0.5-2.5 s after the journal opens and every 10-20 s, randomised: the exe's
+executable sections against its file with the file's relocations applied; the first 32 bytes and the in-memory
+export entries of 49 exports (user32's message, raw-input, key-state, cursor, hook and window-long functions,
+win32u's syscall stubs for them, XInputGetState, the kernelbase/ntdll functions the scan calls, plus
+gdi32!SwapBuffers and opengl32!wglSwapBuffers, which overlays hook) against their DLL files, and each such DLL's
+in-memory export directory against its file's; each listed DLL must load from the Windows folder (else `dll`: a
+stand-in its own file would vouch for); the import slots of the exe and of those DLLs (names from the files,
+slots from memory, the expected address from the exporting DLL's file where it is listed -- exporters are
+scanned before importers -- else a GetProcAddress made only after the export directory tested readable);
+in_win.c's raw-input, GetCurrentInputMessageSource and XInputGetState pointers; the window procedure (read once;
+only the exe itself or a Windows DLL may own it -- opengl32.dll subclasses it under GL, measured); debug
+registers on every thread; committed executable memory no image backs, and executable images the loader does not
+list. A finding is decoded from where its jump starts and followed through trampolines and jump stubs (4 hops)
+to the code that runs, classed as P1577 classes modules (game, windows = under the Windows folder, program,
+user, other) or image/unbacked/bad/int3. Memory is read through ReadProcessMemory after VirtualQuery, so an
+unreadable or guard page is a `noread` place, never a fault or a disarmed guard; kernel32 lookups and the folder
+list are resolved on the main thread; the worker makes no console call (it can outlive the console at quit).
+A journal begins with `hookscan 1`; a written one carries, beside module+ and before `end`, the distinct
+findings of every scan it saw, most telling first (`hook <kind> <site> <class> <owner> <hops>`, at most 16),
+`hookskip <what> <why>` (unreadable, malformed, noheader, stale -- the file is not the one mapped --, emulated --
+x64 on ARM64, whose system DLLs are rewritten as they load --, imports, exports), and `hooks <found> <codebytes>
+<funcs> <slots> <execregions> <execkib> <debugger> <scans> <unread> <unlisted> <inflight>` (scans 0: none
+finished; inflight 1: one was under way). The block is written whole only if it fits with 256 bytes to spare
+under in_jrn_max (the `end` line's); the main thread only resets and copies the accumulator. P1577's folder logic
+moved into INS_ModDirs/INS_ModClass/INS_ModToken, same results. hidcheck (FTESurf) lists the lines and notes
+them; an older reader notes unknown kinds. A note, never a verdict.
+
+**Measured first.** A clean process's system DLL code equals the file's after relocation (user32, win32u, gdi32,
+gdi32full, opengl32, kernel32, kernelbase, ntdll, xinput1_4: 0 bytes outside `fothk`, the loader's thunk section);
+a running client's 5.85 MB .text equals its file (no mingw pseudo-relocations in code). GetCursorPos and
+GetPhysicalCursorPos are one function on Windows 11 (compared once).
+
+**Verified.** tools/p1586hooks.py (FTESurf): a client holds journal A 4 s, the driver patches it from outside --
+a 14-byte jump and an int3 in code padding, a jump over user32!GetRawInputBuffer, the exe's GetClipboardData slot,
+user32's GetPhysicalCursorPos export entry, an executable region -- and it holds journal B 25 s. A: 0 findings,
+5,859,424 code bytes, 49 functions, 2,874 slots, 1 scan. B: each planted patch named with the module its jump
+ends in (KERNELBASE.dll through the region and kernel32's Sleep stub), the int3 as int3, the region counted,
+nothing else, 2 scans merged. Control (installed P1578 exe): no hook lines. hidcheck this tree and the previous
+one: no fault; test_hidcheck 1666/0, test_reccheck 979/0. Scans 70-96 ms on the worker. Frame-time A/B
+(tools/p1586perf.py, menu, 400 fps cap, scan/control/control/scan, 40 s each): 1% tail 2.73/2.74/2.80/2.72 ms,
+0.1% 3.04/3.08/3.46/2.92 ms, worst 3.72/4.27/4.43/3.34 ms, no stutters -- no measurable cost on this PC. Three
+review rounds. Round 1 (three lenses): a crash reading import names through memory, decoding from the first
+differing byte, game-folder DLLs trusted, the scan on the main thread at every lobby run end, the block eating
+the trailer's reserve, unreadable places counted as findings. Round 2: GetProcAddress on unguarded export tables,
+the window destroyed mid-scan, a console print after teardown, the priority argument ignored by Sys_CreateThread,
+the reserve. Round 3 (no crash or corruption left): a refused lookup silent, a moved export table unseen, partial
+reads decoded, exiting threads read as unreadable debug registers, a scan in flight at the end. All fixed.
+
+**Limits.** A tool that restores its bytes around the scans, works below user mode, edits data rather than code,
+or targets the scan itself (a forwarded export's target DLL is read unchecked by GetProcAddress) is not seen;
+plugins in the game folder are trusted. Findings name file names, as module lines do. Measured on one Windows 11
+24H2 PC only.
+
 ## Patch 1579 - Jargon walks into a stage after a speed-zeroing teleport
 
 **Problem.** (Lex, 16 Nov, watching surf_rookie: Jargon finished stage 1 countless times before going on, then
