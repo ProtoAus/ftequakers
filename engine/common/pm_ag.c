@@ -8,12 +8,12 @@
 
 static const pmprofile_t pm_profiles[] =
 {
-	{"ag-100",		"ag-100-v1",	PMPROFILE_AG,		100,	0.01f},
-	{"ag-250",		"ag-250-v1",	PMPROFILE_AG,		250,	0.004f},
-	{"ag-1000",		"ag-1000-v1",	PMPROFILE_AG,		1000,	0.001f},
-	{"cs16",		"cs16-v1",		PMPROFILE_CS16,		100,	0.01f},
-	{"hl2-pre",		"hl2-pre-v1",	PMPROFILE_HL2PRE,	0,		0.015f},
-	{"hl2-post",	"hl2-post-v1",	PMPROFILE_HL2POST,	0,		0.015f},
+	{"ag-100",		"ag-100-v1",	PMPROFILE_AG,		100,	0.01f,	1542},
+	{"ag-250",		"ag-250-v1",	PMPROFILE_AG,		250,	0.004f,	1542},
+	{"ag-1000",		"ag-1000-v1",	PMPROFILE_AG,		1000,	0.001f,	1589},
+	{"cs16",		"cs16-v1",		PMPROFILE_CS16,		100,	0.01f,	1589},
+	{"hl2-pre",		"hl2-pre-v1",	PMPROFILE_HL2PRE,	0,		0.015f,	1589},
+	{"hl2-post",	"hl2-post-v1",	PMPROFILE_HL2POST,	0,		0.015f,	1589},
 };
 const pmprofile_t *PM_ProfileByIdentity(const char *identity)
 {

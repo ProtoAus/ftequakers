@@ -19,7 +19,9 @@ typedef struct
 	int kind;
 	int rate;				//GoldSrc steps per second; 0 for HL2
 	float tick;
+	int since;				//engine patch whose clients know it (server gate on *pmprofile)
 } pmprofile_t;
+#define PMPROFILE_CLIENTVERSION 1589	//this client's *pmprofile
 const pmprofile_t *PM_ProfileByIdentity(const char *identity);
 const pmprofile_t *PM_ProfileBySelector(const char *selector);
 #define PM_ProfileGoldSrc(kind) ((kind) == PMPROFILE_AG || (kind) == PMPROFILE_CS16)

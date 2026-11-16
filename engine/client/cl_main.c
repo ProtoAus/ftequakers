@@ -6158,6 +6158,7 @@ void CL_Init (void)
 		cls.userinfo[seat].ChangeCB = CL_UserinfoChanged;
 		InfoBuf_SetStarKey (&cls.userinfo[seat], "*ver", ver);
 		InfoBuf_SetStarKey (&cls.userinfo[seat], "*agmove", "1");
+		InfoBuf_SetStarKey (&cls.userinfo[seat], "*pmprofile", STRINGIFY(PMPROFILE_CLIENTVERSION));	//Patch 1589
 	}
 
 	InitValidation();
@@ -7534,6 +7535,8 @@ float CL_MaxFPSFloor(float fps)
 		(movevars.physicsmode != PHYSMODE_SOURCE && movevars.physicsmode != PHYSMODE_AG) || movevars.ticrate <= 0)
 		return fps;
 	tickfps = 1.0f / movevars.ticrate;
+	if (movevars.physicsmode == PHYSMODE_AG && tickfps > 250)
+		tickfps = 250;	//Patch 1589: AG batches ticks per command; ag-1000 must not force 1000 fps
 	return fps < tickfps ? tickfps : fps;
 }
 

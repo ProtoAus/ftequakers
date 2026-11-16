@@ -767,6 +767,15 @@ void SV_New_f (void)
 	client_t *split;
 	unsigned int fteext1, fteext2, ezext1, vers;	//reported to client
 
+	{	//Patch 1589: an older client would refuse the identity or predict without its rules.
+		const pmprofile_t *prof = PM_ProfileByIdentity(InfoBuf_ValueForKey(&svs.info, "*movementprofile"));
+		if (prof && prof->since > atoi(InfoBuf_ValueForKey(&host_client->userinfo, "*pmprofile")) && prof->since > 1542)
+		{
+			SV_ClientPrintf(host_client, PRINT_HIGH, "The %s movement profile needs a newer client.\n", prof->selector);
+			SV_DropClient(host_client);
+			return;
+		}
+	}
 	if (movevars.physicsmode == PHYSMODE_AG &&
 		strcmp(InfoBuf_ValueForKey(&host_client->userinfo, "*agmove"), "1"))
 	{

@@ -331,6 +331,9 @@ static void PMAg_Tick(void)
 	pmove.ducktime = max(0, pmove.ducktime - pmove.cmd.msec);
 	if (movevars.profilekind == PMPROFILE_CS16) pmove.stamina = max(0, pmove.stamina - pmove.cmd.msec);
 	factor = pmove.ducked ? 0.333f : 1;
+	if (movevars.profilekind == PMPROFILE_CS16 && pmove.pm_type != PM_DEAD &&
+		((pmove.cmd.buttons & BUTTON_DUCK) || pmove.ducking))
+		factor = 0.333f;	// CS 1.6 PM_Duck crops from the first ducking tick, not once fully ducked
 	forwardmove = command.forwardmove * factor; sidemove = command.sidemove * factor; upmove = command.upmove * factor;
 	PMAg_Categorize(); PMAg_Duck();
 	VectorCopy(pmove.basevelocity, originalbase); VectorClear(current);
