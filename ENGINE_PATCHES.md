@@ -1,5 +1,90 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1578 - Warm the other fog variant of listed permutations at activation
+
+**Problem.** After Patch 1574, surf_null still compiled three GLSL permutations mid-run on its first play (first-play
+census, PC):
+- vmt/vertexlit 0x128 and 0x328, fog variants of the listed 0x108 and 0x308;
+- vmt/refract 0x20, the fog-only permutation of a 4-bit program no list knew.
+
+Each took 10-16 ms. The warm list is shared by every map, so a permutation seen only unfogged had no fog variant
+listed. Permutation 0 is never listed, so its fog variant is not either.
+
+**Change.** A third pass in `GLSLWarm_MapActive`, after the listed and whole passes.
+- It runs where the map can draw `PERMUTATION_FOG`: always on a Source world, otherwise when any `cl.fog` density is
+  non-zero. A Source world's fog controllers switch on later (SetFogController fires on 54 maps; 26 start on a
+  disabled master), and its water fogs the view without one (gl_rmain.c's fallback).
+- For each active program declaring the fog bit and more than the 3 bits Patch 1574 warms whole, it compiles the
+  fog-only permutation and each listed permutation with its fog bit toggled. So a permutation listed only fogged
+  warms its no-fog base too.
+- It is counted apart (`r_mapready_info`: `fog variants fogged ...`) and stays out of ready-closure, like the whole
+  pass.
+- tools/test_mapreadiness.py covers fogged and unfogged maps, a negative density, a Source world, the budget and a
+  missing list: 46 checks. Two mutants fail it (the bit set instead of toggled; the Source test removed).
+
+**Verified.** First-play census, same diag build plus and minus this patch: a cold driver cache per exe, seed-only
+warm list, board replays from a fresh launch.
+- surf_null's late compiles: 3 -> 0. The frame that compiled vmt/vertexlit mid-run: 18.6 -> 5.6 ms.
+- No map had a compile during play.
+- The pass compiled 14-46 permutations a map: 27-86 eligible, 13-40 already there.
+- Activation took 0.08-0.27 s longer on a cold cache (surf_boreas 0.93 -> 1.20 s), behind the loading screen.
+
+One review (predicate and flow): no must-fix. Its should-fixes are in: fog that starts after activation, Source
+water's fallback fog, and the renderer's non-zero test. Still open:
+- the Max Fog event's stuffcmd fog on a non-Source map;
+- wasted compiles for `$nofog` materials (bounded by the budget).
+
+## Patch 1575 - Make the water capture targets at activation
+
+**Problem.** After Patch 1574, the frame that first showed a map's water still cost 53.0 ms on surf_boreas and
+29.0 ms on surf_chateau (first-play census, PC). In that frame the driver reported allocating multisample renderbuffer
+storage. The reflection's MSAA pair (Patch 1276, `r_reflectmultisample`) and the capture textures were made by the
+first capture that needed them, in play. They live until a mode change, so this happened on the first map with water
+in each session, and again after any resize.
+
+**Change.**
+- `GLBE_CaptureTargets_MapActive` runs at activation, after the GLSL warm-up (`r_capturewarm`, default 1).
+- It finds the active shaders that reflect (the largest `portalfboscale`), that read reflection depth, and that
+  refract (a depth texture, or the renderbuffer variant under `r_refract_fbo`).
+- It sizes each target as the main view's first capture will: `vid.fbpwidth` from the window and `r_renderscale`,
+  then `BE_WaterCaptureRect`.
+- It binds each FBO once and clears it, the reflection through the MSAA begin/end path. GL's scissor is off for its
+  whole length.
+- First it runs GLBE_DrawWorld's mode-change housekeeping, now `BE_CheckModeChange`. `shaderstate.oldwidth` is 0
+  until the first world draw, so otherwise the session's first frame freed what the warm made.
+- Portal shaders, recursive captures, GLES and `r_portalrecursion 0` are left alone.
+- The per-frame path creates and resizes its textures through the same helper, `BE_CaptureTexture`, so the warm and
+  play cannot disagree about formats.
+- `r_mapready_info` prints the predicted sizes and how many of the main view's water textures and MSAA storages were
+  rebuilt since activation. Non-zero means the prediction missed.
+
+Trade-offs:
+- When a loaded reflecting shader reads reflection depth (#PARALLAX water), P1475's depth texture is made at
+  activation. From then on, glass captures keep it attached, as they already did after the first sight of such water.
+- About 16-19 MB at 1920x1080 is held from activation rather than from the first sight of water (a reviewer's
+  estimate from the formats).
+- A view that is not full screen, or a resize after activation, is rebuilt on first sight, as before.
+
+**Verified.** First-play census, the same diag build with `r_capturewarm 0` against 1: a cold driver cache per exe,
+seed-only warm list, board replays from a fresh launch.
+
+| | control (`r_capturewarm 0`) | warmed |
+|---|---|---|
+| surf_chateau first-water frame | 29.0 ms | 19.2 ms (18.6 with Patch 1578) |
+| surf_boreas first-water frame | 53.0 ms | 45.6 ms (twice) |
+| driver multisample allocations in play | 2 | 0 |
+| targets rebuilt in play (all four maps) | textures 4, AA 1 | 0 and 0 |
+| activation time | | within 0.06 s |
+
+surf_nova's and surf_null's first-water frames (17-19 ms) had no allocation in play and did not change. What is
+left in those frames is CPU in opaque draws (16-41 ms) in the first frame that renders the two water views.
+boreas' frame first-uses 68 vertex buffers: the driver's first draw of what the water views show, not render targets.
+
+Reviews (predicate and flow): round 1 found one must-fix, the first frame freeing the warm's targets, fixed as above.
+Its should-fixes are done too: the counter covers only level-0 non-portal targets, plus the scissor, GLES and
+recursion guards. Round 2: no must-fix. Its should-fix is in (the MSAA resolve trusted a stale scissor flag), and the
+counters restart at a mode change.
+
 ## Patch 1572 - tas_rollout follows trigger_push
 
 **Problem.** (Lex, 16 Nov: Jargon completes little; does it know push triggers?) tas_rollout ran only the mover:
