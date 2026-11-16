@@ -6044,20 +6044,31 @@ char *FS_GetGamedir(qboolean publicpathonly)
 //announce, demos record and download URLs name); the local folder may be either.
 static const char *fs_gamedir_aliases[] = {"ftesurf", "worldofsurf"};
 
-//this install's basegame when dir is its other name, else NULL.
+//case-insensitive and blind to the trailing dots and spaces Windows drops from a folder name:
+//a server announcing `WorldOfSurf.` would otherwise reach the worldofsurf folder unaliased.
+static qboolean FS_GamedirNameIs(const char *dir, const char *name)
+{
+	size_t len = strlen(dir), n = strlen(name);
+	while (len && (dir[len-1] == '.' || dir[len-1] == ' '))
+		len--;
+	return len == n && !Q_strncasecmp(dir, name, n);
+}
+
+//this install's basegame when dir is any spelling of either name and the base is one of them, else NULL.
 const char *FS_GamedirAlias(const char *dir)
 {
 	size_t i, j;
 	if (!fs_manifest || !dir)
 		return NULL;
-	for (j = 0; j < countof(fs_gamedir_aliases) && Q_strcasecmp(dir, fs_gamedir_aliases[j]); j++)
+	for (j = 0; j < countof(fs_gamedir_aliases) && !FS_GamedirNameIs(dir, fs_gamedir_aliases[j]); j++)
 		;
 	if (j == countof(fs_gamedir_aliases))
 		return NULL;
 	for (i = 0; i < countof(fs_manifest->gamepath); i++)
-		if (fs_manifest->gamepath[i].path && (fs_manifest->gamepath[i].flags & GAMEDIR_BASEGAME) &&
-			!Q_strcasecmp(fs_manifest->gamepath[i].path, fs_gamedir_aliases[!j]))
-			return fs_gamedir_aliases[!j];	//not the manifest's string: COM_Gamedir may free that manifest
+		if (fs_manifest->gamepath[i].path && (fs_manifest->gamepath[i].flags & GAMEDIR_BASEGAME))
+			for (j = 0; j < countof(fs_gamedir_aliases); j++)
+				if (!Q_strcasecmp(fs_manifest->gamepath[i].path, fs_gamedir_aliases[j]))
+					return fs_gamedir_aliases[j];	//not the manifest's string: COM_Gamedir may free that manifest
 	return NULL;
 }
 
@@ -6066,7 +6077,7 @@ const char *FS_GamedirWireName(const char *dir)
 {
 	size_t j;
 	for (j = 0; dir && j < countof(fs_gamedir_aliases); j++)
-		if (!Q_strcasecmp(dir, fs_gamedir_aliases[j]))
+		if (FS_GamedirNameIs(dir, fs_gamedir_aliases[j]))
 			return fs_gamedir_aliases[0];
 	return dir;
 }

@@ -978,7 +978,7 @@ void CL_DownloadFinished(qdownload_t *dl)
 	}
 }
 
-//FTESurf P1593: a server announcing our basegame's other name (FS_GamedirAlias) is our own game:
+//FTESurf P1593: a server announcing any spelling of either name (FS_GamedirAlias) is our own game:
 //no mount, no config reload, files land in our folder. Web downloads ask for <dlURL>/<gamedir>/ in
 //the server's spelling while connected, else the wire spelling (surfd/maps.nginx serves /ftesurf/maps/).
 static char cl_servergamedir[MAX_QPATH];
@@ -988,7 +988,8 @@ static const char *CL_ServerGamedir(const char *str)
 	Q_strncpyz(cl_servergamedir, str, sizeof(cl_servergamedir));
 	if (!own)
 		return str;
-	Con_DPrintf("Server gamedir \"%s\" is \"%s\" here\n", str, own);
+	if (strcmp(str, own))
+		Con_DPrintf("Server gamedir \"%s\" is \"%s\" here\n", str, own);
 	return own;
 }
 
@@ -1041,9 +1042,23 @@ qboolean	CL_CheckOrEnqueDownloadFile (const char *filename, const char *localnam
 	if (flags & DLLF_NONGAME)
 	{
 		/*pak/pk3 downloads have an explicit leading package/ as an internal/network marker*/
+		//FTESurf P1593: these land under the install root in a folder the server names (//paknames,
+		//redirects). One named for our base's other spelling is our base: no second identity folder.
+		static char pkglocal[MAX_OSPATH];	//not va(): filename holds one of its two buffers
+		const char *rest = localname?strchr(localname, '/'):NULL, *own = NULL;
+		char dir[MAX_QPATH];
 		if (!strchr(filename, ':'))
 			filename = va("package/%s", filename);
-		localname = va("package/%s", localname);
+		if (rest && (size_t)(rest - localname) < sizeof(dir))
+		{
+			Q_strncpyz(dir, localname, rest - localname + 1);
+			own = FS_GamedirAlias(dir);
+		}
+		if (own)
+			Q_snprintfz(pkglocal, sizeof(pkglocal), "package/%s%s", own, rest);
+		else
+			Q_snprintfz(pkglocal, sizeof(pkglocal), "package/%s", localname);
+		localname = pkglocal;
 	}
 	/*files with a leading * should not be downloaded (inline models, sexed sounds, etc). also block anyone trying to explicitly download a package/ because our code (wrongly) uses that name internally*/
 	else if (*filename == '*' || !strncmp(filename, "package/", 8))

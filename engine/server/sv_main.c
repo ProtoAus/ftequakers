@@ -6715,7 +6715,7 @@ void SV_ExecInitialConfigs(char *defaultexec)
 	Cbuf_AddText("cvarreset *\n", RESTRICT_LOCAL);			//reset all cvars to their current (engine) defaults
 	Cbuf_AddText("alias restart \"map_restart\"\n",RESTRICT_LOCAL);
 
-	Cbuf_AddText(va("sv_gamedir \"%s\"\n", FS_GetGamedir(true)), RESTRICT_LOCAL);
+	Cbuf_AddText(va("sv_gamedir \"%s\"\n", FS_GamedirWireName(FS_GetGamedir(true))), RESTRICT_LOCAL);	//FTESurf P1593: *gamedir is the wire spelling
 
 	Cbuf_AddText("cl_warncmd 0\n", RESTRICT_LOCAL);
 	Cbuf_AddText(defaultexec, RESTRICT_LOCAL);
