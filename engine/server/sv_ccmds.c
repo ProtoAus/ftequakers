@@ -4691,6 +4691,7 @@ static void SV_DetTest_Run (void)
 			pmove.surfacefriction = 1.0f;
 			movevars = savemv;
 			movevars.physicsmode = PHYSMODE_SOURCE;
+			movevars.agprofile = 0; movevars.profilekind = PMPROFILE_NONE;	//Patch 1589: not the live profile
 			movevars.ticrate     = arm_tick[a];
 			for (k = 0; k < 3; k++)
 				pmove.origin[k] = (float)((lo[k] + hi[k]) / 2);
@@ -6708,6 +6709,7 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify, const
 		VectorSet(pmove.player_maxs,  16,  16, 62);
 
 		movevars.physicsmode = PHYSMODE_SOURCE;
+		movevars.agprofile = 0; movevars.profilekind = PMPROFILE_NONE;	/* Patch 1589: nor the server's profile */
 		movevars.ticrate     = rate;		/* the FILE's, not the server's */
 		if (exact)
 		{	/* Patch 347: the physics the file says ran, not this server's. */

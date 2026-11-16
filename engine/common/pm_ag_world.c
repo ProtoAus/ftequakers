@@ -334,7 +334,16 @@ static void PMAg_Tick(void)
 	if (movevars.profilekind == PMPROFILE_CS16 && pmove.pm_type != PM_DEAD &&
 		((pmove.cmd.buttons & BUTTON_DUCK) || pmove.ducking))
 		factor = 0.333f;	// CS 1.6 PM_Duck crops from the first ducking tick, not once fully ducked
-	forwardmove = command.forwardmove * factor; sidemove = command.sidemove * factor; upmove = command.upmove * factor;
+	forwardmove = command.forwardmove; sidemove = command.sidemove; upmove = command.upmove;
+	if (pmove.pm_type != PM_SPECTATOR && pmove.pm_type != PM_OLD_SPECTATOR && movevars.maxspeed > 0)
+	{	// GoldSrc PM_CheckParamters: the move is scaled to maxspeed BEFORE the duck crop (Patch 1589)
+		float spd = sqrtf(forwardmove * forwardmove + sidemove * sidemove + upmove * upmove);
+		if (spd > movevars.maxspeed)
+		{
+			forwardmove *= movevars.maxspeed / spd; sidemove *= movevars.maxspeed / spd; upmove *= movevars.maxspeed / spd;
+		}
+	}
+	forwardmove *= factor; sidemove *= factor; upmove *= factor;
 	PMAg_Categorize(); PMAg_Duck();
 	VectorCopy(pmove.basevelocity, originalbase); VectorClear(current);
 	contents = pmove.watertype;
