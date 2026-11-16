@@ -1,5 +1,24 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1592 - A run resumed from a save is "segmented", in its file name too
+
+**Problem.** Lex: rename the "shadow" runs and their demos to segmented. A shadow run (QC TF_SHADOW, RT_SHADOW 3)
+is a segmented run picked up from a save with its clock. The held recording close rebuilds each run's expected leaf
+with a fixed word table (`sv_held_prepare.inc`) and would refuse a progs that names the file `_segmented.rec`.
+
+**Change.**
+- The table is file scope (`held_run_tags`); tag 3 reads `segmented`, and `Held_PrepareCloseNamespace` also accepts
+  the legacy `shadow` for tag 3 only (a second pass), so an older progs keeps closing.
+- New builtin `string(float tag) rec_tagword` (`SV_HeldRunTagWord`): "" outside 1..6. QC (P1592 part 2) writes
+  `segmented` only when it answers so, and never on a lobby until surfd takes the leaf.
+
+**Verified.** Game-repo arm `tools/p1592seg.py` (surf_dune, start box beside the end, save, resume, finish): new
+engine + new progs `0000283_local-..._segmented.rec`; P1591 engine + new progs `_shadow.rec`; new engine + live
+progs `_shadow.rec`; all flags 133257 (TF_SHADOW|TF_SEGMENT). Two reviews (control flow; evidence/readers/cheater
+gain) found no defect in the change. Not measured: the held close itself, which a listen server never admits, and
+which refuses every history finish anyway (`Held_PrepareWho` wants "" locally; e26b5768's `<owner>-<32 hex>` who)
+-- dormant, `rec_held_metadata` defaults to 0; recorded in the game repo's BACKLOG.
+
 ## Patch 1591 - Autohop under every movement profile
 
 **Problem.** Lex: "add autohop to every game mode". The default mode autohops (`pm_autobunny 1`, canonical in
