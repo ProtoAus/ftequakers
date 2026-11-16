@@ -660,10 +660,11 @@ float(string cmd) CSQC_ConsoleCommand =
             assert rows and rows[-1] > 0, 'rendered client made no prediction comparison'
             ring=[line.split() for line in (clientgame/'data/prederr/ag-walk.txt').read_text().splitlines() if line[:1].isdigit()]
             air=[r for r in ring if r[14]=='0' or r[15]=='0']
-            airerr=max((sum((float(r[2+i])-float(r[5+i]))**2 for i in range(3))**0.5 for r in air),default=None)
-            print('P1589 airborne comparisons %d, max airborne prediction error %s' % (len(air), airerr))
-            # The ring prints origins with %.2f: 0.01 is one print step, not a measured gap.
-            assert len(air) >= 10 and airerr < 0.015, 'airborne commands mispredicted or never measured'
+            # Per axis: origins print %.2f. The base engine's own ag-250 shows a one-row 0.02 z transient
+            # (ctl-ag-250, 16 Nov); the cs16 stamina miss this catches was 0.26-0.65 per command.
+            airerr=max((max(abs(float(r[2+i])-float(r[5+i])) for i in range(3)) for r in air),default=None)
+            print('P1589 airborne comparisons %d, max airborne per-axis prediction error %s' % (len(air), airerr))
+            assert len(air) >= 10 and airerr < 0.025, 'airborne commands mispredicted or never measured'
         if hl2:
             assert peak > 200, "HL2 jump boost never raised server speed above the 190 walk"
         assert re.search(r'AGSOCKET timer state=2 .*body=[1-9]', logs), 'timer never ran through real walking'

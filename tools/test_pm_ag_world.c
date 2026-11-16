@@ -262,10 +262,13 @@ static void CS16(void)
 	puts("PASS CS16 bhop cap: 400 u/s jump drops to 0.8 x 300; plain AG keeps 400");
 	Reset(); movevars.profilekind=PMPROFILE_CS16; movevars.maxspeed=250; movevars.accelerate=5; movevars.stopspeed=75;
 	pmove.cmd.forwardmove=320; pmove.cmd.buttons=BUTTON_DUCK; PMAg_PlayerMove(1);
-	NEAR(pmove.velocity[0],5*320*0.333f*0.01f,0.001f);
+	NEAR(pmove.velocity[0],5*250*0.333f*0.01f,0.001f); // clamp to maxspeed, then crop (PM_CheckParamters)
 	Reset(); movevars.maxspeed=250; movevars.accelerate=5; movevars.stopspeed=75;
 	pmove.cmd.forwardmove=320; pmove.cmd.buttons=BUTTON_DUCK; PMAg_PlayerMove(1);
 	NEAR(pmove.velocity[0],12.5f,0.001f);
-	puts("PASS CS16 duck crop from the first ducking tick (5.33 u/s); plain AG crops only once ducked (12.5)");
+	puts("PASS CS16 duck crop from the first ducking tick, after the maxspeed clamp (4.16 u/s); plain AG crops only once ducked (12.5)");
+	Reset(); pmove.ducked=true; pmove.origin[2]=18; pmove.cmd.forwardmove=450; pmove.cmd.buttons=BUTTON_DUCK; PMAg_PlayerMove(1);
+	NEAR(pmove.velocity[0],10*320*0.333f*0.01f,0.001f);
+	puts("PASS AG ducked 450 forward: clamp to 320 then crop, wish 106.6 (not 149.9)");
 }
 int main(void) {Dry();Clock();CollisionAndNoEquipment();CS16();Duck();WaterLadder();ReviewedControls();puts("PASS AG world solver fixtures (not BSP/socket/oracle acceptance)");return 0;}
