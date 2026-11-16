@@ -1,5 +1,34 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1579 - Jargon walks into a stage after a speed-zeroing teleport
+
+**Problem.** (Lex, 16 Nov, watching surf_rookie: Jargon finished stage 1 countless times before going on, then
+bunny-hopped the start of stage 2; unless horizontal speed carries between stages, walk to the first ramp and jump.)
+surf_rookie's stage teleports zero horizontal speed and put the body 1 u from the guide's landing every time. The first
+stretch after one was searched like any other, with `hop`, from a standstill the curve cannot steer (it steers off the
+velocity); it failed, and each backtrack replayed stage 1 into the identical state ("counted as failed again") until
+the chain stopped.
+
+**Change.** QuakeC only (sv_tasautosurf.qc). A stretch that starts after a portal leaving horizontal speed under 30 u/s
+-- at run time, or by the guide's own speed just past the teleport, which a Continue keeps -- is a floor: no backtrack
+rule and no escalation restart goes before it. On such a still start Jargon replays the guide's own walk (stage 34):
+the drop waited out with no keys, then a guide row a tick from the row after the guide's landing to its takeoff (read
+from the vertical speed: these guides carry no ksfbuttons jump rows), the jump on that row only; the stretch is then
+searched from the air with no hops and no guide jump rows. A drift over 48 u from the guide's track, or no takeoff
+before the board, falls back to the search (a walk and one jump, hops off). tas_jargon_off 8388608 turns it off.
+
+**Verified.** Three VMs 0 warnings (fteqcc 1f2efd06). surf_rookie main, headless bench on the PC: six stage starts each
+walked and jumped at the guide's own speed (262-276 u/s) 0-1 u from its takeoff, and boarded; stretch 16 of 64 in 420 s
+with one backtrack, none before a stage portal; 22/22 predicted landings bit-equal (rig g6; g5 before the review-2
+fixes: 20 of 64 in 480 s, takeoffs 4 u late, 26/26). Before (P1572 build, f1): stretch 9 in 1200 s, stage 1 re-finished
+each backtrack. Cuts measured and replaced: a walk-and-one-jump search from the standstill (g3: no backtrack through the
+portal, but 11 searches never boarded stretch 5) and a replay from the teleport itself (g4: the drop's timing put it
+50 u off within 12 rows, so the search from mid-drop with hops did the boarding). Two reviews (control flow and state):
+the first found no jump in rookie's rows (they have no ksfbuttons), a stale floor across a Continue, the rule bit and
+rule 8's baseline; the second found the floor lost after a later portal or a Continue, a landing row after a hop, the
+replay a tick late, ksfbuttons jumps kept after it, and a redo after a stop mid-replay -- all fixed. A replay ending in
+a state that cannot board stays stuck there (deterministic; BACKLOG).
+
 ## Patch 1581 - pm_verify names the prop models a run's lobby lacked beside a state/physents HOLD
 
 **Problem.** A lobby that missed newly installed content collides with a placeholder where the content should be,
