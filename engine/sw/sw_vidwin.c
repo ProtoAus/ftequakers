@@ -552,6 +552,7 @@ LONG WINAPI MainWndProc (
 		// Its delta is either positive or neg, and we generate the proper
 		// Event.
 		case WM_MOUSEWHEEL: 
+			if (!INS_PointerGuardBlocks())	//FTESurf Patch 1576
 			{
 				if ((short) HIWORD(wParam) > 0)
 				{

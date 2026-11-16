@@ -97,7 +97,7 @@ HRESULT (WINAPI *pDirectInputCreate)(HINSTANCE hinst, DWORD dwVersion,
 #define DINPUT_VERSION_DX7 0x0700
 
 // mouse variables
-static cvar_t	in_dinput = CVARFD("in_dinput","0", CVAR_ARCHIVE, "Enables the use of dinput for mouse movements");
+static cvar_t	in_dinput = CVARFD("in_dinput","0", CVAR_ARCHIVE|CVAR_NOTFROMSERVER, "Enables the use of dinput for mouse movements. Runs with it on do not rank (Patch 1576).");
 static cvar_t	in_xinput = CVARFD("in_xinput","1", CVAR_ARCHIVE, "Enables the use of xinput for controllers.\nNote that if you have a headset plugged in, that headset will be used for audio playback if no specific audio device is configured.");
 static cvar_t	in_builtinkeymap = CVARF("in_builtinkeymap", "0", CVAR_ARCHIVE);
 static cvar_t in_simulatemultitouch = CVAR("in_simulatemultitouch", "0");
@@ -429,7 +429,7 @@ static qboolean rawmouse_nolegacy;
   getting overwritten -- backwards.*/
 static cvar_t in_rawinput_mice = CVARAFD("in_rawinput", "1", "m_rawinput", CVAR_ARCHIVE, "Enables rawinput support for mice in XP onwards. Rawinput permits independant device identification (ie: splitscreen clients can each have their own mouse), and reports mouse motion as the device sends it rather than as an OS-summed and OS-accelerated cursor delta.");
 static cvar_t in_rawinput_keyboard = CVARD("in_rawinput_keyboard", "0", "Enables rawinput support for keyboards in XP onwards as well as just mice.");
-static cvar_t in_rawinput_rdp = CVARD("in_rawinput_rdp", "0", "Activate Remote Desktop Protocol devices too.");
+static cvar_t in_rawinput_rdp = CVARFD("in_rawinput_rdp", "0", CVAR_NOTFROMSERVER, "Activate Remote Desktop Protocol devices too. Runs with it on do not rank (Patch 1576).");
 /*FTESurf Patch 307, defaults since Patch 1576: on, and touchpads off (the owner's 16 Nov
   ranked rule; Patch 468 gave touchpad clicks a raw path).  NOTFROMSERVER: a map's
   worldspawn `cvar_` key or a server stuffcmd must not hold these apart from what the
@@ -1879,60 +1879,200 @@ void INS_ReInit (void)
 #endif
 }
 
-/*FTESurf Patch 1576: injected keys are dropped.  Windows 8+ says where the input message
-  being processed came from; only IMO_HARDWARE passes, so SendInput (IMO_INJECTED), UIAccess
-  tools and on-screen keyboards (IMO_SYSTEM) and posted messages are dropped, and so is a
-  key message sent from another thread.  An in-process hook or a device that presents as a
-  keyboard is not seen here.  The check runs on the window thread inside the message's own
-  dispatch, the only place the answer is current.  P1424's observer still counts them.*/
-static cvar_t in_keyguard = CVARFD("in_keyguard", "1", CVAR_ARCHIVE|CVAR_NOTFROMSERVER, "Drop keyboard messages that Windows does not report as coming from a keyboard: keys sent by other programs, such as macro tools, remappers, remote-play software and on-screen keyboards. 0 accepts them; runs then do not rank.");
-static cvar_t in_guard_live = CVARFD("in_guard_live", "0", CVAR_NOSET|CVAR_NOSAVE|CVAR_NOTFROMSERVER, "Set by the engine: which input guards are applied. 1 injected clicks blocked while the mouse is grabbed, 2 touchpad input off, 4 injected keys blocked.");
+/*FTESurf Patch 1576: input other programs make is dropped.  Windows 8+ says where the input
+  message being dispatched came from (GetCurrentInputMessageSource); only IMO_HARDWARE passes, so
+  SendInput from ordinary programs (IMO_INJECTED), system-injected input (IMO_SYSTEM), posted
+  messages (IMO_UNAVAILABLE) and messages sent from another thread are dropped.  Windows reports
+  SendInput from a UIAccess program (signed and installed under Program Files, such as the
+  on-screen keyboard) as hardware; P1424's observer still counts those.  An in-process hook or a
+  device that presents itself as a keyboard or mouse is not seen here.  Each check runs on the
+  window thread inside the message's own dispatch, the only place the answer is current.
+
+  The window thread enforces guard_applied, which only INS_GuardPublish (main thread, once a
+  frame) changes: a guard switched on applies at once, one switched off keeps applying for
+  GUARD_WEAKEN_DELAY after in_guard_live has said so, so a setting turned off and back on between
+  two reports, or just before a finish, still reaches the server first.*/
+static cvar_t in_keyguard = CVARFD("in_keyguard", "1", CVAR_ARCHIVE|CVAR_NOTFROMSERVER, "Drop keyboard messages that Windows does not report as coming from a keyboard: keys sent by other programs, such as macro tools, remappers and remote-play software. 0 accepts them; runs then do not rank.");
+static cvar_t in_guard_live = CVARFD("in_guard_live", "0", CVAR_NOSET|CVAR_NOSAVE|CVAR_NOTFROMSERVER, "Set by the engine: which input guards apply. 1 clicks and wheel from other programs dropped, 2 touchpad and touch input off, 4 keys from other programs dropped, 8 the key guard cannot run here.");
+static cvar_t in_guard_rev = CVARFD("in_guard_rev", "0", CVAR_ARCHIVE|CVAR_NOTFROMSERVER, "Which one-time move of the input guard settings this config has had.");
+#define GUARD_CLICKS 1
+#define GUARD_TOUCH  2
+#define GUARD_KEYS   4
+#define GUARD_KEYSNA 8
+#define GUARD_WEAKEN_DELAY 1.0
+#define GUARD_TAINT_TIME 1.5	//an injected release let through keeps bit 4 off this long, so a run reads `changed`
+#define KEYGUARD_SUSPEND_AFTER 8	//drops with no hardware key yet: every key is coming from another program
 typedef struct {int devicetype, originid;} fs_inputsource_t;	//INPUT_MESSAGE_SOURCE
 #define FS_IMO_HARDWARE 1
 static BOOL (WINAPI *pGetCurrentInputMessageSource)(fs_inputsource_t *src);
-static volatile LONG keyguard_blocked;	//window thread writes, INS_GuardPublish reads
-static LONG keyguard_reported;
-static volatile LONG keyguard_lastorigin = -1;
+static volatile LONG guard_applied = GUARD_CLICKS|GUARD_TOUCH|GUARD_KEYS;
+//window thread writes, INS_GuardPublish reads
+static volatile LONG keyguard_blocked, keyguard_heldrelease, keyguard_hwseen, keyguard_apifail;
+static volatile LONG pointer_blocked, pad_rejected, keyguard_lastorigin = -1;
+extern int in_raw_keydropped;	//in_generic.c: the .hid's 'kd' record
 
-static qboolean INS_KeyGuardBlocks(void)
+//0 a hardware device's, 1 another program's, -1 cannot tell (passed, and the guard reports itself off).
+static int INS_MessageSource(void)
 {
 	fs_inputsource_t src;
-
-	if (!in_keyguard.ival || !pGetCurrentInputMessageSource)
-		return false;
 	if (InSendMessage())
 		src.originid = -2;
 	else if (!pGetCurrentInputMessageSource(&src))
-		src.originid = -3;
+	{
+		InterlockedExchange(&keyguard_apifail, 1);
+		return -1;
+	}
 	else if (src.originid == FS_IMO_HARDWARE)
-		return false;
+		return 0;
 	keyguard_lastorigin = src.originid;
+	return 1;
+}
+
+static qboolean INS_KeyGuardBlocks(qboolean down, int qcode)
+{
+	int from;
+	if (!(guard_applied & GUARD_KEYS) || !pGetCurrentInputMessageSource)
+		return false;
+	from = INS_MessageSource();
+	if (from == 0)
+		InterlockedExchange(&keyguard_hwseen, 1);
+	if (from != 1)
+		return false;
+	if (!down && qcode > 0 && qcode < K_MAX && keydown[qcode])
+	{	//never strand a held key: the release passes, and the run reads `changed`
+		InterlockedIncrement(&keyguard_heldrelease);
+		return false;
+	}
 	InterlockedIncrement(&keyguard_blocked);
+	if (down)
+		in_raw_keydropped++;
 	return true;
 }
 
-//Main thread, once a frame: publish what applies, and say so when a key was dropped.
+//The window procedures' clicks, wheel and app commands.
+qboolean INS_PointerGuardBlocks(void)
+{
+	if (!(guard_applied & GUARD_CLICKS) || !pGetCurrentInputMessageSource || INS_MessageSource() != 1)
+		return false;
+	InterlockedIncrement(&pointer_blocked);
+	return true;
+}
+qboolean INS_TouchAllowed(void)
+{
+	return !(guard_applied & GUARD_TOUCH);
+}
+
+/*Once per config, after a server connection (the config has run by then): the P1573 move for
+  configs written before it, which pin the old values.  The game code's copy cannot set these
+  any more (NOTFROMSERVER refuses localcmd).  A value changed back after this stays.*/
+static void INS_GuardMigrate(void)
+{
+	if (in_guard_rev.ival >= 1573)
+		return;
+#ifdef USINGRAWINPUT
+	if (strcmp(in_rawinput_nolegacy.string, "1"))
+	{
+		Cvar_Set(&in_rawinput_nolegacy, "1");
+		Con_Printf("Input: clicks no mouse sent are blocked in game now (in_rawinput_nolegacy 1)\n");
+	}
+	if (strcmp(in_rawinput_touchpad.string, "0"))
+	{
+		Cvar_Set(&in_rawinput_touchpad, "0");
+		Con_Printf("Input: touchpads no longer move the view or click in game, and runs on one do not rank (in_rawinput_touchpad 1 brings it back, unranked)\n");
+	}
+#endif
+	Cvar_Set(&in_guard_rev, "1576");
+}
+
+//Main thread, once a frame: what the settings ask for, what applies, what in_guard_live says.
 static void INS_GuardPublish(void)
 {
-	int live = 0;
-	LONG n;
-#ifdef USINGRAWINPUT
-	if (in_rawinput_nolegacy.ival)
-		live |= 1;
-	if (!in_rawinput_touchpad.ival)
-		live |= 2;
-#endif
-	if (in_keyguard.ival && pGetCurrentInputMessageSource)
-		live |= 4;
-	if (live != in_guard_live.ival)
-		Cvar_ForceSet(&in_guard_live, va("%i", live));
-	n = keyguard_blocked;
-	if (n != keyguard_reported)
+	static qboolean first = true, migrated, suspended, padsaid;
+	static LONG blockreported, heldreported, pointerreported;
+	static double offsince[3] = {-1, -1, -1}, taintuntil;
+	double now = Sys_DoubleTime();
+	int want = 0, live, applied, b;
+	char livestr[16];
+
+	if (!migrated && cls.state >= ca_connected)
 	{
-		if (!keyguard_reported)
-			Con_Printf("Input: dropped a key another program sent (in_keyguard 1). Remappers, macro tools and on-screen keyboards send keys this way; in_keyguard 0 accepts them, and runs then do not rank.\n");
-		Con_DPrintf("in_keyguard: %ld dropped, last origin %ld\n", (long)n, (long)keyguard_lastorigin);
-		keyguard_reported = n;
+		migrated = true;
+		INS_GuardMigrate();
+	}
+	if (!suspended && !keyguard_hwseen && keyguard_blocked >= KEYGUARD_SUSPEND_AFTER)
+	{
+		suspended = true;
+		Con_Printf("Input: every key so far came from another program (remote play?), so keys are no longer dropped this session. Runs do not rank until the game is restarted with a keyboard.\n");
+	}
+#ifdef USINGRAWINPUT
+	if (in_rawinput_nolegacy.ival && pGetCurrentInputMessageSource && !keyguard_apifail)
+		want |= GUARD_CLICKS;
+	if (!in_rawinput_touchpad.ival)
+		want |= GUARD_TOUCH;
+#endif
+	if (in_keyguard.ival && pGetCurrentInputMessageSource && !suspended && !keyguard_apifail)
+		want |= GUARD_KEYS;
+#ifdef AVAIL_DINPUT
+	if (in_dinput.ival)
+		want &= ~GUARD_CLICKS;	//DirectInput reads the mouse with no source to check
+#endif
+#ifdef USINGRAWINPUT
+	if (in_rawinput_rdp.ival)
+		want &= ~(GUARD_CLICKS|GUARD_KEYS);	//a remote session's devices pass as hardware
+#endif
+
+	applied = first ? want : guard_applied;
+	for (b = 0; b < 3; b++)
+	{
+		if (want & (1<<b))
+		{
+			applied |= 1<<b;
+			offsince[b] = -1;
+		}
+		else if (applied & (1<<b))
+		{
+			if (offsince[b] < 0)
+				offsince[b] = now;
+			else if (now - offsince[b] >= GUARD_WEAKEN_DELAY)
+				applied &= ~(1<<b);
+		}
+	}
+	InterlockedExchange(&guard_applied, applied);
+	if (first && (applied & GUARD_KEYS) && in_raw_keydropped < 0)
+		in_raw_keydropped = 0;
+	first = false;
+
+	live = want;
+	if (in_keyguard.ival && !(want & GUARD_KEYS))
+		live |= GUARD_KEYSNA;
+	if (keyguard_heldrelease != heldreported)
+	{
+		heldreported = keyguard_heldrelease;
+		taintuntil = now + GUARD_TAINT_TIME;
+	}
+	if (now < taintuntil)
+		live &= ~GUARD_KEYS;
+	Q_snprintfz(livestr, sizeof(livestr), "%i", live);
+	if (strcmp(in_guard_live.string, livestr))	//by string: a launch +set can leave an odd one behind
+		Cvar_ForceSet(&in_guard_live, livestr);
+
+	if (keyguard_blocked != blockreported)
+	{
+		if (!blockreported)
+			Con_Printf("Input: dropped a key another program sent (in_keyguard 1). Remappers, macro tools and remote-play software send keys this way; in_keyguard 0 accepts them, and runs then do not rank.\n");
+		Con_DPrintf("in_keyguard: %ld dropped, last origin %ld\n", (long)keyguard_blocked, (long)keyguard_lastorigin);
+		blockreported = keyguard_blocked;
+	}
+	if (pointer_blocked != pointerreported)
+	{
+		if (!pointerreported)
+			Con_Printf("Input: dropped a click or wheel turn another program sent (in_rawinput_nolegacy 1).\n");
+		pointerreported = pointer_blocked;
+	}
+	if (pad_rejected && !padsaid)
+	{
+		padsaid = true;
+		Con_Printf("Input: the touchpad is off in game (in_rawinput_touchpad 0). in_rawinput_touchpad 1 turns it on; runs on it do not rank.\n");
 	}
 }
 
@@ -1990,6 +2130,8 @@ void INS_Init (void)
 #endif
 	Cvar_Register (&in_keyguard, "Input Controls");	//FTESurf Patch 1576
 	Cvar_Register (&in_guard_live, "Input Controls");
+	Cvar_ForceSet(&in_guard_live, "0");	//a launch +set made before this is not the engine's word
+	Cvar_Register (&in_guard_rev, "Input Controls");
 	pGetCurrentInputMessageSource = (void*)GetProcAddress(GetModuleHandleA("user32.dll"), "GetCurrentInputMessageSource");
 
 	INS_ScreenSaver_Init();
@@ -2039,6 +2181,9 @@ a mouse button was pressed/released, mstate is the current set of buttons presse
 void INS_MouseEvent (int mstate)
 {
 	int		i;
+
+	if (INS_PointerGuardBlocks())
+		return;	//FTESurf Patch 1576
 
 	legacyactivateclick &= mstate;	//FTESurf Patch 1410: held at its old state until released
 	mstate = (mstate & ~legacyactivateclick) | (sysmouse.oldbuttons & legacyactivateclick);
@@ -2230,7 +2375,7 @@ void INS_Move (void)
 	  effect until the next alt-tab and would read as the setting not working.  Driving
 	  it from the live state instead makes all three the same event.  The latch inside
 	  makes this two compares on a frame where nothing changed.*/
-	INS_RawInput_MouseSetLegacy(mouseactive && in_rawinput_nolegacy.ival);
+	INS_RawInput_MouseSetLegacy(mouseactive && (guard_applied & GUARD_CLICKS));	//Patch 1576: the applied guard, see INS_GuardPublish
 #endif
 	INS_GuardPublish();	//FTESurf Patch 1576
 
@@ -2362,7 +2507,7 @@ void INS_RawInput_MouseRead(void)
 				  inside the window -- the OS synthesised this report from that contact.
 				  Accepted onto padmouse and counted apart from the rejections.*/
 				double now = Sys_DoubleTime();
-				qboolean inwindow = rawpadcount > 0 && in_rawinput_touchpad.ival && rawpad_lasttime >= 0
+				qboolean inwindow = rawpadcount > 0 && !(guard_applied & GUARD_TOUCH) && rawpad_lasttime >= 0
 					&& now - rawpad_lasttime <= RAWPAD_WINDOW;
 				qboolean release = !inwindow && rawpadcount > 0 && INS_RawInput_PadReleases();
 				if (inwindow || release)
@@ -2563,6 +2708,8 @@ static void INS_RawInput_PadRead(void)
 		if (rawpad[i] == raw->header.hDevice)
 		{
 			rawpad_lasttime = Sys_DoubleTime();
+			if (guard_applied & GUARD_TOUCH)
+				pad_rejected = 1;	//Patch 1576: INS_GuardPublish says so once
 			if (in_raw_padreports >= 0)
 				in_raw_padreports++;
 			return;
@@ -3293,9 +3440,9 @@ void INS_TranslateKeyEvent(WPARAM wParam, LPARAM lParam, qboolean down, int qdev
 	if (!genkeystate)
 		INS_LegacyKeyObserve(lParam, down);	//FTESurf Patch 1424: only the legacy callers pass false
 #endif
-	if (!genkeystate && INS_KeyGuardBlocks())
-		return;	//FTESurf Patch 1576; the raw opt-in path already drops handle-less reports
 	qcode = MapKey(lParam);
+	if (!genkeystate && INS_KeyGuardBlocks(down, qcode))
+		return;	//FTESurf Patch 1576; the raw opt-in path already drops handle-less reports
 
 	if (WinNT && !in_builtinkeymap.value)
 	{
@@ -3430,6 +3577,8 @@ int INS_AppCommand(LPARAM lParam)
 {
 	const char *b;
 	int qkey = 0;
+	if (INS_KeyGuardBlocks(true, 0))
+		return true;	//FTESurf Patch 1576: posted or injected; swallowed
 	switch(HIWORD(lParam)&0xfff)
 	{
 	case APPCOMMAND_BROWSER_BACKWARD:	qkey = K_MM_BROWSER_BACK;			break;

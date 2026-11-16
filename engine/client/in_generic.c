@@ -277,6 +277,7 @@ int in_raw_legacybtn = -1;
   at begin and as an 'o' record at every change.*/
 int in_raw_legacykey = -1;
 int in_raw_kbdnohandle = -1;
+int in_raw_keydropped = -1;	/*Patch 1576: key presses in_keyguard dropped; -1 = this backend has no guard*/
 int in_rawkbd_observe = -1;
 int in_rawkbd_observechanges;
 
@@ -370,6 +371,7 @@ static const char *in_jrn_inputcvars[] =
 	"m_accel_style", "m_accel_power", "m_accel_offset", "m_accel_senscap",
 	"m_forcewheel", "m_forcewheel_threshold",	/*turn wheel motion into keypresses*/
 	"in_rawinput_touchpad",		/*Patch 468: whether handle-less reports become counts on a touchpad laptop*/
+	"in_keyguard",				/*Patch 1576: whether keys other programs send are dropped ("kd" counts them)*/
 	/*Found by the red-team pass over this patch, all three invisible until now:*/
 	"leftisright",				/*r_xflip.  renderer.c declares it `cvar_t r_xflip =
 							  CVAR("leftisright", ...)`, so the C identifier and the
@@ -1058,6 +1060,7 @@ static unsigned int	in_jrn_dropreported, in_jrn_dropbase, in_jrn_events, in_jrn_
 static int			in_jrn_injbase, in_jrn_unenumbase;			/*Patch 306: taken at begin, so the journal reports only its own window*/
 static int			in_jrn_injreported, in_jrn_unenumreported;	/*...and how far the per-frame records have caught up*/
 static int			in_jrn_lgbbase, in_jrn_lgbreported;			/*Patch 307: the same pair for the uncorroborated legacy button*/
+static int			in_jrn_kdreported;		/*Patch 1576: key presses in_keyguard dropped, caught up*/
 static int			in_jrn_lgkreported, in_jrn_nhkreported;		/*Patch 1424: legacy keys and handle-less keyboard reports, caught up*/
 static int			in_jrn_obsreported;							/*Patch 1424: in_rawkbd_observechanges last written*/
 static int			in_jrn_padbase, in_jrn_padreported;			/*Patch 468: accepted touchpad reports, baseline and caught up*/
@@ -1648,6 +1651,14 @@ static void IN_Journal_Keys(void)
 		in_jrn_obsreported = in_rawkbd_observechanges;
 		Q_snprintfz(tail, sizeof(tail), "%i", in_rawkbd_observe);
 		IN_Journal_Line(in_jrn_last, "o", tail);
+	}
+	/*Patch 1576: 'kd <n>', dt 0, presses the key guard dropped since the last one.  They are
+	  also among the 'y' legacy presses (P1424's observer counts before the guard drops).*/
+	if (in_raw_keydropped > in_jrn_kdreported)
+	{
+		Q_snprintfz(tail, sizeof(tail), "%i", in_raw_keydropped - in_jrn_kdreported);
+		in_jrn_kdreported = in_raw_keydropped;
+		IN_Journal_Line(in_jrn_last, "kd", tail);
 	}
 	lk = (in_raw_legacykey < 0) ? 0 : in_raw_legacykey;
 	nh = (in_raw_kbdnohandle < 0) ? 0 : in_raw_kbdnohandle;
@@ -2400,6 +2411,7 @@ static void IN_JournalBegin_f(void)
 	in_jrn_unenumreported = in_jrn_unenumbase = (in_raw_unenum < 0) ? 0 : in_raw_unenum;
 	in_jrn_lgbreported = in_jrn_lgbbase = (in_raw_legacybtn < 0) ? 0 : in_raw_legacybtn;	/*Patch 307*/
 	in_jrn_lgkreported = (in_raw_legacykey < 0) ? 0 : in_raw_legacykey;	/*Patch 1424*/
+	in_jrn_kdreported = (in_raw_keydropped < 0) ? 0 : in_raw_keydropped;	/*Patch 1576*/
 	in_jrn_nhkreported = (in_raw_kbdnohandle < 0) ? 0 : in_raw_kbdnohandle;
 	in_jrn_obsreported = in_rawkbd_observechanges;
 	in_jrn_padreported = in_jrn_padbase = (in_raw_touchpad < 0) ? 0 : in_raw_touchpad;	/*Patch 468*/
