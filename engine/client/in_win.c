@@ -360,6 +360,7 @@ static double rawkey_nohandletime[256];	//FTESurf Patch 1576: last handle-less r
 static double rawkey_legup[256];	//FTESurf Patch 1576: last legacy release per scancode
 static qboolean rawkey_ready;	//the arrays have been reset once (zero is a real time)
 static void INS_RawKeyUncorroborated(int sc);
+static int MapKey (int vkey);
 int in_raw_injectedkey;	//FTESurf Patch 1576: uncorroborated presses SendInput's raw report sat beside (a lapse)
 static qboolean rawkey_rawheld[256], rawkey_legheld[256];
 static int rawkey_npending;
@@ -371,7 +372,11 @@ static void INS_RawKeyReset(void)
 	for (i = 0; i < (int)countof(rawkey_time); i++)
 	{
 		if (rawkey_ready && rawkey_pending[i] >= 0)
-			INS_RawKeyUncorroborated(i);	//FTESurf Patch 1576: a re-registration must not swallow a lapse
+		{	//FTESurf Patch 1576: a re-registration decides a pending press, it does not swallow it
+			INS_RawKeyUncorroborated(i);
+			if (in_raw_legacykey >= 0)
+				in_raw_legacykey++;
+		}
 		rawkey_time[i] = rawkey_pending[i] = rawkey_nohandletime[i] = rawkey_legup[i] = -1;
 		rawkey_rawheld[i] = rawkey_legheld[i] = false;
 	}
@@ -1483,8 +1488,8 @@ static void INS_RawInput_KeyObserve(void)
 		now = Sys_DoubleTime();
 		if (!(raw->data.keyboard.Flags & RI_KEY_BREAK))
 			rawkey_nohandletime[sc] = now;
-		else if (rawkey_legheld[sc] || (rawkey_legup[sc] >= 0 && now - rawkey_legup[sc] <= 2*RAWKEY_WINDOW))
-			in_raw_injectedkey++;	//FTESurf Patch 1576: SendInput released a held key (a lapse, UIAccess or not)
+		else if (keydown[MapKey(sc << 16)] || (rawkey_legup[sc] >= 0 && now - rawkey_legup[sc] <= 2*RAWKEY_WINDOW))
+			in_raw_injectedkey++;	//FTESurf Patch 1576: SendInput released a key the game held (UIAccess or not)
 		return;
 	}
 	sc = raw->data.keyboard.MakeCode & 0xff;
@@ -1520,7 +1525,6 @@ static void INS_LegacyKeyObserve(LPARAM lParam, qboolean down)
 	if (!down)
 	{
 		rawkey_legheld[sc] = false;
-		rawkey_legup[sc] = now;	//FTESurf Patch 1576: INS_RawInput_KeyObserve pairs a handle-less release with it
 		return;
 	}
 	if (rawkey_legheld[sc])
@@ -3549,6 +3553,10 @@ void INS_TranslateKeyEvent(WPARAM wParam, LPARAM lParam, qboolean down, int qdev
 	qcode = MapKey(lParam);
 	if (!genkeystate && INS_KeyGuardBlocks(down, qcode, lParam, true))
 		return;	//FTESurf Patch 1576; the raw opt-in path already drops handle-less reports
+#ifdef USINGRAWINPUT
+	if (!genkeystate && !down)
+		rawkey_legup[(lParam >> 16) & 0xff] = Sys_DoubleTime();	//a release the game took (INS_RawInput_KeyObserve)
+#endif
 
 	if (WinNT && !in_builtinkeymap.value)
 	{

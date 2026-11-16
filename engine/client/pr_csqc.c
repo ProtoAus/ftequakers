@@ -8702,6 +8702,10 @@ qboolean CSQC_Init (qboolean anycsqc, const char *csprogsname, unsigned int chec
 	csqcprogparms.edicts = (struct edict_s **)&csqc_world.edicts;
 	csqcprogparms.num_edicts = &csqc_world.num_edicts;
 
+	{
+		extern int (*qclib_debugwriteblocked)(void *ppf);
+		qclib_debugwriteblocked = CSQC_DebugWriteBlocked;	//FTESurf Patch 1576: every evaluator write path
+	}
 	csqcprogparms.useeditor = QCEditor;//void (*useeditor) (char *filename, int line, int nump, char **parms);
 	csqcprogparms.user = &csqc_world;
 	csqc_world.keydestmask = kdm_game;
@@ -9246,6 +9250,10 @@ qboolean CSQC_DebugAllowed(void)
 {
 	return csqc_singlecheats || !cls.state;
 }
+static int CSQC_DebugWriteBlocked(void *ppf)
+{
+	return ppf && ppf == (void*)csqcprogs && !CSQC_DebugAllowed();
+}
 
 static void CSQC_Poke_f(void)
 {
@@ -9263,7 +9271,10 @@ void CSQC_WatchPoint_f(void)
 		variable = NULL;
 
 	if (!csqc_singlecheats)
+	{
 		Con_Printf("%s is a cheat command\n", Cmd_Argv(0));
+		return;	//FTESurf Patch 1576: it used to say so and set the watchpoint anyway
+	}
 	else if (!csqcprogs)
 	{
 		Con_Printf("csqc not running\n");

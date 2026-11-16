@@ -33,6 +33,7 @@ cvar_t pr_debugger = CVARAFD("pr_debugger", debugger_default, "debugger", CVAR_S
 extern cvar_t pr_sourcedir;
 
 static pubprogfuncs_t *editprogfuncs;
+extern qboolean CSQC_DebugAllowed(void);	//FTESurf Patch 1576 (pr_csqc.c)
 
 qboolean editoractive;			//(export)
 console_t *editormodal;			//doesn't return. (export)
@@ -807,7 +808,7 @@ qboolean Con_Editor_Key(console_t *con, unsigned int unicode, int key)
 
 #ifndef SERVERONLY
 #ifdef CSQC_DAT
-			if (csqc_world.progs && csqc_world.progs->ToggleBreak)
+			if (csqc_world.progs && csqc_world.progs->ToggleBreak && CSQC_DebugAllowed())	//FTESurf Patch 1576
 				csqc_world.progs->ToggleBreak(csqc_world.progs, fname, line, mode);
 #endif
 #ifdef MENU_DAT

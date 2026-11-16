@@ -277,9 +277,8 @@ qboolean QCExternalDebuggerCommand(char *text)
 #if defined(CSQC_DAT) && !defined(SERVERONLY)
 	{	//FTESurf Patch 1576: connected without cheats the debugger gets nothing but its window handle
 		extern qboolean CSQC_DebugAllowed(void);
-		if (strncmp(text, "debuggerwnd ", 12) && !CSQC_DebugAllowed() &&
-			(!strncmp(text, "qcstep", 6) || !strncmp(text, "qcresume", 8) || !strncmp(text, "qcjump ", 7) ||
-			 !strncmp(text, "qcinspect ", 10) || !strncmp(text, "qcreload", 8) || !strncmp(text, "qcbreakpoint ", 13)))
+		if (!CSQC_DebugAllowed() &&
+			(!strncmp(text, "qcjump ", 7) || !strncmp(text, "qcreload", 8) || !strncmp(text, "qcbreakpoint ", 13)))
 		{
 			Con_Printf("Debugger command refused while connected without cheats\n");
 			return true;
@@ -429,6 +428,14 @@ qboolean QCExternalDebuggerCommand(char *text)
 
 int QDECL QCEditor (pubprogfuncs_t *prinst, const char *filename, int *line, int *statement, int firststatement, char *reason, pbool fatal)
 {
+#if defined(CSQC_DAT) && !defined(SERVERONLY)
+	{	//FTESurf Patch 1576: never stop in the client's game code while connected without cheats
+		extern world_t csqc_world;
+		extern qboolean CSQC_DebugAllowed(void);
+		if (prinst && prinst == csqc_world.progs && !CSQC_DebugAllowed())
+			return fatal ? DEBUG_TRACE_ABORTERROR : DEBUG_TRACE_OFF;
+	}
+#endif
 //#if defined(_WIN32) && !defined(FTE_SDL) && !defined(_XBOX)
 	if (isPlugin >= 2)
 	{

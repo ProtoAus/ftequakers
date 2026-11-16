@@ -906,6 +906,7 @@ static const char *PR_ParseCast(const char *key, etype_t *t, pbool *isptr)
 	}
 	return key;
 }
+int (*qclib_debugwriteblocked)(void *ppf);	//FTESurf Patch 1576: set by the client; nonzero refuses an assignment
 char *PDECL PR_EvaluateDebugString(pubprogfuncs_t *ppf, const char *key)
 {
 	progfuncs_t *progfuncs = (progfuncs_t*)ppf;
@@ -1008,6 +1009,8 @@ char *PDECL PR_EvaluateDebugString(pubprogfuncs_t *ppf, const char *key)
 		type = fdef->type;
 	}
 */
+	if (assignment && qclib_debugwriteblocked && qclib_debugwriteblocked(ppf))
+		return "(refused: no writes to game code while connected without cheats)";
 	if (assignment)
 	{
 		char *str = assignment+1;
