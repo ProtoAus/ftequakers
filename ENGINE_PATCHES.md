@@ -1,5 +1,33 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1588 - A game this PC hosts predicts save loads and holds, as a remote one does
+
+**Problem.** Lex (16 Nov, after 0.1.47): `map surf_colin_blaster_69000` from the console, then a load: "Loading save"
+flashed on every load, and with `sv_minping 300` the body froze before it could move. Patch 862 opened the trigger
+mirror on a listen server but kept the warp-op pre-move hook (CSQC_PredictPlayerPreMove) and the predicted hold
+(CSQC_PredictsHeld) gated on `sv.state`, so in a hosted game WarpOp_HookAlive was false and every load went as an
+sl_load stringcmd whose release waits for the server's answer (P1227).
+
+**Change.** pr_csqc.c CSQC_PredictListenOpsGated, cvar `cl_predict_listenops` (default 1): both open on a listen
+server when `cl_predict_listen` is also on (without the post-move hook WarpOp_PostMove never runs and a save would
+capture a stale posture). 0 restores the old gate. The hook writes only pmove fields that CL_PredictUsercmdPart and
+PM_PlayerMove already write on every listen piece and SV_RunCmd reloads per client (body, pm_type, duck state,
+cmd.msec, basevelocity, safeorigin_known, oldbuttons), and movevars.entgravity, which sv_user.c sets before each
+command. QC: "Loading save" shows only once a load has waited 0.3 s (cl_saveloc.qc).
+
+**Verified.** Local game on surf_dune (tmp/listen_arm.py: one client hosting, a real 0.2 s +sl_hold press, P1384
+probe rows), 0.1.47 exe against this one:
+- 0.1.47, sv_minping 0: 0/20 held rows on the op path, "Loading save" shown, 1 prederr.
+- 0.1.47, sv_minping 300: body moving at +0.61 s (0.41 s after key-up), "Loading save".
+- This exe, sv_minping 0 and 300: 20/20 rows predicted, the body at the save from the first frame (+0.01 s), moving
+  0.01 s after release at both, no text, 0 prederr.
+- `cl_predict_listenops 0`, and `cl_predict_listen 0`: 0 rows predicted, the old freeze (+0.61 s); at minping 0 the
+  text no longer flashes.
+Two reviews (in-process state; game behaviour and recorded runs), then a re-review of the fixes: the op path and the
+stringcmd path call the same server functions (SV_WarpOpCommand), the impulse is not recorded, TAS cancels the
+same way. Limit: with the server paused (`pausable 1` pause, or a 1-slot game's auto-pause), an op sent in the
+first ~0.5 s rides a command the paused server drops (stringcmds ran while paused); not reachable in the default
+setup (sv_playerslots 2, deathmatch refuses pause). Arms: C:\FTESurf-worktrees\localload-20261116-06.
 ## Patch 1587 - Water and glass default to the transparent plane and translucent glass
 
 **Problem.** Lex (16 Nov): water should draw as the transparent plane by default and glass translucent without
