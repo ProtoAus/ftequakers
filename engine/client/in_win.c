@@ -3823,20 +3823,33 @@ int INS_ForeignModules(void *ctx, void (*callback)(void *ctx, const char *cls, c
 	return foreign;
 }
 
-/*FTESurf Patch 1586: hooks below the journal (ENGINE_PATCHES.md).  As a journal is written: the exe's
-  executable sections against its file, the input APIs' first bytes against their DLL files, and the
-  exe's import slots, in_win.c's API pointers and the window procedure against where those resolve; a
-  count of executable memory no image backs.  `hook <kind> <site> <class> <owner> <hops>` per finding,
-  `hookskip <what> <why>` where it could not look, then the `hooks` summary.  Anything inside the
-  process can undo its patch before this runs: it catches tools that do not.*/
+/*FTESurf Patch 1586: hooks below the journal (ENGINE_PATCHES.md).  While a journal is open a worker
+  thread scans this process as it opens and every INS_HOOKPERIOD s: the exe's executable sections against
+  its file; the first 32 bytes of the exports in ins_hookapis against their DLL files (each DLL must load
+  from the Windows folder); the import slots of the exe and of those DLLs, in_win.c's API pointers and the
+  window procedure against where they resolve; armed debug registers; executable memory no image backs and
+  executable images the loader does not list.  A written journal gets the distinct findings of every scan
+  it saw, most telling first, then `hookskip` lines and the `hooks` summary.  Anything inside the process
+  can undo a patch before a scan or stop the worker: a tripwire for tools that do neither.*/
+#if defined(_WIN64)
+#include <tlhelp32.h>
 #define INS_HOOKLINES 16
+#define INS_HOOKLINELEN 224
+#define INS_HOOKSKIPS 8
+#define INS_HOOKPERIOD 15
 typedef struct
 {
+	char lines[INS_HOOKLINES][INS_HOOKLINELEN];	//"hook ..." without the newline, by INS_HookPrio
+	int prio[INS_HOOKLINES], nlines;
+	char skips[INS_HOOKSKIPS][64];				//"<what> <why>"
+	int nskips;
+	int found, unread, codebytes, funcs, slots, regions, kib, unlisted, dbg, scans;
+} inshookset_t;
+typedef struct
+{
+	inshookset_t r;
 	insdirs_t dirs;
-	void *ctx;
-	void (*line)(void *ctx, const char *text);
-	int found, slots;
-	struct {const char *dll, *name; const unsigned char *addr;} want[64];	//exports as the DLL files place them
+	struct {const char *dll, *name; const unsigned char *addr;} want[96];	//exports as the DLL files place them
 	int nwant;
 } inshook_t;
 typedef struct
@@ -3851,57 +3864,92 @@ typedef struct
 } inspe_t;
 
 static qboolean INS_ReadSelf(const void *p, void *out, size_t n)
-{	//never faults: a tool may guard or unmap what it patched
+{	//never faults, and never reads a guard page (that would disarm it)
+	MEMORY_BASIC_INFORMATION mbi;
+	const unsigned char *q = p, *end = (const unsigned char*)p + n;
 	SIZE_T got = 0;
+	while (q < end)
+	{
+		if (!VirtualQuery(q, &mbi, sizeof(mbi)) || mbi.State != MEM_COMMIT || !mbi.Protect || (mbi.Protect & (PAGE_GUARD|PAGE_NOACCESS)))
+			return false;
+		q = (const unsigned char*)mbi.BaseAddress + mbi.RegionSize;
+	}
 	return ReadProcessMemory(GetCurrentProcess(), p, out, n, &got) && got == n;
 }
 
-//Where a jump idiom at p lands: jmp rel32/rel8, jmp [rip+x], mov reg,imm64 + jmp reg or push reg;ret,
-//push lo + mov [rsp+4],hi + ret.  NULL for anything else.
-static const unsigned char *INS_JumpTarget(const unsigned char *p)
+//Where a jump idiom at p lands, and its length: jmp rel32/rel8, jmp [rip+x] (also REX.W), mov reg,imm64 +
+//jmp reg or push reg;ret, push lo + mov [rsp+4],hi + ret; with calls, call rel32 too.  NULL for anything else.
+static const unsigned char *INS_JumpTarget(const unsigned char *p, int *len, qboolean calls)
 {
 	unsigned char b[16];
 	ULONGLONG q;
 	DWORD lo, hi;
-	int rel, r;
+	int rel, r, l;
+	const unsigned char *t = NULL;
+	if (!len)
+		len = &l;
 	if (!INS_ReadSelf(p, b, sizeof(b)))
 		return NULL;
-	if (b[0] == 0xe9)
+	if (b[0] == 0xe9 || (calls && b[0] == 0xe8))
 	{
 		memcpy(&rel, b+1, 4);
+		*len = 5;
 		return p + 5 + rel;
 	}
 	if (b[0] == 0xeb)
-		return p + 2 + (signed char)b[1];
-	if (b[0] == 0xff && b[1] == 0x25)
 	{
-		memcpy(&rel, b+2, 4);
-		return INS_ReadSelf(p + 6 + rel, &q, 8) ? (const unsigned char*)(uintptr_t)q : NULL;
+		*len = 2;
+		return p + 2 + (signed char)b[1];
+	}
+	if ((b[0] == 0xff && b[1] == 0x25) || (b[0] == 0x48 && b[1] == 0xff && b[2] == 0x25))
+	{
+		r = (b[0] == 0x48);
+		memcpy(&rel, b+2+r, 4);
+		*len = rel ? 6+r : 14+r;	//rel 0: the address follows inline
+		return INS_ReadSelf(p + 6 + r + rel, &q, 8) ? (const unsigned char*)(uintptr_t)q : NULL;
 	}
 	if ((b[0] == 0x48 || b[0] == 0x49) && (b[1] & 0xf8) == 0xb8)
 	{
 		memcpy(&q, b+2, 8);
 		r = b[1] & 7;
 		if (b[0] == 0x48 && ((b[10] == 0xff && b[11] == 0xe0 + r) || (b[10] == 0x50 + r && b[11] == 0xc3)))
-			return (const unsigned char*)(uintptr_t)q;
-		if (b[0] == 0x49 && b[10] == 0x41 && ((b[11] == 0xff && b[12] == 0xe0 + r) || (b[11] == 0x50 + r && b[12] == 0xc3)))
-			return (const unsigned char*)(uintptr_t)q;
-		return NULL;
+			t = (const unsigned char*)(uintptr_t)q, *len = 12;
+		else if (b[0] == 0x49 && b[10] == 0x41 && ((b[11] == 0xff && b[12] == 0xe0 + r) || (b[11] == 0x50 + r && b[12] == 0xc3)))
+			t = (const unsigned char*)(uintptr_t)q, *len = 13;
+		return t;
 	}
 	if (b[0] == 0x68 && b[5] == 0xc7 && b[6] == 0x44 && b[7] == 0x24 && b[8] == 0x04 && b[13] == 0xc3)
 	{
 		memcpy(&lo, b+1, 4);
 		memcpy(&hi, b+9, 4);
+		*len = 14;
 		return (const unsigned char*)(uintptr_t)(((ULONGLONG)hi << 32) | lo);
 	}
 	return NULL;
 }
+//The start of a jump covering first, up to back bytes earlier (a patch whose leading bytes match), else first.
+static const unsigned char *INS_PatchStart(const unsigned char *first, int back)
+{
+	int k, len;
+	for (k = back; k > 0; k--)
+		if (INS_JumpTarget(first - k, &len, true) && len > k)
+			return first - k;
+	return first;
+}
 
+static HMODULE INS_ModuleAt(const void *addr)
+{
+	static BOOL (WINAPI *pGetModuleHandleExW)(DWORD, LPCWSTR, HMODULE *);
+	HMODULE mod;
+	if (!pGetModuleHandleExW)
+		pGetModuleHandleExW = (void*)GetProcAddress(GetModuleHandleA("kernel32.dll"), "GetModuleHandleExW");
+	//4|2: GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|_UNCHANGED_REFCOUNT
+	return (pGetModuleHandleExW && pGetModuleHandleExW(4|2, (LPCWSTR)addr, &mod)) ? mod : NULL;
+}
 //A listed image's INS_ModClass, "image" for one the loader does not list, "unbacked" for private or
 //mapped memory, "bad" for none.
 static const char *INS_AddrOwner(inshook_t *h, const void *addr, char *name, size_t size)
 {
-	static BOOL (WINAPI *pGetModuleHandleExW)(DWORD, LPCWSTR, HMODULE *);
 	MEMORY_BASIC_INFORMATION mbi;
 	HMODULE mod;
 	wchar_t path[MAX_PATH];
@@ -3911,21 +3959,64 @@ static const char *INS_AddrOwner(inshook_t *h, const void *addr, char *name, siz
 		return "bad";
 	if (mbi.Type != MEM_IMAGE)
 		return "unbacked";
-	if (!pGetModuleHandleExW)
-		pGetModuleHandleExW = (void*)GetProcAddress(GetModuleHandleA("kernel32.dll"), "GetModuleHandleExW");
-	//4|2: GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|_UNCHANGED_REFCOUNT
-	if (!pGetModuleHandleExW || !pGetModuleHandleExW(4|2, (LPCWSTR)addr, &mod) || !GetModuleFileNameW(mod, path, countof(path)))
+	if (!(mod = INS_ModuleAt(addr)) || !GetModuleFileNameW(mod, path, countof(path)))
 		return "image";
 	INS_ModToken(path, name, size);
 	return INS_ModClass(&h->dirs, path);
 }
 
-//One finding.  at is patched code (decoded) or, with isptr, the address a slot holds.
+static int INS_HookPrio(const char *kind)
+{
+	static const char *order[] = {"wndproc", "ptr", "dll", "iat", "eat", "code", "api", "draw", "noread"};
+	int i;
+	for (i = 0; i < countof(order); i++)
+		if (!strcmp(kind, order[i]))
+			return i;
+	return countof(order);
+}
+//Into a set kept in priority order; a duplicate, or one past the cap that ranks no higher, is dropped.
+static void INS_HookInsert(inshookset_t *s, const char *text, int pr)
+{
+	int i, j;
+	for (i = 0; i < s->nlines; i++)
+		if (!strcmp(s->lines[i], text))
+			return;
+	for (i = 0; i < s->nlines && s->prio[i] <= pr; i++)
+		;
+	if (i >= INS_HOOKLINES)
+		return;
+	if (s->nlines < INS_HOOKLINES)
+		s->nlines++;
+	for (j = s->nlines - 1; j > i; j--)
+	{
+		memcpy(s->lines[j], s->lines[j-1], INS_HOOKLINELEN);
+		s->prio[j] = s->prio[j-1];
+	}
+	Q_strncpyz(s->lines[i], text, INS_HOOKLINELEN);
+	s->prio[i] = pr;
+}
+static void INS_HookLine(inshook_t *h, const char *kind, const char *site, const char *cls, const char *owner, int hops)
+{
+	char text[INS_HOOKLINELEN];
+	Q_snprintfz(text, sizeof(text), "hook %s %s %s %s %i", kind, site, cls, owner, hops);
+	INS_HookInsert(&h->r, text, INS_HookPrio(kind));
+	if (!strcmp(kind, "noread"))
+		h->r.unread++;
+	else
+		h->r.found++;
+}
+static void INS_HookSkip(inshook_t *h, const char *what, const char *why)
+{
+	if (h->r.nskips < INS_HOOKSKIPS)
+		Q_snprintfz(h->r.skips[h->r.nskips++], sizeof(h->r.skips[0]), "%s %s", what, why);
+}
+//One finding.  at is patched code (decoded from there) or, with isptr, the address a slot holds; then
+//through further jumps (trampolines, thunks) to the code that runs.
 static void INS_Hook(inshook_t *h, const char *kind, const char *site, const unsigned char *at, qboolean isptr)
 {
-	const unsigned char *t = isptr ? at : INS_JumpTarget(at), *next;
+	const unsigned char *t = isptr ? at : INS_JumpTarget(at, NULL, true), *next;
 	const char *cls = "-";
-	char owner[64], text[256];
+	char owner[64];
 	unsigned char op;
 	int hops = 0;
 
@@ -3933,18 +4024,14 @@ static void INS_Hook(inshook_t *h, const char *kind, const char *site, const uns
 	if (!t && !isptr && INS_ReadSelf(at, &op, 1) && op == 0xcc)
 		cls = "int3";
 	while (t && hops < 4)
-	{	//through trampolines in unbacked memory to the image that owns the code
+	{
 		hops++;
 		cls = INS_AddrOwner(h, t, owner, sizeof(owner));
-		if (strcmp(cls, "unbacked") || !(next = INS_JumpTarget(t)))
+		if (!(next = INS_JumpTarget(t, NULL, false)))
 			break;
 		t = next;
 	}
-	if (h->found++ < INS_HOOKLINES)
-	{
-		Q_snprintfz(text, sizeof(text), "hook %s %s %s %s %i\n", kind, site, cls, owner, hops);
-		h->line(h->ctx, text);
-	}
+	INS_HookLine(h, kind, site, cls, owner, hops);
 }
 
 static qboolean INS_PERead(inspe_t *pe, DWORD ofs, void *out, DWORD len)
@@ -3971,27 +4058,31 @@ static void INS_PEClose(inspe_t *pe)
 	free(pe->reloc);
 	memset(pe, 0, sizeof(*pe));
 }
-//NULL when the file opened and its headers are the loaded image's; else why not.  "stale": the file
-//was replaced since it was mapped (an update waiting on a restart), so it cannot speak for memory.
+//NULL when the file opened and its headers are the loaded image's; else why not.  "stale": the file is not
+//the one mapped (an update waiting on a restart; Wine's placeholders).  "noheader": memory has no PE header.
 static const char *INS_PEOpen(inspe_t *pe, const wchar_t *path, const unsigned char *loaded)
 {
 	unsigned char hdr[4096], mhdr[4096];
 	const IMAGE_NT_HEADERS64 *nt, *mnt;
 	const IMAGE_SECTION_HEADER *sh;
 	LONG at, mat;
-	DWORD len, ofs;
+	DWORD len, ofs, ndir;
 
 	memset(pe, 0, sizeof(*pe));
+	if (!INS_ReadSelf(loaded, mhdr, sizeof(mhdr)))
+		return "noheader";
+	mat = ((const IMAGE_DOS_HEADER*)mhdr)->e_lfanew;
+	mnt = (const void*)(mhdr + mat);
+	if (((const IMAGE_DOS_HEADER*)mhdr)->e_magic != IMAGE_DOS_SIGNATURE || mat < 0 || mat > (LONG)(sizeof(mhdr) - sizeof(*mnt))
+		|| mnt->Signature != IMAGE_NT_SIGNATURE)
+		return "noheader";
 	pe->f = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE, NULL, OPEN_EXISTING, 0, NULL);
-	if (pe->f == INVALID_HANDLE_VALUE || !INS_PERead(pe, 0, hdr, sizeof(hdr)) || !INS_ReadSelf(loaded, mhdr, sizeof(mhdr)))
+	if (pe->f == INVALID_HANDLE_VALUE || !INS_PERead(pe, 0, hdr, sizeof(hdr)))
 		return "unreadable";
 	at = ((const IMAGE_DOS_HEADER*)hdr)->e_lfanew;
-	mat = ((const IMAGE_DOS_HEADER*)mhdr)->e_lfanew;
-	if (((const IMAGE_DOS_HEADER*)hdr)->e_magic != IMAGE_DOS_SIGNATURE || at < 0 || at > (LONG)(sizeof(hdr) - sizeof(*nt))
-		|| mat < 0 || mat > (LONG)(sizeof(mhdr) - sizeof(*mnt)))
+	if (((const IMAGE_DOS_HEADER*)hdr)->e_magic != IMAGE_DOS_SIGNATURE || at < 0 || at > (LONG)(sizeof(hdr) - sizeof(*nt)))
 		return "malformed";
 	nt = (const void*)(hdr + at);
-	mnt = (const void*)(mhdr + mat);
 	if (nt->Signature != IMAGE_NT_SIGNATURE || nt->OptionalHeader.Magic != IMAGE_NT_OPTIONAL_HDR64_MAGIC)
 		return "malformed";
 	pe->nsec = nt->FileHeader.NumberOfSections;
@@ -3999,7 +4090,8 @@ static const char *INS_PEOpen(inspe_t *pe, const wchar_t *path, const unsigned c
 	if (pe->nsec > (int)countof(pe->sec) || (const unsigned char*)(sh + pe->nsec) > hdr + sizeof(hdr))
 		return "malformed";
 	memcpy(pe->sec, sh, pe->nsec * sizeof(*sh));
-	memcpy(pe->dir, nt->OptionalHeader.DataDirectory, sizeof(pe->dir));
+	ndir = min(nt->OptionalHeader.NumberOfRvaAndSizes, (DWORD)countof(pe->dir));
+	memcpy(pe->dir, nt->OptionalHeader.DataDirectory, ndir * sizeof(pe->dir[0]));
 	pe->imagebase = nt->OptionalHeader.ImageBase;
 	if (mnt->FileHeader.TimeDateStamp != nt->FileHeader.TimeDateStamp || mnt->OptionalHeader.SizeOfImage != nt->OptionalHeader.SizeOfImage
 		|| mnt->OptionalHeader.CheckSum != nt->OptionalHeader.CheckSum)
@@ -4049,66 +4141,79 @@ static void INS_PERelocate(const inspe_t *pe, unsigned char *buf, DWORD rva, DWO
 	}
 }
 
-//The exe's executable sections, byte for byte against the file.  Returns the bytes compared, -1 if it could not.
-static int INS_HookExe(inshook_t *h)
+static void INS_HookRun(inshook_t *h, const unsigned char *self, DWORD va, DWORD s, DWORD e)
 {
-	const unsigned char *self = (const void*)GetModuleHandleW(NULL);
+	char site[64];
+	Q_snprintfz(site, sizeof(site), "exe+%x/%u", (unsigned)(va + s), (unsigned)(e - s + 1));
+	INS_Hook(h, "code", site, INS_PatchStart(self + va + s, min(s, 15)), false);
+}
+//The exe's executable sections, byte for byte against the file.  Returns the bytes compared, -1 if it could not.
+static int INS_HookExe(inshook_t *h, inspe_t *pe, const unsigned char *self)
+{
 	unsigned char *file = NULL, *mem = malloc(65536);
-	wchar_t path[MAX_PATH];
-	const char *why;
-	char site[64], text[64];
-	inspe_t pe;
+	char site[64];
 	int i, bytes = 0;
-	DWORD len, at, n, j, k, last;
+	qboolean run;
+	DWORD va, len, at, n, j, pg, pn, off, rs = 0, last = 0;
 
-	memset(&pe, 0, sizeof(pe));
-	why = !mem ? "unreadable" : GetModuleFileNameW(NULL, path, countof(path)) ? INS_PEOpen(&pe, path, self) : "unreadable";
-	for (i = 0; i < pe.nsec && !why; i++)
+	if (!mem)
+		return -1;
+	for (i = 0; i < pe->nsec; i++)
 	{
-		if (!(pe.sec[i].Characteristics & IMAGE_SCN_MEM_EXECUTE))
+		if (!(pe->sec[i].Characteristics & IMAGE_SCN_MEM_EXECUTE))
 			continue;
-		len = min(pe.sec[i].Misc.VirtualSize, pe.sec[i].SizeOfRawData);
-		if (len > (64<<20) || !(file = malloc(len ? len : 1)) || !INS_PERead(&pe, pe.sec[i].PointerToRawData, file, len))
+		va = pe->sec[i].VirtualAddress;
+		len = min(pe->sec[i].Misc.VirtualSize, pe->sec[i].SizeOfRawData);
+		if (len > (64<<20) || !(file = malloc(len ? len : 1)) || !INS_PERead(pe, pe->sec[i].PointerToRawData, file, len))
 		{
-			why = "unreadable";
-			break;
+			free(file);
+			free(mem);
+			return -1;
 		}
-		INS_PERelocate(&pe, file, pe.sec[i].VirtualAddress, len, (uintptr_t)self - pe.imagebase);
+		INS_PERelocate(pe, file, va, len, (uintptr_t)self - pe->imagebase);
+		run = false;
 		for (at = 0; at < len; at += n)
 		{
 			n = min(len - at, 65536);
-			if (!INS_ReadSelf(self + pe.sec[i].VirtualAddress + at, mem, n))
-			{
-				Q_snprintfz(site, sizeof(site), "exe+%x/%u", (unsigned)(pe.sec[i].VirtualAddress + at), (unsigned)n);
-				INS_Hook(h, "noread", site, NULL, true);
-				continue;
+			if (INS_ReadSelf(self + va + at, mem, n))
+				bytes += n;
+			else for (pg = 0; pg < n; pg += pn)
+			{	//page by page, so one unreadable page costs only itself
+				pn = min(n - pg, 4096);
+				if (INS_ReadSelf(self + va + at + pg, mem + pg, pn))
+					bytes += pn;
+				else
+				{
+					memcpy(mem + pg, file + at + pg, pn);
+					Q_snprintfz(site, sizeof(site), "exe+%x/%u", (unsigned)(va + at + pg), (unsigned)pn);
+					INS_HookLine(h, "noread", site, "-", "-", 0);
+				}
 			}
 			if (!memcmp(mem, file + at, n))
 				continue;
 			for (j = 0; j < n; j++)
 			{
-				if (mem[j] == file[at+j])
+				off = at + j;
+				if (mem[j] == file[off])
 					continue;
-				for (last = j, k = j + 1; k < n && k <= last + 8; k++)	//one run: differences at most 8 apart
-					if (mem[k] != file[at+k])
-						last = k;
-				Q_snprintfz(site, sizeof(site), "exe+%x/%u", (unsigned)(pe.sec[i].VirtualAddress + at + j), (unsigned)(last - j + 1));
-				INS_Hook(h, "code", site, self + pe.sec[i].VirtualAddress + at + j, false);
-				j = last;
+				if (run && off <= last + 8)
+				{	//one run: differences at most 8 apart, across chunks too
+					last = off;
+					continue;
+				}
+				if (run)
+					INS_HookRun(h, self, va, rs, last);
+				run = true;
+				rs = last = off;
 			}
 		}
-		bytes += len;
+		if (run)
+			INS_HookRun(h, self, va, rs, last);
 		free(file);
 		file = NULL;
 	}
-	free(file);
 	free(mem);
-	INS_PEClose(&pe);
-	if (!why)
-		return bytes;
-	Q_snprintfz(text, sizeof(text), "hookskip exe %s\n", why);
-	h->line(h->ctx, text);
-	return -1;
+	return bytes;
 }
 
 //rva of a named export as the file places it; 0 when absent or forwarded.
@@ -4131,118 +4236,10 @@ static DWORD INS_PEExport(const unsigned char *exp, DWORD exprva, DWORD explen, 
 		if (ord >= ed->NumberOfFunctions)
 			return 0;
 		memcpy(&rva, exp + ed->AddressOfFunctions - exprva + ord*4, 4);
-		return INS_INEXP(rva, 0) ? 0 : rva;
+		return (rva >= exprva && rva < exprva + explen) ? 0 : rva;
 	}
 	return 0;
 #undef INS_INEXP
-}
-
-static const char *const ins_hookapis[] =
-{	//per DLL: its name, the exports below the journal, NULL
-	"user32", "GetCurrentInputMessageSource", "InSendMessage", "InSendMessageEx", "GetRawInputData",
-		"GetRawInputBuffer", "GetRawInputDeviceInfoA", "GetRawInputDeviceInfoW", "GetRawInputDeviceList",
-		"RegisterRawInputDevices", "GetCursorPos", "GetPhysicalCursorPos", "SetCursorPos", "GetAsyncKeyState",
-		"GetKeyState", "GetKeyboardState", "PeekMessageA", "PeekMessageW", "GetMessageA", "GetMessageW",
-		"DispatchMessageA", "DispatchMessageW", "TranslateMessage", "CallWindowProcA", "CallWindowProcW",
-		"CallNextHookEx", "SetWindowsHookExA", "SetWindowsHookExW", "GetMessageExtraInfo", NULL,
-	"win32u", "NtUserGetRawInputData", "NtUserGetRawInputBuffer", "NtUserGetCurrentInputMessageSource",
-		"NtUserPeekMessage", "NtUserGetMessage", "NtUserGetAsyncKeyState", "NtUserGetKeyState",
-		"NtUserGetKeyboardState", "NtUserGetRawInputDeviceInfo", "NtUserSetWindowsHookEx", NULL,
-	"xinput1_4", "XInputGetState", NULL,
-	"xinput1_3", "XInputGetState", NULL,
-	"xinput9_1_0", "XInputGetState", NULL,
-	"gdi32", "SwapBuffers", NULL,	//not input: overlays hook these two, so they show the check seeing a real hook
-	"opengl32", "wglSwapBuffers", NULL,
-	NULL
-};
-//One export's first 16 bytes against the file, and GetProcAddress against the file's address.
-static qboolean INS_HookAPI(inshook_t *h, inspe_t *pe, HMODULE mod, const char *dll, const char *name, DWORD rva)
-{
-	const unsigned char *at = (const unsigned char*)mod + rva, *gpa;
-	unsigned char file[32], mem[32];
-	DWORD ofs = rva >= 8 ? INS_PEOffset(pe, rva - 8, sizeof(file)) : 0;
-	char site[96];
-	int k;
-
-	if (h->nwant < countof(h->want))
-	{
-		h->want[h->nwant].dll = dll;
-		h->want[h->nwant].name = name;
-		h->want[h->nwant++].addr = at;
-	}
-	Q_snprintfz(site, sizeof(site), "%s!%s", dll, name);
-	gpa = (const void*)GetProcAddress(mod, name);
-	if (gpa != at)
-		INS_Hook(h, "eat", site, gpa, true);
-	if (!ofs || !INS_PERead(pe, ofs, file, sizeof(file)))
-		return false;
-	INS_PERelocate(pe, file, rva - 8, sizeof(file), (uintptr_t)mod - pe->imagebase);
-	if (!INS_ReadSelf(at - 8, mem, sizeof(mem)))
-	{
-		INS_Hook(h, "noread", site, NULL, true);
-		return true;
-	}
-	for (k = 8; k < 24 && mem[k] == file[k]; k++)
-		;
-	if (k < 24)
-	{
-		if (k > 8)
-			Q_snprintfz(site, sizeof(site), "%s!%s+%i", dll, name, k - 8);
-		INS_Hook(h, "api", site, INS_JumpTarget(at) ? at : at + k - 8, false);
-	}
-	return true;
-}
-static int INS_HookAPIs(inshook_t *h)
-{
-	BOOL (WINAPI *pIsWow64Process2)(HANDLE, USHORT *, USHORT *);
-	USHORT procm = 0, nativem = 0;
-	qboolean emulated;
-	const char *const *a = ins_hookapis;
-	const char *dll, *why;
-	unsigned char *exp;
-	char text[96];
-	wchar_t path[MAX_PATH];
-	HMODULE mod;
-	inspe_t pe;
-	DWORD exprva, explen, ofs, rva;
-	int funcs = 0;
-	//x64 under ARM64 Windows: system DLLs are ARM64X, rewritten for x64 callers as they load, so no file speaks for them
-	pIsWow64Process2 = (void*)GetProcAddress(GetModuleHandleA("kernel32.dll"), "IsWow64Process2");
-	emulated = pIsWow64Process2 && pIsWow64Process2(GetCurrentProcess(), &procm, &nativem) && nativem == 0xaa64;
-
-	while ((dll = *a++))
-	{
-		Q_snprintfz(text, sizeof(text), "%s.dll", dll);
-		if (!(mod = GetModuleHandleA(text)))
-		{	//not loaded, so not on the input path (no XInput yet, a D3D renderer)
-			while (*a++)
-				;
-			continue;
-		}
-		exp = NULL;
-		memset(&pe, 0, sizeof(pe));
-		why = emulated ? "emulated" : GetModuleFileNameW(mod, path, countof(path)) ? INS_PEOpen(&pe, path, (const void*)mod) : "unreadable";
-		exprva = pe.dir[IMAGE_DIRECTORY_ENTRY_EXPORT].VirtualAddress;
-		explen = pe.dir[IMAGE_DIRECTORY_ENTRY_EXPORT].Size;
-		if (!why)
-		{
-			ofs = INS_PEOffset(&pe, exprva, explen);
-			if (!ofs || explen < sizeof(IMAGE_EXPORT_DIRECTORY) || explen > (4<<20) || !(exp = malloc(explen)) || !INS_PERead(&pe, ofs, exp, explen))
-				why = "malformed";
-		}
-		if (why)
-		{
-			Q_snprintfz(text, sizeof(text), "hookskip %s %s\n", dll, why);
-			h->line(h->ctx, text);
-		}
-		for (; *a; a++)
-			if (!why && (rva = INS_PEExport(exp, exprva, explen, *a)) && INS_HookAPI(h, &pe, mod, dll, *a, rva))
-				funcs++;
-		a++;
-		free(exp);
-		INS_PEClose(&pe);
-	}
-	return funcs;
 }
 
 static const void *INS_Wanted(inshook_t *h, const char *dll, const char *name)
@@ -4253,132 +4250,477 @@ static const void *INS_Wanted(inshook_t *h, const char *dll, const char *name)
 			return h->want[i].addr;
 	return NULL;
 }
-//Each import slot of the exe against the address its export resolves to.
-static void INS_HookImports(inshook_t *h)
+//Each import slot of the image at base against where its export resolves; names come from base's file
+//(pe), so a tool cannot edit what the slot is checked against.  importer: NULL for the exe.
+static void INS_HookImports(inshook_t *h, const unsigned char *base, inspe_t *pe, const char *importer)
 {
-	const unsigned char *base = (const void*)GetModuleHandleW(NULL);
-	const IMAGE_NT_HEADERS64 *nt = (const void*)(base + ((const IMAGE_DOS_HEADER*)base)->e_lfanew);
-	const IMAGE_DATA_DIRECTORY *dd = &nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
-	const IMAGE_IMPORT_DESCRIPTOR *imp;
-	const IMAGE_THUNK_DATA64 *hint;
-	const ULONGLONG *slot;
-	ULONGLONG held;
+	const IMAGE_DATA_DIRECTORY *dd = &pe->dir[IMAGE_DIRECTORY_ENTRY_IMPORT];
+	const IMAGE_SECTION_HEADER *s = NULL;
+	IMAGE_IMPORT_DESCRIPTOR imp;
+	unsigned char *buf;
+	char dll[64], fn[128], site[INS_HOOKLINELEN - 96], *dot;
 	const void *want;
-	const char *fn;
-	char dll[32], site[96], *dot;
+	ULONGLONG ent, held;
+	DWORD blen, d, j, k;
 	HMODULE mod;
 	int i;
 
-	if (!dd->VirtualAddress)
+	for (i = 0; i < pe->nsec; i++)
+		if (dd->VirtualAddress >= pe->sec[i].VirtualAddress && dd->VirtualAddress - pe->sec[i].VirtualAddress < pe->sec[i].SizeOfRawData)
+			s = &pe->sec[i];
+	if (!dd->VirtualAddress || !s || (blen = s->SizeOfRawData) > (16<<20) || !(buf = malloc(blen)))
 		return;
-	for (imp = (const void*)(base + dd->VirtualAddress); imp->Name && imp->FirstThunk; imp++)
+	if (!INS_PERead(pe, s->PointerToRawData, buf, blen))
 	{
-		if (!imp->OriginalFirstThunk || !(mod = GetModuleHandleA((const char*)base + imp->Name)))
+		free(buf);
+		return;
+	}
+#define INS_INSEC(r,l) ((r) >= s->VirtualAddress && (ULONGLONG)(r) - s->VirtualAddress + (l) <= blen)
+#define INS_STR(r,out) do {for (k = 0; k < sizeof(out) - 1 && INS_INSEC((r)+k, 1) && buf[(r)+k-s->VirtualAddress]; k++) out[k] = buf[(r)+k-s->VirtualAddress]; out[k] = 0;} while(0)
+	for (d = 0; d < 1024 && INS_INSEC(dd->VirtualAddress + d*sizeof(imp), sizeof(imp)); d++)
+	{
+		memcpy(&imp, buf + dd->VirtualAddress + d*sizeof(imp) - s->VirtualAddress, sizeof(imp));
+		if (!imp.Name)
+			break;
+		INS_STR(imp.Name, dll);
+		if (!imp.OriginalFirstThunk || !imp.FirstThunk || !(mod = GetModuleHandleA(dll)))
 			continue;
-		Q_strncpyz(dll, (const char*)base + imp->Name, sizeof(dll));
-		for (i = 0; dll[i]; i++)
-			dll[i] = (dll[i] >= 'A' && dll[i] <= 'Z') ? dll[i] + 32 : dll[i];
+		for (k = 0; dll[k]; k++)
+			dll[k] = (dll[k] >= 'A' && dll[k] <= 'Z') ? dll[k] + 32 : dll[k];
 		if ((dot = strrchr(dll, '.')))
 			*dot = 0;
-		hint = (const void*)(base + imp->OriginalFirstThunk);
-		slot = (const void*)(base + imp->FirstThunk);
-		for (; hint->u1.AddressOfData; hint++, slot++)
+		for (j = 0; j < 16384 && INS_INSEC(imp.OriginalFirstThunk + j*8, 8); j++)
 		{
-			if (IMAGE_SNAP_BY_ORDINAL64(hint->u1.Ordinal))
+			memcpy(&ent, buf + imp.OriginalFirstThunk + j*8 - s->VirtualAddress, 8);
+			if (!ent)
+				break;
+			if (IMAGE_SNAP_BY_ORDINAL64(ent))
 			{
-				Q_snprintfz(site, sizeof(site), "%s!#%u", dll, (unsigned)IMAGE_ORDINAL64(hint->u1.Ordinal));
-				want = (const void*)GetProcAddress(mod, MAKEINTRESOURCEA(IMAGE_ORDINAL64(hint->u1.Ordinal)));
+				Q_snprintfz(fn, sizeof(fn), "#%u", (unsigned)IMAGE_ORDINAL64(ent));
+				want = (const void*)GetProcAddress(mod, MAKEINTRESOURCEA(IMAGE_ORDINAL64(ent)));
 			}
 			else
 			{
-				fn = (const char*)((const IMAGE_IMPORT_BY_NAME*)(base + hint->u1.AddressOfData))->Name;
-				Q_snprintfz(site, sizeof(site), "%s!%s", dll, fn);
+				INS_STR((DWORD)ent + 2, fn);
+				if (!*fn)
+					continue;
 				if (!(want = INS_Wanted(h, dll, fn)))
 					want = (const void*)GetProcAddress(mod, fn);
 			}
 			if (!want)
 				continue;
-			h->slots++;
-			if (!INS_ReadSelf(slot, &held, sizeof(held)))
-				INS_Hook(h, "noread", site, NULL, true);
+			if (importer)
+				Q_snprintfz(site, sizeof(site), "%s/%s!%s", importer, dll, fn);
+			else
+				Q_snprintfz(site, sizeof(site), "%s!%s", dll, fn);
+			h->r.slots++;
+			if (!INS_ReadSelf(base + imp.FirstThunk + j*8, &held, sizeof(held)))
+				INS_HookLine(h, "noread", site, "-", "-", 0);
 			else if ((const void*)(uintptr_t)held != want)
 				INS_Hook(h, "iat", site, (const void*)(uintptr_t)held, true);
 		}
 	}
+#undef INS_STR
+#undef INS_INSEC
+	free(buf);
 }
-static void INS_HookPointer(inshook_t *h, const char *name, const void *p)
+
+static const char *const ins_hookapis[] =
+{	//per DLL: its name, then exports: input below the journal, then what this scan itself calls; NULL
+	"user32", "GetCurrentInputMessageSource", "InSendMessage", "InSendMessageEx", "GetRawInputData",
+		"GetRawInputBuffer", "GetRawInputDeviceInfoA", "GetRawInputDeviceInfoW", "GetRawInputDeviceList",
+		"RegisterRawInputDevices", "GetCursorPos", "GetPhysicalCursorPos", "SetCursorPos", "GetAsyncKeyState",
+		"GetKeyState", "GetKeyboardState", "PeekMessageA", "PeekMessageW", "GetMessageA", "GetMessageW",
+		"DispatchMessageA", "DispatchMessageW", "TranslateMessage", "CallWindowProcA", "CallWindowProcW",
+		"CallNextHookEx", "SetWindowsHookExA", "SetWindowsHookExW", "GetMessageExtraInfo",
+		"GetWindowLongPtrA", "GetWindowLongPtrW", NULL,
+	"win32u", "NtUserGetRawInputData", "NtUserGetRawInputBuffer", "NtUserGetCurrentInputMessageSource",
+		"NtUserPeekMessage", "NtUserGetMessage", "NtUserGetAsyncKeyState", "NtUserGetKeyState",
+		"NtUserGetKeyboardState", "NtUserGetRawInputDeviceInfo", "NtUserSetWindowsHookEx", NULL,
+	"xinput1_4", "XInputGetState", NULL,
+	"xinput1_3", "XInputGetState", NULL,
+	"xinput9_1_0", "XInputGetState", NULL,
+	"kernelbase", "ReadProcessMemory", "VirtualQuery", "GetThreadContext", "ReadFile", "GetModuleHandleExW", NULL,
+	"ntdll", "NtReadVirtualMemory", "NtQueryVirtualMemory", "NtGetContextThread", "NtReadFile", NULL,
+	"gdi32", "SwapBuffers", NULL,	//draw: overlays hook these two, which shows the check seeing a real hook
+	"opengl32", "wglSwapBuffers", NULL,
+	NULL
+};
+//One export's first 32 bytes against the file, and GetProcAddress against the file's address.  False when
+//not compared (no room in its section; an alias of one already compared).
+static qboolean INS_HookAPI(inshook_t *h, inspe_t *pe, HMODULE mod, const char *dll, const char *name, DWORD rva, qboolean draw)
 {
-	const void *want = INS_Wanted(h, "user32", name);
+	const unsigned char *at = (const unsigned char*)mod + rva, *gpa;
+	unsigned char file[48], mem[48];
+	DWORD ofs = rva >= 8 ? INS_PEOffset(pe, rva - 8, sizeof(file)) : 0;
 	char site[96];
-	if (!p || !want)
+	int i, k;
+	qboolean alias = false;
+
+	for (i = 0; i < h->nwant; i++)
+		if (h->want[i].addr == at)
+			alias = true;	//GetCursorPos and GetPhysicalCursorPos are one function on Windows 11
+	if (h->nwant < countof(h->want))
+	{
+		h->want[h->nwant].dll = dll;
+		h->want[h->nwant].name = name;
+		h->want[h->nwant++].addr = at;
+	}
+	Q_snprintfz(site, sizeof(site), "%s!%s", dll, name);
+	gpa = (const void*)GetProcAddress(mod, name);
+	if (gpa != at)
+		INS_Hook(h, "eat", site, gpa, true);
+	if (alias || !ofs || !INS_PERead(pe, ofs, file, sizeof(file)))
+		return false;
+	INS_PERelocate(pe, file, rva - 8, sizeof(file), (uintptr_t)mod - pe->imagebase);
+	if (!INS_ReadSelf(at - 8, mem, sizeof(mem)))
+	{
+		INS_HookLine(h, "noread", site, "-", "-", 0);
+		return true;
+	}
+	for (k = 8; k < 40 && mem[k] == file[k]; k++)
+		;
+	if (k < 40)
+	{
+		if (k > 8)
+			Q_snprintfz(site, sizeof(site), "%s!%s+%i", dll, name, k - 8);
+		INS_Hook(h, draw ? "draw" : "api", site, INS_PatchStart(at + k - 8, k - 8), false);
+	}
+	return true;
+}
+static void INS_HookAPIs(inshook_t *h)
+{
+	BOOL (WINAPI *pIsWow64Process2)(HANDLE, USHORT *, USHORT *);
+	USHORT procm = 0, nativem = 0;
+	qboolean emulated, draw;
+	const char *const *a = ins_hookapis;
+	const char *dll, *why, *cls;
+	unsigned char *exp;
+	char text[96], owner[64];
+	wchar_t path[MAX_PATH];
+	HMODULE mod;
+	inspe_t pe;
+	DWORD exprva, explen, ofs, rva;
+
+	//x64 under ARM64 Windows: system DLLs are ARM64X, rewritten for x64 callers as they load, so no file speaks for them
+	pIsWow64Process2 = (void*)GetProcAddress(GetModuleHandleA("kernel32.dll"), "IsWow64Process2");
+	emulated = pIsWow64Process2 && pIsWow64Process2(GetCurrentProcess(), &procm, &nativem) && nativem == 0xaa64;
+	while ((dll = *a++))
+	{
+		Q_snprintfz(text, sizeof(text), "%s.dll", dll);
+		draw = !strcmp(dll, "gdi32") || !strcmp(dll, "opengl32");
+		exp = NULL;
+		memset(&pe, 0, sizeof(pe));
+		if (!(mod = GetModuleHandleA(text)) || !GetModuleFileNameW(mod, path, countof(path)))
+			why = "-";	//not loaded, so not on the input path (no XInput yet, a D3D renderer)
+		else if (strcmp((cls = INS_ModClass(&h->dirs, path)), "windows"))
+		{	//loaded from elsewhere: a stand-in, which its own file would vouch for
+			INS_ModToken(path, owner, sizeof(owner));
+			INS_HookLine(h, "dll", dll, cls, owner, 0);
+			why = "-";
+		}
+		else
+			why = emulated ? "emulated" : INS_PEOpen(&pe, path, (const void*)mod);
+		exprva = pe.dir[IMAGE_DIRECTORY_ENTRY_EXPORT].VirtualAddress;
+		explen = pe.dir[IMAGE_DIRECTORY_ENTRY_EXPORT].Size;
+		if (!why)
+		{
+			ofs = INS_PEOffset(&pe, exprva, explen);
+			if (!ofs || explen < sizeof(IMAGE_EXPORT_DIRECTORY) || explen > (4<<20) || !(exp = malloc(explen)) || !INS_PERead(&pe, ofs, exp, explen))
+				why = "malformed";
+		}
+		if (why && *why != '-')
+			INS_HookSkip(h, dll, why);
+		for (; *a; a++)
+			if (!why && (rva = INS_PEExport(exp, exprva, explen, *a)) && INS_HookAPI(h, &pe, mod, dll, *a, rva, draw) && !draw)
+				h->r.funcs++;
+		a++;
+		if (!why)
+			INS_HookImports(h, (const void*)mod, &pe, dll);
+		free(exp);
+		INS_PEClose(&pe);
+	}
+}
+
+static void INS_HookPointer(inshook_t *h, const char *dll, const char *name, const void *p)
+{
+	const void *want = INS_Wanted(h, dll, name);
+	char site[96];
+	HMODULE mod;
+	if (!p)
 		return;
-	h->slots++;
+	Q_snprintfz(site, sizeof(site), "%s.dll", dll);
+	if (!want && (mod = GetModuleHandleA(site)))
+		want = (const void*)GetProcAddress(mod, name);
+	if (!want)
+		return;
+	h->r.slots++;
 	if (p != want)
 	{
-		Q_snprintfz(site, sizeof(site), "user32!%s", name);
+		Q_snprintfz(site, sizeof(site), "%s!%s", dll, name);
 		INS_Hook(h, "ptr", site, p, true);
 	}
 }
+//Threads with a hardware breakpoint armed (a debugger, or a tool's exception handler, changes no bytes).
+static int INS_HookDebugRegs(void)
+{
+	HANDLE (WINAPI *pOpenThread)(DWORD, BOOL, DWORD);
+	THREADENTRY32 te;
+	CONTEXT ctx;
+	HANDLE snap, th;
+	DWORD pid = GetCurrentProcessId(), self = GetCurrentThreadId();
+	BOOL more;
+	int armed = 0;
 
-int INS_HookScan(void *ctx, void (*line)(void *ctx, const char *text))
+	pOpenThread = (void*)GetProcAddress(GetModuleHandleA("kernel32.dll"), "OpenThread");
+	if (!pOpenThread || (snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0)) == INVALID_HANDLE_VALUE)
+		return 0;
+	te.dwSize = sizeof(te);
+	for (more = Thread32First(snap, &te); more; more = Thread32Next(snap, &te))
+	{
+		if (te.th32OwnerProcessID != pid)
+			continue;
+		th = (te.th32ThreadID == self) ? GetCurrentThread() : pOpenThread(THREAD_GET_CONTEXT, FALSE, te.th32ThreadID);
+		if (!th)
+			continue;
+		memset(&ctx, 0, sizeof(ctx));
+		ctx.ContextFlags = CONTEXT_DEBUG_REGISTERS;
+		if (GetThreadContext(th, &ctx) && (ctx.Dr7 & 0xff) && (ctx.Dr0 || ctx.Dr1 || ctx.Dr2 || ctx.Dr3))
+			armed++;
+		if (te.th32ThreadID != self)
+			CloseHandle(th);
+		te.dwSize = sizeof(te);
+	}
+	CloseHandle(snap);
+	return armed;
+}
+
+static void INS_HookScan(inshook_t *h)
 {
 	BOOL (WINAPI *pRemoteDbg)(HANDLE, PBOOL);
 	MEMORY_BASIC_INFORMATION mbi;
-	const unsigned char *p = NULL;
+	const unsigned char *self = (const void*)GetModuleHandleW(NULL), *p = NULL, *lastalloc = NULL;
 	const void *wp;
-	const char *cls;
+	const char *cls, *why;
 	ULONGLONG execbytes = 0;
-	int code, funcs, regions = 0, found;
 	BOOL remote = FALSE;
-	char text[128], owner[64];
+	char owner[64];
+	wchar_t path[MAX_PATH];
+	HMODULE mod;
+	inspe_t pe;
 	double t0 = Sys_DoubleTime();
-	inshook_t *h = calloc(1, sizeof(*h));
 
-	if (!h)
-		return -1;
-	h->ctx = ctx;
-	h->line = line;
 	INS_ModDirs(&h->dirs);
-	code = INS_HookExe(h);
-	funcs = INS_HookAPIs(h);
-	INS_HookImports(h);
+	INS_HookAPIs(h);
+	memset(&pe, 0, sizeof(pe));
+	why = GetModuleFileNameW(NULL, path, countof(path)) ? INS_PEOpen(&pe, path, self) : "unreadable";
+	if (why)
+	{
+		INS_HookSkip(h, "exe", why);
+		h->r.codebytes = -1;
+	}
+	else
+	{
+		INS_HookImports(h, self, &pe, NULL);
+		h->r.codebytes = INS_HookExe(h, &pe, self);
+		if (h->r.codebytes < 0)
+			INS_HookSkip(h, "exe", "unreadable");
+	}
+	INS_PEClose(&pe);
 #ifdef USINGRAWINPUT
-	INS_HookPointer(h, "GetRawInputData", (const void*)_GRID);
-	INS_HookPointer(h, "GetRawInputDeviceList", (const void*)_GRIDL);
-	INS_HookPointer(h, "GetRawInputDeviceInfoA", (const void*)_GRIDIA);
-	INS_HookPointer(h, "RegisterRawInputDevices", (const void*)_RRID);
+	INS_HookPointer(h, "user32", "GetRawInputData", (const void*)_GRID);
+	INS_HookPointer(h, "user32", "GetRawInputDeviceList", (const void*)_GRIDL);
+	INS_HookPointer(h, "user32", "GetRawInputDeviceInfoA", (const void*)_GRIDIA);
+	INS_HookPointer(h, "user32", "RegisterRawInputDevices", (const void*)_RRID);
 #endif
-	INS_HookPointer(h, "GetCurrentInputMessageSource", (const void*)pGetCurrentInputMessageSource);
+	INS_HookPointer(h, "user32", "GetCurrentInputMessageSource", (const void*)pGetCurrentInputMessageSource);
+#ifdef AVAIL_XINPUT
+	INS_HookPointer(h, GetModuleHandleA("xinput1_4.dll") ? "xinput1_4" : GetModuleHandleA("xinput1_3.dll") ? "xinput1_3" : "xinput9_1_0",
+		"XInputGetState", (const void*)pXInputGetState);
+#endif
 	if (mainwindow)
-	{	//a subclassed window sees every message first.  Windows' own DLLs subclass it too (opengl32.dll
-		//does under GL, measured), so only another owner is a finding.
+	{	//a subclassed window sees every message first: only the exe itself or a Windows DLL may own the head
+		//of the chain (opengl32.dll subclasses it under GL, measured)
 		wp = (const void*)(IsWindowUnicode(mainwindow) ? GetWindowLongPtrW(mainwindow, GWLP_WNDPROC) : GetWindowLongPtrA(mainwindow, GWLP_WNDPROC));
-		h->slots++;
+		if (!strcmp(INS_AddrOwner(h, wp, owner, sizeof(owner)), "bad"))	//a CallWindowProc handle: the subclass used the other charset
+			wp = (const void*)(IsWindowUnicode(mainwindow) ? GetWindowLongPtrA(mainwindow, GWLP_WNDPROC) : GetWindowLongPtrW(mainwindow, GWLP_WNDPROC));
 		cls = INS_AddrOwner(h, wp, owner, sizeof(owner));
-		if (strcmp(cls, "game") && strcmp(cls, "windows"))
+		mod = INS_ModuleAt(wp);
+		h->r.slots++;
+		if (!mod || (mod != (HMODULE)self && strcmp(cls, "windows")))
 			INS_Hook(h, "wndproc", "window", wp, true);
 	}
-	//Executable memory no image backs: JITs, overlay trampolines, and manually mapped code.
+	//Executable memory no image backs (JITs, overlay trampolines, manually mapped code), and executable
+	//images the loader does not list.
 	while (VirtualQuery(p, &mbi, sizeof(mbi)) == sizeof(mbi))
 	{
-		if (mbi.State == MEM_COMMIT && mbi.Type != MEM_IMAGE && (mbi.Protect & 0xf0) && !(mbi.Protect & (PAGE_GUARD|PAGE_NOACCESS)))
+		if (mbi.State == MEM_COMMIT && (mbi.Protect & 0xf0) && !(mbi.Protect & (PAGE_GUARD|PAGE_NOACCESS)))
 		{	//0xf0: PAGE_EXECUTE, _READ, _READWRITE, _WRITECOPY
-			regions++;
-			execbytes += mbi.RegionSize;
+			if (mbi.Type != MEM_IMAGE)
+			{
+				h->r.regions++;
+				execbytes += mbi.RegionSize;
+			}
+			else if (mbi.AllocationBase != lastalloc)
+			{
+				lastalloc = mbi.AllocationBase;
+				if (!INS_ModuleAt(mbi.AllocationBase))
+					h->r.unlisted++;
+			}
 		}
 		if ((const unsigned char*)mbi.BaseAddress + mbi.RegionSize <= p)
 			break;
 		p = (const unsigned char*)mbi.BaseAddress + mbi.RegionSize;
 	}
+	h->r.kib = (int)(execbytes >> 10);
 	pRemoteDbg = (void*)GetProcAddress(GetModuleHandleA("kernel32.dll"), "CheckRemoteDebuggerPresent");
 	if (pRemoteDbg && !pRemoteDbg(GetCurrentProcess(), &remote))
 		remote = FALSE;
-	Q_snprintfz(text, sizeof(text), "hooks %i %i %i %i %i %u %i\n", h->found, code, funcs, h->slots,
-		regions, (unsigned)(execbytes >> 10), (IsDebuggerPresent() || remote) ? 1 : 0);
-	line(ctx, text);
-	found = h->found;
-	free(h);
-	Con_DPrintf("hook scan: %i found, %.2f ms\n", found, (Sys_DoubleTime() - t0) * 1000);
-	return found;
+	h->r.dbg = ((IsDebuggerPresent() || remote) ? 1 : 0) | (INS_HookDebugRegs() ? 2 : 0);
+	h->r.scans = 1;
+	Con_DPrintf("hook scan: %i found, %i unread, %.2f ms\n", h->r.found, h->r.unread, (Sys_DoubleTime() - t0) * 1000);
 }
+
+static struct
+{
+	void *mutex, *thread;
+	int gen, open, want;
+	double next;
+	inshookset_t acc;
+} inshookst;
+static void INS_HookMerge(const inshookset_t *r)
+{
+	inshookset_t *a = &inshookst.acc;
+	int i, j, f = 0, u = 0;
+	for (i = 0; i < r->nlines; i++)
+		INS_HookInsert(a, r->lines[i], r->prio[i]);
+	for (i = 0; i < r->nskips; i++)
+	{
+		for (j = 0; j < a->nskips && strcmp(a->skips[j], r->skips[i]); j++)
+			;
+		if (j == a->nskips && a->nskips < INS_HOOKSKIPS)
+			memcpy(a->skips[a->nskips++], r->skips[i], sizeof(a->skips[0]));
+	}
+	for (i = 0; i < a->nlines; i++)
+	{
+		if (a->prio[i] == INS_HookPrio("noread"))
+			u++;
+		else
+			f++;
+	}
+	a->found = max(max(a->found, r->found), f);	//distinct findings over the journal's scans, at least
+	a->unread = max(max(a->unread, r->unread), u);
+	a->codebytes = r->codebytes;
+	a->funcs = r->funcs;
+	a->slots = r->slots;
+	a->regions = r->regions;
+	a->kib = r->kib;
+	a->unlisted = r->unlisted;
+	a->dbg |= r->dbg;
+	a->scans++;
+}
+#ifdef MULTITHREAD
+static int INS_HookWorker(void *arg)
+{
+	inshook_t *h;
+	qboolean due;
+	int gen;
+	for (;;)
+	{
+		Sys_LockMutex(inshookst.mutex);
+		due = inshookst.open && (inshookst.want || Sys_DoubleTime() >= inshookst.next);
+		gen = inshookst.gen;
+		if (due)
+		{
+			inshookst.want = false;
+			inshookst.next = Sys_DoubleTime() + INS_HOOKPERIOD;
+		}
+		Sys_UnlockMutex(inshookst.mutex);
+		if (!due || !(h = calloc(1, sizeof(*h))))
+		{
+			Sys_Sleep(0.05);
+			continue;
+		}
+		INS_HookScan(h);
+		Sys_LockMutex(inshookst.mutex);
+		if (gen == inshookst.gen && inshookst.open)
+			INS_HookMerge(&h->r);
+		Sys_UnlockMutex(inshookst.mutex);
+		free(h);
+	}
+	return 0;
+}
+#endif
+//As a journal opens: forget the last journal's scans and ask for one now.  True if a scan will be written.
+qboolean INS_HookJournalBegin(void)
+{
+#ifdef MULTITHREAD
+	if (!inshookst.mutex)
+		inshookst.mutex = Sys_CreateMutex();
+	if (inshookst.mutex)
+	{
+		Sys_LockMutex(inshookst.mutex);
+		inshookst.gen++;
+		inshookst.open = inshookst.want = true;
+		memset(&inshookst.acc, 0, sizeof(inshookst.acc));
+		Sys_UnlockMutex(inshookst.mutex);
+		if (!inshookst.thread)
+			inshookst.thread = Sys_CreateThread("hookscan", INS_HookWorker, NULL, THREADP_IDLE, 0);
+		return true;
+	}
+#endif
+	memset(&inshookst.acc, 0, sizeof(inshookst.acc));
+	inshookst.open = true;
+	return true;
+}
+//As a journal closes: with line, the journal's scans as lines (a scan here if no worker ran one).
+void INS_HookJournalEnd(void *ctx, void (*line)(void *ctx, const char *text))
+{
+	inshookset_t a;
+	inshook_t *h;
+	char text[INS_HOOKLINELEN + 2];
+	int i;
+
+	if (inshookst.mutex)
+		Sys_LockMutex(inshookst.mutex);
+	a = inshookst.acc;
+	inshookst.open = false;
+	if (inshookst.mutex)
+		Sys_UnlockMutex(inshookst.mutex);
+	if (!line)
+		return;
+	if ((!inshookst.mutex || !inshookst.thread) && !a.scans && (h = calloc(1, sizeof(*h))))
+	{	//no worker: scan now, on this thread
+		INS_HookScan(h);
+		inshookst.acc = a;
+		INS_HookMerge(&h->r);
+		a = inshookst.acc;
+		free(h);
+	}
+	for (i = 0; i < a.nlines; i++)
+	{
+		Q_snprintfz(text, sizeof(text), "%s\n", a.lines[i]);
+		line(ctx, text);
+	}
+	for (i = 0; i < a.nskips; i++)
+	{
+		Q_snprintfz(text, sizeof(text), "hookskip %s\n", a.skips[i]);
+		line(ctx, text);
+	}
+	if (a.scans)
+		Q_snprintfz(text, sizeof(text), "hooks %i %i %i %i %i %i %i %i %i %i\n", a.found, a.codebytes, a.funcs, a.slots,
+			a.regions, a.kib, a.dbg, a.scans, a.unread, a.unlisted);
+	else	//no scan finished while the journal was open
+		Q_snprintfz(text, sizeof(text), "hooks -1 -1 -1 -1 -1 -1 0 0 -1 -1\n");
+	line(ctx, text);
+}
+#else
+qboolean INS_HookJournalBegin(void)
+{
+	return false;
+}
+void INS_HookJournalEnd(void *ctx, void (*line)(void *ctx, const char *text))
+{
+}
+#endif
 #endif

@@ -1367,6 +1367,9 @@ void IN_Journal_AbortClose(void)
 	}
 }
 
+#if defined(_WIN32) && !defined(WINRT) && !defined(FTE_SDL)
+void INS_HookJournalEnd(void *ctx, void (*line)(void *ctx, const char *text));	/*Patch 1586*/
+#endif
 void IN_Journal_Drop(void)
 {
 	/*Main-side lifecycle: the worker already owns indeplock while appending.
@@ -1391,6 +1394,9 @@ void IN_Journal_Drop(void)
 	in_jrn_full = in_jrn_synth = false;
 	in_jrn_events = in_jrn_frames = in_jrn_hidden = 0;
 	memset(in_jrn_haveabs, 0, sizeof(in_jrn_haveabs));
+#if defined(_WIN32) && !defined(WINRT) && !defined(FTE_SDL)
+	INS_HookJournalEnd(NULL, NULL);	/*Patch 1586: no journal open, so no scans*/
+#endif
 	CL_AllowIndependantSendCmd(allowed);
 }
 
@@ -2398,17 +2404,30 @@ static void IN_Journal_Modules(qboolean atend)
 	Q_snprintfz(line, sizeof(line), "modules %i\n", INS_ForeignModules(NULL, IN_Journal_Module));
 	IN_Journal_Raw(line);
 }
-/*FTESurf Patch 1586: hooks below the journal (INS_HookScan, in_win.c): `hook`/`hookskip` lines and the
-  `hooks` summary beside module+, in a journal that will be written.*/
-int INS_HookScan(void *ctx, void (*line)(void *ctx, const char *text));
+/*FTESurf Patch 1586: hooks below the journal (in_win.c).  A `hookscan 1` header line promises the
+  `hook`/`hookskip` lines and `hooks` summary beside module+ in a written journal, as one block and only
+  if it fits under the cap: the space past in_jrn_max is the `truncated` and `end` lines'.*/
+qboolean INS_HookJournalBegin(void);
+void INS_HookJournalEnd(void *ctx, void (*line)(void *ctx, const char *text));
+#define IN_JRN_HOOKBLOCK 8192
 static void IN_Journal_HookLine(void *ctx, const char *text)
 {
-	IN_Journal_Raw(text);
+	char *blk = ctx;
+	size_t l = strlen(blk), t = strlen(text);
+	if (l + t < IN_JRN_HOOKBLOCK)
+		memcpy(blk + l, text, t + 1);
 }
-#define IN_Journal_Hooks() INS_HookScan(NULL, IN_Journal_HookLine)
+static void IN_Journal_Hooks(qboolean discard)
+{
+	char blk[IN_JRN_HOOKBLOCK];
+	*blk = 0;
+	INS_HookJournalEnd(discard ? NULL : blk, discard ? NULL : IN_Journal_HookLine);
+	if (!discard && *blk && !in_jrn_full && in_jrn_len + strlen(blk) <= in_jrn_max)
+		IN_Journal_Raw(blk);
+}
 #else
 #define IN_Journal_Modules(atend)
-#define IN_Journal_Hooks()
+#define IN_Journal_Hooks(discard)
 #endif
 
 static void IN_Journal_DeviceLine(void *vctx, const char *type, const char *devicename, unsigned int *qdevid)
@@ -2606,6 +2625,10 @@ static void IN_JournalBegin_f(void)
 	}
 
 	IN_Journal_Modules(false);	/*Patch 1577*/
+#if defined(_WIN32) && !defined(WINRT) && !defined(FTE_SDL)
+	if (INS_HookJournalBegin())
+		IN_Journal_Raw("hookscan 1\n");	/*Patch 1586*/
+#endif
 	IN_Journal_Raw("anglecause 1\n");
 	IN_Journal_Raw("begin\n");
 	CL_AllowIndependantSendCmd(allowed);
@@ -2700,8 +2723,7 @@ static void IN_JournalEnd_f(void)
 	  and such a file already says `truncated`, so the loss is announced.*/
 	INS_EnumerateDevices((void*)"devmap", IN_Journal_DeviceLine);
 	IN_Journal_Modules(true);	/*Patch 1577*/
-	if (!discard)
-		IN_Journal_Hooks();	/*Patch 1586: milliseconds, so not for the discarded journal most finishes close*/
+	IN_Journal_Hooks(discard);	/*Patch 1586*/
 
 	/*Allow the trailer into a full journal's reserved space, but never lower
 	  the configured limit to the current allocation: an ordinary journal may
