@@ -20,6 +20,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include "quakedef.h"
 #include "../common/anglecause.h"
 #include "com_bih.h"
+#include "pm_ag.h"
 #include "sv_held_ledger.h"
 #include "sv_held_replay.h"
 #include "sv_held_coverage.h"
@@ -1064,8 +1065,7 @@ void SV_Map_f (void)
 	cvar_t *profile = Cvar_FindVar("sv_movementprofile");
 	const char *requested = profile ? (profile->latched_string ? profile->latched_string : profile->string) : "";
 
-	if (*requested && strcmp(requested, "default") && strcmp(requested, "ag-100") &&
-		strcmp(requested, "ag-250"))
+	if (*requested && strcmp(requested, "default") && !PM_ProfileBySelector(requested))
 	{
 		Con_Printf(CON_ERROR "Refusing map: sv_movementprofile %s is unknown or not acceptance-qualified\n", requested);
 		return;

@@ -13,6 +13,10 @@ static void PMAg_Hull(void)
 	pmove.capsule = false;
 }
 
+// CS 1.6 eyes sit 17 above the centre (VEC_VIEW), HL/AG's 28; both duck to 12.
+static float PMAg_StandView(void) { return movevars.profilekind == PMPROFILE_CS16 ? 17 : 28; }
+static float PMAg_DuckingView(float fraction) { return PMAg_StandView() - (PMAg_StandView() + 6) * fraction; }
+
 static void PMAg_Posture(void)
 {
 	float fraction;
@@ -22,9 +26,9 @@ static void PMAg_Posture(void)
 	{
 		fraction = bound(0, (1000 - pmove.ducktime) / 400, 1);
 		fraction = fraction * fraction * (3 - 2 * fraction);
-		pmove.viewheight = 28 - 34 * fraction;
+		pmove.viewheight = PMAg_DuckingView(fraction);
 	}
-	else pmove.viewheight = 28;
+	else pmove.viewheight = PMAg_StandView();
 }
 
 static trace_t PMAg_Trace(vec3_t start, vec3_t end)
@@ -91,7 +95,7 @@ static void PMAg_Stand(void)
 	pmove.ducked = false; PMAg_Hull();
 	if (!PMAg_Clear(candidate)) { pmove.ducked = wasducked; PMAg_Hull(); return; }
 	VectorCopy(candidate, pmove.origin);
-	pmove.ducking = false; pmove.ducktime = 0; pmove.viewheight = 28;
+	pmove.ducking = false; pmove.ducktime = 0; pmove.viewheight = PMAg_StandView();
 	PMAg_Categorize();
 }
 
@@ -128,7 +132,7 @@ static void PMAg_Duck(void)
 	{
 		fraction = (1000 - pmove.ducktime) / 400;
 		fraction = fraction * fraction * (3 - 2 * fraction);
-		pmove.viewheight = 28 - 34 * fraction;
+		pmove.viewheight = PMAg_DuckingView(fraction);
 	}
 }
 
@@ -325,6 +329,7 @@ static void PMAg_Tick(void)
 	pmove.surfacefriction = 1;
 	VectorSet(pmove.gravitydir, 0, 0, -1); PMAg_Posture();
 	pmove.ducktime = max(0, pmove.ducktime - pmove.cmd.msec);
+	if (movevars.profilekind == PMPROFILE_CS16) pmove.stamina = max(0, pmove.stamina - pmove.cmd.msec);
 	factor = pmove.ducked ? 0.333f : 1;
 	forwardmove = command.forwardmove * factor; sidemove = command.sidemove * factor; upmove = command.upmove * factor;
 	PMAg_Categorize(); PMAg_Duck();
@@ -358,6 +363,12 @@ static void PMAg_Tick(void)
 			pmove.velocity[2] += pmove.basevelocity[2] * PMAg_Duration();
 			pmove.basevelocity[2] = originalbase[2] = 0;
 			PMAg_DryStart(&pmove, &movevars, pmove.surfacefriction, PMAg_Edge());
+			// CS 1.6 PM_WalkMove: every ground tick inside the fuser2 window scales horizontal speed.
+			if (movevars.profilekind == PMPROFILE_CS16 && pmove.onground && pmove.stamina > 0)
+			{
+				float ratio = PMAg_CS16StaminaRatio(&pmove);
+				pmove.velocity[0] *= ratio; pmove.velocity[1] *= ratio;
+			}
 			wishspeed = PMAg_Wish(direction, false, forwardmove, sidemove, upmove);
 			PMAg_Accelerate(&pmove, &movevars, direction, wishspeed, pmove.surfacefriction);
 			/* Vertical carrier is command-local and is never accumulated in state. */
@@ -390,11 +401,11 @@ void PMAg_PlayerMove(float gamespeed)
 	PMAg_Posture(); // loaded state owns outputs even when this command executes no tick
 	if (available + 0.0000001f < tick) PMAg_Water(); // point outputs only: no contact motion or timers
 	/* Profile rates have integral command milliseconds. Retain only sub-tick
-	 * carry; a stalled command may never credit more than eight executed ticks. */
+	 * carry; a stalled command may never credit more than PMAg_TickBudget ticks. */
 	pmove.cmd.msec = (int)(tick * 1000 + 0.5f);
 	while (available + 0.0000001f >= tick)
 	{
-		if (count == 8) { available = 0; break; }
+		if (count == (unsigned int)PMAg_TickBudget(tick)) { available = 0; break; }
 		PMAg_Tick();
 		available -= tick;
 		count++;

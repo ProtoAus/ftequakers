@@ -8,6 +8,7 @@
 #include <limits.h>
 #include <time.h>
 #include "sv_held_ledger.h"
+#include "pm_ag.h"
 #ifdef _WIN32
 #include <windows.h>
 #else
@@ -65,13 +66,23 @@ static qboolean Held_FileComponent(const char *s, size_t n)
 		return false;
 	return true;
 }
+// data/parts/ or data/experimental/<known profile identity>/parts/
+static qboolean Held_FileProfileParts(const char *s)
+{
+	char identity[32];
+	const char *slash;
+	if (strncmp(s, "data/experimental/", 18)) return false;
+	slash = strchr(s+18, '/');
+	if (!slash || slash-(s+18) >= (int)sizeof(identity)) return false;
+	memcpy(identity, s+18, slash-(s+18));
+	identity[slash-(s+18)] = 0;
+	return PM_ProfileByIdentity(identity) && !strncmp(slash, "/parts/", 7);
+}
 static qboolean Held_FileRelative(const char *s)
 {
 	const char *p, *start;
 	if (!s || strlen(s) >= MAX_QPATH ||
-	    (strncmp(s, "data/parts/", 11) &&
-	     strncmp(s, "data/experimental/ag-100-v1/parts/", 34) &&
-	     strncmp(s, "data/experimental/ag-250-v1/parts/", 34)))
+	    (strncmp(s, "data/parts/", 11) && !Held_FileProfileParts(s)))
 		return false;
 	start = s;
 	for (p = s; ; ++p)
@@ -574,7 +585,10 @@ int SV_HeldFileTest(unsigned int *checks)
 	CHECK(!Held_FileRelative("data/runs/slot.rec"));
 	CHECK(Held_FileRelative("data/experimental/ag-100-v1/parts/0.rec"));
 	CHECK(Held_FileRelative("data/experimental/ag-250-v1/parts/p27530-0.rec"));
-	CHECK(!Held_FileRelative("data/experimental/ag-1000-v1/parts/0.rec"));
+	CHECK(Held_FileRelative("data/experimental/ag-1000-v1/parts/0.rec"));
+	CHECK(Held_FileRelative("data/experimental/hl2-post-v1/parts/0.rec"));
+	CHECK(!Held_FileRelative("data/experimental/ag-1000-v2/parts/0.rec"));
+	CHECK(!Held_FileRelative("data/experimental/cs16-v1/saves/0.rec"));
 	CHECK(!Held_FileRelative("data/experimental/other/parts/0.rec"));
 	CHECK(!Held_FileRelative("data/experimental/ag-100-v1/parts/../0.rec"));
 	f = SV_HeldFileCreate(path, &t);
