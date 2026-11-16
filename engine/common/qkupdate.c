@@ -256,7 +256,7 @@ static qboolean QKU_ValidPath(const char *p)
 typedef struct { const char *game, *dir, *exe[2]; } qku_identity_t;	//exe: win64, linux64
 static const qku_identity_t qku_identities[] = {
 	{"ftesurf", "ftesurf/", {"ftesurf64.exe", "ftesurf64"}},
-	{"worldofsurf", "worldofsurf/", {"WorldofSurf.exe", "worldofsurf"}},
+	{"worldofsurf", "worldofsurf/", {"WorldofSurf.exe", "worldofsurf64"}},
 };
 static const qku_identity_t *qku_id;	//NULL refuses every signed manifest
 

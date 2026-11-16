@@ -14,7 +14,7 @@ import subprocess
 
 ENGINE = Path(__file__).resolve().parents[1] / 'engine'
 HASH = '0' * 64
-EXES = {'ftesurf': ('ftesurf64.exe', 'ftesurf64'), 'worldofsurf': ('WorldofSurf.exe', 'worldofsurf')}
+EXES = {'ftesurf': ('ftesurf64.exe', 'ftesurf64'), 'worldofsurf': ('WorldofSurf.exe', 'worldofsurf64')}
 
 STUB = r'''
 #include <stdio.h>
@@ -175,6 +175,7 @@ def cases(platform):
         'new zone file': (('managed', 'worldofsurf', 'worldofsurf/maps/zones/local/a.json'), 'managed'),
         'new player cfg refused': (('managed', 'worldofsurf', 'worldofsurf/cfg/settings.cfg'), 'refused'),
         'shared root file': (('managed', 'worldofsurf', 'default.fmf'), 'managed'),
+        'file at the gamedir name refused': (('managed', 'worldofsurf', 'worldofsurf'), 'refused'),
         'select ftesurf': (('select', 'ftesurf'), 'ftesurf'),
         'select worldofsurf': (('select', 'worldofsurf'), 'worldofsurf'),
         'select other': (('select', 'quakers'), 'none'),
