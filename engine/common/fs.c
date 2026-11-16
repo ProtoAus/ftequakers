@@ -6040,6 +6040,25 @@ char *FS_GetGamedir(qboolean publicpathonly)
 		return gamedirfile;
 }
 
+//FTESurf P1593: `ftesurf` and `worldofsurf` are one game; the lobbies keep announcing `ftesurf`.
+//Returns this install's basegame when dir is its other name, else NULL.
+const char *FS_GamedirAlias(const char *dir)
+{
+	static const char *names[] = {"ftesurf", "worldofsurf"};
+	size_t i, j;
+	if (!fs_manifest || !dir)
+		return NULL;
+	for (j = 0; j < countof(names) && Q_strcasecmp(dir, names[j]); j++)
+		;
+	if (j == countof(names))
+		return NULL;
+	for (i = 0; i < countof(fs_manifest->gamepath); i++)
+		if (fs_manifest->gamepath[i].path && (fs_manifest->gamepath[i].flags & GAMEDIR_BASEGAME) &&
+			!Q_strcasecmp(fs_manifest->gamepath[i].path, names[!j]))
+			return names[!j];	//not the manifest's string: COM_Gamedir may free that manifest
+	return NULL;
+}
+
 //returns the commandline arguments required to duplicate the fs details
 char *FS_GetManifestArgs(void)
 {

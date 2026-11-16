@@ -978,6 +978,20 @@ void CL_DownloadFinished(qdownload_t *dl)
 	}
 }
 
+//FTESurf P1593: a server announcing our basegame's other name (FS_GamedirAlias) is our own game:
+//no mount, no config reload, files land in our folder. Its spelling is kept for web downloads,
+//which ask for <dlURL>/<its gamedir>/ (surfd/maps.nginx serves /ftesurf/maps/).
+static char cl_servergamedir[MAX_QPATH];
+static const char *CL_ServerGamedir(const char *str)
+{
+	const char *own = FS_GamedirAlias(str);
+	Q_strncpyz(cl_servergamedir, own?str:"", sizeof(cl_servergamedir));
+	if (!own)
+		return str;
+	Con_DPrintf("Server gamedir \"%s\" is \"%s\" here\n", str, own);
+	return own;
+}
+
 static qboolean CL_CheckFile(const char *filename)
 {
 	if (strstr (filename, ".."))
@@ -1098,7 +1112,8 @@ qboolean	CL_CheckOrEnqueDownloadFile (const char *filename, const char *localnam
 			if (!strncmp(filename, "pics/../", 8))
 				filename += 8;
 #endif
-			Q_snprintfz(weburl, sizeof(weburl), "%s%s%s/%s", dlURL, ((dlURL[strlen(dlURL)-1]=='/')?"":"/"), FS_GetGamedir(true), filename);
+			Q_snprintfz(weburl, sizeof(weburl), "%s%s%s/%s", dlURL, ((dlURL[strlen(dlURL)-1]=='/')?"":"/"),
+				(cls.state != ca_disconnected && *cl_servergamedir)?cl_servergamedir:FS_GetGamedir(true), filename);
 			filename = weburl;
 			flags |= DLLF_TRYWEB|DLLF_ALLOWWEB;
 		}
@@ -3844,10 +3859,13 @@ static void CLQW_ParseServerData (void)
 	if (!*str)
 		str = "qw";	//FIXME: query active manifest's basegamedir
 
+	{
+		const char *dir = CL_ServerGamedir(str);
 #ifndef CLIENTONLY
-	if (!sv.state)
+		if (!sv.state)
 #endif
-		COM_Gamedir(str, NULL);
+			COM_Gamedir(dir, NULL);
+	}
 
 	CL_ClearState (true);
 #ifdef QUAKEHUD
@@ -4527,11 +4545,14 @@ static void CLNQ_ParseServerData(void)		//Doesn't change gamedir - use with caut
 	}
 	if (str)
 	{
+		const char *dir = CL_ServerGamedir(str);
 #ifndef CLIENTONLY
 		if (!sv.state)
 #endif
-			COM_Gamedir(str, NULL);
+			COM_Gamedir(dir, NULL);
 	}
+	else
+		*cl_servergamedir = 0;
 	if (cl.allocated_client_slots > MAX_CLIENTS)
 	{
 		cl.allocated_client_slots = MAX_CLIENTS;
