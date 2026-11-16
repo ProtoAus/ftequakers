@@ -7436,10 +7436,11 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify, const
 				Q_snprintfz(why, sizeof(why), "ticks: the zones say %i, the file says %i", vfin_ticks, endticks);
 			if (vrearm_row >= 0)
 				Con_Printf("  note      the replay re-enters this track's START at row %i\n", vrearm_row);
-			/*FTESurf Patch 1581: a state/physents difference on a run whose lobby had failed to load prop
-			  models is what a lobby that missed newly installed content looks like; say so beside it.*/
+			/*FTESurf Patch 1581: the run's lobby lacked solid prop model files; a state/physents difference is
+			  then what a lobby that missed newly installed content looks like. A hint from the file, not proof.*/
 			if (propmiss_n > 0 && (!strncmp(why, "state:", 6) || !strncmp(why, "physents:", 9)))
-				Q_strncatz(why, va("; the lobby lacked %i prop model(s) (%s): content skew, not tampering", propmiss_n, propmiss_names), sizeof(why));
+				Q_strncatz(why, va("; lobby lacked %i prop model file(s): %s%s (may be content skew)", propmiss_n, propmiss_names,
+					strlen(propmiss_names) >= sizeof(propmiss_names)-1 ? "..." : ""), sizeof(why));
 			if (*why)
 				Con_Printf("VERIFY %s HOLD %s\n", fname, why);
 			else
