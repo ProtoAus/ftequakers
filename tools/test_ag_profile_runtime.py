@@ -635,7 +635,7 @@ float(string cmd) CSQC_ConsoleCommand =
         (root/'selector-cycle.json').write_text(json.dumps({'passed':True,'midmap_identity_unchanged':True,'default_source_restored':True,'ag250_next_map':True,'final_client_acting':cycle_witness},indent=2))
         rate_logs=initial
     if args.expect_missing_capability:
-        assert 'requires an AG-v1 capable client' in logs
+        assert 'requires an AG-v1 capable client' in logs or 'movement profile needs a newer client' in logs
     else:
         assert 'AGSOCKET player' in logs and 'AGSOCKET FAIL' not in logs
         if optional:

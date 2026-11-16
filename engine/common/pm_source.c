@@ -5259,16 +5259,18 @@ static void PMSrc_TestBankStartGravity(void)
 			PMSrc_Check(hl2[h].name, pmove.velocity[0], hl2[h].want, 0.001f);
 		}
 		{	/* P1589: HL2 sprint is 320/190 of maxspeed on +speed, refused fully ducked */
-			float savems = movevars.maxspeed;
+			float savems = movevars.maxspeed, savewalk = movevars.walkspeed, savestamon = movevars.stamina, savestam = pmove.stamina;
 			int savebuttons = pmove.cmd.buttons;
+			movevars.walkspeed = movevars.stamina = pmove.stamina = 0;	//as the profile sets them
 			movevars.profilekind = PMPROFILE_HL2POST; movevars.maxspeed = 190;
 			pmove.cmd.buttons = BUTTON_SPEED; pmove.pm_type = PM_NORMAL; pmove.ducked = false;
 			PMSrc_Check("P1589 HL2 sprint maxspeed", PMSrc_EffectiveMaxSpeed(), 320, 0.001f);
 			pmove.ducked = true;
 			PMSrc_Check("P1589 HL2 no sprint fully ducked", PMSrc_EffectiveMaxSpeed(), 190, 0.001f);
 			movevars.profilekind = PMPROFILE_NONE;
-			PMSrc_Check("P1589 default +speed unchanged", PMSrc_EffectiveMaxSpeed(), 190 * (movevars.walkspeed > 0 ? movevars.walkspeed : 1), 0.001f);
+			PMSrc_Check("P1589 default +speed without walkspeed unchanged", PMSrc_EffectiveMaxSpeed(), 190, 0.001f);
 			pmove.ducked = false; movevars.maxspeed = savems; pmove.cmd.buttons = savebuttons;
+			movevars.walkspeed = savewalk; movevars.stamina = savestamon; pmove.stamina = savestam;
 		}
 		movevars.profilekind = PMPROFILE_NONE;
 		pms_forwardmove = 0;
