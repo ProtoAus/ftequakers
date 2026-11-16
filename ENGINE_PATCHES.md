@@ -1,5 +1,53 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1594 - The journal times each key press and release against the keyboard's own raw report
+
+**Problem.** P1576 drops key messages Windows says another program made, and P1586 notes patched code, but a
+tool inside the process that holds, delays or advances genuine key messages keeps their hardware origin and can
+do it without patching anything the scan compares. Key timing is what such a tool shapes (a strafe-sync helper
+moves releases), and nothing measured it: P1424 pairs presses with the raw keyboard inside a 100 ms window and
+never looked at releases.
+
+**Change.** in_win.c pairs legacy releases with a real keyboard's raw release of the same scancode as P1424 pairs
+presses (either order, one for one, inside RAWKEY_WINDOW; a second release before one is met counts the first
+alone; a release of a press the legacy path never saw is not judged; a focus change or raw re-registration ends
+the release pairings, after deciding what is already past its window). Every matched press and release adds its
+gap to `in_raw_keytime[2][8]` (0-0.5, 0.5-1, 1-2, 2-5, 5-10, 10-20, 20-50, 50-100 ms) and, when the legacy
+message came first, to `in_raw_keylegfirst`; a legacy release no raw release met counts in `in_raw_keyupalone`,
+a raw press no legacy press met in `in_raw_keyrawalone` (the game's own blocked keys, hotkeys, IMEs). Raw reports of
+Windows' fake shift (VKey 0xFF, E0 0x2A/0x36) and Pause's E1 report vouch for nothing. The observer now runs after
+the P1576 key guard, only for messages the guard passed, so a dropped keystroke is the guard's `kd` and never a
+lone release or a timed pair; the guard keeps its own clear of an earlier pending press of that scancode, so
+P1576's lapse path is as it was. Every raw report, mouse motion included, decides
+waiting presses, releases and raw presses, as P1424's presses were decided. All of it on the window thread. A
+journal snapshots the counters as it begins, promises them with the header `keytiming 1`, and at the trailer's
+moment beside the last 'y' writes `keytimes <8 press> <8 release> <releases alone> <presses legacy-first>
+<releases legacy-first> <raw presses alone>` while the keyboard is observed (kbdobserve 1), with 256 bytes left
+under in_jrn_max for `end`. The 8+8+1 layout is fixed; fields are appended. P1586's scan adds
+kernelbase!QueryPerformanceCounter and ntdll!RtlQueryPerformanceCounter, the clock this and the journal rest
+on. hidcheck lists the counts (PARTIAL where P1424's counts are), notes late pairs and lone releases, says when
+nothing paired, and never faults.
+
+**Verified.** tools/p1594keys.py (FTESurf), 10 posted taps a journal (no keyboard behind them). Guard off: 16
+zero buckets, 10 releases alone, P1424's 'y' 10, no raw press alone. Guard on (the default): `kd` 6, and the 4 taps that reached the game after P1576 stood down (a session
+with no hardware key, as on a rig) are exactly the releases alone; none of the dropped ones. Control (installed 0.1.48 exe): no keytimes line or promise. hidcheck this tree and the previous
+one: no fault; test_hidcheck 1680/0. Four review rounds. Round 1 (pairing/threading; evidence and what a tool keeps): a
+dropped keystroke counted as a lone release, releases decided only by key events, Windows' fake keys mispairing,
+a second release lost, the snapshot taken late, the reader calling a partial journal whole. Round 2: the line's
+tail overflowing a 16-byte buffer, a slot-based undo that could turn a blocked injection into a lapse, Pause
+broken by the fake-key filter, an expiry call that never ran. Round 3: the snapshot-and-restore undo could still
+lapse a held key and, with vid_winthread 1, make a journal count go backwards -- replaced by running the guard
+first. The pre-fix build counts all 10 guarded releases alone (6 of them dropped); the fix, 4. A real
+keyboard's gaps are the owner's to supply (lextest): a rig cannot press a key, so the pairing and bucketing are
+first exercised by the owner's journals.
+
+**Limits.** Measures the gap between the raw report and the legacy message of one keystroke as each is handled:
+this thread's own work between them adds to it, a tool that shapes both together (at the raw layer too) or stays
+under the smallest bucket is not seen, mouse buttons and the wheel have no second path to time against, and the
+histogram has no time or key (a handful of shaped keystrokes among thousands can hide in it). A lone legacy
+release followed by a real release of the same key within 100 ms is timed against the wrong one. Real-keyboard
+gaps are not calibrated yet.
+
 ## Patch 1592 - A run resumed from a save is "segmented", in its file name too
 
 **Problem.** Lex: rename the "shadow" runs and their demos to segmented. A shadow run (QC TF_SHADOW, RT_SHADOW 3)
