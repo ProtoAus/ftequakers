@@ -427,18 +427,19 @@ static qboolean QKU_JSONStrictNumber(const unsigned char **sp)
 //P1593: strict RFC 8259 text with an object at the top and at most QKU_JSONDEPTH levels, which is
 //what the launcher's serde reads, minus what JSON_Parse also takes (comments, trailing commas, a
 //BOM, text after the value, bare words). Iterative, so it runs BEFORE JSON_Parse recurses per
-//level on the 256 KB loader thread.
+//level on the 256 KB loader thread. An envelope is one level of exactly two string members, so
+//nothing nested in unsigned text is ever allocated.
 #define QKU_JSONDEPTH 32
-static qboolean QKU_JSONStrict(const char *text)
+static qboolean QKU_JSONStrict(const char *text, qboolean envelope)
 {
 	const unsigned char *s = (const unsigned char *)text;
 	char stack[QKU_JSONDEPTH];
-	int depth = 0;
+	int depth = 0, maxdepth = envelope ? 1 : QKU_JSONDEPTH, members = 0;
 	enum { WANT_VALUE, WANT_VALUE_OR_END, WANT_KEY, WANT_KEY_OR_END, WANT_COLON, WANT_NEXT, WANT_NOTHING } want = WANT_VALUE;
 	for (;;)
 	{
 		while (*s == ' ' || *s == '\t' || *s == '\n' || *s == '\r') s++;
-		if (!*s) return want == WANT_NOTHING;
+		if (!*s) return want == WANT_NOTHING && (!envelope || members == 2);
 		switch (want)
 		{
 		case WANT_NOTHING:
@@ -456,6 +457,7 @@ static qboolean QKU_JSONStrict(const char *text)
 		case WANT_KEY_OR_END:
 			if (*s == '}' && want == WANT_KEY_OR_END) { s++; want = --depth ? WANT_NEXT : WANT_NOTHING; break; }
 			if (*s != '"' || !QKU_JSONStrictString(&s)) return false;
+			members++;
 			want = WANT_COLON;
 			break;
 		case WANT_VALUE_OR_END:
@@ -465,12 +467,13 @@ static qboolean QKU_JSONStrict(const char *text)
 		case WANT_VALUE:
 			if (*s == '{' || *s == '[')
 			{
-				if ((!depth && *s != '{') || depth == QKU_JSONDEPTH) return false;
+				if ((!depth && *s != '{') || depth == maxdepth) return false;
 				stack[depth++] = *s;
 				want = *s++ == '{' ? WANT_KEY_OR_END : WANT_VALUE_OR_END;
 				break;
 			}
 			if (!depth) return false;	//an object at the top
+			if (envelope && *s != '"') return false;
 			if (*s == '"') { if (!QKU_JSONStrictString(&s)) return false; }
 			else if (*s == '-' || (*s >= '0' && *s <= '9')) { if (!QKU_JSONStrictNumber(&s)) return false; }
 			else if (!strncmp((const char *)s, "true", 4)) s += 4;
@@ -1037,7 +1040,7 @@ static json_t *QKU_FSParseSigned(const char *text, char **payloadout)
 	char sighex[129], *payload = NULL;
 	size_t n;
 	*payloadout = NULL;
-	if (strlen(text) > 2*1024*1024 || !QKU_JSONStrict(text)) return NULL;
+	if (strlen(text) > 2*1024*1024 || !QKU_JSONStrict(text, true)) return NULL;	//2 MiB accepted, as the boot read
 	envelope = JSON_Parse(text);
 	if (!envelope || !QKU_FSEnvelopeKeys(envelope)) goto done;
 	body = JSON_FindChild(envelope, "payload");
@@ -1049,7 +1052,7 @@ static json_t *QKU_FSParseSigned(const char *text, char **payloadout)
 	if (!QKU_FSJSONNoNul(payload, payload+strlen(payload))) goto done;
 	JSON_GetString(envelope, "signature", sighex, sizeof(sighex), "");
 	if (!QKU_DecodeHex(QKU_FSKEY, pk, sizeof(pk)) || !QKU_DecodeHex(sighex, sig, sizeof(sig)) || !Ed25519_Verify(sig, (const qbyte *)payload, strlen(payload), pk)) goto done;
-	payloadroot = QKU_JSONStrict(payload) ? JSON_Parse(payload) : NULL;
+	payloadroot = QKU_JSONStrict(payload, false) ? JSON_Parse(payload) : NULL;
 	if (payloadroot) { *payloadout = payload; payload = NULL; }
  done:
 	if (payload) Z_Free(payload);
@@ -1269,6 +1272,8 @@ static void QKU_Work_Check(void *ctx, void *data, size_t a, size_t b)
 
 	if (qku_ftesurf)
 	{
+		if (strlen(args->text) > 2*1024*1024 || !QKU_JSONStrict(args->text, true))
+		{ Q_strncpyz(plan->reason, "manifest is not valid JSON (a proxy error page?)", sizeof(plan->reason)); goto done; }
 		root = QKU_FSParseSigned(args->text, &payload);
 		if (!root) { Q_strncpyz(plan->reason, "update manifest signature is invalid", sizeof(plan->reason)); goto done; }
 		if (!QKU_FSValidateManifest(root)) { Q_strncpyz(plan->reason, "signed update format/policy is invalid", sizeof(plan->reason)); goto done; }
@@ -2515,7 +2520,7 @@ void QKU_ReplayJournal(void)
 		qku_state_t state;
 		qboolean older;
 		QKU_InstallPath(sigpath, sizeof(sigpath), ".ftesurf-updater/ingame/manifest.json");
-		signedtext = QKU_ReadTextFile(sigpath, 2*1024*1024);
+		signedtext = QKU_ReadTextFile(sigpath, 2*1024*1024 + 1);	//refuses >= max: 2 MiB accepted, as QKU_FSParseSigned
 		signedroot = signedtext ? QKU_FSParseSigned(signedtext, &signedpayload) : NULL;
 		if (!signedroot || !QKU_FSValidateManifest(signedroot) || !count || count > 8192 || !files || files->type != json_type_array) Sys_Error("Update recovery lacks a valid signed manifest. Run the launcher to repair.");
 		JSON_GetString(signedroot, "version", version, sizeof(version), "");

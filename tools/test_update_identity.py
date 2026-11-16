@@ -2,8 +2,10 @@
 """P1593: compile qkupdate.c's identity selection and signed-manifest policy; drive two identities.
 
 The real slices (QKU_ValidPath .. QKU_FSValidateManifest, QKU_FSNoLinks, QKU_FSRegular ..
-QKU_FSIdentity) are compiled with the real json.c and qclib/hash.c under a stub quakedef.h,
-once per platform; QKU_InstallPath is stubbed onto a fixture root. Signatures are not involved: the
+QKU_FSIdentity, QKU_FSJSONNoNul .. QKU_FSParseSigned) are compiled with the real json.c and
+qclib/hash.c under a stub quakedef.h, once per platform; QKU_InstallPath is stubbed onto a fixture
+root, and Ed25519_Verify onto a toy rule (64 copies of the message's byte sum) so the parse sites
+are exercised with signatures that pass -- the curve itself is tools/ed25519check.py's. Signatures are not involved: the
 policy runs on the parsed payload, exactly as after QKU_FSParseSigned. Mutants are plausible
 wrong cuts of the change; each must let through exactly the cases that guard against it.
 """
@@ -70,6 +72,16 @@ static char *QKU_ReadTextFile(const char *abspath, size_t maxsize)	//the engine'
 	if (!f || n >= maxsize || strlen(buf) != n) { free(buf); return NULL; }
 	return buf;
 }
+#define QKU_FSKEY "0000000000000000000000000000000000000000000000000000000000000000"
+static qboolean Ed25519_Verify(const qbyte sig[64], const qbyte *m, size_t mlen, const qbyte pk[32])
+{	//harness toy, not a signature scheme: 64 copies of the message's byte sum
+	unsigned sum = 0;
+	size_t i;
+	(void)pk;
+	for (i = 0; i < mlen; i++) sum += m[i];
+	for (i = 0; i < 64; i++) if (sig[i] != (qbyte)sum) return false;
+	return true;
+}
 '''
 
 DRIVER = r'''
@@ -119,14 +131,21 @@ int main(int argc, char **argv)
 		printf("%s\n", id ? id->game : "none");
 		return 0;
 	}
-	if (argc == 3 && (!strcmp(argv[1], "strict") || !strcmp(argv[1], "envelope")))
-	{	//strict <file>: QKU_JSONStrict. envelope <file>: QKU_FSEnvelopeKeys on JSON_Parse's tree.
-		char *text = readall(argv[2]);
+	if (argc == 3 && (!strcmp(argv[1], "strict") || !strcmp(argv[1], "strictenv") || !strcmp(argv[1], "envelope") || !strcmp(argv[1], "parse")))
+	{	//strict|strictenv <file>: QKU_JSONStrict payload/envelope mode. envelope <file>: QKU_FSEnvelopeKeys
+		//on JSON_Parse's tree. parse <file>: QKU_FSParseSigned.
+		char *text = readall(argv[2]), *payload = NULL;
 		json_t *root;
 		if (!text) return 2;
-		if (!strcmp(argv[1], "strict"))
+		if (!strcmp(argv[1], "strict") || !strcmp(argv[1], "strictenv"))
 		{
-			printf("%s\n", QKU_JSONStrict(text) ? "strict" : "refused");
+			printf("%s\n", QKU_JSONStrict(text, !strcmp(argv[1], "strictenv")) ? "strict" : "refused");
+			return 0;
+		}
+		if (!strcmp(argv[1], "parse"))
+		{
+			root = QKU_FSParseSigned(text, &payload);
+			printf("%s\n", root ? "parsed" : "refused");
 			return 0;
 		}
 		root = JSON_Parse(text);
@@ -199,21 +218,45 @@ MUTANTS = {
     'escapes-allowed': (" || strchr(names[i], '\\\\')", '', {'escaped duplicate key'}),
     'dots-allowed': ("strchr(names[i], '.') || ", '', {'dotted key'}),
     'no-key-cap': ('if (++n > 8192) return true;', '++n;', {'object over the key cap'}),
-    'deeper-nesting': ('#define QKU_JSONDEPTH 32', '#define QKU_JSONDEPTH 40', {'strict: 33 levels'}),
+    'deeper-nesting': ('#define QKU_JSONDEPTH 32', '#define QKU_JSONDEPTH 40', {'strict: 33 levels', 'parse: payload 33 levels'}),
     'trailing-text-allowed': ('\t\t\treturn false;\t//text after the value', '\t\t\treturn true;',
-                              {'strict: text after the value', 'strict: second object'}),
-    'trailing-comma-allowed': (" && want == WANT_KEY_OR_END) {", ") {", {'strict: trailing comma in an object'}),
+                              {'strict: text after the value', 'strict: second object', 'parse: trailing comment'}),
+    'trailing-comma-allowed': (" && want == WANT_KEY_OR_END) {", ") {",
+                               {'strict: trailing comma in an object', 'parse: payload trailing comma'}),
     'control-chars-allowed': ('\t\tif (c < 0x20) return false;\t//includes the terminating NUL', '\t\tif (!c) return false;',
                               {'strict: raw control character in a string'}),
     'lone-surrogate-allowed': ('\t\t\tif (u >= 0xDC00 && u <= 0xDFFF) return false;\n', '', {'strict: lone trailing surrogate'}),
     'overlong-allowed': ('int n = c >= 0xC2 && c <= 0xDF', 'int n = c >= 0xC0 && c <= 0xDF', {'strict: overlong UTF-8'}),
-    'array-top-allowed': ("if ((!depth && *s != '{') || depth == QKU_JSONDEPTH)", 'if (depth == QKU_JSONDEPTH)',
+    'envelope-strict-skipped': (' || !QKU_JSONStrict(text, true)) return NULL;', ') return NULL;',
+                                {'parse: byte order mark', 'parse: trailing comment'}),
+    'payload-strict-skipped': ('QKU_JSONStrict(payload, false) ? JSON_Parse(payload) : NULL', 'JSON_Parse(payload)',
+                               {'parse: payload trailing comma', 'parse: payload 33 levels'}),
+    'envelope-depth-loose': ('maxdepth = envelope ? 1 : QKU_JSONDEPTH', 'maxdepth = QKU_JSONDEPTH',
+                             {'strictenv: nested member', 'strictenv: 2 MiB of nested arrays'}),
+    'envelope-members-unchecked': ('(!envelope || members == 2)', '(!envelope || members >= 0)',
+                                   {'strictenv: three members', 'strictenv: one member'}),
+    'envelope-scalars-allowed': ("\t\t\tif (envelope && *s != '\"') return false;\n", '', {'strictenv: number member'}),
+    'size-bound-tightened': ('if (strlen(text) > 2*1024*1024 ||', 'if (strlen(text) >= 2*1024*1024 ||', {'parse: exactly 2 MiB'}),
+    'array-top-allowed': ("if ((!depth && *s != '{') || depth == maxdepth)", 'if (depth == maxdepth)',
                           {'strict: array at the top'}),
     'envelope-extra-allowed': ('if (bit == 4u || (seen & bit)) return false;', 'if (bit == 4u) { continue; } if (seen & bit) { return false; }',
                                {'envelope: extra key'}),
     'envelope-repeat-allowed': ('if (bit == 4u || (seen & bit)) return false;', 'if (bit == 4u) return false;',
                                 {'envelope: repeated payload'}),
 }
+
+
+MODES = ('strict', 'strictenv', 'envelope', 'parse')
+
+
+def envelope(payload, upper=False, pad=0):
+    """An envelope the harness's toy Ed25519_Verify accepts; pad trails whitespace to `pad` bytes."""
+    if upper:  # pad the payload until its toy signature has a hex letter for upper() to change
+        while not set('%02x' % (sum(payload.encode()) & 0xff)) & set('abcdef'):
+            payload += ' '
+    sig = ('%02x' % (sum(payload.encode()) & 0xff)) * 64
+    text = json.dumps({'payload': payload, 'signature': sig.upper() if upper else sig}, separators=(',', ':'))
+    return text + ' ' * (pad - len(text)) if pad else text
 
 
 def feed_for(game):
@@ -352,10 +395,31 @@ def cases(platform, roots):
         'envelope: extra key': ('{"payload":"x","signature":"y","note":"z"}', 'refused'),
         'envelope: repeated payload': ('{"payload":"x","payload":"x","signature":"y"}', 'refused'),
         'envelope: missing signature': ('{"payload":"x"}', 'refused'),
+        'strictenv: two string members': ('{"payload":"x","signature":"y"}', 'strict'),
+        'strictenv: three members': ('{"payload":"x","signature":"y","n":"z"}', 'refused'),
+        'strictenv: one member': ('{"payload":"x"}', 'refused'),
+        'strictenv: number member': ('{"payload":"x","signature":1}', 'refused'),
+        'strictenv: nested member': ('{"payload":"x","signature":[]}', 'refused'),
+        'strictenv: 2 MiB of nested arrays': ('{"payload":"x","signature":[' + ','.join(['[]'] * 699000) + ']}', 'refused'),
     }
+    signed_good = envelope(legacy_text)
+    big = envelope(legacy_text, pad=2 * 1024 * 1024)
+    strict.update({
+        'parse: a toy-signed envelope': (signed_good, 'parsed'),
+        'parse: wrong signature': (json.dumps({'payload': legacy_text, 'signature': ('%02x' % ((sum(legacy_text.encode()) + 1) & 0xff)) * 64}), 'refused'),
+        'parse: uppercase signature': (envelope(legacy_text, upper=True), 'refused'),
+        'parse: byte order mark': ('\ufeff' + signed_good, 'refused'),
+        'parse: trailing comment': (signed_good + '//x', 'refused'),
+        'parse: text after the envelope': (signed_good + ' x', 'refused'),
+        'parse: payload trailing comma': (envelope(legacy_text[:-1] + ',}'), 'refused'),
+        'parse: payload 33 levels': (envelope(legacy_text[:-1] + ',"deep":' + '[' * 32 + ']' * 32 + '}'), 'refused'),
+        'parse: payload 32 levels': (envelope(legacy_text[:-1] + ',"deep":' + '[' * 31 + ']' * 31 + '}'), 'parsed'),
+        'parse: exactly 2 MiB': (big, 'parsed'),
+        'parse: 2 MiB plus one': (big + ' ', 'refused'),
+    })
     for name, (text_in, want) in strict.items():
-        feeds[name] = (text_in, 'strict' if name.startswith('strict') else 'envelope', want)
-    out = {name: ((ident, payload) if ident in ('strict', 'envelope') else ('validate', ident, payload), want)
+        feeds[name] = (text_in, name.split(':')[0], want)
+    out = {name: ((ident, payload) if ident in MODES else ('validate', ident, payload), want)
            for name, (payload, ident, want) in feeds.items()}
     out.update({
         'legacy path under new': (('managed', 'worldofsurf', 'ftesurf/menu.dat'), 'refused'),
@@ -417,7 +481,7 @@ def build(work, name, code, platform, cc, env):
 def run(binary, table, work, env):
     got = {}
     for name, (argv, _) in table.items():
-        if argv[0] in ('validate', 'strict', 'envelope'):
+        if argv[0] in ('validate', *MODES):
             data = argv[-1] if isinstance(argv[-1], (str, bytes)) else json.dumps(argv[-1])
             payload = work / 'payload.json'
             payload.write_bytes(data if isinstance(data, bytes) else data.encode())
@@ -442,7 +506,8 @@ def main():
     policy = source[source.index('static qboolean QKU_ValidHash('):source.index('//`path` comes straight out')] + \
         source[source.index('static qboolean QKU_ValidPath('):source.index('static qboolean QKU_FSNoLinks(')] + \
         source[source.index('static qboolean QKU_FSNoLinks('):source.index('//FTESurf Patch 1209: the launcher is WOS-Launcher.')] + \
-        source[source.index('static int QKU_FSRegular('):source.index('// Missing content can be repaired;')]
+        source[source.index('static int QKU_FSRegular('):source.index('// Missing content can be repaired;')] + \
+        source[source.index('static qboolean QKU_FSJSONNoNul('):source.index('static qboolean QKU_FSSaveEnvelope(')]
     common = (ENGINE / 'common/common.h').read_text().replace('\r\n', '\n')
     json_block = common[common.index('//json.c\n'):common.index("//there's no write logic")]
     (a.work_root / 'quakedef.h').write_text(STUB + json_block)
