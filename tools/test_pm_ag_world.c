@@ -270,5 +270,9 @@ static void CS16(void)
 	Reset(); pmove.ducked=true; pmove.origin[2]=18; pmove.cmd.forwardmove=450; pmove.cmd.buttons=BUTTON_DUCK; PMAg_PlayerMove(1);
 	NEAR(pmove.velocity[0],10*320*0.333f*0.01f,0.001f);
 	puts("PASS AG ducked 450 forward: clamp to 320 then crop, wish 106.6 (not 149.9)");
+	Reset(); movevars.maxspeed=320; pmove.origin[2]=1000; pmove.cmd.sidemove=450; pmove.cmd.upmove=200; pmove.cmd.buttons=BUTTON_JUMP; PMAg_PlayerMove(1);
+	NEAR(fabsf(pmove.velocity[1]),30,0.001f); // air: client upmove 200 with jump held must not shrink the side wish (P1542 behaviour)
+	Reset(); pmove.cmd.sidemove=450; pmove.cmd.upmove=200; PMAg_PlayerMove(1); NEAR(fabsf(pmove.velocity[1]),32,0.001f);
+	puts("PASS uncropped moves ignore the clamp: held-jump upmove 200 leaves the side wish at 320");
 }
 int main(void) {Dry();Clock();CollisionAndNoEquipment();CS16();Duck();WaterLadder();ReviewedControls();puts("PASS AG world solver fixtures (not BSP/socket/oracle acceptance)");return 0;}
