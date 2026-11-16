@@ -37,6 +37,65 @@ bypassing the mode, unindexed sort, per-map scan, out-of-pool finishes -- all fi
 Limits: the surfd half needs a guarded backend generation; a partly crawled KSF board's X is a lower bound;
 ui_native_scores draws no group lines (BACKLOG).
 
+## Patch 1589 - HL2 (before/after the jump limiter), AG 1000 and CS 1.6 movement profiles
+
+**Problem.** Lex asked for HL2 movement before and after its jump-boost limiter, HL1/AG at 100/250/1000 and
+CS 1.6 movement as practice modes. P1542 shipped ag-100/ag-250 on `sv_movementprofile`; ag-1000 was refused
+(eight ticks per command cannot carry a 1 ms rate) and the others did not exist. A separate private attempt
+moved HL2's whole player state over a new wire format and never got a client to accept it.
+
+**Change.** pm_ag.c holds one profile table (PM_ProfileByIdentity/BySelector); the selector check (sv_ccmds.c),
+SV_ApplyMovementProfile, the held-file roots (sv_held_file.c), the held recorder (pr_cmds.c) and the client's
+context (cl_main.c) read it instead of naming ag-100/ag-250. movevars.profilekind (appended) carries the kind to
+both movers on both sides; SV_PMPinApply, SV_DetPinMover and pm_selftest clear it (a recording's pin names none).
+- `hl2-pre`, `hl2-post`: PMSrc with HL2's values (gravity 600, jump 160 = SDK movement optimisations,
+  sv_maxspeed 190, +speed sprints at maxspeed*320/190 unless fully ducked, hull 72/36, eyes 64/28, duck crop
+  0.333, full-delta air duck, no autobunny/stamina/normalised jump, Momentum's surf fixes off, 0.015 s ticks)
+  plus PMSrc_HL2JumpBoost, gamemovement.cpp's single-player boost along the flat view axis: fmove * 0.5 (0.1
+  sprinting or ducked). Pre adds it unclamped; post clamps the total to 1.5x maxspeed and takes the sign from
+  fmove after the clamp, so facing away from the travel direction gains speed (ABH).
+- `ag-1000`: 1 ms ticks; PMAg_TickBudget allows 32 ticks per command there (8 at 100/250, unchanged);
+  CL_MaxFPSFloor stops at 250 for AG so the frame cap is not forced to 1000.
+- `cs16`: PMAg with accelerate 5, stopspeed 75, maxspeed 250 (knife), eyes 17 (VEC_VIEW), the 0.333 crop from
+  the first ducking tick, CS 1.6's fuser2 in pmove.stamina (a jump scales its impulse by (100 - fuser2*0.019)/100,
+  then recharges 1315.789 ms; ground ticks inside it scale horizontal speed by the same ratio) and
+  PreventMegaBunnyJumping (a jump above 1.2x maxspeed leaves 0.8 of that). pmsrc is not networked, so the
+  server publishes run_movestamina and cs16's phase stat appends it ("owner:lo:hi:carry:stamina");
+  CL_PredictSourcePhase seeds the replay with it.
+- Clients advertise `*pmprofile 1589`; SV_New_f drops an older client from a profile newer than it (it would
+  refuse the identity or predict without the rules); ag-100/250 keep the `*agmove` gate.
+- When the duck crop applies, PMAg clamps forward/side to maxspeed first (PM_CheckParamters order; not upmove, which
+  this client sets to 200 while jump is held), so a ducked 450 forward wishes 106.6 under AG (was 149.9) and 83.3
+  under cs16. Uncropped moves are P1542's exactly.
+- pm_dettest's census arm clears the live profile, and pm_recsim refuses an unpinned recording on a profile server
+  (an AG server ended the map there since P1542).
+QC (2b7430e4, 9c200faa): the four identities join FS_MovementProfileKnown and the sweeps;
+FS_MovementProfileGoldSrc picks the centred hull and the AG water-jump save path, so hl2-* spawn on Source's feet
+origin and save without an agwaterjump line. reccheck.py notes an HL2-profile recording as unsupported (no physics
+verdict) instead of faulting it (main's reader faulted the real hl2-pre file), and still requires its unranked
+flag. pm_verify already abstains on any `movementprofile` header.
+
+**Verified.** pm_selftest: all checks passed (1841 ok), P1589 cases: boost pre 300->395; post 200->285, 300->285; post
+facing away at 400 u/s, no input -> 515; holding back -> 285; pre facing away -> 400; default -> 300; sprint
+320, fully ducked 190. tools/test_pm_ag_world.c (gnu99 -Wall -Wextra -Werror): 1000 Hz free fall z 600.000 over
+1000 commands; 32-tick stalled command; CS16 jump 260.33 fresh, 0.905x after 500 ms of fuser2; landing
+192 -> 173.76 (plain AG 192); bhop 400 -> 239.99 (AG 400); cs16 first ducking tick 4.16 (AG 12.5); AG ducked 450 -> 10.66 u/s (the previous
+mover fails both); old 100/250 fixtures unchanged. tools/test_pm_ag.py: 6 mutants still rejected. Rendered dedicated+client runs
+(tools/test_ag_profile_runtime.py --rendered, rig.lock): every profile's airborne commands predicted within one
+%.2f print step (hl2 63+63 rows 0.00, cs16 87 and ag-1000 247 rows <= 0.01) except ag-100/ag-250's one-row 0.02 z
+transient, which the pre-P1589 engine shows too (ctl-ag-250); server peak speed 285
+under hl2 from a 190 walk (default 260, no boost); cs16 landings predicted command for command after the stamina
+seed (before it: 0.39 u, 8 prederr lines). Default shows the same 1-2 u walk-start error, so that is not P1589's.
+Profile runs saved/restored in their namespace, recorded only under data/experimental/<identity>/, no PB or
+submission. One server process default -> hl2-post -> cs16 -> default: the last step's movement cvars equal the
+first's. A 0.1.47 client is dropped from cs16 ("needs a newer client"). reccheck 979/0, test_reccheck_ag 7/7.
+
+**Limits.** Values come from SDK 2013/ReGameDLL as known, not a reference recording. HL2's duck-jump timers
+(m_flJumpTime/m_flDuckJumpTime), +walk and suit-power sprint drain are not modelled (sprint is unlimited); CS 1.6
+runs at knife speed only; ag-1000 samples input once per command (8-13 ms) and its run_movetick float stops
+counting exactly after ~4.7 h on one map. QC traces using PM_HULL (zone_goto, teleports) keep the 62-unit hull.
+TAS projects under hl2-pre/hl2-post share one pin (BACKLOG). Human feel check pending (lextest.md).
+
 ## Patch 1588 - A game this PC hosts predicts save loads and holds, as a remote one does
 
 **Problem.** Lex (16 Nov, after 0.1.47): `map surf_colin_blaster_69000` from the console, then a load: "Loading save"
