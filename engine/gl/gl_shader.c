@@ -5831,7 +5831,7 @@ void R_MapReadyInfo_f(void)
 		GLBE_CaptureTargets_Info();	//FTESurf Patch 1575
 	}
 #endif
-	Con_Printf("mapready: closure excludes future registrations, render targets other than the water captures, audio, driver first-draw and route coverage; NOT timer admission\n");
+	Con_Printf("mapready: closure excludes future registrations, render targets other than the main view's water captures, audio, driver first-draw and route coverage; NOT timer admission\n");
 }
 
 //one permutation of an active program at activation: counted, compiled unless already there or past the budget
