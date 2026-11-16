@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """P1593: compile qkupdate.c's identity selection and signed-manifest policy; drive two identities.
 
-The real slice (QKU_ValidPath .. QKU_FSValidateManifest) is compiled with the real json.c and
-qclib/hash.c under a stub quakedef.h, once per platform. Signatures are not involved: the
+The real slices (QKU_ValidPath .. QKU_FSValidateManifest, QKU_FSNoLinks, QKU_FSRegular ..
+QKU_FSIdentity) are compiled with the real json.c and qclib/hash.c under a stub quakedef.h,
+once per platform; QKU_InstallPath is stubbed onto a fixture root. Signatures are not involved: the
 policy runs on the parsed payload, exactly as after QKU_FSParseSigned. Mutants are plausible
 wrong cuts of the change; each must let through exactly the cases that guard against it.
 """
@@ -10,6 +11,7 @@ import argparse
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 
 ENGINE = Path(__file__).resolve().parents[1] / 'engine'
@@ -17,6 +19,13 @@ HASH = '0' * 64
 EXES = {'ftesurf': ('ftesurf64.exe', 'ftesurf64'), 'worldofsurf': ('WorldofSurf.exe', 'worldofsurf64')}
 
 STUB = r'''
+#ifdef _WIN32
+#define NOMINMAX
+#include <windows.h>
+#else
+#include <errno.h>
+#include <sys/stat.h>
+#endif
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -45,6 +54,14 @@ enum { GAMEDIR_BASEGAME=1u<<0, GAMEDIR_PRIVATE=1u<<1, GAMEDIR_USEBASEDIR=1u<<3, 
 typedef struct { struct { unsigned flags; char *path; } gamepath[8]; } ftemanifest_t;
 '''
 
+PRE = r'''
+static char harness_root[1024];
+static void QKU_InstallPath(char *out, size_t outsize, const char *rel)
+{
+	snprintf(out, outsize, "%s/%s", harness_root, rel);
+}
+'''
+
 DRIVER = r'''
 static char *readall(const char *name)
 {
@@ -66,23 +83,36 @@ static const qku_identity_t *named(const char *name)
 	return NULL;
 }
 
-//select [*]basegame...: '*' marks a GAMEDIR_SPECIAL entry. validate <identity|none> <payload.json>.
-//managed <identity> <path>. Prints the verdict; exit 2 on harness misuse.
+//select [*]basegame...: '*' marks a GAMEDIR_SPECIAL entry. identity <root> <basegame>: the boot
+//rule, BASEGAME plus its gamedir on disk. validate <identity|none> <payload.json>.
+//managed <identity> <path>. feed <identity>. Prints the verdict; exit 2 on harness misuse.
 int main(int argc, char **argv)
 {
-	if (argc >= 2 && !strcmp(argv[1], "select"))
+	if (argc >= 2 && (!strcmp(argv[1], "select") || !strcmp(argv[1], "identity")))
 	{
 		ftemanifest_t man;
 		const qku_identity_t *id;
-		int i;
+		int i, first = 2;
 		memset(&man, 0, sizeof(man));
-		for (i = 2; i < argc && i - 2 < 8; i++)
+		if (!strcmp(argv[1], "identity"))
 		{
-			man.gamepath[i-2].flags = GAMEDIR_BASEGAME | (argv[i][0] == '*' ? GAMEDIR_STEAMGAME : 0);
-			man.gamepath[i-2].path = argv[i] + (argv[i][0] == '*');
+			if (argc < 3) return 2;
+			snprintf(harness_root, sizeof(harness_root), "%s", argv[2]);
+			first = 3;
 		}
-		id = QKU_FSSelectIdentity(&man);
+		for (i = first; i < argc && i - first < 8; i++)
+		{
+			man.gamepath[i-first].flags = GAMEDIR_BASEGAME | (argv[i][0] == '*' ? GAMEDIR_STEAMGAME : 0);
+			man.gamepath[i-first].path = argv[i] + (argv[i][0] == '*');
+		}
+		id = first == 3 ? QKU_FSIdentity(&man) : QKU_FSSelectIdentity(&man);
 		printf("%s\n", id ? id->game : "none");
+		return 0;
+	}
+	if (argc == 3 && !strcmp(argv[1], "feed"))
+	{
+		const qku_identity_t *id = named(argv[2]);
+		printf("%s\n", id ? id->feed : "none");
 		return 0;
 	}
 	if (argc == 4 && !strcmp(argv[1], "validate"))
@@ -121,6 +151,15 @@ MUTANTS = {
                                  {'special basegame skipped'}),
     'casefold-identity': ('\t\tif (!strcmp(last, qku_identities[i].game))\n', '\t\tif (!Q_strcasecmp(last, qku_identities[i].game))\n',
                           {'basegame matched exactly'}),
+    'identity-without-gamedir': ('\treturn id && QKU_FSGamedirCounts(id) ? id : NULL;', '\treturn id;',
+                                 {'no gamedir', 'stray folder', 'one required file', 'linked gamedir', 'required file is a directory',
+                                  'basegame names a different gamedir'}),
+    'any-file-counts': ('\treturn have >= 2;', '\treturn have >= 1;', {'one required file', 'required file is a directory'}),
+    'all-three-required': ('\treturn have >= 2;', '\treturn have >= 3;', {'mid-apply, two files'}),
+    'links-count': ('if (QKU_FSNoLinks(rel) && QKU_FSRegular(abs) == 1)', 'if (QKU_FSRegular(abs) == 1)', {'linked gamedir'}),
+    'repeats-allowed': ('\tif (QKU_JSONRepeatsKey(root)) return false;\n', '',
+                        {'repeated top-level key', 'repeated nested key', 'escaped duplicate key'}),
+    'escapes-allowed': ("\t\t\tif (strchr(a->name, '\\\\')) return true;\n", '', {'escaped duplicate key'}),
 }
 
 
@@ -143,9 +182,42 @@ def plus(payload, path, platform='all'):
     return dict(payload, files=payload['files'] + [{'path': path, 'hash': HASH, 'size': 1, 'platform': platform, 'exec': False}])
 
 
-def cases(platform):
+def fixtures(work):
+    """Gamedir layouts on disk for the boot identity rule: name -> install root."""
+    roots = {}
+    layouts = {'full': ('ftesurf', ['menu.dat', 'csprogs.dat', 'qwprogs.dat']), 'empty': (None, []),
+               'stray': ('worldofsurf', ['readme.txt']), 'one': ('worldofsurf', ['menu.dat']),
+               'two': ('worldofsurf', ['csprogs.dat', 'qwprogs.dat']), 'dirfile': ('worldofsurf', ['csprogs.dat'])}
+    for name, (gamedir, leaves) in layouts.items():
+        root = work / 'roots' / name
+        root.mkdir(parents=True)
+        for leaf in leaves:
+            (root / gamedir).mkdir(exist_ok=True)
+            (root / gamedir / leaf).write_bytes(leaf.encode())
+        roots[name] = root
+    (roots['dirfile'] / 'worldofsurf/menu.dat').mkdir()
+    target = work / 'roots/elsewhere/worldofsurf'
+    target.mkdir(parents=True)
+    for leaf in ('menu.dat', 'csprogs.dat', 'qwprogs.dat'):
+        (target / leaf).write_bytes(leaf.encode())
+    roots['linked'] = work / 'roots/linked'
+    roots['linked'].mkdir()
+    if os.name == 'nt':
+        subprocess.run(['cmd', '/C', 'mklink', '/J', str(roots['linked'] / 'worldofsurf'), str(target)],
+                       check=True, capture_output=True)
+    else:
+        os.symlink(target, roots['linked'] / 'worldofsurf')
+    return roots
+
+
+def cases(platform, roots):
     """name -> (argv after the binary, expected stdout)."""
     here = 0 if platform == 'win64' else 1
+    text = json.dumps(dict(feed_for('ftesurf'), game='worldofsurf'), separators=(',', ':'))
+    first_game = '{"game":"ftesurf",' + text[1:]  # JSON_FindChild takes the first: ftesurf
+    legacy_text = json.dumps(feed_for('ftesurf'), separators=(',', ':'))
+    nested = legacy_text.replace('"hash":"', f'"hash":"{HASH}","hash":"', 1)
+    escaped = '{"g\\u0061me":"worldofsurf",' + legacy_text[1:]
     relabelled = dict(feed_for('worldofsurf'), game='ftesurf')
     legacy_as_new = dict(feed_for('ftesurf'), game='worldofsurf')
     legacy_exec = json.loads(json.dumps(feed_for('worldofsurf')))
@@ -164,6 +236,9 @@ def cases(platform):
         'new gamedir in a legacy feed': (plus(feed_for('ftesurf'), 'worldofsurf/gfx/x.png'), 'ftesurf', 'refuse'),
         'outside the gamedir': (plus(feed_for('worldofsurf'), 'worldofsurf/data/consent.txt'), 'worldofsurf', 'refuse'),
         'traversal out of the gamedir': (plus(feed_for('worldofsurf'), 'worldofsurf/../ftesurf/menu.dat'), 'worldofsurf', 'refuse'),
+        'repeated top-level key': (first_game, 'ftesurf', 'refuse'),
+        'repeated nested key': (nested, 'ftesurf', 'refuse'),
+        'escaped duplicate key': (escaped, 'ftesurf', 'refuse'),
     }
     out = {name: (('validate', ident, payload), want) for name, (payload, ident, want) in feeds.items()}
     out.update({
@@ -183,6 +258,16 @@ def cases(platform):
         'basegame matched exactly': (('select', 'WorldofSurf'), 'none'),
         'last basegame wins': (('select', 'ftesurf', 'worldofsurf'), 'worldofsurf'),
         'special basegame skipped': (('select', 'worldofsurf', '*ftesurf'), 'worldofsurf'),
+        'full gamedir': (('identity', str(roots['full']), 'ftesurf'), 'ftesurf'),
+        'no gamedir': (('identity', str(roots['empty']), 'worldofsurf'), 'none'),
+        'stray folder': (('identity', str(roots['stray']), 'worldofsurf'), 'none'),
+        'one required file': (('identity', str(roots['one']), 'worldofsurf'), 'none'),
+        'mid-apply, two files': (('identity', str(roots['two']), 'worldofsurf'), 'worldofsurf'),
+        'linked gamedir': (('identity', str(roots['linked']), 'worldofsurf'), 'none'),
+        'required file is a directory': (('identity', str(roots['dirfile']), 'worldofsurf'), 'none'),
+        'basegame names a different gamedir': (('identity', str(roots['full']), 'worldofsurf'), 'none'),
+        'legacy feed url': (('feed', 'ftesurf'), 'https://proto.bar/ftesurf/update.json'),
+        'worldofsurf feed url': (('feed', 'worldofsurf'), 'https://proto.bar/ftesurf/worldofsurf.json'),
     })
     return out
 
@@ -191,7 +276,7 @@ def build(work, name, code, platform, cc, env):
     """The subject slice is held to -Werror; json.c and hash.c are engine code, built as they are."""
     c = work / f'{name}-{platform}.c'
     binary = work / f'{name}-{platform}.exe'
-    c.write_text('#include "quakedef.h"\n#include "hash.h"\n' + code + DRIVER)
+    c.write_text('#include "quakedef.h"\n#include "hash.h"\n' + PRE + code + DRIVER)
     include = ['-I', str(work), '-I', str(ENGINE / 'qclib')]
     for obj, src in (('json.o', work / 'json.c'), ('hash.o', ENGINE / 'qclib/hash.c')):
         if not (work / obj).exists():
@@ -207,7 +292,7 @@ def run(binary, table, work, env):
     for name, (argv, _) in table.items():
         if argv[0] == 'validate':
             payload = work / 'payload.json'
-            payload.write_text(json.dumps(argv[2]))
+            payload.write_text(argv[2] if isinstance(argv[2], str) else json.dumps(argv[2]))
             argv = (argv[0], argv[1], str(payload))
         r = subprocess.run([str(binary), *argv], capture_output=True, text=True, env=env)
         assert r.returncode == 0, (name, r.returncode, r.stderr)
@@ -227,14 +312,17 @@ def main():
         env['PATH'] = str(Path(a.cc).parent) + os.pathsep + env.get('PATH', '')
     source = (ENGINE / 'common/qkupdate.c').read_text().replace('\r\n', '\n')
     policy = source[source.index('static qboolean QKU_ValidHash('):source.index('//`path` comes straight out')] + \
-        source[source.index('static qboolean QKU_ValidPath('):source.index('static qboolean QKU_FSNoLinks(')]
+        source[source.index('static qboolean QKU_ValidPath('):source.index('static qboolean QKU_FSNoLinks(')] + \
+        source[source.index('static qboolean QKU_FSNoLinks('):source.index('//FTESurf Patch 1209: the launcher is WOS-Launcher.')] + \
+        source[source.index('static int QKU_FSRegular('):source.index('// Missing content can be repaired;')]
     common = (ENGINE / 'common/common.h').read_text().replace('\r\n', '\n')
     json_block = common[common.index('//json.c\n'):common.index("//there's no write logic")]
     (a.work_root / 'quakedef.h').write_text(STUB + json_block)
     (a.work_root / 'json.c').write_text((ENGINE / 'common/json.c').read_text())
+    roots = fixtures(a.work_root)
     failures = 0
     for platform in ('win64', 'linux64'):
-        table = cases(platform)
+        table = cases(platform, roots)
         got = run(build(a.work_root, 'subject', policy, platform, a.cc, env), table, a.work_root, env)
         wrong = {n: got[n] for n, (_, want) in table.items() if got[n] != want}
         print(f'subject {platform}: {len(table) - len(wrong)}/{len(table)} as expected', wrong or '')

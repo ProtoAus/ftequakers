@@ -253,10 +253,10 @@ static qboolean QKU_ValidPath(const char *p)
 //P1593: the two install identities, picked from the running manifest's BASEGAME
 //(QKU_FSSelectIdentity); must agree with updatefeed.py and the launcher. worldofsurf is the
 //ftesurf policy below with the gamedir and exe respelled (QKU_FSLegacySpelling), so they cannot drift.
-typedef struct { const char *game, *dir, *exe[2]; } qku_identity_t;	//exe: win64, linux64
+typedef struct { const char *game, *dir, *exe[2], *feed; } qku_identity_t;	//exe: win64, linux64
 static const qku_identity_t qku_identities[] = {
-	{"ftesurf", "ftesurf/", {"ftesurf64.exe", "ftesurf64"}},
-	{"worldofsurf", "worldofsurf/", {"WorldofSurf.exe", "worldofsurf64"}},
+	{"ftesurf", "ftesurf/", {"ftesurf64.exe", "ftesurf64"}, "https://proto.bar/ftesurf/update.json"},
+	{"worldofsurf", "worldofsurf/", {"WorldofSurf.exe", "worldofsurf64"}, "https://proto.bar/ftesurf/worldofsurf.json"},	//launcher WOS_FEED_URL
 };
 static const qku_identity_t *qku_id;	//NULL refuses every signed manifest
 
@@ -346,6 +346,32 @@ static qboolean QKU_FSProtected(const char *p)
 	return !strcmp(p, "ftesurf/fs_addons.txt") || !strncmp(p, "ftesurf/maps/zones/local/", 25);
 }
 
+static const char *qku_required[] = {"menu.dat", "csprogs.dat", "qwprogs.dat"};	//at the root of each identity's gamedir
+
+static qboolean QKU_FSIsGameFile(const char *p, const char *leaf)
+{
+	size_t d = strlen(qku_id->dir);
+	return !strncmp(p, qku_id->dir, d) && !strcmp(p + d, leaf);
+}
+
+//serde and Python keep a repeated key's last value, JSON_FindChild the first: refuse instead.
+//A raw name is compared, so an escaped key (JSON_CreateNode keeps escapes) is refused too.
+static qboolean QKU_JSONRepeatsKey(json_t *t)
+{
+	json_t *a, *b;
+	for (a = t ? t->child : NULL; a; a = a->sibling)
+	{
+		if (t->type == json_type_object)
+		{
+			if (strchr(a->name, '\\')) return true;
+			for (b = a->sibling; b; b = b->sibling)
+				if (!strcmp(a->name, b->name)) return true;
+		}
+		if (QKU_JSONRepeatsKey(a)) return true;
+	}
+	return false;
+}
+
 static qboolean QKU_FSLegacyIs(const char *p, const char *legacyname)
 {
 	char legacy[MAX_OSPATH];
@@ -415,12 +441,13 @@ static qboolean QKU_FSValidateManifest(json_t *root)
 	hashtable_t paths, native, hashes;
 	void *pm = NULL, *nm = NULL, *hm = NULL;
 	json_t *list, *exec, *args;
-	size_t i, j, count, buckets;
+	size_t i, j, k, count, buckets;
 	quint64_t total = 0;
 	unsigned ver[3], must = 0;
 	qboolean ok = false;
 	char buf[MAX_OSPATH];
 	const char *exe = qku_id ? qku_id->exe[!!strcmp(QKU_PLATFORM, "win64")] : "";
+	if (QKU_JSONRepeatsKey(root)) return false;
 	JSON_GetString(root, "game", buf, sizeof(buf), ""); if (!qku_id || strcmp(buf, qku_id->game)) return false;
 	JSON_GetString(root, "channel", buf, sizeof(buf), ""); if (strcmp(buf, "stable")) return false;
 	JSON_GetString(root, "version", buf, sizeof(buf), ""); if (!QKU_FSVersion(buf, ver)) return false;
@@ -461,9 +488,7 @@ static qboolean QKU_FSValidateManifest(json_t *root)
 		{
 			if (!strcmp(rows[i].path, exe)) must |= 1u;
 			if (!strcmp(rows[i].path, "default.fmf")) must |= 2u;
-			if (QKU_FSLegacyIs(rows[i].path, "ftesurf/menu.dat")) must |= 4u;
-			if (QKU_FSLegacyIs(rows[i].path, "ftesurf/csprogs.dat")) must |= 8u;
-			if (QKU_FSLegacyIs(rows[i].path, "ftesurf/qwprogs.dat")) must |= 16u;
+			for (k = 0; k < countof(qku_required); k++) if (QKU_FSIsGameFile(rows[i].path, qku_required[k])) must |= 4u << k;
 			for (j = 0; rows[i].path[j]; j++) if (rows[i].path[j] >= 'A' && rows[i].path[j] <= 'Z') rows[i].path[j] += 'a'-'A';
 			if (Hash_Get(&native, rows[i].path)) goto done;
 			Hash_Add(&native, rows[i].path, &rows[i], &rows[i].bynative);
@@ -699,6 +724,29 @@ static int QKU_FSRegular(const char *path)
 #endif
 }
 
+//A gamedir counts when at least two qku_required files are regular files with no link on the way:
+//QKU_InstallOne replaces one file at a time, so an interrupted apply is short exactly one.
+static qboolean QKU_FSGamedirCounts(const qku_identity_t *id)
+{
+	char rel[MAX_OSPATH], abs[MAX_OSPATH];
+	size_t k;
+	int have = 0;
+	for (k = 0; k < countof(qku_required); k++)
+	{
+		Q_snprintfz(rel, sizeof(rel), "%s%s", id->dir, qku_required[k]);
+		QKU_InstallPath(abs, sizeof(abs), rel);
+		if (QKU_FSNoLinks(rel) && QKU_FSRegular(abs) == 1) have++;
+	}
+	return have >= 2;
+}
+
+//P1593: BASEGAME names the identity, valid only while its gamedir counts; otherwise none (fail closed).
+static const qku_identity_t *QKU_FSIdentity(const ftemanifest_t *man)
+{
+	const qku_identity_t *id = QKU_FSSelectIdentity(man);
+	return id && QKU_FSGamedirCounts(id) ? id : NULL;
+}
+
 // Missing content can be repaired; unreadable content cannot be classified.
 static qboolean QKU_FSReadableClosure(json_t *root)
 {
@@ -802,7 +850,7 @@ static json_t *QKU_FSParseSigned(const char *text, char **payloadout)
 	*payloadout = NULL;
 	if (strlen(text) > 2*1024*1024) return NULL;
 	envelope = JSON_Parse(text);
-	if (!envelope) goto done;
+	if (!envelope || QKU_JSONRepeatsKey(envelope)) goto done;
 	body = JSON_FindChild(envelope, "payload");
 	if (!body || body->type != json_type_string || !QKU_FSJSONNoNul(body->bodystart, body->bodyend)) goto done;
 	n = JSON_ReadBody(body, NULL, 0); // escaped-length upper bound, NOT decoded length
@@ -2240,7 +2288,7 @@ void QKU_ReplayJournal(void)
 	alreadyran = true;
 	// Public gamedir is assigned only when paths mount, AFTER this recovery hook.
 	qku_ftesurf = fs_manifest->installation && (!Q_strcasecmp(fs_manifest->installation, "FTESurf") || !Q_strcasecmp(fs_manifest->installation, "WorldofSurf"));
-	qku_id = qku_ftesurf ? QKU_FSSelectIdentity(fs_manifest) : NULL;	//P1593
+	qku_id = qku_ftesurf ? QKU_FSIdentity(fs_manifest) : NULL;	//P1593
 	qku_profileknown = true;
 	if (qku_ftesurf) QKU_FSLock();
 	if (qku_initialised) QKU_ConfigureProfile();
@@ -2751,7 +2799,7 @@ static void QKU_ConfigureProfile(void)
 	if (qku_ftesurf)
 	{
 		cvar_t *vars[] = {&update_manifest_url, &update_max_files, &update_max_mb};
-		char *values[] = {"https://proto.bar/ftesurf/update.json", "512", "16"};
+		char *values[] = {(char *)(qku_id ? qku_id : qku_identities)->feed, "512", "16"};
 		char path[MAX_OSPATH], *consent;
 		size_t i;
 		for (i = 0; i < countof(vars); i++)
