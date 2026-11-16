@@ -120,6 +120,14 @@ int Con_Editor_Evaluate(console_t *con, const char *evalstring)
 	Con_Footerf(con, false, "%s", evalstring);
 	if (eq)
 	{
+		extern qboolean CSQC_DebugAllowed(void);
+		if (!CSQC_DebugAllowed())
+		{	//FTESurf Patch 1576: no writes to game code while connected without cheats
+			*eq = '=';
+			Con_Footerf(con, true, " (refused while connected without cheats)");
+			con->linebuffered = NULL;
+			return true;
+		}
 		*eq = '=';
 		Con_Footerf(con, true, " = %s", editprogfuncs->EvaluateDebugString(editprogfuncs, evalstring));
 	}

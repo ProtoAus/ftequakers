@@ -274,6 +274,18 @@ qboolean QCExternalDebuggerCommand(char *text)
 
 	if (!isPlugin)
 		return false;
+#if defined(CSQC_DAT) && !defined(SERVERONLY)
+	{	//FTESurf Patch 1576: connected without cheats the debugger gets nothing but its window handle
+		extern qboolean CSQC_DebugAllowed(void);
+		if (strncmp(text, "debuggerwnd ", 12) && !CSQC_DebugAllowed() &&
+			(!strncmp(text, "qcstep", 6) || !strncmp(text, "qcresume", 8) || !strncmp(text, "qcjump ", 7) ||
+			 !strncmp(text, "qcinspect ", 10) || !strncmp(text, "qcreload", 8) || !strncmp(text, "qcbreakpoint ", 13)))
+		{
+			Con_Printf("Debugger command refused while connected without cheats\n");
+			return true;
+		}
+	}
+#endif
 	if ((!strncmp(text, "qcstep", 6) && (text[6] == 0 || text[6] == ' ')) || (!strncmp(text, "qcresume", 8) && (text[8] == 0 || text[8] == ' ')))
 	{
 //		int l;

@@ -357,6 +357,9 @@ static int rawinput_readdepth;
 static double rawkey_time[256];
 static double rawkey_pending[256];
 static double rawkey_nohandletime[256];	//FTESurf Patch 1576: last handle-less raw report per scancode
+static double rawkey_legup[256];	//FTESurf Patch 1576: last legacy release per scancode
+static qboolean rawkey_ready;	//the arrays have been reset once (zero is a real time)
+static void INS_RawKeyUncorroborated(int sc);
 int in_raw_injectedkey;	//FTESurf Patch 1576: uncorroborated presses SendInput's raw report sat beside (a lapse)
 static qboolean rawkey_rawheld[256], rawkey_legheld[256];
 static int rawkey_npending;
@@ -367,10 +370,13 @@ static void INS_RawKeyReset(void)
 
 	for (i = 0; i < (int)countof(rawkey_time); i++)
 	{
-		rawkey_time[i] = rawkey_pending[i] = rawkey_nohandletime[i] = -1;
+		if (rawkey_ready && rawkey_pending[i] >= 0)
+			INS_RawKeyUncorroborated(i);	//FTESurf Patch 1576: a re-registration must not swallow a lapse
+		rawkey_time[i] = rawkey_pending[i] = rawkey_nohandletime[i] = rawkey_legup[i] = -1;
 		rawkey_rawheld[i] = rawkey_legheld[i] = false;
 	}
 	rawkey_npending = 0;
+	rawkey_ready = true;
 }
 
 /*FTESurf Patch 1576: an uncorroborated legacy press reached the game.  Windows makes some from real
@@ -1473,8 +1479,12 @@ static void INS_RawInput_KeyObserve(void)
 	if (!raw->header.hDevice)
 	{	//SendInput's: its legacy copy is what reaches the game, and nothing vouches for it
 		in_raw_kbdnohandle++;
+		sc = raw->data.keyboard.MakeCode & 0xff;
+		now = Sys_DoubleTime();
 		if (!(raw->data.keyboard.Flags & RI_KEY_BREAK))
-			rawkey_nohandletime[raw->data.keyboard.MakeCode & 0xff] = Sys_DoubleTime();
+			rawkey_nohandletime[sc] = now;
+		else if (rawkey_legheld[sc] || (rawkey_legup[sc] >= 0 && now - rawkey_legup[sc] <= 2*RAWKEY_WINDOW))
+			in_raw_injectedkey++;	//FTESurf Patch 1576: SendInput released a held key (a lapse, UIAccess or not)
 		return;
 	}
 	sc = raw->data.keyboard.MakeCode & 0xff;
@@ -1510,6 +1520,7 @@ static void INS_LegacyKeyObserve(LPARAM lParam, qboolean down)
 	if (!down)
 	{
 		rawkey_legheld[sc] = false;
+		rawkey_legup[sc] = now;	//FTESurf Patch 1576: INS_RawInput_KeyObserve pairs a handle-less release with it
 		return;
 	}
 	if (rawkey_legheld[sc])
@@ -2105,7 +2116,7 @@ static void INS_GuardPublish(void)
 	//(Windows passes a UIAccess program's SendInput as hardware; P1424 still sees no device behind it),
 	//a console command from another program. CSQC steps `bad` on any change.
 	live = want & ~cannot;
-	if (in_keyguard.ival && (cannot || !(want & GUARD_KEYS)))
+	if (in_keyguard.ival && ((cannot & GUARD_KEYS) || !(want & GUARD_KEYS)))
 		live |= GUARD_KEYSNA;	//asked for and not running: no setting the player can change helps
 	for (b = 0; b < 3; b++)
 		if ((guard_lastlive & (1<<b)) && !(live & (1<<b)))

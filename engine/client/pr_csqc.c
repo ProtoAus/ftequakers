@@ -9222,6 +9222,11 @@ void CSQC_Breakpoint_f(void)
 		Con_Printf("CSQC not running\n");
 		return;
 	}
+	if (!CSQC_DebugAllowed())
+	{	//FTESurf Patch 1576
+		Con_Printf("%s is a cheat command\n", Cmd_Argv(0));
+		return;
+	}
 	wasset = csqcprogs->ToggleBreak(csqcprogs, filename, line, 3);
 	isset = csqcprogs->ToggleBreak(csqcprogs, filename, line, 2);
 
@@ -9233,6 +9238,13 @@ void CSQC_Breakpoint_f(void)
 		Con_Printf("Breakpoint has been cleared\n");
 
 //	Cvar_Set(Cvar_FindVar("pr_debugger"), "1");
+}
+
+//FTESurf Patch 1576: connected without cheats, no debugger may change the client's game code -- the ranked
+//input report lives there. poke_csqc's own rule, for every other way in (pipe, breakpoints, editor).
+qboolean CSQC_DebugAllowed(void)
+{
+	return csqc_singlecheats || !cls.state;
 }
 
 static void CSQC_Poke_f(void)
