@@ -5491,6 +5491,8 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify, const
 	float         sjrule = -1, sjoff[3] = {0,0,0};
 	int           filever = 0;
 	int           filepropr = 0;				/* header `proprule`: which prop geometry built this run's collision world */
+	int           propmiss_n = 0;				/* FTESurf Patch 1581: header `propmiss`, prop models the lobby failed to load */
+	char          propmiss_names[96] = "";
 	float         hdrtick = 0;					/* header `tickrate`: the cash-out's TICK_INTERVAL */
 	int           inend_mt = -1;				/* Patch 344: v8 closing horizon */
 	float         inend_carry = 0;
@@ -5721,6 +5723,16 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify, const
 						filever = atoi(ln+12);
 					else if (!strncmp(ln, "proprule ", 9))
 						filepropr = atoi(ln+9);
+					else if (!strncmp(ln, "propmiss ", 9))	/* FTESurf Patch 1581 */
+					{
+						const char *names = ln+9;
+						propmiss_n = atoi(names);
+						while (*names && *names != ' ')
+							names++;
+						while (*names == ' ')
+							names++;
+						Q_strncpyz(propmiss_names, names, sizeof(propmiss_names));
+					}
 					else if (!strncmp(ln, "movementprofile ", 16))
 						optionalprofile = true;
 					else if (!strncmp(ln, "pmpin ", 6))	/* Patch 347 */
@@ -7385,7 +7397,7 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify, const
 		   accusation. */
 		if (verify)
 		{
-			char why[160];
+			char why[320];	//FTESurf Patch 1581: room for the missing-props tail
 			*why = 0;
 			/* Patch 367: a session boundary is named before the divergence it causes;
 			   the clock check is counter arithmetic and needs no trajectory. */
@@ -7424,6 +7436,10 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify, const
 				Q_snprintfz(why, sizeof(why), "ticks: the zones say %i, the file says %i", vfin_ticks, endticks);
 			if (vrearm_row >= 0)
 				Con_Printf("  note      the replay re-enters this track's START at row %i\n", vrearm_row);
+			/*FTESurf Patch 1581: a state/physents difference on a run whose lobby had failed to load prop
+			  models is what a lobby that missed newly installed content looks like; say so beside it.*/
+			if (propmiss_n > 0 && (!strncmp(why, "state:", 6) || !strncmp(why, "physents:", 9)))
+				Q_strncatz(why, va("; the lobby lacked %i prop model(s) (%s): content skew, not tampering", propmiss_n, propmiss_names), sizeof(why));
 			if (*why)
 				Con_Printf("VERIFY %s HOLD %s\n", fname, why);
 			else
