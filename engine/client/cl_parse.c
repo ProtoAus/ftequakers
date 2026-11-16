@@ -978,7 +978,8 @@ void CL_DownloadFinished(qdownload_t *dl)
 	}
 }
 
-//FTESurf P1593: the gamedir a server announced, as this client mounts it. Anything but one plain name
+//FTESurf P1593: the gamedir a server announced, as this client mounts it. On an identity install
+//(base ftesurf/worldofsurf; other games keep stock behaviour) anything but one plain name
 //([A-Za-z0-9_.-], under 64 bytes, no leading dot) is our own base: FS_Manifest_ChangeGameDir splits on
 //';', whitespace, control and high bytes, and `~` reaches a folder by its 8.3 name. Any spelling of either
 //identity is our base too (FS_GamedirAlias): no mount, no config reload, files land in our folder.
@@ -988,7 +989,7 @@ static const char *CL_ServerGamedir(const char *str)
 {
 	const char *own, *c;
 	*cl_servergamedir = 0;
-	if (!*str)
+	if (!*str || !FS_GamedirIdentityInstall())
 		return str;
 	for (c = str; *c; c++)
 		if (!((*c >= 'a' && *c <= 'z') || (*c >= 'A' && *c <= 'Z') || (*c >= '0' && *c <= '9') ||
@@ -1065,7 +1066,7 @@ qboolean	CL_CheckOrEnqueDownloadFile (const char *filename, const char *localnam
 		char dir[64];	//MAX_QPATH is 128 here
 		if (!strchr(filename, ':'))
 			filename = va("package/%s", filename);
-		if (rest)
+		if (rest && FS_GamedirIdentityInstall())
 		{
 			if ((size_t)(rest - localname) >= sizeof(dir) || memchr(localname, '~', rest - localname))
 			{

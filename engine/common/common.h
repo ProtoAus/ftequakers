@@ -883,6 +883,7 @@ qboolean FS_PathURLCache(const char *url, char *path, size_t pathsize);	//conver
 char *FS_GetGamedir(qboolean publicpathonly);
 const char *FS_GamedirAlias(const char *dir);	//FTESurf P1593
 const char *FS_GamedirWireName(const char *dir);	//FTESurf P1593
+qboolean FS_GamedirIdentityInstall(void);	//FTESurf P1593
 char *FS_GetManifestArgs(void);
 int FS_GetManifestArgv(const char **argv, int maxargs);
 

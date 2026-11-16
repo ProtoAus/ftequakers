@@ -1069,15 +1069,14 @@ static qboolean FS_GamedirIsIdentity(const char *dir)
 			return true;
 	return false;
 }
-//the identity name man has as a basegame, else NULL. A literal, never the manifest's string.
+//man's basegame in its own spelling when it is either identity name, else NULL. Lives in man.
 static const char *FS_Manifest_IdentityBase(ftemanifest_t *man)
 {
-	size_t i, j;
+	size_t i;
 	for (i = 0; man && i < countof(man->gamepath); i++)
-		if (man->gamepath[i].path && (man->gamepath[i].flags & GAMEDIR_BASEGAME))
-			for (j = 0; j < countof(fs_gamedir_aliases); j++)
-				if (!Q_strcasecmp(man->gamepath[i].path, fs_gamedir_aliases[j]))
-					return fs_gamedir_aliases[j];
+		if (man->gamepath[i].path && (man->gamepath[i].flags & GAMEDIR_BASEGAME) &&
+			FS_GamedirIsIdentity(man->gamepath[i].path))
+			return man->gamepath[i].path;
 	return NULL;
 }
 
@@ -6077,11 +6076,22 @@ char *FS_GetGamedir(qboolean publicpathonly)
 		return gamedirfile;
 }
 
-//FTESurf P1593: this install's basegame when dir is any spelling of either name and the base is one
-//of them, else NULL. A literal: COM_Gamedir may free the manifest.
+//FTESurf P1593: this install's basegame (its manifest's spelling) when dir is any spelling of either
+//name and the base is one of them, else NULL. A copy: COM_Gamedir may free the manifest it came from.
 const char *FS_GamedirAlias(const char *dir)
 {
-	return FS_GamedirIsIdentity(dir)?FS_Manifest_IdentityBase(fs_manifest):NULL;
+	static char base[MAX_QPATH];
+	const char *b = FS_GamedirIsIdentity(dir)?FS_Manifest_IdentityBase(fs_manifest):NULL;
+	if (!b)
+		return NULL;
+	Q_strncpyz(base, b, sizeof(base));
+	return base;
+}
+
+//FTESurf P1593: true when this install's base is ftesurf or worldofsurf; the stricter rules apply only then.
+qboolean FS_GamedirIdentityInstall(void)
+{
+	return FS_Manifest_IdentityBase(fs_manifest) != NULL;
 }
 
 //FTESurf P1593: the wire spelling of a local gamedir: `ftesurf` for either name when this install's
@@ -6387,17 +6397,21 @@ qboolean FS_GenCachedPakName(const char *pname, const char *crc, char *local, in
 		*local = 0;
 		return false;
 	}
-	{	//FTESurf P1593: the folder is the server's word. A long one or `~` (8.3 names: WORLDO~1) is
-		//refused; either identity in any spelling is this install's base, for the download and the mount.
+	{	//FTESurf P1593, identity installs only: the folder is the server's word. A long one or `~` (8.3
+		//names: WORLDO~1) is refused; either identity in any spelling is this install's base, for the
+		//download and the mount.
 		char dir[64];	//MAX_QPATH is 128 here
-		const char *own;
-		if ((size_t)(fn - pname) > sizeof(dir) || memchr(pname, '~', fn - pname))
+		const char *own = NULL;
+		if (FS_GamedirIdentityInstall())
 		{
-			*local = 0;
-			return false;
+			if ((size_t)(fn - pname) > sizeof(dir) || memchr(pname, '~', fn - pname))
+			{
+				*local = 0;
+				return false;
+			}
+			Q_strncpyz(dir, pname, fn - pname);
+			own = FS_GamedirAlias(dir);
 		}
-		Q_strncpyz(dir, pname, fn - pname);
-		own = FS_GamedirAlias(dir);
 		if (own)
 			Q_snprintfz(local, llen, "%s/", own);
 		else
