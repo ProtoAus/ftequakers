@@ -277,6 +277,8 @@ int in_raw_legacybtn = -1;
   at begin and as an 'o' record at every change.*/
 int in_raw_legacykey = -1;
 int in_raw_kbdnohandle = -1;
+int in_raw_keytime[2][IN_KEYTIME_BUCKETS];	/*Patch 1594: see in_win.c's rawkey_uptime*/
+int in_raw_keyupalone;
 int in_raw_keydropped = -1;	/*Patch 1576: key presses in_keyguard dropped; -1 = this backend has no guard*/
 int in_rawkbd_observe = -1;
 int in_rawkbd_observechanges;
@@ -1062,6 +1064,7 @@ static int			in_jrn_injreported, in_jrn_unenumreported;	/*...and how far the per
 static int			in_jrn_lgbbase, in_jrn_lgbreported;			/*Patch 307: the same pair for the uncorroborated legacy button*/
 static int			in_jrn_kdreported;		/*Patch 1576: key presses in_keyguard dropped, caught up*/
 static int			in_jrn_lgkreported, in_jrn_nhkreported;		/*Patch 1424: legacy keys and handle-less keyboard reports, caught up*/
+static int			in_jrn_ktbase[2][IN_KEYTIME_BUCKETS], in_jrn_kubase;	/*Patch 1594: the counters as the journal began*/
 static int			in_jrn_obsreported;							/*Patch 1424: in_rawkbd_observechanges last written*/
 static int			in_jrn_padbase, in_jrn_padreported;			/*Patch 468: accepted touchpad reports, baseline and caught up*/
 static int			in_jrn_prbase, in_jrn_prreported;			/*...and the digitizer reports that armed the window*/
@@ -1638,6 +1641,30 @@ static void IN_Journal_Bypassed(double when)
 	Q_snprintfz(tail, sizeof(tail), "%i", in_raw_legacybtn - in_jrn_lgbreported);
 	in_jrn_lgbreported = in_raw_legacybtn;
 	IN_Journal_Line(when, "b", tail);
+}
+
+/*Patch 1594: `keytimes <press buckets> <release buckets> <releases alone>`, untimestamped beside module+, the
+  journal's own differences: how long after (or before) a real keyboard's raw report of the same scancode each
+  legacy press and release arrived (IN_KEYTIME_BUCKETS), and legacy releases no raw release met.  Only while the
+  keyboard is observed (kbdobserve 1); a mid-journal change shows as 'o'.  Kept clear of the trailer's reserve.*/
+static void IN_Journal_KeyTimes(void)
+{
+	char line[256], num[16];
+	int i, up;
+
+	if (!in_jrn_buf || in_jrn_full || in_rawkbd_observe != 1)
+		return;
+	Q_strncpyz(line, "keytimes", sizeof(line));
+	for (up = 0; up < 2; up++)
+		for (i = 0; i < IN_KEYTIME_BUCKETS; i++)
+		{
+			Q_snprintfz(num, sizeof(num), " %i", in_raw_keytime[up][i] - in_jrn_ktbase[up][i]);
+			Q_strncatz(line, num, sizeof(line));
+		}
+	Q_snprintfz(num, sizeof(num), " %i\n", in_raw_keyupalone - in_jrn_kubase);
+	Q_strncatz(line, num, sizeof(line));
+	if (in_jrn_len + strlen(line) + 256 <= in_jrn_max)
+		IN_Journal_Raw(line);
 }
 
 /*Patch 1424: 'o <kbdobserve>' when observation started or stopped (even off and on again
@@ -2493,6 +2520,8 @@ static void IN_JournalBegin_f(void)
 	in_jrn_lgkreported = (in_raw_legacykey < 0) ? 0 : in_raw_legacykey;	/*Patch 1424*/
 	in_jrn_kdreported = (in_raw_keydropped < 0) ? 0 : in_raw_keydropped;	/*Patch 1576*/
 	in_jrn_nhkreported = (in_raw_kbdnohandle < 0) ? 0 : in_raw_kbdnohandle;
+	memcpy(in_jrn_ktbase, in_raw_keytime, sizeof(in_jrn_ktbase));	/*Patch 1594*/
+	in_jrn_kubase = in_raw_keyupalone;
 	in_jrn_obsreported = in_rawkbd_observechanges;
 	in_jrn_padreported = in_jrn_padbase = (in_raw_touchpad < 0) ? 0 : in_raw_touchpad;	/*Patch 468*/
 	in_jrn_prreported = in_jrn_prbase = (in_raw_padreports < 0) ? 0 : in_raw_padreports;
@@ -2724,6 +2753,7 @@ static void IN_JournalEnd_f(void)
 	INS_EnumerateDevices((void*)"devmap", IN_Journal_DeviceLine);
 	IN_Journal_Modules(true);	/*Patch 1577*/
 	IN_Journal_Hooks(discard);	/*Patch 1586*/
+	IN_Journal_KeyTimes();	/*Patch 1594*/
 
 	/*Allow the trailer into a full journal's reserved space, but never lower
 	  the configured limit to the current allocation: an ordinary journal may

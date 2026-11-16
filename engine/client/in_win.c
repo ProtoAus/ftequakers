@@ -364,6 +364,22 @@ static int MapKey (int vkey);
 int in_raw_injectedkey;	//FTESurf Patch 1576: uncorroborated presses SendInput's raw report sat beside (a lapse)
 static qboolean rawkey_rawheld[256], rawkey_legheld[256];
 static int rawkey_npending;
+/*FTESurf Patch 1594: releases are paired like presses (rawkey_uptime an unconsumed raw release, rawkey_uppending a
+  legacy release waiting for one), and every pair's gap is counted into in_raw_keytime.  The raw report and the
+  legacy message of one keystroke reach this thread together, so an honest gap is well under a millisecond; a tool
+  that holds, delays or advances key messages inside the process keeps their hardware origin but not this gap.*/
+static double rawkey_uptime[256];
+static double rawkey_uppending[256];
+static int rawkey_nuppending;
+static void INS_KeyTime(int up, double gap)
+{
+	static const double edge[IN_KEYTIME_BUCKETS - 1] = {0.0005, 0.001, 0.002, 0.005, 0.01, 0.02, 0.05};
+	int b;
+	gap = fabs(gap);
+	for (b = 0; b < IN_KEYTIME_BUCKETS - 1 && gap >= edge[b]; b++)
+		;
+	in_raw_keytime[up][b]++;
+}
 
 static void INS_RawKeyReset(void)
 {
@@ -378,9 +394,10 @@ static void INS_RawKeyReset(void)
 				in_raw_legacykey++;
 		}
 		rawkey_time[i] = rawkey_pending[i] = rawkey_nohandletime[i] = rawkey_legup[i] = -1;
+		rawkey_uptime[i] = rawkey_uppending[i] = -1;	//Patch 1594: a release left waiting is dropped, not counted
 		rawkey_rawheld[i] = rawkey_legheld[i] = false;
 	}
-	rawkey_npending = 0;
+	rawkey_npending = rawkey_nuppending = 0;
 	rawkey_ready = true;
 }
 
@@ -398,7 +415,7 @@ static void INS_RawKeyExpire(double now)
 {
 	int i;
 
-	if (rawinput_quiesced || !raw || !rawkbd_observe || !rawkey_npending)
+	if (rawinput_quiesced || !raw || !rawkbd_observe || (!rawkey_npending && !rawkey_nuppending))
 		return;
 	for (i = 0; i < (int)countof(rawkey_pending); i++)
 	{
@@ -408,6 +425,12 @@ static void INS_RawKeyExpire(double now)
 			rawkey_pending[i] = -1;
 			rawkey_npending--;
 			in_raw_legacykey++;
+		}
+		if (rawkey_uppending[i] >= 0 && now - rawkey_uppending[i] > RAWKEY_WINDOW)
+		{	//Patch 1594
+			rawkey_uppending[i] = -1;
+			rawkey_nuppending--;
+			in_raw_keyupalone++;
 		}
 	}
 }
@@ -1411,8 +1434,12 @@ int INS_RawInput_KeyboardControl(rawkbdop_t op)
 	}
 	if (op == RAWKBD_CLEARHELD)
 	{
+		int i;
 		memset(rawkey_rawheld, 0, sizeof(rawkey_rawheld));
 		memset(rawkey_legheld, 0, sizeof(rawkey_legheld));
+		for (i = 0; i < (int)countof(rawkey_uptime); i++)	//Patch 1594: a focus change ends every pairing unjudged
+			rawkey_uptime[i] = rawkey_uppending[i] = -1;
+		rawkey_nuppending = 0;
 		return 0;
 	}
 	if (op != RAWKBD_REMOVE && op != RAWKBD_OPTIN && op != RAWKBD_OBSERVE)
@@ -1494,18 +1521,28 @@ static void INS_RawInput_KeyObserve(void)
 		return;
 	}
 	sc = raw->data.keyboard.MakeCode & 0xff;
+	now = Sys_DoubleTime();
 	if (raw->data.keyboard.Flags & RI_KEY_BREAK)
 	{
 		rawkey_rawheld[sc] = false;
+		INS_RawKeyExpire(now);
+		if (rawkey_uppending[sc] >= 0)
+		{	//Patch 1594: the legacy release arrived first, inside the window
+			INS_KeyTime(1, now - rawkey_uppending[sc]);
+			rawkey_uppending[sc] = -1;
+			rawkey_nuppending--;
+		}
+		else
+			rawkey_uptime[sc] = now;
 		return;
 	}
 	if (rawkey_rawheld[sc])
 		return;	//typematic repeat: vouches for nothing
 	rawkey_rawheld[sc] = true;
-	now = Sys_DoubleTime();
 	INS_RawKeyExpire(now);
 	if (rawkey_pending[sc] >= 0)
 	{	//the legacy press arrived first, inside the window
+		INS_KeyTime(0, now - rawkey_pending[sc]);	//Patch 1594
 		rawkey_pending[sc] = -1;
 		rawkey_npending--;
 		return;
@@ -1525,7 +1562,19 @@ static void INS_LegacyKeyObserve(LPARAM lParam, qboolean down)
 	INS_RawKeyExpire(now);
 	if (!down)
 	{
+		if (!rawkey_legheld[sc])
+			return;	//Patch 1594: a release of a press this path never saw (focus came back held) is not judged
 		rawkey_legheld[sc] = false;
+		if (rawkey_uptime[sc] >= 0 && now - rawkey_uptime[sc] <= RAWKEY_WINDOW)
+		{	//Patch 1594: consumed, one raw release for one legacy release
+			INS_KeyTime(1, now - rawkey_uptime[sc]);
+			rawkey_uptime[sc] = -1;
+		}
+		else if (rawkey_uppending[sc] < 0)
+		{
+			rawkey_uppending[sc] = now;
+			rawkey_nuppending++;
+		}
 		return;
 	}
 	if (rawkey_legheld[sc])
@@ -1539,7 +1588,10 @@ static void INS_LegacyKeyObserve(LPARAM lParam, qboolean down)
 		in_raw_legacykey++;
 	}
 	if (rawkey_time[sc] >= 0 && now - rawkey_time[sc] <= RAWKEY_WINDOW)
+	{
+		INS_KeyTime(0, now - rawkey_time[sc]);	//Patch 1594
 		rawkey_time[sc] = -1;	//consumed: one raw down vouches for one press
+	}
 	else
 	{
 		rawkey_pending[sc] = now;
