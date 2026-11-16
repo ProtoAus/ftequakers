@@ -1488,7 +1488,8 @@ static void INS_RawInput_KeyObserve(void)
 		now = Sys_DoubleTime();
 		if (!(raw->data.keyboard.Flags & RI_KEY_BREAK))
 			rawkey_nohandletime[sc] = now;
-		else if (keydown[MapKey(sc << 16)] || (rawkey_legup[sc] >= 0 && now - rawkey_legup[sc] <= 2*RAWKEY_WINDOW))
+		else if (keydown[MapKey((sc | ((raw->data.keyboard.Flags & RI_KEY_E0) ? 0x100 : 0)) << 16)] ||
+			(rawkey_legup[sc] >= 0 && now - rawkey_legup[sc] <= 2*RAWKEY_WINDOW))
 			in_raw_injectedkey++;	//FTESurf Patch 1576: SendInput released a key the game held (UIAccess or not)
 		return;
 	}

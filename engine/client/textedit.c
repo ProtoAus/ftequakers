@@ -33,7 +33,11 @@ cvar_t pr_debugger = CVARAFD("pr_debugger", debugger_default, "debugger", CVAR_S
 extern cvar_t pr_sourcedir;
 
 static pubprogfuncs_t *editprogfuncs;
+#ifdef CSQC_DAT
 extern qboolean CSQC_DebugAllowed(void);	//FTESurf Patch 1576 (pr_csqc.c)
+#else
+#define CSQC_DebugAllowed() true
+#endif
 
 qboolean editoractive;			//(export)
 console_t *editormodal;			//doesn't return. (export)
