@@ -5,9 +5,10 @@ The real slices (QKU_ValidPath .. QKU_FSValidateManifest, QKU_FSNoLinks, QKU_FSR
 QKU_FSIdentity, QKU_FSJSONNoNul .. QKU_FSParseSigned) are compiled with the real json.c and
 qclib/hash.c under a stub quakedef.h, once per platform; QKU_InstallPath is stubbed onto a fixture
 root, and Ed25519_Verify onto a toy rule (64 copies of the message's byte sum) so the parse sites
-are exercised with signatures that pass -- the curve itself is tools/ed25519check.py's. Signatures are not involved: the
-policy runs on the parsed payload, exactly as after QKU_FSParseSigned. Mutants are plausible
-wrong cuts of the change; each must let through exactly the cases that guard against it.
+run with signatures that pass. The real curve (engine/common/ed25519.c) is not exercised here; the
+native updater arms in the game repo drive it with production-signed fixtures. The policy cases
+feed QKU_FSValidateManifest a parsed payload, as QKU_FSParseSigned hands it on. Mutants are
+plausible wrong cuts of the change; each must let through exactly the cases that guard against it.
 """
 import argparse
 import json
@@ -232,7 +233,7 @@ MUTANTS = {
     'payload-strict-skipped': ('QKU_JSONStrict(payload, false) ? JSON_Parse(payload) : NULL', 'JSON_Parse(payload)',
                                {'parse: payload trailing comma', 'parse: payload 33 levels'}),
     'envelope-depth-loose': ('maxdepth = envelope ? 1 : QKU_JSONDEPTH', 'maxdepth = QKU_JSONDEPTH',
-                             {'strictenv: nested member', 'strictenv: 2 MiB of nested arrays'}),
+                             {'strictenv: nested member', 'strictenv: 2 MiB array member'}),
     'envelope-members-unchecked': ('(!envelope || members == 2)', '(!envelope || members >= 0)',
                                    {'strictenv: three members', 'strictenv: one member'}),
     'envelope-scalars-allowed': ("\t\t\tif (envelope && *s != '\"') return false;\n", '', {'strictenv: number member'}),
@@ -400,7 +401,7 @@ def cases(platform, roots):
         'strictenv: one member': ('{"payload":"x"}', 'refused'),
         'strictenv: number member': ('{"payload":"x","signature":1}', 'refused'),
         'strictenv: nested member': ('{"payload":"x","signature":[]}', 'refused'),
-        'strictenv: 2 MiB of nested arrays': ('{"payload":"x","signature":[' + ','.join(['[]'] * 699000) + ']}', 'refused'),
+        'strictenv: 2 MiB array member': ('{"payload":"x","signature":[' + ','.join(['[]'] * 699000) + ']}', 'refused'),
     }
     signed_good = envelope(legacy_text)
     big = envelope(legacy_text, pad=2 * 1024 * 1024)
