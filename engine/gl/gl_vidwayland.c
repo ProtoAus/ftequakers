@@ -1678,6 +1678,7 @@ static void WL_seat_handle_capabilities(void *data, struct wl_seat *seat, enum w
 	else if (!(caps & WL_SEAT_CAPABILITY_POINTER) && s->pointer)
 	{
 		WL_DropCursorShapeDevice();
+		s->cursorfocus = false;
 		pwl_pointer_destroy(s->pointer);
 		s->pointer = NULL;
 
@@ -2558,6 +2559,7 @@ static void WL_DestroyObject(void *obj, uint32_t destroyop)
 }
 static void WL_DeInit(void)
 {
+	w.cursorfocus = false;	//a pointer.enter the final roundtrip delivers must not set a cursor again
 #if defined(GLQUAKE) && defined(USE_EGL)
 	EGL_Shutdown();
 	if (w.enwindow)
