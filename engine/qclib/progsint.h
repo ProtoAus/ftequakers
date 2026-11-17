@@ -107,6 +107,10 @@ typedef struct
 #if defined(QCGC) && defined(MULTITHREAD)
 	#define THREADEDGC
 #endif
+//FTESurf Patch 1605: Patch 1481's incremental collector copy on Linux too (userfaultfd write-protect + PAGEMAP_SCAN)
+#if defined(THREADEDGC) && defined(__linux__) && !defined(__ANDROID__)
+	#define QCGC_LINUXWATCH
+#endif
 
 typedef struct
 {
@@ -218,8 +222,11 @@ typedef struct prinst_s
 	unsigned int nostr_start[NOSTR_MAX];
 	unsigned int nostr_end[NOSTR_MAX];
 
-#if defined(_WIN32) && !defined(WINRT)
-	//FTESurf Patch 1481: the hunk is reserved MEM_WRITE_WATCH; the collector keeps a copy of it page for page and
+#if (defined(_WIN32) && !defined(WINRT)) || defined(QCGC_LINUXWATCH)
+	#define QCGC_WATCHABLE	//FTESurf Patch 1605: these fields exist
+#endif
+#ifdef QCGC_WATCHABLE
+	//FTESurf Patch 1481: the hunk is reserved MEM_WRITE_WATCH (Linux, Patch 1605: mmap'd, userfaultfd write-protected); the collector keeps a copy of it page for page and
 	//refreshes only the pages written since its last start. gcmirrorused 0: the next start copies everything.
 	pbool hunkwatch;
 	char *gcmirror;
@@ -234,6 +241,9 @@ typedef struct prinst_s
 	void **gctabpages;
 	size_t gctabpagescap;
 	unsigned int gclivebase;		//...live temps after the last finish (the budget trigger counts from here)
+#ifdef QCGC_LINUXWATCH
+	size_t hunkmaplen, tablemaplen;	//FTESurf Patch 1605: the watched mappings' lengths (munmap); 0 when malloc'd
+#endif
 #endif
 } prinst_t;
 

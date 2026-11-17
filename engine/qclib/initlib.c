@@ -2,6 +2,160 @@
 #include "progsint.h"
 #include <stdlib.h>
 
+#ifdef QCGC_LINUXWATCH
+/*FTESurf Patch 1605: GetWriteWatch for Linux. The hunk and slot table are anonymous mappings registered with a
+  userfaultfd in write-protect mode with WP_ASYNC: the kernel lifts a page's protection on its first write (one minor
+  fault, ~0.7 us on the PC), and PAGEMAP_SCAN lists the pages written since and protects them again in the same call.
+  Kernel 6.7+; UFFD_USER_MODE_ONLY needs no privilege (vm.unprivileged_userfaultfd 0). Anything that fails -- an older
+  kernel, a seccomp sandbox, no /proc -- leaves the old path: malloc and a full copy each collection.*/
+#include <sys/mman.h>
+#include <sys/ioctl.h>
+#include <sys/syscall.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <linux/userfaultfd.h>
+#ifndef UFFDIO_REGISTER_MODE_WP
+#define UFFDIO_REGISTER_MODE_WP ((__u64)1<<1)
+#endif
+#ifndef UFFD_USER_MODE_ONLY
+#define UFFD_USER_MODE_ONLY 1
+#endif
+#ifndef UFFD_FEATURE_WP_UNPOPULATED
+#define UFFD_FEATURE_WP_UNPOPULATED (1<<13)
+#endif
+#ifndef UFFD_FEATURE_WP_ASYNC
+#define UFFD_FEATURE_WP_ASYNC (1<<15)
+#endif
+//linux/fs.h's PAGEMAP_SCAN UAPI (6.7), spelt here: that header clashes with sys/mount.h and older ones lack it
+struct qcww_region {unsigned long long start, end, categories;};
+struct qcww_scan {unsigned long long size, flags, start, end, walk_end, vec, vec_len, max_pages,
+	category_inverted, category_mask, category_anyof_mask, return_mask;};
+#define QCWW_PAGEMAP_SCAN	_IOWR('f', 16, struct qcww_scan)
+#define QCWW_IS_WRITTEN		(1<<1)	//PAGE_IS_WRITTEN
+#define QCWW_IS_PRESENT		(1<<3)	//PAGE_IS_PRESENT
+#define QCWW_WP_MATCHING	(1<<0)	//PM_SCAN_WP_MATCHING
+#define QCWW_CHECK_WPASYNC	(1<<1)	//PM_SCAN_CHECK_WPASYNC
+static int qcww_uffd = -2, qcww_pagemap = -1;	//-2: not tried yet; kept open for the process (closing unregisters)
+static pid_t qcww_pid;	//both descriptors act on the address space that opened them: a forked child (Sys_ForkServer) must not use them
+static void *QCWW_Map(size_t bytes, size_t *maplen);
+static unsigned int QCWW_GetWriteWatch(void *base, size_t span, void **pages, size_t *count, unsigned int *gran);
+static pbool QCWW_Init(void)
+{
+	if (qcww_uffd == -2)
+	{
+		struct uffdio_api api;
+		memset(&api, 0, sizeof(api));
+		api.api = UFFD_API;
+		api.features = UFFD_FEATURE_WP_ASYNC|UFFD_FEATURE_WP_UNPOPULATED;
+		qcww_uffd = -1;
+		qcww_pid = getpid();
+		if (sysconf(_SC_PAGESIZE) == 4096)	//the mirrors and the scan's page list are cut in 4 KB pages
+			qcww_uffd = syscall(SYS_userfaultfd, O_CLOEXEC|O_NONBLOCK|UFFD_USER_MODE_ONLY);
+		if (qcww_uffd >= 0 && ioctl(qcww_uffd, UFFDIO_API, &api) == 0)
+			qcww_pagemap = open("/proc/self/pagemap", O_RDONLY|O_CLOEXEC);
+		if (qcww_pagemap >= 0)
+		{	//one page through the whole cycle, or a sandbox that filters the ioctl would cost a full copy every collection
+			size_t len, count = 2;
+			unsigned int gran;
+			void *pages[2];
+			char *p = QCWW_Map(4096, &len);
+			pbool ok = p && !QCWW_GetWriteWatch(p, len, pages, &count, &gran);
+			if (ok)
+			{
+				p[0] = 1;
+				count = 2;
+				ok = !QCWW_GetWriteWatch(p, len, pages, &count, &gran) && count == 1 && pages[0] == p;
+			}
+			if (p)
+				munmap(p, len);
+			if (!ok)
+			{
+				close(qcww_pagemap);
+				qcww_pagemap = -1;
+			}
+		}
+		if (qcww_pagemap < 0 && qcww_uffd >= 0)
+		{
+			close(qcww_uffd);
+			qcww_uffd = -1;
+		}
+	}
+	return qcww_uffd >= 0 && qcww_pid == getpid();
+}
+//zeroed memory whose writes are tracked; NULL: the caller allocates as before
+static void *QCWW_Map(size_t bytes, size_t *maplen)
+{
+	size_t len = (bytes + 4095) & ~(size_t)4095;
+	struct uffdio_register reg;
+	void *p;
+	*maplen = 0;
+	if (!len || qcww_uffd < 0 || qcww_pid != getpid())	//QCWW_Init opened it (and probes through here)
+		if (!len || !QCWW_Init())
+			return NULL;
+	p = mmap(NULL, len, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0);
+	if (p == MAP_FAILED)
+		return NULL;
+	memset(&reg, 0, sizeof(reg));
+	reg.range.start = (size_t)p;
+	reg.range.len = len;
+	reg.mode = UFFDIO_REGISTER_MODE_WP;
+	if (ioctl(qcww_uffd, UFFDIO_REGISTER, &reg))
+	{
+		munmap(p, len);
+		return NULL;
+	}
+	//no initial UFFDIO_WRITEPROTECT: a (re)mapped block's first start copies everything (gcmirrorused/gctablevalid 0)
+	//after a scan that protects whatever it reports, and a page never protected always reads as written
+	*maplen = len;
+	return p;
+}
+static void QCWW_Unmap(void *p, size_t maplen)
+{
+	if (p)
+		munmap(p, maplen);
+}
+/*GetWriteWatch with WRITE_WATCH_FLAG_RESET: 0 and the written pages of [base, base+span) since the last call,
+  protected again; nonzero (or *count == cap) and the caller copies everything. A full list still protects the rest,
+  so the next call is short again.*/
+static unsigned int QCWW_GetWriteWatch(void *base, size_t span, void **pages, size_t *count, unsigned int *gran)
+{
+	struct qcww_region vec[256];
+	unsigned long long pos = (size_t)base, end = pos + span, a;
+	size_t cap = *count, n = 0;
+	long r, i;
+	*gran = 4096;
+	if (qcww_pid != getpid())
+		return 1;
+	while (pos < end)
+	{
+		struct qcww_scan s;
+		memset(&s, 0, sizeof(s));
+		s.size = sizeof(s);
+		s.flags = QCWW_WP_MATCHING|QCWW_CHECK_WPASYNC;
+		s.start = pos;
+		s.end = end;
+		s.vec = (size_t)vec;
+		s.vec_len = sizeof(vec)/sizeof(vec[0]);
+		//PRESENT keeps the scan off the written-only fast path, which in 6.7/6.8 skips written pages that are swapped
+		//out or migrating (it tests pte_uffd_wp on a swap entry)
+		s.category_mask = QCWW_IS_WRITTEN;
+		s.return_mask = QCWW_IS_WRITTEN|QCWW_IS_PRESENT;
+		r = ioctl(qcww_pagemap, QCWW_PAGEMAP_SCAN, &s);
+		if (r < 0 || s.walk_end <= pos || s.walk_end > end)
+			return 1;
+		for (i = 0; i < r; i++)
+			for (a = vec[i].start; a < vec[i].end; a += 4096)
+				if (n < cap)
+					pages[n++] = (void*)(size_t)a;
+				else
+					n = cap;
+		pos = s.walk_end;
+	}
+	*count = n;
+	return n >= cap;
+}
+#endif
+
 static void PR_FreeAllTemps			(progfuncs_t *progfuncs);
 
 typedef struct prmemb_s {
@@ -121,13 +275,30 @@ void *PRAddressableExtend(progfuncs_t *progfuncs, void *src, size_t srcsize, int
 			}
 #else
 			int newsize = (prinst.addressableused + ammount + 1024*1024) & ~(1024*1024-1);
-			char *newblock = malloc(newsize);
+			char *newblock = NULL;
+#ifdef QCGC_LINUXWATCH
+			size_t maplen;
+			newblock = QCWW_Map(newsize, &maplen);	//FTESurf Patch 1605
+#endif
+			if (!newblock)
+				newblock = malloc(newsize);
 			if (newblock)
 			{
+				memcpy(newblock, prinst.addressablehunk, prinst.addressableused);	//FTESurf Patch 1605: this path never copied
 				PRAddressableRelocate(progfuncs, prinst.addressablehunk, newblock, prinst.addressableused);
-				free(prinst.addressablehunk);
+#ifdef QCGC_LINUXWATCH
+				if (prinst.hunkmaplen)
+					QCWW_Unmap(prinst.addressablehunk, prinst.hunkmaplen);
+				else
+#endif
+					free(prinst.addressablehunk);
 				prinst.addressablehunk = newblock;
 				prinst.addressablesize = newsize;
+#ifdef QCGC_LINUXWATCH
+				prinst.hunkmaplen = maplen;
+				prinst.hunkwatch = !!maplen;
+				prinst.gcmirrorused = 0;	//a new block: the collector's copy starts again
+#endif
 			}
 #endif
 		}
@@ -619,11 +790,26 @@ void PRAddressableFlush(progfuncs_t *progfuncs, size_t totalammount)
 #else
 	if (prinst.addressablehunk && prinst.addressablesize != totalammount)
 	{
-		free(prinst.addressablehunk);
+#ifdef QCGC_LINUXWATCH
+		if (prinst.hunkmaplen)
+			QCWW_Unmap(prinst.addressablehunk, prinst.hunkmaplen);
+		else
+#endif
+			free(prinst.addressablehunk);
 		prinst.addressablehunk = NULL;
 	}
 	if (!prinst.addressablehunk)
-		prinst.addressablehunk = malloc(totalammount);	//linux will allocate-on-use anyway, which is handy.
+	{
+#ifdef QCGC_LINUXWATCH
+		prinst.addressablehunk = QCWW_Map(totalammount, &prinst.hunkmaplen);	//FTESurf Patch 1605
+		prinst.hunkwatch = !!prinst.addressablehunk;
+		if (!prinst.addressablehunk)
+#endif
+			prinst.addressablehunk = malloc(totalammount);	//linux will allocate-on-use anyway, which is handy.
+	}
+#ifdef QCGC_LINUXWATCH
+	prinst.gcmirrorused = 0;
+#endif
 //	memset(prinst.addressablehunk, 0xff, totalammount);
 #endif
 	if (!prinst.addressablehunk)
@@ -1558,6 +1744,25 @@ static void PR_ExpandTempStrings(progfuncs_t *progfuncs, size_t newmax)
 	}
 	prinst.tablewatch = watch;
 	prinst.gctablevalid = 0;
+#elif defined(QCGC_LINUXWATCH)
+	size_t maplen;
+	ntable = QCWW_Map(sizeof(*ntable) * newmax, &maplen);	//FTESurf Patch 1605: zeroed
+	if (!ntable)
+	{
+		ntable = progfuncs->funcs.parms->memalloc(sizeof(*ntable) * newmax);
+		memset(ntable+prinst.maxtempstrings, 0, sizeof(*ntable) * (newmax-prinst.maxtempstrings));
+	}
+	memcpy(ntable, prinst.tempstrings, sizeof(*ntable) * prinst.maxtempstrings);
+	if (prinst.tempstrings)
+	{
+		if (prinst.tablemaplen)
+			QCWW_Unmap(prinst.tempstrings, prinst.tablemaplen);
+		else
+			progfuncs->funcs.parms->memfree(prinst.tempstrings);
+	}
+	prinst.tablemaplen = maplen;
+	prinst.tablewatch = !!maplen;
+	prinst.gctablevalid = 0;
 #else
 	ntable = progfuncs->funcs.parms->memalloc(sizeof(*ntable) * newmax);
 	memcpy(ntable, prinst.tempstrings, sizeof(*ntable) * prinst.maxtempstrings);
@@ -1678,7 +1883,7 @@ static void PR_QCGC_Finish(progfuncs_t *progfuncs)
 	free(prinst.gcspare);
 	prinst.gcspare = gc;	//kept for the next collection
 	prinst.gccontext = NULL;
-#if defined(_WIN32) && !defined(WINRT)
+#ifdef QCGC_WATCHABLE
 	prinst.gclivebase = prinst.livetemps;	//FTESurf Patch 1481
 #endif
 
@@ -1691,7 +1896,16 @@ static void PR_QCGC_Finish(progfuncs_t *progfuncs)
 	pr_gc_mainus += (Sys_DoubleTime() - t0) * 1e6;
 	pr_gc_dones++;
 }
-#if defined(THREADEDGC) && defined(_WIN32) && !defined(WINRT)
+#if defined(THREADEDGC) && defined(QCGC_WATCHABLE)
+#ifdef QCGC_LINUXWATCH
+typedef size_t qcww_count_t;
+typedef unsigned int qcww_gran_t;
+#define QCGC_GETWRITEWATCH QCWW_GetWriteWatch	//FTESurf Patch 1605
+#else
+typedef ULONG_PTR qcww_count_t;
+typedef DWORD qcww_gran_t;
+#define QCGC_GETWRITEWATCH(b,s,p,c,g) GetWriteWatch(WRITE_WATCH_FLAG_RESET,b,s,p,c,g)
+#endif
 size_t pr_gc_copied, pr_gc_mismatch;	//FTESurf Patch 1481: bytes the last start copied; differing bytes pr_gc_writewatch 2 found
 //[s, e) of the hunk into the mirror where it lies inside the GC's segments
 static void PR_QCGC_MirrorRange(progfuncs_t *progfuncs, size_t s, size_t e, const size_t *ofs, const size_t *len, unsigned int n)
@@ -1720,8 +1934,8 @@ static void PR_QCGC_MirrorRange(progfuncs_t *progfuncs, size_t s, size_t e, cons
 static pbool PR_QCGC_Snapshot(progfuncs_t *progfuncs, const size_t *ofs, const size_t *len, unsigned int n)
 {
 	size_t used = prinst.addressableused, span = (used + 4095) & ~(size_t)4095, i;
-	ULONG_PTR count;
-	DWORD gran;
+	qcww_count_t count;
+	qcww_gran_t gran;
 	unsigned int k;
 	if (!prinst.hunkwatch || externs->gcwritewatch <= 0 || !used)
 		return false;
@@ -1752,7 +1966,7 @@ static pbool PR_QCGC_Snapshot(progfuncs_t *progfuncs, const size_t *ofs, const s
 		prinst.gcmirrorused = 0;
 	}
 	count = prinst.gcpagescap;
-	if (GetWriteWatch(WRITE_WATCH_FLAG_RESET, prinst.addressablehunk, span, prinst.gcpages, &count, &gran) || gran != 4096 || count >= prinst.gcpagescap)
+	if (QCGC_GETWRITEWATCH(prinst.addressablehunk, span, prinst.gcpages, &count, &gran) || gran != 4096 || count >= prinst.gcpagescap)
 		prinst.gcmirrorused = 0;	//(a full list could have been cut short)
 	pr_gc_copied = 0;
 	if (!prinst.gcmirrorused)
@@ -1799,8 +2013,8 @@ static pbool PR_QCGC_Snapshot(progfuncs_t *progfuncs, const size_t *ofs, const s
 static pbool PR_QCGC_TableSnapshot(progfuncs_t *progfuncs)
 {
 	size_t bytes = sizeof(*prinst.tempstrings) * prinst.maxtempstrings, span = (bytes + 4095) & ~(size_t)4095, i;
-	ULONG_PTR count;
-	DWORD gran;
+	qcww_count_t count;
+	qcww_gran_t gran;
 	if (!prinst.tablewatch || externs->gcwritewatch <= 0 || !prinst.maxtempstrings)
 		return false;
 	if (prinst.gctablecap < prinst.maxtempstrings)
@@ -1821,7 +2035,7 @@ static pbool PR_QCGC_TableSnapshot(progfuncs_t *progfuncs)
 		prinst.gctablevalid = 0;
 	}
 	count = prinst.gctabpagescap;
-	if (GetWriteWatch(WRITE_WATCH_FLAG_RESET, prinst.tempstrings, span, prinst.gctabpages, &count, &gran) || gran != 4096 || count >= prinst.gctabpagescap)
+	if (QCGC_GETWRITEWATCH(prinst.tempstrings, span, prinst.gctabpages, &count, &gran) || gran != 4096 || count >= prinst.gctabpagescap)
 		prinst.gctablevalid = 0;
 	if (prinst.gctablevalid != prinst.maxtempstrings)
 	{
@@ -1866,12 +2080,12 @@ static void PDECL PR_PrewarmGC(pubprogfuncs_t *ppf)
 	for (i = 0; i < n; i++)
 		memsize += len[i];
 	padded = (memsize + 7) & ~(size_t)7;
-#if defined(_WIN32) && !defined(WINRT)
+#ifdef QCGC_WATCHABLE
 	if (PR_QCGC_Snapshot(progfuncs, ofs, len, n))	//FTESurf Patch 1481: the mirror's full copy now; the block needs no room for one
 		padded = 0;
 #endif
 	temps = prinst.maxtempstrings > PR_GC_MINTEMPS ? prinst.maxtempstrings : PR_GC_MINTEMPS;	//the floor the first finish sets
-#if defined(_WIN32) && !defined(WINRT)
+#ifdef QCGC_WATCHABLE
 	if (!padded && prinst.tablewatch)	//FTESurf Patch 1481: the table is mirrored, not copied into the block
 		need = sizeof(*gc) - sizeof(gc->amem) + sizeof(*gc->dead)*temps;
 	else
@@ -1919,7 +2133,7 @@ void PR_RunGC (progfuncs_t *progfuncs)
 	{
 		if (prinst.livetemps < prinst.maxtempstrings/2 || prinst.nexttempstring < prinst.maxtempstrings/2)
 		{	//don't bother yet
-#if defined(THREADEDGC) && defined(_WIN32) && !defined(WINRT)
+#if defined(THREADEDGC) && defined(QCGC_WATCHABLE)
 			//FTESurf Patch 1481: a table a burst grew (a replay loading: 2M slots, ~700 live after) would wait for a
 			//million new temps and clear them in one frame. With both copies incremental, collect every
 			//PR_GC_MINTEMPS/2 new ones instead.
@@ -1942,7 +2156,7 @@ void PR_RunGC (progfuncs_t *progfuncs)
 			pbool mirrored = false, tabled = false;
 			for (i = 0; i < n; i++)
 				memsize += len[i];
-#if defined(_WIN32) && !defined(WINRT)
+#ifdef QCGC_WATCHABLE
 			mirrored = PR_QCGC_Snapshot(progfuncs, ofs, len, n);	//FTESurf Patch 1481
 			tabled = mirrored && PR_QCGC_TableSnapshot(progfuncs);	//FTESurf Patch 1481
 #endif
@@ -1967,7 +2181,7 @@ void PR_RunGC (progfuncs_t *progfuncs)
 
 			gc->memsize = memsize;
 			gc->scan = NULL;
-#if defined(_WIN32) && !defined(WINRT)
+#ifdef QCGC_WATCHABLE
 			if (mirrored)
 			{	//FTESurf Patch 1481: the worker reads the mirror at the segments; amem holds only the tables
 				gc->scan = prinst.gcmirror;
@@ -1984,7 +2198,7 @@ void PR_RunGC (progfuncs_t *progfuncs)
 			}
 
 			gc->maxtemps = prinst.maxtempstrings;
-#if defined(_WIN32) && !defined(WINRT)
+#ifdef QCGC_WATCHABLE
 			if (tabled)
 			{	//FTESurf Patch 1481: the worker and the finish read the table's mirror, which only the next start writes
 				gc->tempstrings = prinst.gctable;
@@ -2002,7 +2216,7 @@ void PR_RunGC (progfuncs_t *progfuncs)
 			pr_gc_mainus += (Sys_DoubleTime() - gc_t0) * 1e6;
 			pr_gc_starts++;
 			pr_gc_bytes = padded + (tabled ? 0 : sizeof(*gc->tempstrings)*gc->maxtemps);
-#if defined(_WIN32) && !defined(WINRT)
+#ifdef QCGC_WATCHABLE
 			if (mirrored)
 				pr_gc_bytes += pr_gc_copied;	//FTESurf Patch 1481: the pages refreshed
 #endif
@@ -2055,7 +2269,7 @@ static void PR_FreeAllTemps			(progfuncs_t *progfuncs)
 	prinst.gcspare = NULL;
 	free(prinst.gcfree);
 	prinst.gcfree = NULL;
-#if defined(_WIN32) && !defined(WINRT)
+#ifdef QCGC_WATCHABLE
 	free(prinst.gcmirror), prinst.gcmirror = NULL;	//FTESurf Patch 1481
 	free(prinst.gcpages), prinst.gcpages = NULL;
 	prinst.gcmirrorcap = prinst.gcpagescap = prinst.gcmirrorused = 0;
@@ -2481,7 +2695,12 @@ static void PDECL PR_Shutdown(pubprogfuncs_t *ppf)
 #if defined(_WIN32) && !defined(WINRT)
 	VirtualFree(inst->inst.addressablehunk, 0, MEM_RELEASE);	//doesn't this look complicated? :p
 #else
-	free(inst->inst.addressablehunk);
+#ifdef QCGC_LINUXWATCH
+	if (inst->inst.hunkmaplen)
+		QCWW_Unmap(inst->inst.addressablehunk, inst->inst.hunkmaplen);
+	else
+#endif
+		free(inst->inst.addressablehunk);
 #endif
 
 	PR_FreeAllTemps(inst);
@@ -2494,6 +2713,10 @@ static void PDECL PR_Shutdown(pubprogfuncs_t *ppf)
 #if defined(THREADEDGC) && defined(_WIN32) && !defined(WINRT)
 		if (inst->inst.tablewatch)	//FTESurf Patch 1481
 			VirtualFree(inst->inst.tempstrings, 0, MEM_RELEASE);
+		else
+#elif defined(QCGC_LINUXWATCH)
+		if (inst->inst.tablemaplen)	//FTESurf Patch 1605
+			QCWW_Unmap(inst->inst.tempstrings, inst->inst.tablemaplen);
 		else
 #endif
 			f(inst->inst.tempstrings);
