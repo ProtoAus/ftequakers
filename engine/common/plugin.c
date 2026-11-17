@@ -711,7 +711,8 @@ static qboolean QDECL PlugBI_ExportInterface(const char *name, void *interfacept
   CVAR_SERVEROVERRIDE / CVAR_CONFIGDEFAULT / CVAR_USERCREATED are the engine's
   bookkeeping, not a plugin's to assert.
 */
-#define PLUG_CVAR_FLAGS (CVAR_ARCHIVE|CVAR_CHEAT|CVAR_SEMICHEAT)
+//FTESurf Patch 1604: CVAR_NOSET too, another flag that can only refuse (hl2_sprpmiss is evidence; no plugin passed it before).
+#define PLUG_CVAR_FLAGS (CVAR_ARCHIVE|CVAR_CHEAT|CVAR_SEMICHEAT|CVAR_NOSET)
 static cvar_t *QDECL Plug_Cvar_GetNVFDG(const char *name, const char *defaultvalue, unsigned int flags, const char *description, const char *groupname)
 {
 	if (!defaultvalue)

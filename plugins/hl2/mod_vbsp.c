@@ -8462,41 +8462,60 @@ static qboolean VBSP_TraceVisual(struct model_s *model, int hulloverride, const 
 }
 
 //FTESurf Patch 1604: a solid static prop whose model FILE this machine lacks collides with nothing here, while Source
-//collides with it. Noted once per model; a file that exists but would not load is another fault and stays out, since
-//the lobby's .rec (`propmiss`) names these as content it lacked.
+//collides with it. Noted once per file, case-insensitively (the model cache is case-sensitive, so ahop_coast's
+//Handrail04_long and handrail04_long are two models); a file that exists but would not load is another fault and
+//stays out, since the lobby's .rec (`propmiss`) names these as content it lacked.
 static void VBSP_NoteStaticMissing(model_t **list, size_t *n, model_t *m)
 {
 	size_t i;
 	if (!list)
 		return;
 	for (i = 0; i < *n; i++)
-		if (list[i] == m)
+		if (!Q_strcasecmp(list[i]->name, m->name))
 			return;
 	if (!filefuncs->LocateFile(m->name, FSLF_IFFOUND, NULL))
 		list[(*n)++] = m;
 }
 
-//FTESurf Patch 1604: hl2_sprpmiss = "<world model> <distinct models> <names...>" for the lobby's QC
-//(sv_entities.qc SV_PropStaticMissing). The world's name leads because only a Source map sets it: a value naming
-//another map is the last Source map's.
-#define SPRPMISS_NAMES 64
+//FTESurf Patch 1604: a token for the QC's tokenize_console: every byte up to space and the quote become '_', and a
+//leading '/' too (a token starting "//" or "/*" is a comment there).
+static void VBSP_SprpToken(char *s)
+{
+	char *c;
+	for (c = s; *c; c++)
+		if ((unsigned char)*c <= ' ' || *c == '"' || (c == s && *c == '/'))
+			*c = '_';
+}
+
+//FTESurf Patch 1604: hl2_sprpmiss = "<world model> <distinct files> <names...>" for the lobby's QC
+//(sv_entities.qc SV_PropStaticMissing), "" when prop collision is off (nothing measured). The world's name leads
+//because only a Source map sets it: a value naming another map is the last Source map's.
+#define SPRPMISS_NAMES 512
 static void VBSP_PublishStaticMissing(model_t *world, model_t **list, size_t n)
 {
-	char buf[SPRPMISS_NAMES * (MAX_QPATH + 1) + MAX_QPATH + 16], *c;
-	size_t i, at;
-	Q_snprintfz(buf, sizeof(buf), "%s %u", world->name, (unsigned)n);
+	size_t i, at, size = (SPRPMISS_NAMES + 1) * (MAX_QPATH + 1) + 16;
+	char *buf;
+	if (!hl2_propcollision->ival)
+	{
+		cvarfuncs->ForceSetString("hl2_sprpmiss", "");
+		return;
+	}
+	buf = plugfuncs->Malloc(size);
+	Q_snprintfz(buf, size, "%s", world->name);
+	VBSP_SprpToken(buf);
+	at = strlen(buf);
+	Q_snprintfz(buf + at, size - at, " %u", (unsigned)n);
 	for (i = 0; i < n && i < SPRPMISS_NAMES; i++)
 	{
 		at = strlen(buf);
-		Q_snprintfz(buf + at, sizeof(buf) - at, " %s", list[i]->name);
-		for (c = buf + at + 1; *c; c++)
-			if (*c == ' ' || *c == '\t' || *c == '\r' || *c == '\n' || *c == '"')
-				*c = '_';
+		Q_snprintfz(buf + at, size - at, " %s", list[i]->name);
+		VBSP_SprpToken(buf + at + 1);
 	}
 	cvarfuncs->ForceSetString("hl2_sprpmiss", buf);
+	plugfuncs->Free(buf);
 	if (n)
-		Con_Printf(CON_WARNING "%s: %u solid static prop model(s) are missing here and collide with nothing "
-			"(hl2_sprpmiss lists them)\n", world->name, (unsigned)n);
+		Con_Printf(CON_WARNING "%s: %u solid static prop model file(s) are missing here and those props collide with "
+			"nothing (hl2_sprpmiss lists them)\n", world->name, (unsigned)n);
 }
 
 static cvar_t *hl2_lt_prewarm;	//Patch 1364's, defined with its warm below; read by Patch 1501 here
@@ -14918,7 +14937,7 @@ qboolean VBSP_Init(void)
 		cvarfuncs->GetNVFDG("hl2_unresolved_first", "", CVAR_NOSAVE, "The first material the loaded map failed to resolve, as a hint at which asset pack it wants.", MAPOPTIONS);
 		//FTESurf Patch 233: ...and how many of them are on a face or a prop rather than only
 		//in the texdata string table.  The HUD banner draws on THIS, not on the raw count.
-		cvarfuncs->GetNVFDG("hl2_sprpmiss", "", CVAR_NOSAVE|CVAR_NOSET, "FTESurf Patch 1604: the solid static props whose model file this machine lacks, so they collide with nothing here while Source collides with them: \"<world model> <distinct models> <names>\" (at most 64 names; spaces and quotes as _). Set when a Source map's collision is built; the lobby adds them to the .rec header propmiss.", MAPOPTIONS);
+		cvarfuncs->GetNVFDG("hl2_sprpmiss", "", CVAR_NOSAVE|CVAR_NOSET, "FTESurf Patch 1604, read-only: the solid static props whose model file this machine lacks, so they collide with nothing here while Source collides with them: \"<world model> <distinct files, case-insensitive> <names>\" (at most 512 names; control bytes, spaces and quotes as _). Set when a Source map's collision is built; \"\" while hl2_propcollision is 0. The lobby adds them to the .rec header propmiss.", MAPOPTIONS);
 		cvarfuncs->GetNVFDG("hl2_unresolved_visible", "0", CVAR_NOSAVE, "How many of hl2_unresolved are on something you can actually look at -- a drawn world face, or a prop skin. A material named in the map's texdata table that no face uses cannot be seen and does not count. `hl2_missing` says which is which. FTESurf Patch 1560: 0 when scripts/unshipped.txt lists every miss as content the map never shipped.", MAPOPTIONS);
 
 		/*
