@@ -3089,7 +3089,7 @@ void R_RestartRenderer (rendererstate_t *newr)
 			qboolean failed = true;
 			rendererinfo_t *skip = newr->renderer;
 			struct sortedrenderers_s sorted[countof(rendererinfo)];
-			rendererstate_t asked = *newr;	//P1602: the other renderers below get this mode, not the 640x480 retry
+			rendererstate_t asked = *newr;	//P1602: the other renderers below get this mode first, not the 640x480 retry
 
 			if (failed && newr->vr)
 			{
@@ -3124,13 +3124,6 @@ void R_RestartRenderer (rendererstate_t *newr)
 				newr->fullscreen = 0;
 				failed = !R_ApplyRenderer(newr);
 			}
-			if (failed)
-			{
-				newr->width = asked.width;
-				newr->height = asked.height;
-				newr->fullscreen = asked.fullscreen;
-				newr->rate = asked.rate;
-			}
 
 			for (i = 0; i < countof(sorted); i++)
 			{
@@ -3144,8 +3137,21 @@ void R_RestartRenderer (rendererstate_t *newr)
 				newr->renderer = sorted[i].r;
 				if (newr->renderer && newr->renderer != skip && newr->renderer->rtype != QR_HEADLESS)
 				{
+					newr->width = asked.width;
+					newr->height = asked.height;
+					newr->fullscreen = asked.fullscreen;
+					newr->rate = asked.rate;
 					Con_Printf(CON_NOTICE "Trying %s"CON_DEFAULT"\n", newr->renderer->description);
 					failed = !R_ApplyRenderer(newr);
+					if (failed && (newr->fullscreen || newr->rate || newr->width != DEFAULT_WIDTH || newr->height != DEFAULT_HEIGHT))
+					{	//P1602: then its safe mode, before the next renderer
+						newr->width = DEFAULT_WIDTH;
+						newr->height = DEFAULT_HEIGHT;
+						newr->fullscreen = 0;
+						newr->rate = 0;
+						Con_Printf(CON_NOTICE "Trying %s windowed %i*%i"CON_DEFAULT"\n", newr->renderer->description, DEFAULT_WIDTH, DEFAULT_HEIGHT);
+						failed = !R_ApplyRenderer(newr);
+					}
 				}
 			}
 

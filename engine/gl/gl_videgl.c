@@ -235,6 +235,7 @@ qboolean EGL_LoadLibrary(char *driver)
 
 void EGL_Shutdown(void)
 {
+	egl_backendpacing = false;	//the next backend sets it again if it wants it
 	if (eglctx == EGL_NO_CONTEXT)
 		return;
 
@@ -305,11 +306,16 @@ void EGL_Shutdown(void)
 	}
 }*/
 
+//P1602: set by the Wayland backend before EGL_InitWindow. Its frame callback paces vsync, so eglSwapBuffers must
+//never wait: with interval 1 the driver waits for a frame callback a hidden surface never gets, stalling the host.
+qboolean egl_backendpacing;
 static void EGL_UpdateSwapInterval(void)
 {
 	int interval;
 	vid_vsync.modified = false;
-	if (*vid_vsync.string)
+	if (egl_backendpacing)
+		interval = 0;
+	else if (*vid_vsync.string)
 		interval = vid_vsync.ival;
 	else
 		interval = 1;	//default is to always vsync, according to EGL docs, so lets just do that.

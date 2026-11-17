@@ -30,6 +30,7 @@ void EGL_UnloadLibrary(void);
 qboolean EGL_LoadLibrary(char *driver);
 void EGL_Shutdown(void);
 void EGL_SwapBuffers (void);
+extern qboolean egl_backendpacing;	//swap interval 0 whatever vid_vsync says (EGL_Shutdown clears it)
 
 qboolean EGL_InitDisplay (rendererstate_t *info, int eglplat, void *ndpy, EGLNativeDisplayType dpyid, EGLConfig *outconfig);
 qboolean EGL_InitWindow (rendererstate_t *info, int eglplat, void *nwindow, EGLNativeWindowType windowid, EGLConfig cfg);

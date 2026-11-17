@@ -24,6 +24,7 @@ kwin unstable protocools:
 #include <unistd.h>
 #include <sys/mman.h>
 #include <poll.h>
+#include <errno.h>
 #include <xkbcommon/xkbcommon.h>
 
 #include "quakedef.h"
@@ -359,11 +360,13 @@ static struct wdisplay_s
 	struct wl_data_device *data_device;
 	struct wl_data_offer *newoffer;	//offers announce their mime types before selection/enter names them
 	int newoffer_mime;				//1-based index into wl_textmimes, 0 = no text
+	qboolean newoffer_self;			//it offers WL_SelfMime: this process's own selection
 	struct wl_data_offer *selection_offer;
 	int selection_mime;
+	qboolean selection_self;
 	struct wl_data_offer *dnd_offer;
-	struct wl_data_source *data_source;	//set while we own the selection
-	char *cliptext;
+	struct wl_data_source *data_source;	//our newest source, until it is cancelled
+	char *cliptext;					//what data_source serves
 
 	//because wayland really doesn't help when it comes to various keymaps
 	struct xkb_context *xkb_context;
@@ -411,6 +414,7 @@ static struct wdisplay_s
 	int intscale;				//integer scale when there is no fractional scale
 	int bufscale120;			//the scale the buffer was last sized for
 	int bufwidth, bufheight;
+	int destwidth, destheight;	//the logical size they were made for (the viewport destination)
 
 	struct wp_tearing_control_manager_v1 *tearing_control_manager;
 	struct wp_tearing_control_v1 *tearing_control;
@@ -441,6 +445,12 @@ static struct wdisplay_s
 #endif
 } w;
 static void WL_SetCaption(const char *text);
+
+//P1602: an interface table from the loaded libwayland-client bounds the version too: an older library cannot decode newer events
+static uint32_t WL_BindVersion(const struct wl_interface *iface, uint32_t advertised, uint32_t ours)
+{
+	return min(min(advertised, ours), (uint32_t)iface->version);
+}
 
 //Patch 1602: HiDPI. The buffer is round(logical size * scale); wp_viewport maps it back onto the logical size.
 #define WP_FRACTIONAL_SCALE_MANAGER_V1_GET_FRACTIONAL_SCALE 1
@@ -565,12 +575,12 @@ static void WL_ApplySize(void)
 
 	if (!w.surface || !w.truewidth || !w.trueheight)
 		return;
-	if (bw == w.bufwidth && bh == w.bufheight && scale == w.bufscale120)
+	if (bw == w.bufwidth && bh == w.bufheight && scale == w.bufscale120 && w.truewidth == w.destwidth && w.trueheight == w.destheight)
 		return;
 
 	if (w.viewport)
 		pwl_proxy_marshal((struct wl_proxy *) w.viewport, WP_VIEWPORT_SET_DESTINATION, w.truewidth, w.trueheight);
-	else if (scale != w.bufscale120)
+	else if (scale != w.bufscale120 && w.compositor_version >= 3)
 		pwl_surface_set_buffer_scale(w.surface, scale/120);
 	if (scale != w.bufscale120)
 	{	//for the code that sizes things in physical units
@@ -581,6 +591,8 @@ static void WL_ApplySize(void)
 	w.bufwidth = bw;
 	w.bufheight = bh;
 	w.bufscale120 = scale;
+	w.destwidth = w.truewidth;
+	w.destheight = w.trueheight;
 	Con_DPrintf("Wayland: %ix%i logical, scale %g, %ix%i buffer\n", w.truewidth, w.trueheight, scale/120.0, bw, bh);
 
 #if defined(GLQUAKE) && defined(USE_EGL)
@@ -651,7 +663,8 @@ static void WL_BindOutput(struct wl_registry *registry, uint32_t id, uint32_t ve
 		{
 			w.outputs[i].id = id;
 			w.outputs[i].scale = 1;
-			w.outputs[i].output = pwl_registry_bind(registry, id, pwl_output_interface, min(version, 2));
+			w.outputs[i].entered = false;
+			w.outputs[i].output = pwl_registry_bind(registry, id, pwl_output_interface, WL_BindVersion(pwl_output_interface, version, 2));
 			pwl_proxy_add_listener((struct wl_proxy *) w.outputs[i].output, (void (**)(void)) &output_listener, &w.outputs[i]);
 			return;
 		}
@@ -661,7 +674,7 @@ static void WL_surface_handle_output(struct wl_output *output, qboolean entered)
 {
 	int i;
 	for (i = 0; i < countof(w.outputs); i++)
-		if (w.outputs[i].output == output)
+		if (output && w.outputs[i].output == output)	//NULL: an output we already destroyed
 			w.outputs[i].entered = entered;
 	WL_UpdateIntScale();
 }
@@ -1641,6 +1654,13 @@ static const struct wl_seat_listener seat_listener =
 
 //clipboard: wl_data_device's selection, CBT_CLIPBOARD only (gl_vidlinuxglx.c's Sys_Clipboard_PasteText/Sys_SaveClipboard call in)
 static const char *wl_textmimes[] = {"text/plain;charset=utf-8", "text/plain", "UTF8_STRING"};	//best first
+static const char *WL_SelfMime(void)
+{	//our sources also offer this, so a selection is known to be ours (not another copy of the game's) by its offer alone
+	static char mime[64];
+	if (!*mime)
+		Q_snprintfz(mime, sizeof(mime), "application/x-ftesurf-self;pid=%u", (unsigned)getpid());
+	return mime;
+}
 static void WL_DestroyOffer(struct wl_data_offer **offer)
 {
 	if (!*offer)
@@ -1656,6 +1676,8 @@ static void WL_data_offer_handle_offer(void *data, struct wl_data_offer *offer, 
 	int i;
 	if (offer != w.newoffer)
 		return;
+	if (!strcmp(mime, WL_SelfMime()))
+		w.newoffer_self = true;
 	for (i = 0; i < countof(wl_textmimes); i++)
 		if (!strcmp(mime, wl_textmimes[i]) && (!w.newoffer_mime || i+1 < w.newoffer_mime))
 			w.newoffer_mime = i+1;
@@ -1668,6 +1690,7 @@ static void WL_data_device_handle_data_offer(void *data, struct wl_data_device *
 {
 	w.newoffer = offer;
 	w.newoffer_mime = 0;
+	w.newoffer_self = false;
 	pwl_proxy_add_listener((struct wl_proxy *) offer, (void (**)(void)) &data_offer_listener, &w);
 }
 static void WL_data_device_handle_enter(void *data, struct wl_data_device *device, uint32_t serial, struct wl_surface *surface, wl_fixed_t x, wl_fixed_t y, struct wl_data_offer *offer)
@@ -1688,6 +1711,7 @@ static void WL_data_device_handle_selection(void *data, struct wl_data_device *d
 		WL_DestroyOffer(&w.selection_offer);
 	w.selection_offer = offer;
 	w.selection_mime = (offer && offer == w.newoffer)?w.newoffer_mime:0;
+	w.selection_self = (offer && offer == w.newoffer)?w.newoffer_self:false;
 }
 static const struct wl_data_device_listener data_device_listener =
 {
@@ -1702,23 +1726,38 @@ static void WL_data_source_handle_target(void *data, struct wl_data_source *sour
 {
 }
 static void WL_data_source_handle_send(void *data, struct wl_data_source *source, const char *mime, int32_t fd)
-{
+{	//non-blocking with 100 ms in all: a reader that stops reading must not stall the game
 	const char *t = w.cliptext?w.cliptext:"";
-	size_t len = strlen(t);
+	size_t len = strcmp(mime, WL_SelfMime())?strlen(t):0;
+	double deadline = Sys_DoubleTime() + 0.1;
+	struct pollfd p;
+	fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK);
 	while (len)
 	{
 		ssize_t r = write(fd, t, len);
-		if (r <= 0)
-			break;
-		t += r;
-		len -= r;
+		int ms = (deadline - Sys_DoubleTime())*1000;
+		if (r > 0)
+		{
+			t += r;
+			len -= r;
+			continue;
+		}
+		p.fd = fd;
+		p.events = POLLOUT;
+		if (r < 0 && errno == EAGAIN && ms > 0 && poll(&p, 1, ms) > 0)
+			continue;
+		break;	//an error, or the reader is out of time
 	}
 	close(fd);
 }
 static void WL_data_source_handle_cancelled(void *data, struct wl_data_source *source)
 {	//someone else took the selection (or our replacement did)
 	if (source == w.data_source)
+	{
 		w.data_source = NULL;
+		Z_Free(w.cliptext);
+		w.cliptext = NULL;
+	}
 	pwl_proxy_marshal((struct wl_proxy *) source, WL_DATA_SOURCE_DESTROY);
 	pwl_proxy_destroy((struct wl_proxy *) source);
 }
@@ -1728,7 +1767,7 @@ static const struct wl_data_source_listener data_source_listener =
 	WL_data_source_handle_send,
 	WL_data_source_handle_cancelled,
 };
-//false: not ours to answer (no Wayland, the primary selection, or we own the selection), so the caller uses its own copy
+//false: not ours to answer (no Wayland clipboard, the primary selection, or the selection is this process's), so the caller uses its own copy
 qboolean WL_Clipboard_PasteText(clipboardtype_t cbt, void (*callback)(void *ctx, const char *utf8), void *ctx)
 {
 	int fds[2];
@@ -1736,9 +1775,11 @@ qboolean WL_Clipboard_PasteText(clipboardtype_t cbt, void (*callback)(void *ctx,
 	size_t len = 0, cap = 0;
 	ssize_t r;
 	struct pollfd p;
+	double deadline;
+	int ms;
 
-	if (!w.display || cbt != CBT_CLIPBOARD || w.data_source)
-		return false;
+	if (!w.display || cbt != CBT_CLIPBOARD || !w.data_device || w.selection_self)
+		return false;	//(reading our own source would wait on ourselves)
 	if (!w.selection_offer || !w.selection_mime || pipe(fds) < 0)
 	{
 		callback(ctx, NULL);
@@ -1750,7 +1791,8 @@ qboolean WL_Clipboard_PasteText(clipboardtype_t cbt, void (*callback)(void *ctx,
 
 	p.fd = fds[0];
 	p.events = POLLIN;
-	while (len < (1u<<20) && poll(&p, 1, 1000) > 0)	//a source that never writes costs a second, not a hang
+	deadline = Sys_DoubleTime() + 1;	//a source that never finishes costs a second in all, not a hang
+	while (len < (1u<<20) && (ms = (deadline - Sys_DoubleTime())*1000) > 0 && poll(&p, 1, ms) > 0)
 	{
 		if (len+4096 >= cap)
 		{
@@ -1775,12 +1817,13 @@ void WL_SaveClipboard(clipboardtype_t cbt, const char *text)
 {
 	int i;
 	struct wl_data_source *source;
-	if (!w.display || cbt != CBT_CLIPBOARD || !w.data_device)
-		return;
+	if (!w.display || cbt != CBT_CLIPBOARD || !w.data_device || !w.inputserial)
+		return;	//no input serial yet: set_selection would be refused, so only the caller's own copy changes
 	Z_StrDupPtr(&w.cliptext, text);
 	source = (struct wl_data_source *) pwl_proxy_marshal_constructor((struct wl_proxy *) w.data_device_manager, WL_DATA_DEVICE_MANAGER_CREATE_DATA_SOURCE, pwl_data_source_interface, NULL);
 	for (i = 0; i < countof(wl_textmimes); i++)
 		pwl_proxy_marshal((struct wl_proxy *) source, WL_DATA_SOURCE_OFFER, wl_textmimes[i]);
+	pwl_proxy_marshal((struct wl_proxy *) source, WL_DATA_SOURCE_OFFER, WL_SelfMime());
 	pwl_proxy_add_listener((struct wl_proxy *) source, (void (**)(void)) &data_source_listener, &w);
 	pwl_proxy_marshal((struct wl_proxy *) w.data_device, WL_DATA_DEVICE_SET_SELECTION, source, w.inputserial);
 	w.data_source = source;	//the previous one, if any, is told 'cancelled'
@@ -1917,14 +1960,14 @@ static void WL_handle_global(void *data, struct wl_registry *registry, uint32_t 
 Con_DLPrintf(0, "Wayland Interface %s id %u version %u\n", interface, id, version);
 	if (strcmp(interface, "wl_compositor") == 0)
 	{	//v3: wl_surface.set_buffer_scale, v6: wl_surface.preferred_buffer_scale
-		d->compositor_version = min(version, 6);
+		d->compositor_version = WL_BindVersion(pwl_compositor_interface, version, 6);
 		d->compositor = pwl_registry_bind(registry, id, pwl_compositor_interface, d->compositor_version);
 	}
 	else if (strcmp(interface, "wl_shm") == 0)
-		d->shm = pwl_registry_bind(registry, id, pwl_shm_interface, 1);
+		d->shm = pwl_registry_bind(registry, id, pwl_shm_interface, WL_BindVersion(pwl_shm_interface, version, 1));
 #ifdef WL_SHELL_NAME
 	else if (strcmp(interface, WL_SHELL_NAME) == 0)
-		d->shell = pwl_registry_bind(registry, id, pwl_shell_interface, 1);
+		d->shell = pwl_registry_bind(registry, id, pwl_shell_interface, WL_BindVersion(pwl_shell_interface, version, 1));
 #endif
 #ifdef XDG_SHELL_NAME
 	else if (strcmp(interface, XDG_SHELL_NAME) == 0 && version > 1)	//old versions of kwin are buggy, sidestep it.
@@ -1932,13 +1975,13 @@ Con_DLPrintf(0, "Wayland Interface %s id %u version %u\n", interface, id, versio
 #endif
 	else if (strcmp(interface, "wl_seat") == 0 && !d->seat)
 	{	//v4 for wl_keyboard.repeat_info; v5 would add wl_pointer events the listener lacks
-		d->seat = pwl_registry_bind(registry, id, pwl_seat_interface, min(version, 4));
+		d->seat = pwl_registry_bind(registry, id, pwl_seat_interface, WL_BindVersion(pwl_seat_interface, version, 4));
 		pwl_seat_add_listener(d->seat, &seat_listener, d);
 	}
 	else if (strcmp(interface, "wl_output") == 0)
 		WL_BindOutput(registry, id, version);
 	else if (strcmp(interface, "wl_data_device_manager") == 0)
-		d->data_device_manager = pwl_registry_bind(registry, id, pwl_data_device_manager_interface, 1);
+		d->data_device_manager = pwl_registry_bind(registry, id, pwl_data_device_manager_interface, WL_BindVersion(pwl_data_device_manager_interface, version, 1));
 	else if (strcmp(interface, WP_FRACTIONAL_SCALE_MANAGER_NAME) == 0)
 		WL_BindFractionalScaleManager(registry, id);
 	else if (strcmp(interface, WP_VIEWPORTER_NAME) == 0)
@@ -2086,7 +2129,7 @@ static void WL_SwapBuffers(void)
 
 		EGL_SwapBuffers();
 		//wl_surface_damage(w.surface, 0, 0, vid.pixelwidth, vid.pixelheight);
-		if (pwl_display_dispatch_pending(w.display) < 0)
+		if (!WL_PumpEvents(0))	//read too: with vsync off WL_MayRefresh never waits, so nothing else reads the socket
 		{
 			Con_Printf(CON_ERROR "wayland connection was lost. Restarting video\n");
 			Cbuf_InsertText("vid_restart", RESTRICT_LOCAL, true);
@@ -2107,7 +2150,7 @@ static void WL_SwapBuffers(void)
 		break;
 #endif
 	case QR_VULKAN:
-		if (pwl_display_dispatch_pending(w.display) < 0)
+		if (!WL_PumpEvents(0))
 		{
 			Con_Printf(CON_ERROR "wayland connection was lost. Restarting video\n");
 			Cbuf_InsertText("vid_restart", RESTRICT_LOCAL, true);
@@ -2401,8 +2444,10 @@ pwl_display_roundtrip(w.display);
 					pwl_surface_commit(w.surface);
 				}
 			#endif
+			egl_backendpacing = true;	//WL_SwapBuffers' frame callback paces vsync; EGL must not block on its own
 			if (!EGL_InitWindow(info, EGL_PLATFORM_WAYLAND_KHR, w.enwindow, (EGLNativeWindowType)w.enwindow, cfg))
 			{
+				egl_backendpacing = false;
 				Con_Printf("couldn't initialise EGL context\n");
 				return false;
 			}
