@@ -1,5 +1,43 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1604 - The lobby records the solid static props whose model file it lacks (hl2_sprpmiss, `propstatic`)
+
+**Problem.** A solid static prop whose model the server cannot load gets no collision ("has no collision info and must
+not be used as a solid static prop"), so the lobby has a hole where Source has a wall. Patch 1581's `propmiss` named
+only entity props, so pm_verify's "may be content skew" never covered these. The 12 lobby logs hold 531 map/model
+pairs on 55 maps over their life (most before the Pi had HL2 content); surf_1969's TF2 props are still current.
+
+**Change.**
+- hl2 plugin, VBSP_BuildBIHMain: each solid static prop with no collision whose model FILE is absent (LocateFile; a
+  present file that will not load is another fault) is noted once per file, case-insensitively. After the BIH build
+  it publishes `hl2_sprpmiss` = "<world model> <n> <names>" (up to 512 names; bytes <= space, the quote and a leading
+  '/' as '_'), "" while hl2_propcollision is 0, with one console warning when n > 0.
+- common/plugin.c: PLUG_CVAR_FLAGS passes CVAR_NOSET (Patch 460's rule: flags that can only refuse; no plugin passed
+  it before), so hl2_sprpmiss is read-only: `set` answers "variable hl2_sprpmiss is readonly".
+- FTESurf QC (P1604): reads it only when cvar_type says read-only and it names this world (`.gz`/`.xz` accepted);
+  static names are checked against the entity props' lower-case keys without joining them; new header
+  `propstatic 0 | 1 <k>` (k: the static files missing, each also in n); the props line says "static props checked (k
+  missing)" or "not checked". reccheck knows the key and prints both with -v.
+
+**Verified.** ahop_coast on a local dedicated server and a headless listen server (`vid_renderer headless`), no Steam
+content unless noted (HOME emptied: Linux Steam's default library has HL2):
+- 154 static files listed; propmiss 215 (65 entity props + 150 statics no entity prop named), `propstatic 1 154`.
+  With Steam: 0, checked. An empty .mdl planted for one model takes it out (153/214). Pre-P1604 engine with the new
+  QC: 65, "not checked", `propstatic 0`.
+- `set hl2_sprpmiss ...` is refused and a same-map reload keeps 215; on the old engine a console-made value and
+  `restart` change nothing (65, not checked). hl2_propcollision 0: "" and not checked. ahop_coast.bsp.gz: checked.
+- A real run's streamed .rec: `propmiss 215 ...` and `propstatic 1 154` (old engine: `propmiss 65`, `propstatic 0`).
+- The 145 models the Pi's own logs named for ahop_coast before it had HL2 content are all in the local list.
+- Engine: no new warnings in the changed files; fteqcc 0 warnings; test_reccheck 1052/0, corpus sweep unchanged.
+- Reviews: round 1 (predicate/control flow; consequences for evidence) found the settable cvar, the overcount and the
+  missing marker; round 2 on the fixes found a reccheck crash on a malformed propmiss and an understated k, both fixed
+  with tests that fail on the old code. Stopped there under the integrity rule: nothing in either round ranks a run.
+
+**Limits.** A model that failed on one map stays failed on the next (gl_model.c keeps failed models), so if a later
+map ships it in its own pak the prop has no collision and is not listed (the file exists). The lobby cannot tell a
+file nobody ships from one only it lacks. Only the first 8 names reach the header, entity props spawned with the map first. The Pi's
+server engine must carry this patch.
+
 ## Patch 1603 - Linux runs rank, marked "Linux: Not mouse verified" (QC + surfd + reccheck; no engine change)
 
 **Problem.** Patch 389 (Linux beta, 19 Sep) returned PW_PLATFORM for any input report without IPH_RAW (in_rawinput
