@@ -25,6 +25,7 @@ kwin unstable protocools:
 #include <sys/mman.h>
 #include <poll.h>
 #include <errno.h>
+#include <sys/random.h>
 #include <xkbcommon/xkbcommon.h>
 
 #include "quakedef.h"
@@ -1655,10 +1656,19 @@ static const struct wl_seat_listener seat_listener =
 //clipboard: wl_data_device's selection, CBT_CLIPBOARD only (gl_vidlinuxglx.c's Sys_Clipboard_PasteText/Sys_SaveClipboard call in)
 static const char *wl_textmimes[] = {"text/plain;charset=utf-8", "text/plain", "UTF8_STRING"};	//best first
 static const char *WL_SelfMime(void)
-{	//our sources also offer this, so a selection is known to be ours (not another copy of the game's) by its offer alone
+{	//our sources also offer this, so a selection is known to be ours (not another copy of the game's) by its offer alone.
+	//A random id, not the pid: PID namespaces (Flatpak) repeat pids, and clipboard managers keep a dead instance's offer.
 	static char mime[64];
 	if (!*mime)
-		Q_snprintfz(mime, sizeof(mime), "application/x-ftesurf-self;pid=%u", (unsigned)getpid());
+	{
+		unsigned int id[2];
+		if (getrandom(id, sizeof(id), GRND_NONBLOCK) != sizeof(id))
+		{
+			id[0] = (unsigned int)time(NULL) ^ (unsigned int)getpid();
+			id[1] = (unsigned int)(Sys_DoubleTime()*1000000);
+		}
+		Q_snprintfz(mime, sizeof(mime), "application/x-ftesurf-self;id=%08x%08x", id[0], id[1]);
+	}
 	return mime;
 }
 static void WL_DestroyOffer(struct wl_data_offer **offer)
@@ -1742,11 +1752,18 @@ static void WL_data_source_handle_send(void *data, struct wl_data_source *source
 			len -= r;
 			continue;
 		}
+		if (ms <= 0)
+		{
+			Con_DPrintf("Wayland: clipboard send cut short by its 100 ms budget, %u bytes unsent\n", (unsigned int)len);
+			break;
+		}
+		if (r < 0 && errno == EINTR)
+			continue;
 		p.fd = fd;
 		p.events = POLLOUT;
-		if (r < 0 && errno == EAGAIN && ms > 0 && poll(&p, 1, ms) > 0)
-			continue;
-		break;	//an error, or the reader is out of time
+		if (r < 0 && errno == EAGAIN && (poll(&p, 1, ms) >= 0 || errno == EINTR))
+			continue;	//writable, interrupted, or timed out (and the next pass says so)
+		break;	//an error, such as the reader closing
 	}
 	close(fd);
 }
@@ -1792,16 +1809,23 @@ qboolean WL_Clipboard_PasteText(clipboardtype_t cbt, void (*callback)(void *ctx,
 	p.fd = fds[0];
 	p.events = POLLIN;
 	deadline = Sys_DoubleTime() + 1;	//a source that never finishes costs a second in all, not a hang
-	while (len < (1u<<20) && (ms = (deadline - Sys_DoubleTime())*1000) > 0 && poll(&p, 1, ms) > 0)
+	while (len < (1u<<20) && (ms = (deadline - Sys_DoubleTime())*1000) > 0)
 	{
+		int n = poll(&p, 1, ms);
+		if (n < 0 && errno == EINTR)
+			continue;
+		if (n <= 0)
+			break;
 		if (len+4096 >= cap)
 		{
-			char *n = realloc(text, cap = len+4096+1);
-			if (!n)
+			char *grown = realloc(text, cap = len+4096+1);
+			if (!grown)
 				break;
-			text = n;
+			text = grown;
 		}
 		r = read(fds[0], text+len, 4096);
+		if (r < 0 && errno == EINTR)
+			continue;
 		if (r <= 0)
 			break;
 		len += r;
@@ -2480,8 +2504,7 @@ static void WL_DeInit(void)
 	if (w.compositor)	pwl_proxy_destroy((struct wl_proxy *) w.compositor);
 	if (w.registry)		pwl_proxy_destroy((struct wl_proxy *) w.registry);
 	if (w.display)
-	{	//let the server know everything before shutting it off
-		pwl_display_dispatch(w.display);
+	{	//let the server know everything before shutting it off (a roundtrip: a dispatch could wait forever for an event)
 		pwl_display_roundtrip(w.display);
 		pwl_display_disconnect(w.display);
 	}

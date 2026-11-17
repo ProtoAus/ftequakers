@@ -512,6 +512,12 @@ qboolean EGL_InitWindow (rendererstate_t *info, int eglplat, void *nwindow, EGLN
 	}
 
 	EGL_UpdateSwapInterval();
+	if (egl_backendpacing)
+	{	//P1602: a minimum above 0 (Mesa's vblank_mode=3) makes the swap wait again, which blocks the game while hidden
+		EGLint mininterval = 0;
+		if (qeglGetConfigAttrib(egldpy, cfg, EGL_MIN_SWAP_INTERVAL, &mininterval) && mininterval > 0)
+			Con_Printf(CON_WARNING "EGL: minimum swap interval is %i, so the game can stall while its window is hidden\n", mininterval);
+	}
 
 
 	if (info->vr)
