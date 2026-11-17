@@ -3089,6 +3089,7 @@ void R_RestartRenderer (rendererstate_t *newr)
 			qboolean failed = true;
 			rendererinfo_t *skip = newr->renderer;
 			struct sortedrenderers_s sorted[countof(rendererinfo)];
+			rendererstate_t asked = *newr;	//P1602: the other renderers below get this mode, not the 640x480 retry
 
 			if (failed && newr->vr)
 			{
@@ -3122,6 +3123,13 @@ void R_RestartRenderer (rendererstate_t *newr)
 				Con_Printf(CON_NOTICE "Trying windowed"CON_DEFAULT"\n");
 				newr->fullscreen = 0;
 				failed = !R_ApplyRenderer(newr);
+			}
+			if (failed)
+			{
+				newr->width = asked.width;
+				newr->height = asked.height;
+				newr->fullscreen = asked.fullscreen;
+				newr->rate = asked.rate;
 			}
 
 			for (i = 0; i < countof(sorted); i++)

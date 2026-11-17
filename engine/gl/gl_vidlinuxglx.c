@@ -4840,6 +4840,11 @@ static struct {
 	Atom prop;
 	Atom owner;
 } x11paste;
+#ifdef WAYLANDQUAKE
+//Patch 1602, gl_vidwayland.c: the paste returns false unless Wayland answered it; the save does nothing off Wayland
+qboolean WL_Clipboard_PasteText(clipboardtype_t cbt, void (*callback)(void *ctx, const char *utf8), void *ctx);
+void WL_SaveClipboard(clipboardtype_t cbt, const char *text);
+#endif
 void Sys_Clipboard_PasteText(clipboardtype_t clipboardtype, void (*callback)(void *ctx, const char *utf8), void *ctx)
 {
 	//if there's a paste already pending, cancel the callback to ensure it always gets called.
@@ -4849,6 +4854,10 @@ void Sys_Clipboard_PasteText(clipboardtype_t clipboardtype, void (*callback)(voi
 	paste_callback = NULL;
 	pastectx = NULL;
 
+#ifdef WAYLANDQUAKE
+	if (WL_Clipboard_PasteText(clipboardtype, callback, ctx))
+		return;
+#endif
 	if(vid_dpy)
 	{
 		Window clipboardowner;
@@ -4930,6 +4939,9 @@ void Sys_SaveClipboard(clipboardtype_t clipboardtype, const char *text)
 {
 	free(clipboard_buffer[clipboardtype]);
 	clipboard_buffer[clipboardtype] = strdup(text);
+#ifdef WAYLANDQUAKE
+	WL_SaveClipboard(clipboardtype, text);
+#endif
 	if(vid_dpy)
 	{
 		Atom xa_clipboard;
