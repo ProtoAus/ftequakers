@@ -8461,6 +8461,44 @@ static qboolean VBSP_TraceVisual(struct model_s *model, int hulloverride, const 
 	return hit;
 }
 
+//FTESurf Patch 1604: a solid static prop whose model FILE this machine lacks collides with nothing here, while Source
+//collides with it. Noted once per model; a file that exists but would not load is another fault and stays out, since
+//the lobby's .rec (`propmiss`) names these as content it lacked.
+static void VBSP_NoteStaticMissing(model_t **list, size_t *n, model_t *m)
+{
+	size_t i;
+	if (!list)
+		return;
+	for (i = 0; i < *n; i++)
+		if (list[i] == m)
+			return;
+	if (!filefuncs->LocateFile(m->name, FSLF_IFFOUND, NULL))
+		list[(*n)++] = m;
+}
+
+//FTESurf Patch 1604: hl2_sprpmiss = "<world model> <distinct models> <names...>" for the lobby's QC
+//(sv_entities.qc SV_PropStaticMissing). The world's name leads because only a Source map sets it: a value naming
+//another map is the last Source map's.
+#define SPRPMISS_NAMES 64
+static void VBSP_PublishStaticMissing(model_t *world, model_t **list, size_t n)
+{
+	char buf[SPRPMISS_NAMES * (MAX_QPATH + 1) + MAX_QPATH + 16], *c;
+	size_t i, at;
+	Q_snprintfz(buf, sizeof(buf), "%s %u", world->name, (unsigned)n);
+	for (i = 0; i < n && i < SPRPMISS_NAMES; i++)
+	{
+		at = strlen(buf);
+		Q_snprintfz(buf + at, sizeof(buf) - at, " %s", list[i]->name);
+		for (c = buf + at + 1; *c; c++)
+			if (*c == ' ' || *c == '\t' || *c == '\r' || *c == '\n' || *c == '"')
+				*c = '_';
+	}
+	cvarfuncs->ForceSetString("hl2_sprpmiss", buf);
+	if (n)
+		Con_Printf(CON_WARNING "%s: %u solid static prop model(s) are missing here and collide with nothing "
+			"(hl2_sprpmiss lists them)\n", world->name, (unsigned)n);
+}
+
 static cvar_t *hl2_lt_prewarm;	//Patch 1364's, defined with its warm below; read by Patch 1501 here
 static void VBSP_BuildBIHMain(void *ctx, void *unusedp, size_t unuseda, size_t unusedb)
 {	//NOTE: must be on main thread because we're waiting for submodels for their size.
@@ -8474,6 +8512,8 @@ static void VBSP_BuildBIHMain(void *ctx, void *unusedp, size_t unuseda, size_t u
 	size_t phyprobes = 0;
 	struct vbsp_phypieces_s *phypiece = NULL;	//FTESurf Patch 764
 	size_t phypieces = 0;
+	model_t **sprpmiss;	//FTESurf Patch 1604, one slot per prop like phyprobe
+	size_t sprpmisses = 0;
 
 	//FTESurf Patch 1501: every prop model, not only the solid ones below, starts loading now, while the map does,
 	//so r_mapready waits for them and warms their shaders; before, the rest loaded in the frame that first drew them,
@@ -8625,6 +8665,7 @@ static void VBSP_BuildBIHMain(void *ctx, void *unusedp, size_t unuseda, size_t u
 	phyprobe = prv->numstaticprops ? plugfuncs->Malloc(sizeof(*phyprobe)*prv->numstaticprops) : NULL;
 	phypieces = 0;	//FTESurf Patch 764, sized as phyprobe is
 	phypiece = prv->numstaticprops ? plugfuncs->Malloc(sizeof(*phypiece)*prv->numstaticprops) : NULL;
+	sprpmiss = prv->numstaticprops ? plugfuncs->Malloc(sizeof(*sprpmiss)*prv->numstaticprops) : NULL;
 	vbsp_stat_phyprops = vbsp_stat_phypieces = vbsp_stat_phyrefused = vbsp_stat_phyplanes = 0;
 	vbsp_stat_phyfixprops = vbsp_stat_phyfixrefused = 0;	//Patch 888
 
@@ -8739,6 +8780,7 @@ static void VBSP_BuildBIHMain(void *ctx, void *unusedp, size_t unuseda, size_t u
 		if (!l->data.mesh.model->funcs.NativeTrace || !l->data.mesh.model->funcs.NativeContents)
 		{
 			Con_Printf("%s has no collision info and must not be used as a solid static prop\n", l->data.mesh.model->name);
+			VBSP_NoteStaticMissing(sprpmiss, &sprpmisses, l->data.mesh.model);	//FTESurf Patch 1604
 			continue;
 		}
 
@@ -8812,6 +8854,8 @@ static void VBSP_BuildBIHMain(void *ctx, void *unusedp, size_t unuseda, size_t u
 	}
 
 	modfuncs->BIH_Build(mod, bihleaf, l-bihleaf);
+	VBSP_PublishStaticMissing(mod, sprpmiss, sprpmisses);	//FTESurf Patch 1604
+	plugfuncs->Free(sprpmiss);
 	VBSP_BuildLightBIH(mod);
 	prv->vis_trace_model = NULL;	//FTESurf Patch 799
 	prv->vis_built = false;
@@ -14874,6 +14918,7 @@ qboolean VBSP_Init(void)
 		cvarfuncs->GetNVFDG("hl2_unresolved_first", "", CVAR_NOSAVE, "The first material the loaded map failed to resolve, as a hint at which asset pack it wants.", MAPOPTIONS);
 		//FTESurf Patch 233: ...and how many of them are on a face or a prop rather than only
 		//in the texdata string table.  The HUD banner draws on THIS, not on the raw count.
+		cvarfuncs->GetNVFDG("hl2_sprpmiss", "", CVAR_NOSAVE|CVAR_NOSET, "FTESurf Patch 1604: the solid static props whose model file this machine lacks, so they collide with nothing here while Source collides with them: \"<world model> <distinct models> <names>\" (at most 64 names; spaces and quotes as _). Set when a Source map's collision is built; the lobby adds them to the .rec header propmiss.", MAPOPTIONS);
 		cvarfuncs->GetNVFDG("hl2_unresolved_visible", "0", CVAR_NOSAVE, "How many of hl2_unresolved are on something you can actually look at -- a drawn world face, or a prop skin. A material named in the map's texdata table that no face uses cannot be seen and does not count. `hl2_missing` says which is which. FTESurf Patch 1560: 0 when scripts/unshipped.txt lists every miss as content the map never shipped.", MAPOPTIONS);
 
 		/*
