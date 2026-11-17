@@ -1,5 +1,50 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1605 - Linux: tempstring collections copy only the QC pages written since the last (userfaultfd + PAGEMAP_SCAN)
+
+**Problem.** Patch 1481's incremental collector copy is Windows-only (MEM_WRITE_WATCH), so on Linux every collection's
+start still copied all of the VM's scanned memory and slot table on the main thread: 13.5 MB on surf_beginner's CSQC
+(start ~1.0 ms, finish ~0.4 ms; fairy 2.0-2.4 ms), one collection every ~1.5 s at ~1000 fps. Those frames are the 0.1%
+tail of a light map. Found by the first Linux survey (lows5, the PC: i9-9900K / RTX 2080 SUPER, CachyOS, labwc Wayland).
+
+**Change.**
+- qclib initlib.c/progsint.h: on Linux (THREADEDGC) the hunk and the slot table are anonymous mmaps registered with a
+  userfaultfd in write-protect mode with WP_ASYNC (kernel 6.7+; UFFD_USER_MODE_ONLY, so no privilege with
+  vm.unprivileged_userfaultfd 0). The kernel lifts a page's protection on its first write (one minor fault, ~0.7 us);
+  QCWW_GetWriteWatch lists the pages written since the last call through the PAGEMAP_SCAN ioctl and protects them
+  again in the same call -- GetWriteWatch(WRITE_WATCH_FLAG_RESET). Patch 1481's mirror code, its budget trigger
+  (every 65536 new temps past the 131072-slot floor) and pr_gc_writewatch 0/1/2 now run on both platforms
+  (QCGC_WATCHABLE); Windows code is unchanged. Unpopulated pages read as unwritten, so no initial protect is needed;
+  huge pages split only where written (4 KB tracking). The PAGEMAP_SCAN UAPI is spelt locally (linux/fs.h clashes with
+  sys/mount.h; old build hosts lack it).
+- Fallback: any failure (older kernel, a seccomp sandbox, no /proc) leaves malloc and the full copy, as before.
+- The non-Windows hunk relocation (SSQC's addressablerelocated) allocated the new block and relocated pointers into
+  it without copying the data; it now copies first.
+
+**Verified.** Linux 7.3, NVIDIA 620.70.06, lows5 rig (dedicated server + client, surf_beginner board replay, Survey 5
+settings, 1920x1200 pixels):
+- pr_gc_writewatch 2: 162 client hunk + 161 table checks and 2 server checks, 0 differing bytes or slots (after the
+  review fixes: 123 + 122 client, 1 + 1 server, 0); a start copies a median 0.43 MB of CSQC's 95 MB hunk (31 segments)
+  plus the table's written pages (was 13.5 MB). A mutant that drops the reported pages differs in 112 of 117 hunk and
+  108 of 116 table checks.
+- userfaultfd refused by a seccomp filter (artifacts/nouffd.py): no userfaultfd descriptor in either process (1 each
+  normally), no write-watch checks, the game plays (fallback).
+- Warm pass, 3 alternating runs a side on a quiet desktop, live P1604 / P1605: slowest collector phase 1.25 / 0.24 ms,
+  start 1.04 / 0.19, finish 0.41 / 0.19, slowest frame holding one 2.44 / 2.03 ms; 0.1% 428 (376-458) / 463 (457-467)
+  fps, 1% 625 / 654, avg 1065 / 1076; CSQC avg 0.65 / 0.64 ms (the write faults do not show). Collections run ~4x as
+  often (the budget trigger: CSQC's table grows to 260,096 slots at load), each far cheaper.
+- Builds: client, server, no new warnings; initlib.c syntax-checked for win64 (mingw) with THREADEDGC.
+- Review (one round, kernel and lifetime lenses): in 6.7/6.8 PAGEMAP_SCAN's written-only fast path tests pte_uffd_wp on
+  swap and migration entries, so a written page swapped out (zram) or migrating could be skipped -- the return mask now
+  adds PAGE_IS_PRESENT, which takes the general path (fixed upstream in 6.9). Both descriptors act on the address space
+  that opened them, and Sys_ForkServer's child keeps running: QCWW_* refuse in another pid. QCWW_Init probes the whole
+  cycle on one page (a sandbox that filters the ioctl would cost a full copy every collection) and needs 4 KB pages.
+  Allocation/free pairing, relocation, the Windows macro expansion and the thread rules were read and found sound.
+
+**Limits.** Kernels before 6.7 (Debian 12 ships 6.1) keep the full copy. The finish still clears the dead
+slots on the main thread (~0.19 ms per 65536). CSQC makes ~123 temp strings a frame (lows5 census: the replay path
+labels, Timer_DrawSplits, Milk_Supported, Time_MsString ...); fewer temps mean fewer collections on every platform.
+
 ## Patch 1604 - The lobby records the solid static props whose model file it lacks (hl2_sprpmiss, `propstatic`)
 
 **Problem.** A solid static prop whose model the server cannot load gets no collision ("has no collision info and must
