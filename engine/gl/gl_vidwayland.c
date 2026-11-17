@@ -25,7 +25,12 @@ kwin unstable protocools:
 #include <sys/mman.h>
 #include <poll.h>
 #include <errno.h>
-#include <sys/random.h>
+#if defined(__has_include)
+#if __has_include(<sys/random.h>)
+#include <sys/random.h>	//getrandom: glibc 2.25+, musl 1.1.20+
+#define HAVE_GETRANDOM
+#endif
+#endif
 #include <xkbcommon/xkbcommon.h>
 
 #include "quakedef.h"
@@ -1662,7 +1667,9 @@ static const char *WL_SelfMime(void)
 	if (!*mime)
 	{
 		unsigned int id[2];
+#ifdef HAVE_GETRANDOM
 		if (getrandom(id, sizeof(id), GRND_NONBLOCK) != sizeof(id))
+#endif
 		{
 			id[0] = (unsigned int)time(NULL) ^ (unsigned int)getpid();
 			id[1] = (unsigned int)(Sys_DoubleTime()*1000000);
@@ -2493,6 +2500,7 @@ static void WL_DeInit(void)
 	EGL_Shutdown();
 	if (w.enwindow)
 		pwl_egl_window_destroy(w.enwindow);
+	w.enwindow = NULL;	//the roundtrip below can still dispatch a configure/scale into WL_ApplySize
 	EGL_UnloadLibrary();
 	GL_ForgetPointers();
 #endif
@@ -2501,6 +2509,7 @@ static void WL_DeInit(void)
 #endif
 	if (w.surface)		pwl_proxy_marshal((struct wl_proxy *) w.surface, WL_SURFACE_DESTROY);
 	if (w.surface)		pwl_proxy_destroy((struct wl_proxy *) w.surface);
+	w.surface = NULL;
 	if (w.compositor)	pwl_proxy_destroy((struct wl_proxy *) w.compositor);
 	if (w.registry)		pwl_proxy_destroy((struct wl_proxy *) w.registry);
 	if (w.display)
