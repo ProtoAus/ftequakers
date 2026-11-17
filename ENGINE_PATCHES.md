@@ -1,5 +1,96 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1603 - Linux runs rank, marked "Linux: Not mouse verified" (QC + surfd + reccheck; no engine change)
+
+**Problem.** Patch 389 (Linux beta, 19 Sep) returned PW_PLATFORM for any input report without IPH_RAW (in_rawinput
+exists only in in_win.c), and the P1573 click guard and P1576 keyguard read cvars that exist only there, so every Linux
+run was TF_NOPROFILE and went to the community board. Lex (17 Nov): Linux runs rank, tagged as Linux; boards show them
+sky blue with "Linux: Not mouse verified"; Linux anti-cheat is deferred. Run-flag bit 21 stays reserved for movement
+styles, and the float flags have no other exact bit.
+
+**Change.**
+- SV_ProfileWhy: a report without IPH_RAW skips only the guard/keyguard block (FS_ProfileWhy's accel/filter/grant,
+  the silence checks, PW_MOVE and PW_CHANGED still apply). `sv_rank_linux` keeps the old PW_PLATFORM verdict while 0;
+  unset, it is 0 on a lobby (lobby_enable) and 1 in a local game; lobby.cfg holds 0 until the surfd below is live.
+- The mark is an integer `plat` (0 verified, 1 Linux), not a flag: run_t_plat, raise-only, set in SV_TimerProfile, so
+  start, finish, park/resume, save/load, stage posts and rewind agree; a kept failed attempt keeps its own
+  (rec_fa_plat). Written as the .rec header key `plat 1`, a finish `plat` record and save/resume/rewind state; posted
+  as `&plat=1` (finish and stage).
+- csprogs counts in_rawinput and the guard cvars only when sys_platform is "Win" (never archived) and the cvar carries
+  the engine's description: a hand-made `set in_rawinput 1` or a Windows config copied to Linux (`seta ... //desc`
+  makes a described cvar) no longer claims IPH_RAW, and a Windows `seta` (which clears TYPEFLAG_ENGINE) still does.
+- surfd: runs/replays.plat via the idempotent ALTER (no schema bump); any positive value clamps to 1; the mark only rises: a post
+  is filed at max(post, stored replay, header, finish record) and keeps its recording; board_rows and the map list emit
+  `plat` only when set. In-game online boards and the website draw marked names #3FC1FF with the tooltip.
+- reccheck knows the key and checks it against `inprof` (notes only; a malformed finish record faults).
+- Deploy order (tools/backend-pending.md): surfd generation, lobby progs with sv_rank_linux 0, then sv_rank_linux 1.
+
+**Verified.** fteqcc 0 warnings for all three progs; tools/test_reccheck.py 1001 checks, 0 failed (22 new); surfd
+test_plat 39 checks, each new one failing with its line reverted; board/helped/web/admin/recplot/schema_compat pass;
+the .rec corpus sweep unchanged. Reviewed in three rounds (lenses: predicate/persistence, evidence/backend, what a cheater gains).
+
+**Limits.** No live Linux client has posted a marked run yet. A determined player can still claim Windows (`set sys_platform Win` plus a
+described cvar), which only gets them judged by Windows rules (the keyguard's IPG_LIVE cannot be forged); a Windows
+client that drops IPH_RAW skips the guards and is marked -- the deferred anti-cheat. Displays without the mark: menu board, profiles, run/watch pages,
+Story/Event ladders and medals, WR/top-10 counts, the native scoreboard (BACKLOG).
+
+## Patch 1602 - Linux: native Wayland by default; HiDPI, decorations, key repeat, clipboard
+
+**Problem.** Lex (17 Nov, his first Linux desktop, labwc, 2560x1600 at scale 1.25 + 1920x1200): the game should
+"just work" on a Wayland desktop. Linux forced `vid_renderer gl` (P386), i.e. GLX through XWayland, and XWayland gives
+X11 clients the output's logical size: DP-1 drew 2048x1280 and labwc upscaled it. Real fullscreen fails under XWayland
+and falls back to "fullscreen windowed" at 640x480 (measured: screenshots 640x480 with vid_width 0 and with an
+explicit 1920x1200). The native backend drew at the logical size as well, had no key repeat, clipboard or server-side
+decorations, capped vsync-off at the refresh (a frame callback per swap gated WL_MayRefresh), and blocked the whole
+host in wl_display_dispatch when a hidden surface got no frame callbacks (wlroots sends them to visible surfaces only):
+a vsync-on client stopped running console commands after the map loaded until killed.
+
+**Change.** gl_vidwayland.c unless noted.
+- HiDPI: wp_fractional_scale_v1 + wp_viewporter (hand-written tables, as for the other protocols). The buffer is
+  round(logical * scale/120), the viewport destination the logical size, wl_egl_window and vid.pixelwidth/height the
+  buffer; vid_dpi_x/y = 96*scale. Fallbacks: wl_surface.preferred_buffer_scale (wl_compositor v6), else the highest
+  wl_output.scale the surface is on, with set_buffer_scale. Absolute pointer positions and the caption hit test map
+  to buffer pixels; relative (raw) deltas are untouched. A scale change (output drag, live rescale) resizes.
+- Server-side decorations through zxdg_decoration_manager_v1 (KDE's protocol is only the fallback).
+- Key repeat from wl_keyboard.repeat_info (wl_seat v4): repeats arrive as further presses, as on X11/Windows; rate 0,
+  release and focus loss stop it.
+- Clipboard: wl_data_device selection read (utf-8 text, text/plain, UTF8_STRING; pipe, 1 s poll, 1 MiB cap) and set
+  (a data source offering the three), wired into Sys_Clipboard_PasteText / Sys_SaveClipboard (gl_vidlinuxglx.c).
+- wp_tearing_control: async with vid_vsync <= 0, vsync otherwise, following live changes.
+- Pacing: under this backend eglSwapInterval is always 0 (gl_videgl.c `egl_backendpacing`); vsync on is paced by one
+  outstanding frame callback, read without blocking (prepare_read/poll/read_events), and after 100 ms without one the
+  frame draws anyway (~10 fps while hidden, host and network keep running). Vsync off reads the socket every swap
+  (WL_PumpEvents(0)) and is not throttled.
+- Binds are capped at the loaded libwayland's interface version (an older libwayland never gets events it cannot
+  decode). Clipboard ownership is read from the selection offer (our sources also offer
+  application/x-ftesurf-self;pid=N), never set at input serial 0; sends are non-blocking (100 ms budget), a paste has
+  one 1 s deadline.
+- `vid_renderer gl`/`opengl` also name the Wayland GL renderer, so the name every Linux config holds resolves by
+  priority: Wayland (2) on a Wayland session, GLX (1) on X11. WL_GetPriority is 2 only with WAYLAND_DISPLAY set;
+  `XDG_SESSION_TYPE=x11` forces GLX.
+- renderer.c R_RestartRenderer: when the requested renderer fails, each other renderer is tried at the requested mode,
+  then once windowed at 640x480 (it used to inherit the failed renderer's 640x480 retry).
+- FTESurf default.cfg's Linux line keeps `set vid_renderer gl` with the new meaning.
+
+**Verified.** This PC (labwc 0.20.3, RTX 2080 SUPER, driver 620). DP-1 at 1.25: a 1600x900 window gives a 2000x1125
+screenshot, fullscreen 2560x1600; DP-2 fullscreen 1920x1200. Nested labwc: scale 1 -> 1.5 -> 2 live (960x540 ->
+1440x810 -> 1920x1080), and the integer and wl_output fallbacks. `vid_renderer gl` -> "OpenGL (Wayland)";
+XDG_SESSION_TYPE=x11 -> GLX; a bogus WAYLAND_DISPLAY falls back to GLX. labwc answers server-side decorations.
+Clipboard copy/paste both ways measured in the nested compositor. vsync off: 991 fps (cl_maxfps 1000; was capped at
+the refresh). Headless labwc at 300/360 Hz: vsync on 288/378 fps (one frame per compositor frame), vsync off 973/991;
+output switched off: 10 fps and `quit` in 0.28 s (swap interval 1: blocked until killed). Nested labwc: clipboard
+own/external/after-external (self offer marked application/x-ftesurf-self;id=<random>), live rescale with vsync off. A bogus WAYLAND_DISPLAY ends on GLX at the requested 1600x900.
+0 new warnings in the touched files. Reviewed in three rounds (round 1: 1 high, 3 medium; round 2: low only; round 3: no new bug, two
+pre-existing lows fixed: dangling surface pointers at deinit, optional <sys/random.h>), plus the vsync-off socket
+read found while retesting.
+
+**Limits.** Human checks pending: key repeat feel, Ctrl+V into console/menus, cursor mapping, title bar on screen,
+dragging between outputs. The hardware cursor is not scaled. The primary (middle-click) selection stays internal.
+Frame-time tails are worse than GLX on this NVIDIA box with the same settings (windowed, vsync off: GLX 1%/0.1%
+604/415 fps, Wayland 308-479/138-235 fps; averages equal) -- NVIDIA's Wayland presentation, not this patch's code
+path; fullscreen cannot be compared because GLX fullscreen is 640x480 under XWayland. Vulkan-on-Wayland untested. A frame callback the compositor never completes on a visible surface
+would hold that window at 10 fps.
+
 ## Patch 1598 - movementprofile: the in-game mode picker's switch, for the player only
 
 **Problem.** Lex: a small in-game UI to switch game mode, the modes 1-7, click or press the number. The modes are
