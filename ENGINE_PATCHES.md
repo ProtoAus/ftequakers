@@ -91,6 +91,16 @@ Frame-time tails are worse than GLX on this NVIDIA box with the same settings (w
 path; fullscreen cannot be compared because GLX fullscreen is 640x480 under XWayland. Vulkan-on-Wayland untested. A frame callback the compositor never completes on a visible surface
 would hold that window at 10 fps.
 
+**Follow-up (18 Nov, Lex: "mouse cursor likes to disappear").** With no custom cursor image WL_SetHWCursor hid
+the pointer (X11 shows the desktop arrow), and releasing the pointer lock refreshed the cursor only while
+relative mode was off -- it is still on then (a destroyed lock sends no `unlocked`), so after mouselook the cursor
+stayed hidden until the pointer left and re-entered. Now wp_cursor_shape_v1 gives the compositor's default arrow
+when there is no custom image, the unlock always ends relative mode and refreshes the cursor, and WL_DeInit
+destroys the role objects (decoration, tearing, fractional scale, viewport, xdg_toplevel, xdg_surface) before the
+surface (wlroots: "surface was destroyed before its role object" at quit). Verified by WAYLAND_DEBUG traces
+(set_shape(serial, 1) sent; quit error gone); one review, minor items fixed. Owner check: cursor in menus and
+after mouselook.
+
 ## Patch 1598 - movementprofile: the in-game mode picker's switch, for the player only
 
 **Problem.** Lex: a small in-game UI to switch game mode, the modes 1-7, click or press the number. The modes are
