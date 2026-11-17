@@ -58,6 +58,7 @@ extern cvar_t vid_conautoscale;
 #define WP_FRACTIONAL_SCALE_MANAGER_NAME "wp_fractional_scale_manager_v1"
 #define WP_VIEWPORTER_NAME "wp_viewporter"
 #define WP_TEARING_CONTROL_MANAGER_NAME "wp_tearing_control_manager_v1"
+#define WP_CURSOR_SHAPE_MANAGER_NAME "wp_cursor_shape_manager_v1"
 
 //#define XDG_SHELL_UNSTABLE
 #ifdef XDG_SHELL_UNSTABLE
@@ -426,6 +427,9 @@ static struct wdisplay_s
 	struct wp_tearing_control_v1 *tearing_control;
 	int tearing_hint;			//last hint sent, -1 = none
 
+	struct wp_cursor_shape_manager_v1 *cursor_shape_manager;
+	struct wp_cursor_shape_device_v1 *cursor_shape_device;	//belongs to w.pointer; dies with it
+
 #ifdef XDG_SHELL_NAME
 	struct xdg_toplevel *xdg_toplevel;
 	struct xdg_surface *xdg_surface;
@@ -469,6 +473,11 @@ static uint32_t WL_BindVersion(const struct wl_interface *iface, uint32_t advert
 static const struct wl_interface *pwp_fractional_scale_v1_interface;
 static const struct wl_interface *pwp_viewport_interface;
 static const struct wl_interface *pwp_tearing_control_v1_interface;
+static const struct wl_interface *pwp_cursor_shape_device_v1_interface;
+#define WP_CURSOR_SHAPE_MANAGER_V1_GET_POINTER 1
+#define WP_CURSOR_SHAPE_DEVICE_V1_DESTROY 0
+#define WP_CURSOR_SHAPE_DEVICE_V1_SET_SHAPE 1
+#define WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_DEFAULT 1
 
 static void WL_BindFractionalScaleManager(struct wl_registry *registry, uint32_t id)
 {
@@ -556,6 +565,43 @@ static void WL_BindTearingControlManager(struct wl_registry *registry, uint32_t 
 
 	pwp_tearing_control_v1_interface = &wp_tearing_control_v1_interface;
 	w.tearing_control_manager = pwl_registry_bind(registry, id, &wp_tearing_control_manager_v1_interface, 1);
+}
+//P1602: wp_cursor_shape_v1 (staging) -- the compositor draws its own arrow, at the output's scale
+static void WL_BindCursorShapeManager(struct wl_registry *registry, uint32_t id)
+{
+	static const struct wl_interface *types[3];
+	static const struct wl_message wp_cursor_shape_manager_v1_requests[] = {
+		{ "destroy", "", types + 0 },
+		{ "get_pointer", "no", types + 1 },
+	};
+	static const struct wl_interface wp_cursor_shape_manager_v1_interface = {
+		"wp_cursor_shape_manager_v1", 1,
+		2, wp_cursor_shape_manager_v1_requests,
+		0, NULL,
+	};
+	static const struct wl_message wp_cursor_shape_device_v1_requests[] = {
+		{ "destroy", "", types + 0 },
+		{ "set_shape", "uu", types + 0 },
+	};
+	static const struct wl_interface wp_cursor_shape_device_v1_interface = {
+		"wp_cursor_shape_device_v1", 1,
+		2, wp_cursor_shape_device_v1_requests,
+		0, NULL,
+	};
+
+	types[1] = &wp_cursor_shape_device_v1_interface;
+	types[2] = pwl_pointer_interface;
+
+	pwp_cursor_shape_device_v1_interface = &wp_cursor_shape_device_v1_interface;
+	w.cursor_shape_manager = pwl_registry_bind(registry, id, &wp_cursor_shape_manager_v1_interface, 1);
+}
+static void WL_DropCursorShapeDevice(void)
+{
+	if (!w.cursor_shape_device)
+		return;
+	pwl_proxy_marshal((struct wl_proxy *) w.cursor_shape_device, WP_CURSOR_SHAPE_DEVICE_V1_DESTROY);
+	pwl_proxy_destroy((struct wl_proxy *) w.cursor_shape_device);
+	w.cursor_shape_device = NULL;
 }
 
 static int WL_Scale120(void)
@@ -1045,6 +1091,12 @@ static void WL_SetHWCursor(void)
 
 		//now actually set it.
 		pwl_pointer_set_cursor(w.pointer, w.cursorserial, c->surf, c->hot_x, c->hot_y);
+	}
+	else if (!w.relative_mouse_active && !w.locked_pointer && w.cursor_shape_manager && w.pointer)
+	{	//P1602: no custom image means the desktop's arrow, as on X11; NULL would hide the pointer in every menu
+		if (!w.cursor_shape_device)
+			w.cursor_shape_device = (struct wp_cursor_shape_device_v1 *)pwl_proxy_marshal_constructor((struct wl_proxy *) w.cursor_shape_manager, WP_CURSOR_SHAPE_MANAGER_V1_GET_POINTER, pwp_cursor_shape_device_v1_interface, NULL, w.pointer);
+		pwl_proxy_marshal((struct wl_proxy *) w.cursor_shape_device, WP_CURSOR_SHAPE_DEVICE_V1_SET_SHAPE, w.cursorserial, WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_DEFAULT);
 	}
 	else
 		pwl_pointer_set_cursor(w.pointer, w.cursorserial, NULL, 0, 0);
@@ -1625,6 +1677,7 @@ static void WL_seat_handle_capabilities(void *data, struct wl_seat *seat, enum w
 	}
 	else if (!(caps & WL_SEAT_CAPABILITY_POINTER) && s->pointer)
 	{
+		WL_DropCursorShapeDevice();
 		pwl_pointer_destroy(s->pointer);
 		s->pointer = NULL;
 
@@ -2019,6 +2072,8 @@ Con_DLPrintf(0, "Wayland Interface %s id %u version %u\n", interface, id, versio
 		WL_BindViewporter(registry, id);
 	else if (strcmp(interface, WP_TEARING_CONTROL_MANAGER_NAME) == 0)
 		WL_BindTearingControlManager(registry, id);
+	else if (strcmp(interface, WP_CURSOR_SHAPE_MANAGER_NAME) == 0)
+		WL_BindCursorShapeManager(registry, id);
 #ifdef XDG_DECORATION_MANAGER_NAME
 	else if (strcmp(interface, XDG_DECORATION_MANAGER_NAME) == 0)
 		WL_BindDecorationManager(registry, id);
@@ -2207,11 +2262,10 @@ static void WL_SwapBuffers(void)
 		pwl_proxy_marshal((struct wl_proxy *) w.locked_pointer, ZWP_LOCKED_POINTER_V1_DESTROY);
 		pwl_proxy_destroy((struct wl_proxy *) w.locked_pointer);
 		w.locked_pointer = NULL;
-		if (!w.relative_mouse_active)
-		{
-			w.relative_mouse_active = false;
-			WL_SetHWCursor();
-		}
+		//P1602: destroying the lock sends no `unlocked`, so this is the only place relative mode ends; the old
+		//test here was inverted and the cursor stayed hidden after mouselook until the pointer left and re-entered.
+		w.relative_mouse_active = false;
+		WL_SetHWCursor();
 	}
 }
 
@@ -2494,6 +2548,14 @@ pwl_display_roundtrip(w.display);
 	}
 	return true;
 }
+//destructor request (opcode) then the proxy; NULL is fine
+static void WL_DestroyObject(void *obj, uint32_t destroyop)
+{
+	if (!obj)
+		return;
+	pwl_proxy_marshal((struct wl_proxy *) obj, destroyop);
+	pwl_proxy_destroy((struct wl_proxy *) obj);
+}
 static void WL_DeInit(void)
 {
 #if defined(GLQUAKE) && defined(USE_EGL)
@@ -2506,6 +2568,21 @@ static void WL_DeInit(void)
 #endif
 #ifdef WL_SHELL_NAME
 	if (w.ssurface)		pwl_proxy_destroy((struct wl_proxy *) w.ssurface);
+#endif
+	//P1602: role objects before their surface, or wlroots answers "surface was destroyed before its role object"
+	WL_DropCursorShapeDevice();
+#ifdef XDG_DECORATION_MANAGER_NAME
+	WL_DestroyObject(w.xdg_decoration, 0);	//zxdg_toplevel_decoration_v1.destroy, before its toplevel
+#endif
+#ifdef ORG_KDE_KWIN_SERVER_DECORATION_MANAGER_NAME
+	WL_DestroyObject(w.kwin_decoration, 0);	//release
+#endif
+	WL_DestroyObject(w.tearing_control, 1);	//wp_tearing_control_v1.destroy is opcode 1
+	WL_DestroyObject(w.fractional_scale, 0);
+	WL_DestroyObject(w.viewport, 0);
+#ifdef XDG_SHELL_NAME
+	WL_DestroyObject(w.xdg_toplevel, 0);
+	WL_DestroyObject(w.xdg_surface, 0);
 #endif
 	if (w.surface)		pwl_proxy_marshal((struct wl_proxy *) w.surface, WL_SURFACE_DESTROY);
 	if (w.surface)		pwl_proxy_destroy((struct wl_proxy *) w.surface);
