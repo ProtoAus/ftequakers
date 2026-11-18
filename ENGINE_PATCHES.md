@@ -44,8 +44,14 @@ fixed and rerun (the exact size's units, its in-flight overwrite, Vulkan maximiz
 (vid_winmaximize 0, 1600x1000): labwc's 0x0 answer applied 1600x1000, then labwc resized it to 2046x1252 itself (its
 geometry for a window born fullscreen).
 
-**Limits.** Not measured on the real display: whether NVIDIA's primary plane takes the game's buffer (direct scan-out)
-is up to the driver; nothing in the client stops it. X11/GLX sessions keep the restart and their own fullscreen.
+**Real display (18 Nov, Lex's OK).** Installed exe on the live labwc session, surf_beginner, vid_vsync 0, cl_maxfps 300:
+labwc fullscreened it on DP-2 (1920x1200, scale 1) and 0.26 s later sent a dmabuf scan-out tranche (tranche_flags 1:
+the surface is its direct scan-out candidate), withdrawn while windowed and sent again 0.15 s after re-fullscreen. The
+buffers' modifier (NVIDIA block-linear 0x300000000606014) did not change. Commits ran 299.9/s in both modes, interval
+p99 3.41-3.42 ms (max 4.5 / 7.4 / 5.6 ms fullscreen / windowed / fullscreen).
+
+**Limits.** The hardware flip itself (the plane holding the game's buffer) is not visible to a client; the kernel's
+DRM debug state (root) would show it. X11/GLX sessions keep the restart and their own fullscreen.
 A latched video cvar (changed but not yet applied) still makes the next toggle a full restart, as before. The video menu
 still offers borderless and exclusive; on Wayland both are this one fullscreen.
 
