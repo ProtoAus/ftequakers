@@ -1,5 +1,70 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1616 - The look and the knife follow the Steam account (QC only; no engine change)
+
+**Problem.** Lex: "belt and body colour doesn't save ... check the player trail, knife, and paint options and ensure
+they are tied to the players steam account and the info loads every time they connect to a server". Body, belt,
+trail and paint lived only in each install's ftesurf.cfg (P1177's archived cl_lobby* mirrors, paint_*), so each
+install had its own look: this PC's config (since 17 Nov) held only a belt, the Windows desktop's a full look. The
+knife had an account store (P970, surfd account_viewmodels) but sv_viewmodel.qc posted to cvar `lobby_url`, which
+nothing sets (the Pi's lobby_local.cfg has `lobby_master`), so no knife setup ever reached it: 0 rows on 19 Nov.
+
+**Change.** QC (server): the knife posts to `lobby_master` like every other social call. The look -- the seven
+hud_player keys, paint_color/size/alpha/rate and cl_trailself, one comma-separated line -- is kept per account by the
+lobbies in their shared gamedir, data/looks/<who>.txt (`who` = *ahash, set only by Social_Set for a proven, unbanned
+account), with P970's handshake: the client sends `look_setup "<packed>"` on change (and every 5 s); at bind the
+lobby reads the file as a stream (FS_FILE_READSTREAM: FILE_READ consults the name cache built at the server's last map
+load, so another lobby's new file is invisible), sends `look_profile load <gen> "<packed>"` and saves nothing until
+the client's `look_profile ack` (a timeout saves nothing; a late ack still counts). A change settles 2 s before it is
+written; one still settling is flushed in SV_Shutdown (every map change) and at disconnect before Account_Disconnect
+empties *ahash. Each write is answered `look_profile saved`. The lobby checks every field (version 1, 13 fields,
+digits/space/dot/minus or "random", 16 chars each). No file: the install's look becomes the account's; a file that
+is there but unreadable is kept, never seeded over. QC (client): cl_look_synced (archived) is the look this install
+last knew its account to have. A load is applied through Av_Put (userinfo + archived cvar, so the install's config
+follows) when the worn look equals it (or it is unset); a look that differs was changed here since -- offline, or on
+a map the account never bound -- and wins and is saved. Unlinked players: as before.
+
+**Verified.** tools/p1616look.py on the PC (i9-9900K, RTX 2080 SUPER): two dedicated servers on loopback sharing one
+gamedir, a mock of the social routes, GL clients in a hidden headless labwc (the headless renderer never runs
+CSQC_UpdateView, so no poll), a fixture-only `look_fixture` that calls the real Social_Set. Review round 1 found the
+cache, the dead disconnect flush and the per-map "since joining"; the extended arm failed 6 of 8 checks on that build.
+Fixed: 8/8 -- client A's saves 5, 7, 9 (the map-end flush), the change made on an unbound map (10) kept at the next
+bind, 11 flushed at an immediate quit; client B on lobby 2 (cache older than the file) got 11, printed it, saved
+nothing back; knife get and set reached the backend. Control (origin/main progs): no look file, no knife post. Mutant
+without the SV_Shutdown flush: the flush checks fail. fteqcc: 0 warnings. Not driven: the ack timeout, a late ack, a
+token-refresh rebind (reasoned from the code).
+
+**Limits.** Kept by the lobbies, not surfd: it follows the account on our lobbies only, and a local game keeps the
+install's own look (the last one loaded is in its config). A palette body colour another player wears is still not
+granted on that lobby (unchanged). The real Steam round trip and the look on screen are owner checks (lextest).
+
+## Patch 1615 - Segment count on segmented runs, on hover (surfd + QC; no engine change)
+
+**Problem.** Lex: "report how many segments a segmented run uses, maybe display it on a hover tool tip hovering over
+the run on the leaderboard". Nothing counted them. Every kept load writes `resume <slot> <ticks>` into the run's
+recording, and a load rewinds the recorder to the save's mark first (sv_timer.qc grammar), so the finished file holds
+exactly the loads the run kept.
+
+**Change.** surfd: `rec_segments` counts `\nresume ` after the `begin` line in 1 MiB chunks (an 8-byte tail carries a
+record across a chunk edge; no `begin` in the first chunk, or a file past the 64 MiB cap, = unknown), and `row_segments` caches it by
+replay id, path, size and mtime (2048 entries), as P1569's row_helpers does. board_rows adds `segs` = 1 + that count
+on segmented rows with a recording only (not TAS), after `ver`, so every other row keeps its bytes; /board/api/map
+reuses it. No schema object, QC post or recorder change, and old runs get counts at once. QC: the TAB board keeps
+`segs` per online row (cl_online.qc, memalloc'd like the other columns) and puts "N segments" first in the name's
+tooltip (Scores_OnlineTip); the menu leaderboard (m_board.qc) shows it over the name and the time. Website: the time
+cell's title, dotted underline.
+
+**Verified.** surfd/test_segs.py on the Pi (Flask 2.2.2): 14 checks (header resume not counted, CRLF, none = 1, no
+begin = 0, every split of a record across a 64-byte chunk, past the cap = 0, exactly the cap counted, the row key order, no key on clean rows or rows
+with no recording, a changed file re-read); two mutants (no chunk tail; counting from the file start) each fail
+their check; test_helped and test_replays unchanged. One review (three lenses): the cap returned a partial count
+as exact (fixed); nothing else in P1615. Live data read-only: 87 segmented rows with recordings, 2 to 56
+segments (Proto's surf_joutsenlaulu 56), 90 MB counted in 0.49 s. fteqcc: 0 warnings (csprogs, menu.dat).
+
+**Limits.** Live only after the next guarded surfd generation (tools/backend-pending.md); the lobby csprogs and this
+PC's menu.dat are harmless before it (no `segs`, no tooltip line). Stage rows and rows without a recording have no
+count; a save-lock hold with no load reads 1 segment. The tooltips are not yet seen on screen (lextest).
+
 ## Patch 1614 - No per-map cap on lobby prederror reports (QC only; no engine change)
 
 **Problem.** Lex wants every prediction error report players send ("we can just filter them ourselves"). The lobby
