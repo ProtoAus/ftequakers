@@ -1,5 +1,36 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1607 - Linux: sys_framepacing (predictive present pacing) -- capped frame rates present on an even grid
+
+**Problem.** Patch 1413's sys_framepacing (default 5: start each frame its predicted render time before a grid slot and
+hold the swap to that slot) lives in sys_win.c, so on Linux a capped game paced frame STARTS and every bit of render-
+time variance reached the present and the frame-time graph. Lex (18 Nov), surf_andromeda: "frame time stays low but
+also jumps up for bits". At his settings (cl_maxfps 300, refraction off) every view along the route costs 1.1-1.7 ms
+(paused probe each second), yet frames ran p99 3.6-4.0 ms, p99.9 ~4.5 ms.
+
+**Change.**
+- client/sys_linux.c: the sys_win.c functions with the same names and logic -- Sys_FramePacedWait (nanosleep to 0.3 ms
+  short, then a pause-instruction spin: sched_yield can give up a ~3 ms EEVDF slice on a shared core),
+  Sys_FramePacingActive/Anchor/AnchorDelay, the mode 4 hold, mode 5's PredictDelay, the swap hold, the swap-block
+  detector and Sys_FramePace_RecordPresent; the cvars sys_framepacing (5), sys_framepacing_quantile,
+  sys_framepacing_drain with Windows' mode-change reset; sys_framepacing_stats. The main loop waits through
+  Sys_FramePacedWait (Sys_Sleep at mode 0).
+- cl_main.c, gl_screen.c, cl_screen.c: the Windows-only guards include native Linux (not Android or SDL), so the GL
+  drain, the hold and r_frametime's sample right after the swap (Patch 1413) run there too.
+
+**Verified.** Linux 7.3, NVIDIA 620.70.06, labwc Wayland; surf_andromeda replay at Lex's own config (cl_maxfps 300,
+MSAA 4, glare/sprites/skyroom on) in a 2000x1250-logical window (2500x1563 px), warm pass. Same binary, 3 alternating
+runs a side, sys_framepacing 0 / 5: p99 3.97 / 3.37 ms, p99.9 4.47 / 4.24, 1% 240 / 283 fps, 0.1% 218 / 224, max 5.8 /
+5.7; mode 5 reports a present interval of 3.333 ms avg, stddev 0.09-0.14 ms, swap blocking p50 0.06 ms. Against the
+P1605 install: p99 3.61 / 3.36. 30-55 ms swap stalls came in one run of each build, both while Firefox was busy: the
+desktop, not the pacing. Builds: no new warnings. Review (one round): no serious findings; the sched_yield spin, the
+missing mode-change reset and a stepped-back clock in the spin were fixed.
+
+**Limits.** The tail left is frame work, not pacing: a late frame presents at once and its successor aims one slot on
+(Patch 1413's design), CSQC frames of 1.4-1.5 ms, and ~1 ms waits for a back buffer the compositor still holds (the
+"resolve, effects, bloom" bucket). With vid_vsync "" (empty) mode 5 still runs, as on Windows. macOS/BSD builds that
+compile sys_linux.c get the accurate wait but not the hold.
+
 ## Patch 1605 - Linux: tempstring collections copy only the QC pages written since the last (userfaultfd + PAGEMAP_SCAN)
 
 **Problem.** Patch 1481's incremental collector copy is Windows-only (MEM_WRITE_WATCH), so on Linux every collection's
