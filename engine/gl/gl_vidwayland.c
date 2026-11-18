@@ -395,6 +395,9 @@ static struct wdisplay_s
 	int csdsize;
 	char *csdcaption;
 	qboolean hasssd;	//probably false on gnome.
+	qboolean fullscreen;	//P1611: the compositor's last xdg_toplevel.configure carried the fullscreen state
+	qboolean statesynced;	//P1611: currentrendererstate.fullscreen re-read from `fullscreen` after the restart's memcpy
+	int winwidth, winheight;	//P1611: an exact windowed size asked for by a live toggle, until a windowed configure
 	int mousex,mousey;
 
 	//window stuff
@@ -454,6 +457,7 @@ static struct wdisplay_s
 	struct org_kde_kwin_server_decoration_manager *kwin_decoration_manager;
 #endif
 } w;
+static char wl_caption[256];	//P1611: the last title, kept across WL_DeInit's memset of `w`
 static void WL_SetCaption(const char *text);
 
 //P1602: an interface table from the loaded libwayland-client bounds the version too: an older library cannot decode newer events
@@ -630,6 +634,15 @@ static void WL_ApplySize(void)
 	if (bw == w.bufwidth && bh == w.bufheight && scale == w.bufscale120 && w.truewidth == w.destwidth && w.trueheight == w.destheight)
 		return;
 
+	if (w.truewidth != w.destwidth || w.trueheight != w.destheight)
+	{	//P1611: the opaque region follows the size. It was set once, at the 640x480 the window was created at, so a
+		//compositor that honours it saw everything past that corner as translucent (only an XRGB buffer hid it).
+		struct wl_region *region = pwl_compositor_create_region(w.compositor);
+		pwl_region_add(region, 0, 0, w.truewidth, w.trueheight);
+		pwl_surface_set_opaque_region(w.surface, region);
+		pwl_proxy_marshal((struct wl_proxy *) region, WL_REGION_DESTROY);	//the surface keeps a copy
+		pwl_proxy_destroy((struct wl_proxy *) region);
+	}
 	if (w.viewport)
 		pwl_proxy_marshal((struct wl_proxy *) w.viewport, WP_VIEWPORT_SET_DESTINATION, w.truewidth, w.trueheight);
 	else if (scale != w.bufscale120 && w.compositor_version >= 3)
@@ -956,6 +969,10 @@ static inline void xdg_toplevel_set_min_size(struct xdg_toplevel *xdg_toplevel, 
 static inline void xdg_toplevel_move(struct xdg_toplevel *xdg_toplevel, struct wl_seat *seat, uint32_t serial)		{ pwl_proxy_marshal((struct wl_proxy *) xdg_toplevel, XDG_TOPLEVEL_MOVE, seat, serial); }
 static inline void xdg_toplevel_show_window_menu(struct xdg_toplevel *xdg_toplevel, struct wl_seat *seat, uint32_t serial, int32_t x, int32_t y)		{ pwl_proxy_marshal((struct wl_proxy *) xdg_toplevel, XDG_TOPLEVEL_SHOW_WINDOW_MENU, seat, serial, x, y); }
 static inline void xdg_toplevel_set_fullscreen(struct xdg_toplevel *xdg_toplevel, struct wl_output *output)		{ pwl_proxy_marshal((struct wl_proxy *) xdg_toplevel, XDG_TOPLEVEL_SET_FULLSCREEN, output); }
+static inline void xdg_toplevel_unset_fullscreen(struct xdg_toplevel *xdg_toplevel)		{ pwl_proxy_marshal((struct wl_proxy *) xdg_toplevel, XDG_TOPLEVEL_UNSET_FULLSCREEN); }
+static inline void xdg_toplevel_set_maximized(struct xdg_toplevel *xdg_toplevel)		{ pwl_proxy_marshal((struct wl_proxy *) xdg_toplevel, XDG_TOPLEVEL_SET_MAXIMIZED); }
+static inline void xdg_toplevel_unset_maximized(struct xdg_toplevel *xdg_toplevel)		{ pwl_proxy_marshal((struct wl_proxy *) xdg_toplevel, XDG_TOPLEVEL_UNSET_MAXIMIZED); }
+#define XDG_TOPLEVEL_STATE_FULLSCREEN 2	//xdg_toplevel.state, the same value in zxdg_toplevel_v6
 
 static void xdg_wm_base_handle_ping(void *data, struct xdg_wm_base *xdg_wm_base, uint32_t serial)
 {
@@ -979,6 +996,30 @@ static const struct xdg_surface_listener myxdg_surface_listener =
 
 void xdg_toplevel_handle_configure(void *data, struct xdg_toplevel *xdg_toplevel, int32_t width, int32_t height, struct wl_array *states)
 {
+	const uint32_t *st;
+	qboolean fs = false;
+	for (st = states->data; (const char *)(st+1) <= (const char *)states->data + states->size; st++)
+		if (*st == XDG_TOPLEVEL_STATE_FULLSCREEN)
+			fs = true;
+	if (fs != w.fullscreen)
+		Con_DPrintf("Wayland: %s\n", fs?"fullscreen":"not fullscreen");
+	w.fullscreen = fs;
+	//P1611: keep the engine's idea in step when the compositor changes it on its own (labwc's ToggleFullscreen,
+	//GNOME's keybinding), so F11's "fullscreen?windowed:fullscreen" decision reads what is on screen. Wayland has
+	//no exclusive mode: the engine's 1 and 2 are the same window state, so anything fullscreen counts.
+	if (fs && !currentrendererstate.fullscreen)
+		currentrendererstate.fullscreen = 2;	//internal 2 = borderless, what fullscreen_toggle asks for
+	else if (!fs && currentrendererstate.fullscreen)
+		currentrendererstate.fullscreen = 0;
+
+	if ((!width || !height) && !fs && w.winwidth)
+	{	//P1611: the 0x0 answer to an exact-size unset_fullscreen. Kept apart from truewidth, so a configure still
+		//in flight (fullscreen-sized) cannot overwrite it first.
+		width = w.winwidth;
+		height = w.winheight;
+	}
+	if (!fs)
+		w.winwidth = w.winheight = 0;
 	if (!width || !height)
 	{
 		width = w.truewidth;
@@ -2174,6 +2215,13 @@ static void WL_SwapBuffers(void)
 	TRACE(("WL_SwapBuffers\n"));
 
 	WL_UpdateTearing();	//rides on the swap's commit
+	if (!w.statesynced && w.xdg_toplevel)
+	{	//P1611: R_ApplyRenderer copies the requested state over currentrendererstate after WL_Init, wiping what an
+		//init-time configure said (a window rule forcing fullscreen); read it back once, at the first swap.
+		w.statesynced = true;
+		if (w.fullscreen != !!currentrendererstate.fullscreen)
+			currentrendererstate.fullscreen = w.fullscreen?2:0;
+	}
 	switch(qrenderer)
 	{
 #if defined(GLQUAKE) && defined(USE_EGL)
@@ -2224,6 +2272,8 @@ static void WL_SwapBuffers(void)
 		}
 		if (w.hasssd)
 			w.csdsize = 0;	//kde's implementation-specific/legacy extension doesn't need us to draw crappy lame CSD junk
+		else if (w.fullscreen)
+			w.csdsize = 0;	//P1611: a fullscreen window has no title bar (GNOME drew ours across the top of the menus)
 		else if (vid.activeapp && w.relative_mouse_active)
 			w.csdsize = 0;	//kill the csd while using relative mouse coords.
 		else
@@ -2284,8 +2334,41 @@ static qboolean WLVK_SetupSurface(void)
 }
 #endif
 
+extern qboolean (*VID_SetFullscreenLive)(int fullscreen, int width, int height);	//renderer.c, P1611
+extern int VID_WindowMaximizePolicy(void);
+//P1611: F11 / Alt+Enter / vid_toggle on the live window: Wayland fullscreen is a window state, not a video mode,
+//so the compositor's configure resizes us (WL_ApplySize) and nothing restarts. OpenGL only: the Vulkan path never
+//rebuilds its swapchain on a resize. Why and measurements: ENGINE_PATCHES.md Patch 1611.
+static qboolean WL_SetFullscreenLive(int fullscreen, int width, int height)
+{
+#ifdef XDG_SHELL_NAME
+	if (!w.xdg_toplevel || qrenderer != QR_OPENGL)
+		return false;
+	w.winwidth = w.winheight = 0;
+	if (fullscreen)
+		xdg_toplevel_set_fullscreen(w.xdg_toplevel, NULL);
+	else
+	{
+		xdg_toplevel_unset_fullscreen(w.xdg_toplevel);
+		if (VID_WindowMaximizePolicy() == 2)
+			xdg_toplevel_set_maximized(w.xdg_toplevel);	//windowed means maximized, as on Windows (Patch 268)
+		else
+		{	//exact size, in the same units WL_Init takes info->width in
+			xdg_toplevel_unset_maximized(w.xdg_toplevel);
+			w.winwidth = width;
+			w.winheight = height;
+		}
+	}
+	pwl_display_flush(w.display);
+	return true;
+#else
+	return false;
+#endif
+}
+
 static qboolean WL_NameAndShame(void)
 {
+	VID_SetFullscreenLive = WL_SetFullscreenLive;	//P1611: the renderer is up; WL_DeInit takes it away again
 	WL_PublishGrant();	//Patch 387
 	//called after the renderer has been initialised, so these messages should be more prominant.
 	if (!w.relative_pointer)
@@ -2435,7 +2518,12 @@ static qboolean WL_Init (rendererstate_t *info, unsigned char *palette)
 		return false;	//no way to make it fullscreen/top-level means it'll probably stay hidden, so make this fatal.
 	}
 
-	WL_SetCaption("FTE Quake");
+	{	//P1611: a restart keeps the title it had. It used to come back as "FTE Quake" (alt-tab's label) until the
+		//client's state next changed.
+		char cap[sizeof(wl_caption)];
+		Q_strncpyz(cap, *wl_caption?wl_caption:(*fs_gamename.string?fs_gamename.string:"FTE Quake"), sizeof(cap));
+		WL_SetCaption(cap);
+	}
 #ifdef XDG_DECORATION_MANAGER_NAME
 	if (w.xdg_decoration_manager && w.xdg_toplevel)
 	{	//decorate it! (before the first commit, as the protocol requires)
@@ -2467,6 +2555,8 @@ static qboolean WL_Init (rendererstate_t *info, unsigned char *palette)
 	{
 		if (info->fullscreen)
 			xdg_toplevel_set_fullscreen(w.xdg_toplevel, NULL);
+		else if (qrenderer == QR_OPENGL && VID_WindowMaximizePolicy() == 2)
+			xdg_toplevel_set_maximized(w.xdg_toplevel);	//P1611: vid_winmaximize, as Windows does (it opened at 640x480); not Vulkan, which cannot resize
 	}
 #endif
 #ifdef WL_SHELL_NAME
@@ -2482,16 +2572,7 @@ static qboolean WL_Init (rendererstate_t *info, unsigned char *palette)
 	w.truewidth = info->width?info->width:640;
 	w.trueheight = info->height?info->height:480;
 pwl_display_roundtrip(w.display);
-
-	{
-		struct wl_region *region = pwl_compositor_create_region(w.compositor);
-		pwl_region_add(region, 0, 0, w.truewidth, w.trueheight);
-		pwl_surface_set_opaque_region(w.surface, region);
-		//FIXME: leaks region...
-		//pwl_region_destroy(region);
-	}
-pwl_display_roundtrip(w.display);
-	WL_ApplySize();	//sets vid.pixelwidth/pixelheight
+	WL_ApplySize();	//sets vid.pixelwidth/pixelheight, and (P1611) the opaque region, on every resize from here on
 
 	vid.activeapp = true;
 
@@ -2559,6 +2640,7 @@ static void WL_DestroyObject(void *obj, uint32_t destroyop)
 }
 static void WL_DeInit(void)
 {
+	VID_SetFullscreenLive = NULL;	//P1611
 	w.cursorfocus = false;	//a pointer.enter the final roundtrip delivers must not set a cursor again
 #if defined(GLQUAKE) && defined(USE_EGL)
 	EGL_Shutdown();
@@ -2609,6 +2691,8 @@ static qboolean WL_ApplyGammaRamps(unsigned int gammarampsize, unsigned short *r
 }
 static void WL_SetCaption(const char *text)
 {
+	if (text != wl_caption)
+		Q_strncpyz(wl_caption, text, sizeof(wl_caption));	//P1611: outlives `w`, for the next WL_Init
 #ifdef XDG_SHELL_NAME
 	if (w.xdg_toplevel)
 		xdg_toplevel_set_title(w.xdg_toplevel, text);

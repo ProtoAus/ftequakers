@@ -40,6 +40,9 @@ void R_RestartRenderer (rendererstate_t *newr);
 static void R_UpdateRendererOpts(void);
 
 qboolean vid_isfullscreen;
+//FTESurf Patch 1611: set by a video backend that can change fullscreen state on the live window (Wayland);
+//R_SetFullscreenMode tries it before a renderer restart. Returns false to ask for the restart after all.
+qboolean (*VID_SetFullscreenLive)(int fullscreen, int width, int height);
 
 #define VIDCOMMANDGROUP "Video config"
 #define GRAPHICALNICETIES "Graphical Nicaties"	//or eyecandy, which ever you prefer.
@@ -1292,6 +1295,7 @@ static void R_SetFullscreenMode(int targetinternal)
 {
 	double time;
 	rendererstate_t newr;
+	int latched;
 
 	if (currentrendererstate.renderer == NULL)
 	{
@@ -1302,7 +1306,7 @@ static void R_SetFullscreenMode(int targetinternal)
 	if (currentrendererstate.renderer->rtype == QR_HEADLESS || currentrendererstate.renderer->rtype == QR_NONE)
 		return;
 
-	Cvar_ApplyLatches(CVAR_VIDEOLATCH|CVAR_RENDERERLATCH, false);
+	latched = Cvar_ApplyLatches(CVAR_VIDEOLATCH|CVAR_RENDERERLATCH, false);
 
 	newr = currentrendererstate;
 	newr.fullscreen = targetinternal;
@@ -1335,6 +1339,18 @@ static void R_SetFullscreenMode(int targetinternal)
 		//still decides whether it opens maximized.
 		newr.width = (vid_width.ival > 0)?vid_width.ival:DEFAULT_WIDTH;
 		newr.height = (vid_height.ival > 0)?vid_height.ival:DEFAULT_HEIGHT;
+	}
+
+	//FTESurf Patch 1611: on a backend that can (Wayland + OpenGL) the window changes state in place: no window
+	//rebuild, no texture reload, no lost shader warm-up. Only when no latched video/renderer cvar was just applied
+	//above, since those need the restart to mean anything.
+	if (!latched && VID_SetFullscreenLive && VID_SetFullscreenLive(newr.fullscreen, newr.width, newr.height))
+	{
+		currentrendererstate.fullscreen = newr.fullscreen;
+		currentrendererstate.width = newr.width;
+		currentrendererstate.height = newr.height;
+		Con_DPrintf("%s: %s, live (no video restart)\n", currentrendererstate.renderer->description, newr.fullscreen?"fullscreen":"windowed");
+		return;
 	}
 
 	time = Sys_DoubleTime();

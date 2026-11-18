@@ -1,5 +1,54 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1611 - Wayland: F11 / Alt+Enter / vid_toggle change fullscreen on the live window; windowed maximizes
+
+**Problem.** Lex (18 Nov, first days on CachyOS + labwc) asked that fullscreen, Alt+Enter and F11 use "proper" fullscreen
+on Wayland rather than borderless, for the best performance out of the box. Measured in a headless nested labwc 0.20.3
+(wlroots 0.20.2, NVIDIA 620.70.06), the protocol side already was proper: Wayland has no exclusive mode, and both
+vid_fullscreen 1 (borderless) and 2 (exclusive) send xdg_toplevel.set_fullscreen. The compositor's configure carries the
+fullscreen state, the buffers are opaque XRGB8888 at the output's 2560x1600 pixels (fractional scale 1.25), and
+labwc's scene took the window as the only thing on the output: it tried direct scan-out every frame, held off only
+while grim's screencopy locked the output. What was wrong was around that:
+- Every toggle rebuilt the renderer: the window destroyed and recreated, every texture reloaded, shader warm-up lost.
+  On surf_beginner (a dedicated server, one client) the frame stream stopped for 1.73 and 1.75 s per toggle.
+- Toggling to windowed gave a 640x480 window (vid_winmaximize was a Windows-only rule): Patch 268's "postage stamp".
+- The new window came back titled "FTE Quake", alt-tab's label, until the client's state next changed.
+- Without server decorations (GNOME), the engine drew its own caption across the top of fullscreen menus.
+- The opaque region was set once, at the 640x480 creation size, and never followed the window.
+
+**Change.** engine/gl/gl_vidwayland.c, engine/client/renderer.c:
+- renderer.c: a hook, VID_SetFullscreenLive, that R_SetFullscreenMode (fullscreen_toggle, vid_toggle, Alt+Enter)
+  tries before R_RestartRenderer, unless the latches it applies first changed a video/renderer cvar.
+- Wayland sets the hook once the renderer is up (cleared in WL_DeInit). OpenGL only: the Vulkan path here never rebuilds
+  its swapchain on a resize, so it keeps the restart. Fullscreen = set_fullscreen; windowed = unset_fullscreen plus
+  set_maximized when VID_WindowMaximizePolicy says 2 (the default), else the exact vid_width/vid_height (in WL_Init's
+  units, held in winwidth apart from truewidth so a configure already in flight cannot overwrite it).
+  The compositor's configure resizes the buffer through WL_ApplySize, as a dragged window edge does.
+- The configure's states array is read: w.fullscreen, which turns the client-side caption off, and currentrendererstate
+  follows a fullscreen the compositor made or ended on its own (labwc's ToggleFullscreen keybind), so F11 next goes
+  the other way.
+- A windowed OpenGL start maximizes by the same policy (not Vulkan). The first swap re-reads the fullscreen state once,
+  since R_ApplyRenderer copies the request over currentrendererstate after an init-time configure. WL_ApplySize resets the opaque region on each resize and destroys the
+  region object (the creation-time one leaked). The window title survives WL_DeInit (wl_caption) for the next window.
+
+**Verified.** Headless nested labwc (artifacts in FTESurf-worktrees/wlfs-20261118-c5), surf_beginner on a dedicated
+server, WAYLAND_DEBUG=1: fullscreen -> windowed sends unset_fullscreen + set_maximized, configure 2048x1254 (states
+maximized, activated) 2 ms later, buffers 2560x1568; windowed -> fullscreen configure 2048x1280, buffers 2560x1600. No
+xdg_toplevel.destroy, longest frame gap after load 77 ms (1.73-1.75 s before). labwc's ToggleFullscreen (Super+F via
+wtype) ended fullscreen and the next fullscreen_toggle sent set_fullscreen. Title "World of Surf: 127.0.0.1:27611"
+kept. vid_fullscreen 0 start: set_maximized before the first commit, configure 2048x1254; vid_toggle from there went
+fullscreen live. Caption: a diagnostic build forcing hasssd false (never shipped) drew no caption in fullscreen and its
+caption when windowed. Vulkan: a Wayland vkCreateSwapchainKHR fails with VK_ERROR_SURFACE_LOST_KHR in the headless
+compositor on the unpatched exe too, so the live path stays off for it. One independent review: four findings, all
+fixed and rerun (the exact size's units, its in-flight overwrite, Vulkan maximizing, the init-time state). Exact size
+(vid_winmaximize 0, 1600x1000): labwc's 0x0 answer applied 1600x1000, then labwc resized it to 2046x1252 itself (its
+geometry for a window born fullscreen).
+
+**Limits.** Not measured on the real display: whether NVIDIA's primary plane takes the game's buffer (direct scan-out)
+is up to the driver; nothing in the client stops it. X11/GLX sessions keep the restart and their own fullscreen.
+A latched video cvar (changed but not yet applied) still makes the next toggle a full restart, as before. The video menu
+still offers borderless and exclusive; on Wayland both are this one fullscreen.
+
 ## Patch 1608 - Board cache saves at map end only; Milk_Supported re-reads the renderer once a second (QC only; no engine change)
 
 **Problem.** Two client costs every map shares. The online board cache (Patch 781, data/boards/<map>.txt) was written
