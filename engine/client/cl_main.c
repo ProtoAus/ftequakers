@@ -7505,10 +7505,9 @@ int		nopacketcount;
 void SNDDMA_SetUnderWater(qboolean underwater);
 
 /* When sys_framepacing is active, Host_Frame yields the remaining frame time to
- * the high-precision paced wait (sys_win.c) instead of busy-waiting, regardless
- * of cl_yieldcpu.  Only the native win32 build provides the pacer; everywhere
- * else this is a no-op. */
-#if defined(_WIN32) && !defined(FTE_SDL)
+ * the high-precision paced wait (sys_win.c; sys_linux.c since Patch 1607) instead of busy-waiting, regardless
+ * of cl_yieldcpu.  Elsewhere this is a no-op. */
+#if (defined(_WIN32) || (defined(__linux__) && !defined(ANDROID))) && !defined(FTE_SDL)	//FTESurf Patch 1607: sys_linux.c too
 extern qboolean Sys_FramePacingActive(void);
 extern qboolean Sys_FramePacingAnchor(void);
 extern qboolean Sys_FramePacePresentActive(void);

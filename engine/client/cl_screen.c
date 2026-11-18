@@ -1376,7 +1376,7 @@ static void R_FrameTime_AfterDump(void)
 {
 	ft.last = Sys_DoubleTime();
 }
-#if defined(_WIN32) && !defined(FTE_SDL) && defined(GLQUAKE)
+#if (defined(_WIN32) || (defined(__linux__) && !defined(ANDROID))) && !defined(FTE_SDL) && defined(GLQUAKE)
 void R_FrameTime_Swapped(void)
 {	//FTESurf Patch 1413: gl_screen.c, right after the buffer swap -- the display follows the swaps, and with the
 	//swap held (sys_framepacing 4/5) the HUD draws at times that move on purpose
@@ -1483,7 +1483,7 @@ void RSpeedShow(void)
 	R_Budget_Sample();	//FTESurf Patch 782
 	if (r_budget.ival)
 		R_Budget_Draw();
-#if defined(_WIN32) && !defined(FTE_SDL) && defined(GLQUAKE)
+#if (defined(_WIN32) || (defined(__linux__) && !defined(ANDROID))) && !defined(FTE_SDL) && defined(GLQUAKE)
 	if (qrenderer != QR_OPENGL)	//FTESurf Patch 1413: there R_FrameTime_Swapped samples
 #endif
 		R_FrameTime_Sample();	//FTESurf Patch 801

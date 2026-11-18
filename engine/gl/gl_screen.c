@@ -274,7 +274,7 @@ qboolean GLSCR_UpdateScreen (void)
 	GLBudget_FrameEnd();	//FTESurf Patch 782: the frame's last GPU work; frame pacing and the swap are waits, not work
 
 	{
-#if defined(_WIN32) && !defined(FTE_SDL)
+#if (defined(_WIN32) || (defined(__linux__) && !defined(ANDROID))) && !defined(FTE_SDL)	//FTESurf Patch 1607: Linux too
 		extern void Sys_FramePacePresent(void);
 		extern qboolean Sys_FramePaceDrainActive(void);
 		extern void Sys_FramePace_RecordPresent(void);
@@ -353,7 +353,7 @@ qboolean GLSCR_UpdateScreen (void)
 		RSpeedRemark();
 		VID_SwapBuffers();
 		RSpeedEnd(RSPEED_PRESENT);
-#if defined(_WIN32) && !defined(FTE_SDL)
+#if (defined(_WIN32) || (defined(__linux__) && !defined(ANDROID))) && !defined(FTE_SDL)
 		RSpeedRemark();
 		Sys_FramePace_RecordPresent();	//sample present-to-present cadence for sys_framepacing_stats (every mode)
 		R_FrameTime_Swapped();	//FTESurf Patch 1413: and for r_frametime

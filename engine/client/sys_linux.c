@@ -624,9 +624,282 @@ static void Sys_Register_File_Associations_f(void)
 	}
 }
 
+extern float CL_MaxFPSFloor(float fps);
+/*FTESurf Patch 1607: sys_framepacing on Linux -- sys_win.c's Patch 1413 modes (the same names and logic, so cl_main.c
+  and gl_screen.c call them unchanged); the wait is nanosleep to just short of the target, then a spin. Without
+  it a capped game paced frame STARTS and the render time's variance reached every present: surf_andromeda at
+  cl_maxfps 300, p50 3.33 ms, max 5.7 ms, while its views cost 1.1-1.7 ms.*/
+#include <time.h>
+static void Sys_FramePacing_Changed(cvar_t *var, char *oldval);
+static cvar_t sys_framepacing = CVARFCD("sys_framepacing", "5", CVAR_NOTFROMSERVER, Sys_FramePacing_Changed,
+	"FTESurf Patch 1413 (Linux: Patch 1607). Frame pacing for cl_maxfps.\n0: plain sleeps. 1-2: an accurate wait (clock_nanosleep + spin). 3: (1) + frame starts pinned to a fixed grid. 4: render at once and hold the buffer swap to the grid (OpenGL). 5: start each frame its recent render time (sys_framepacing_quantile of the last 64, +0.5ms) before the next grid slot and hold the swap to that slot; a late frame presents at once (OpenGL). Acts as mode 1 off-OpenGL, uncapped, minimised, with vid_vsync on, and while the swap itself blocks.");
+static cvar_t sys_framepacing_quantile = CVARFD("sys_framepacing_quantile", "100", CVAR_NOTFROMSERVER, "FTESurf Patch 1413: which of the last 64 render times sys_framepacing 5 plans each frame's start by, as a percentile (100 = the slowest of them); a frame starts that long plus 0.5 ms before its slot. Lower: less latency, more frames presenting late.");
+static cvar_t sys_framepacing_drain = CVARFD("sys_framepacing_drain", "2", CVAR_NOTFROMSERVER,
+	"How far back the GPU is drained before a paced swap (sys_framepacing 4/5). 0 none, 1 this frame, 2 the previous frame (default), 3 two frames back.");
+#define PACE_RING 128
+static double g_present_ring[PACE_RING], g_last_present_t;
+static int g_present_head, g_present_count;
+static double g_anchor_base, g_anchor_tpf;
+static double g_present_base, g_present_interval;
+static double g_wait_err_us[PACE_RING];
+static int g_wait_head, g_wait_count;
+
+void Sys_FramePacedWait(double seconds)
+{
+	double start = Sys_DoubleTime(), target = start + seconds, ahead;
+	if (seconds <= 0)
+		return;
+	if (sys_framepacing.ival <= 0)
+	{
+		Sys_Sleep(seconds);
+		return;
+	}
+	ahead = seconds - 0.0003;	//wake 0.3 ms early (hrtimer slack and the scheduler), spin the rest
+	if (ahead > 0)
+	{
+		struct timespec ts;
+		ts.tv_sec = (time_t)ahead;
+		ts.tv_nsec = (long)((ahead - ts.tv_sec) * 1e9);
+		while (nanosleep(&ts, &ts) == -1 && errno == EINTR)
+			;
+	}
+	for (;;)
+	{	//a pause, as YieldProcessor: sched_yield gives up the slice (~3 ms under EEVDF) when the core is shared
+		double now = Sys_DoubleTime();
+		if (now >= target || now < start)	//(a stepped-back clock: sys_clocktype 1/3)
+			break;
+#if defined(__i386__) || defined(__x86_64__)
+		__builtin_ia32_pause();
+#elif defined(__aarch64__) || defined(__arm__)
+		__asm__ __volatile__("yield");
+#endif
+	}
+	g_wait_err_us[g_wait_head] = (Sys_DoubleTime() - target) * 1e6;
+	g_wait_head = (g_wait_head + 1) % PACE_RING;
+	if (g_wait_count < PACE_RING)
+		g_wait_count++;
+}
+qboolean Sys_FramePacingActive(void)
+{
+	return sys_framepacing.ival > 0;
+}
+qboolean Sys_FramePacingAnchor(void)
+{
+	return sys_framepacing.ival == 3 || (sys_framepacing.ival == 4 && qrenderer != QR_OPENGL);
+}
+double Sys_FramePaceAnchorDelay(double tpf, double now, double frameref)
+{
+	double slot, target;
+	if (tpf <= 0)
+		return 0;
+	if (tpf != g_anchor_tpf || g_anchor_base <= 0 || (frameref - g_anchor_base) > 600.0)
+	{
+		g_anchor_base = frameref;
+		g_anchor_tpf  = tpf;
+	}
+	slot   = floor((frameref - g_anchor_base) / tpf + 0.5);
+	target = g_anchor_base + (slot + 1.0) * tpf;
+	return (target > now) ? (target - now) : 0;
+}
+int Sys_FramePaceDrainDepth(void)
+{
+	return bound(0, sys_framepacing_drain.ival, 3);
+}
+qboolean Sys_FramePacePresentActive(void)
+{
+	return sys_framepacing.ival == 4 && qrenderer == QR_OPENGL;
+}
+
+//mode 5, as sys_win.c's block over Sys_FramePacePredictActive describes
+#define PRED_RING 64
+#define SWAP_RING 32
+#define SWAP_BLOCKS 0.001
+static double g_pred_ring[PRED_RING];
+static int g_pred_head, g_pred_count;
+static double g_pred_start, g_pred_target, g_pred_laststart, g_pred_ontime;
+static qboolean g_pred_stale;
+static double g_swap_ring[SWAP_RING], g_preswap_t;
+static int g_swap_head, g_swap_count;
+static qboolean g_swap_blocks;
+qboolean Sys_FramePacePredictActive(void)
+{
+	extern cvar_t vid_vsync;
+	return sys_framepacing.ival == 5 && qrenderer == QR_OPENGL && !vid_vsync.value && !g_swap_blocks;
+}
+qboolean Sys_FramePaceDrainActive(void)
+{
+	return Sys_FramePacePresentActive() || (sys_framepacing.ival == 5 && qrenderer == QR_OPENGL && g_pred_start > 0);
+}
+static int QDECL Sys_FramePace_CmpD(const void *a, const void *b)
+{
+	double x = *(const double *)a, y = *(const double *)b;
+	return (x > y) - (x < y);
+}
+static double Sys_FramePace_Quantile(const double *ring, int count, double q)
+{
+	double s[PACE_RING];
+	int k;
+	if (count <= 0)
+		return 0;
+	count = min(count, PACE_RING);
+	memcpy(s, ring, sizeof(*s) * count);
+	qsort(s, count, sizeof(*s), Sys_FramePace_CmpD);
+	k = (int)(count * q);
+	return s[bound(0, k, count - 1)];
+}
+static double Sys_FramePacePredicted(void)
+{
+	return Sys_FramePace_Quantile(g_pred_ring, g_pred_count, bound(0, sys_framepacing_quantile.value, 100) / 100.0);
+}
+double Sys_FramePacePredictDelay(double fps)
+{
+	double now = Sys_DoubleTime(), interval, target, start;
+	if (fps <= 0)
+	{
+		g_pred_start = 0;
+		return 0;
+	}
+	interval = 1.0 / fps;
+	if (interval != g_present_interval || g_present_base <= 0 || (now - g_present_base) > 600.0)
+	{
+		g_present_base     = now;
+		g_present_interval = interval;
+		g_pred_ontime      = 0;
+	}
+	if (g_pred_start > 0)
+	{
+		g_pred_start  = 0;
+		g_pred_stale  = true;
+		g_pred_ontime = 0;
+	}
+	if (g_pred_stale || g_last_present_t <= g_present_base || now - g_last_present_t > 0.25)
+	{
+		if (g_pred_laststart > 0 && now >= g_pred_laststart && now - g_pred_laststart < interval)
+			return interval - (now - g_pred_laststart);
+		target = g_present_base + (floor((now - g_present_base) / interval) + 1.0) * interval;
+	}
+	else
+	{
+		if (g_pred_ontime > 0)
+			target = g_pred_ontime + interval;
+		else
+			target = g_present_base + (floor((g_last_present_t - g_present_base) / interval + 0.05) + 1.0) * interval;
+		start = target - Sys_FramePacePredicted() - 0.0005;
+		if (start > now)
+			return start - now;
+	}
+	g_pred_start = g_pred_laststart = now;
+	g_pred_target = target;
+	return 0;
+}
+void Sys_FramePacePresent(void)
+{
+	extern cvar_t cl_maxfps;
+	double fps = CL_MaxFPSFloor(cl_maxfps.value), now, slot, target;
+	if (sys_framepacing.ival == 5)
+	{
+		g_pred_stale = false;
+		g_pred_ontime = 0;
+		if (g_pred_start > 0)
+		{
+			now = Sys_DoubleTime();
+			g_pred_ring[g_pred_head] = min(now - g_pred_start, g_present_interval);
+			g_pred_head = (g_pred_head + 1) % PRED_RING;
+			if (g_pred_count < PRED_RING)
+				g_pred_count++;
+			if (g_pred_target >= now)
+			{
+				g_pred_ontime = g_pred_target;
+				if (g_pred_target > now)
+					Sys_FramePacedWait(g_pred_target - now);
+			}
+			g_pred_start = 0;
+		}
+	}
+	else if (sys_framepacing.ival == 4 && fps > 0)
+	{
+		now = Sys_DoubleTime();
+		if ((1.0 / fps) != g_present_interval || g_present_base <= 0 || (now - g_present_base) > 600.0)
+		{
+			g_present_base     = now;
+			g_present_interval = 1.0 / fps;
+		}
+		slot   = floor((now - g_present_base) / g_present_interval) + 1.0;
+		target = g_present_base + slot * g_present_interval;
+		if (target > now)
+			Sys_FramePacedWait(target - now);
+	}
+	g_preswap_t = Sys_DoubleTime();
+}
+void Sys_FramePace_RecordPresent(void)
+{
+	double now = Sys_DoubleTime();
+	if (g_last_present_t > 0)
+	{
+		g_present_ring[g_present_head] = now - g_last_present_t;
+		g_present_head = (g_present_head + 1) % PACE_RING;
+		if (g_present_count < PACE_RING)
+			g_present_count++;
+	}
+	g_last_present_t = now;
+	if (g_preswap_t > 0 && now >= g_preswap_t)
+	{	//how long the swap itself blocked; mode 5 stands aside while it does
+		g_swap_ring[g_swap_head] = now - g_preswap_t;
+		g_swap_head = (g_swap_head + 1) % SWAP_RING;
+		if (g_swap_count < SWAP_RING)
+			g_swap_count++;
+		if (sys_framepacing.ival == 5)
+			g_swap_blocks = g_swap_count >= SWAP_RING / 2 && Sys_FramePace_Quantile(g_swap_ring, g_swap_count, 0.5) > SWAP_BLOCKS;
+	}
+	g_preswap_t = 0;
+}
+//as sys_win.c's: a mode switch starts every ring and plan again
+static void Sys_FramePacing_Changed(cvar_t *var, char *oldval)
+{
+	g_wait_head = g_wait_count = 0;
+	g_present_head = g_present_count = 0;
+	g_last_present_t = 0;
+	g_anchor_base = g_anchor_tpf = 0;
+	g_pred_count = g_pred_head = 0;
+	g_pred_start = g_pred_target = g_pred_laststart = g_pred_ontime = 0;
+	g_pred_stale = g_swap_blocks = false;
+	g_swap_count = g_swap_head = 0;
+	g_preswap_t = 0;
+}
+static void Sys_FramePacing_Stats_f(void)
+{
+	int i, n = g_present_count;
+	double sum = 0, sq = 0, avg;
+	Con_Printf("sys_framepacing %i (Linux, Patch 1607)%s\n", sys_framepacing.ival,
+		sys_framepacing.ival != 5 ? "" : Sys_FramePacePredictActive() ? " -- mode 5 pacing" : " -- mode 5 stands aside (vid_vsync, not OpenGL, or the swap blocks)");
+	if (sys_framepacing.ival == 5)
+		Con_Printf("  render time %.3f ms predicted (last %i), frames start %.3f ms before their slot\n",
+			Sys_FramePacePredicted() * 1000, g_pred_count, (Sys_FramePacePredicted() + 0.0005) * 1000);
+	if (g_swap_count)
+		Con_Printf("  swap blocked: p50 %.3f  p90 %.3f  max %.3f ms (last %i)\n", Sys_FramePace_Quantile(g_swap_ring, g_swap_count, 0.5) * 1000,
+			Sys_FramePace_Quantile(g_swap_ring, g_swap_count, 0.9) * 1000, Sys_FramePace_Quantile(g_swap_ring, g_swap_count, 1.0) * 1000, g_swap_count);
+	if (g_wait_count)
+		Con_Printf("  wait error: p50 %.1f  max %.1f us (last %i)\n", Sys_FramePace_Quantile(g_wait_err_us, g_wait_count, 0.5),
+			Sys_FramePace_Quantile(g_wait_err_us, g_wait_count, 1.0), g_wait_count);
+	if (n)
+	{
+		for (i = 0; i < n; i++)
+			sum += g_present_ring[i];
+		avg = sum / n;
+		for (i = 0; i < n; i++)
+			sq += (g_present_ring[i] - avg) * (g_present_ring[i] - avg);
+		Con_Printf("  present interval: avg %.3f ms, stddev %.3f ms, p99 %.3f ms (last %i)\n", avg * 1000, sqrt(sq / n) * 1000,
+			Sys_FramePace_Quantile(g_present_ring, n, 0.99) * 1000, n);
+	}
+}
+
 void Sys_Init(void)
 {
 	Sys_InitClock();
+	Cvar_Register(&sys_framepacing, "System vars");	//FTESurf Patch 1607
+	Cvar_Register(&sys_framepacing_quantile, "System vars");
+	Cvar_Register(&sys_framepacing_drain, "System vars");
+	Cmd_AddCommandD("sys_framepacing_stats", Sys_FramePacing_Stats_f, "Reports what sys_framepacing is doing: the mode, mode 5's predicted render time, how long the swap blocks, the wait's error and the present-to-present interval.");
 	Cmd_AddCommandD("sys_register_file_associations", Sys_Register_File_Associations_f, "Register FTE as the default handler for various file+protocol types, using FreeDesktop standards.\n");
 }
 void Sys_Shutdown(void)
@@ -1704,7 +1977,7 @@ int main (int c, const char **v)
 			oldtime = newtime;
 
 			if (sleeptime)
-				Sys_Sleep(sleeptime);
+				Sys_FramePacedWait(sleeptime);	//FTESurf Patch 1607: Sys_Sleep at sys_framepacing 0
 		}
 	}
 }
