@@ -1,5 +1,22 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1614 - No per-map cap on lobby prederror reports (QC only; no engine change)
+
+**Problem.** Lex wants every prediction error report players send ("we can just filter them ourselves"). The lobby
+(sv_prederr.qc, P1195) refused a connection's 4th report on a map (`three-this-map`) and a lobby's 13th on a map
+(`lobby-busy`), so a player with a bad connection on a long map stopped being heard after three.
+
+**Change.** QC (server): both per-map counts removed. The spacing stays: 20 s between one connection's reports and
+10 s between any two on a lobby (the client itself offers at most one report a minute, cl_prederr.qc pe_cool). The
+store cap rises from 600 to 2000 files in data/prederr/, now the limit that bites; on 19 Nov the Pi held 118 lobby
+files in 13 MB, and a report is at most 400 x 1 KB. reportd's HTTP half (P1554) had no per-map limit.
+
+**Verified.** fteqcc: 0 warnings. No runtime arm: Lex was playing on the PC, and the change only deletes two refusal
+branches. Owner check in lextest.md (a 4th report on one map after the lobby deploy).
+
+**Limits.** Fetch-and-clear (tools/prederr_triage.py --fetch) still matters: at 2000 files the lobby refuses with
+`store-full`.
+
 ## Patch 1612 - Graphics > Tool brushes: Shown lasts one session (QC only; no engine change)
 
 **Problem.** Players (18 Nov, surf_ferros and surf_centipedes) saw pink PLAYER CLIP walls over ramps; Lex never did.
