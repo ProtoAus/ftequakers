@@ -1,5 +1,27 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1612 - Graphics > Tool brushes: Shown lasts one session (QC only; no engine change)
+
+**Problem.** Players (18 Nov, surf_ferros and surf_centipedes) saw pink PLAYER CLIP walls over ramps; Lex never did.
+Both maps cover their ramps with a packed "invisible clip" material: surf_ferros tools/paintclip (175 world faces),
+surf_centipedes rampcollision/rampcollision (165), each `UnlitGeneric { $basetexture "tools/toolsplayerclip" $alpha 0 }`
+with texinfo flags 0x410 (no SURF_NODRAW). mat_vmt.c turns $alpha 0 into nodraw only while hl2_hidetools is 1, and
+Graphics > Tool brushes: Shown sets hl2_hidetools 0 with `seta`, so one visit to that row drew the clips opaque,
+z-fighting with the rock, on every map and launch after. Reproduced headless (setpos A/B screenshots): Shown draws them
+in the same striped pink as the players' screenshot, Hidden draws nothing.
+
+**Change.** QC: m_init (the first QC on a launch, after the config, before any map) puts a saved hl2_hidetools 0 back
+to 1 with cvar_set (the cvar is map-latched; with no map loaded the set applies at once) and says so in the console.
+The Graphics row says Shown lasts until the game restarts. Shown still works for the session it is chosen in.
+
+**Verified.** Fixture config with `seta hl2_hidetools "0"`, surf_ferros on a dedicated server: the P1612 menu.dat
+printed the reset, then "808 of 28186 faces hidden" and "tools/paintclip: $alpha 0 -- hidden", `hl2_hidetools` read 1;
+the installed menu.dat (control) left it at 0 and hid nothing. Same result on a normal launch with `connect` typed
+after the menu was up. fteqcc: 0 warnings for menu and csprogs.
+
+**Limits.** A player who wants clips shown every session must choose Shown each time (or put `hl2_hidetools 0` in a
+cfg that runs after the menu starts). Players get it with the next release (menu.dat ships with the client).
+
 ## Patch 1611 - Wayland: F11 / Alt+Enter / vid_toggle change fullscreen on the live window; windowed maximizes
 
 **Problem.** Lex (18 Nov, first days on CachyOS + labwc) asked that fullscreen, Alt+Enter and F11 use "proper" fullscreen
