@@ -1,5 +1,25 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1608 - Board cache saves at map end only; Milk_Supported re-reads the renderer once a second (QC only; no engine change)
+
+**Problem.** Two client costs every map shares. The online board cache (Patch 781, data/boards/<map>.txt) was written
+5 s after each board landed, so a frame early in the run and one after each finish held the file write: OBC_Save's
+own time 3.14 ms on surf_andromeda (r_spikes 2, Lex's settings, cl_maxfps 300: a 5.8 ms frame). And Milk_Supported
+(three temp strings a call, several calls a frame) was ~8% of csprogs' temp strings (lows5 census), so of its
+collections.
+
+**Change.** QC: Online_Prefetch no longer saves mid-map; CSQC_Shutdown, which already saved a dirty cache, runs at every
+serverdata (cl_parse.c), disconnect and quit. Milk_Supported keeps its answer for a second of real time
+(vid_renderer changes only at a vid_restart).
+
+**Verified.** Linux rig, surf_andromeda replay with the P1608 csprogs: no OBC_Save in either pass's r_spikes 2 rows
+(it was 3.14 ms), data/boards/surf_andromeda.txt (deleted first) rewritten at the quit, 42,307 bytes, same header. Temp
+census on surf_beginner: Milk_Supported in 0 of the 100000-temp reports (66 before). fteqcc: 0 warnings for all three
+progs. Not deployed: main's QC also carries P1603, whose surfd goes first (tools/backend-pending.md).
+
+**Limits.** A crash loses that map's fresh boards from the cache; they are asked again on the next visit anyway (a copy
+read from disk always is).
+
 ## Patch 1607 - Linux: sys_framepacing (predictive present pacing) -- capped frame rates present on an even grid
 
 **Problem.** Patch 1413's sys_framepacing (default 5: start each frame its predicted render time before a grid slot and
