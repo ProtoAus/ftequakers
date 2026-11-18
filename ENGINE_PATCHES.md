@@ -1,5 +1,40 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1618 - Map downloads via the Cloudflare-cached maps.proto.bar; no Pi windows after mirror runs (r2gateway only)
+
+**Problem.** Players reported 5-10 minute map downloads (Markbeaton54, 18 Nov: "32 kbps peaks at 1mbs"). The Pi's nginx
+access log (Lex's sudo) showed his surf_pride (215 MB) served by the Pi's own 1 MiB/s fallback, 17:46-17:52Z, 84 MB in
+6 min; the retry at 17:56 got a 302 to R2 and finished in 30 s. Every Pi-served map on 18 Nov (9, 478 MB) started
+between :05 and :17 or :35 and :47. r2mirror (cron :05/:35 since 17 Nov) keeps its ledger in WAL mode and its last
+close deletes -wal/-shm; r2gateway runs under ProtectSystem=strict and cannot recreate them, so its read-only open
+failed ("attempt to write a readonly database") and nginx served every map and zone from disk until r2gzip (:17/:47),
+which reads the ledger with write access, left the side files behind. Agents reading the ledger as proto did the same,
+which hid the fault from spot checks.
+
+**Change.** tools/r2gateway.py: read_row opens a ledger read-only and, when that fails with no -wal beside it (the last
+writer checkpointed and closed, so the main file is whole), immutable. With gateway.json `public_base`
+(https://maps.proto.bar: Lex connected that custom domain to the ftesurf-public bucket and added a cache rule, 19 Nov)
+the 302 names `<public_base>/<key>`, unsigned, so Cloudflare caches the immutable content-addressed objects near the
+player; gzip companions keep Content-Encoding for gzip clients (Cloudflare decompresses for others), CORS * and ranges
+work. One failed R2 probe no longer sends requests to disk: PROBE_FAILURES (3) in a row, 2 s apart, do, and a new
+gateway assumes R2 instead of disk while its first probe is in flight. Each disk answer writes "disk for <alias>: <why>"
+to stderr (the journal), never an address, query or signature.
+
+**Verified.** tools/test_r2gateway.py: 26 tests; the four new ones (WAL ledger without side files in a read-only
+directory, public_base, first probe in flight, three-failure rule) all fail on the previous gateway. A copy of the live
+ledger reproduced the fault (WAL, no side files, read-only directory: the plain open fails; with side files: reads).
+New code against the live config before install: maps (plain and gzip) and zones 302 to maps.proto.bar. Installed
+23:08Z (Lex's sudo; the script's own loopback check saw the maps.proto.bar redirect). At 23:12:58Z, with the ledger's
+side files gone after r2mirror's 23:05:03 run -- the state that used to mean disk -- surf_pride, surf_vitamin_e,
+surf_pantheon and bhop_marathon all answered 302 to maps.proto.bar; a full surf_vitamin_e (103 MB) followed the
+redirect in 9.3 s (this PC's line), twice; objects show cf-cache MISS then HIT.
+
+**Limits.** The first download of a map in each Cloudflare region still comes from R2 in Oceania over one connection
+(slow for distant players); parallel ranged downloads in the engine would help that. tools/r2mirror.py still sets WAL:
+the gateway now copes, but r2gzip-style DELETE mode would remove the trap. Also delivered: the lobby logs (16 GB) were
+archived to /srv/nvme/ftesurf-server/logs-archive (489 MB gz) and /etc/logrotate.d/ftesurf-lobbies rotates them daily
+(copytruncate, 30 days).
+
 ## Patch 1616 - The look and the knife follow the Steam account (QC only; no engine change)
 
 **Problem.** Lex: "belt and body colour doesn't save ... check the player trail, knife, and paint options and ensure
