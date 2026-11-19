@@ -1,5 +1,26 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1628 - AG/HL1 crouch: no second dip when the duck finishes (view only)
+
+**Cause.** Lex: "AG/crouching... you follow it down, and then when you finally make it all the way down, the animation
+sort of does a quick 'reduck'." The AG mover is continuous: ducking eases the eye from 28 to -6 over 0.4 s, then the
+finish drops the origin 18 and sets the offset to 12 in one tick, the world eye unmoved (pm_ag_world.c). Two client
+layers broke that. The drawn feet are lerped between the last two commands while the eye offset came from the
+newest, so the eye stood up to 18 high for one command; and CL_CalcCrouch eases step DOWNS as well as ups, so it read
+the 18-unit origin drop as a stair, held the camera up to 15 high and lowered it at 200 u/s.
+
+**Change.** cl_pred.c, PHYSMODE_AG only: kept commands record their world eye (CL_SourceEyeKeep, P1301's ring; its
+roof flag stays Source-only), and the drawn eye is lerped between the two kept ticks like P1301's roof limit.
+CL_CalcCrouch snaps step-downs under AG, as HL1's V_CalcRefdef does (it eases only steps up).
+
+**Verified.** Hidden rig, local server at `sv_movementprofile ag-1000`, `cl_predtrace 700` while holding duck 1.2 s on
+a flat floor, drawn eye = simorg z + crouchr + vhr. Installed exe: at the finish frame the eye rose 17.33 and eased
+back over ~100 ms. This build: it never rises while ducking (max rebound 0.00), constant to 0.001 across the finish
+frames; the unduck stays eased.
+
+**Boundary.** Drawn values only (eye offset, stair offset); the mover, commands, server, recordings and verification
+are untouched. Source profiles keep their path. AG walking down stairs is no longer eased, as in HL1.
+
 ## Patch 1627 - noclip through walls keeps the view; no sky in the void; a stock sky when the default is missing
 
 **Cause.** Lex: "noclipping into brushes, the transition causes a massive fps spike on all maps... when in void, stop
