@@ -14,20 +14,28 @@ explicit refresh tool and `tools/story-catalogue-audit.md`. Exact fixed-map iden
 slots, reserved Story59 and explicit gates stay put; eight empty Story slots and four empty Event slots are filled.
 Only mixed-tier chapter headings become neutral Chapter N. New Events are finish-only. `course zones` on the two
 Nightingale slots requires valid start/end regions for that bonus in the effective server zone file, preserving
-higher-priority overrides and failing closed on missing/malformed/unreadable data. Existing credit is independent
+player-local, curated (game/Momentum), shipped local (game/Momentum), online (game/Momentum) priority and failing
+closed on missing/malformed/unreadable data. Existing credit is independent
 of availability. The existing Story TTL/worker refresh picks up new zones; stale-while-revalidate is not instantaneous.
 
 **Verified.** Parent rerun: Story 54 tests, Groups 10, offline/source regression 4, all pass. Story tests cover
 snapshot/cutoff ties, exact requested slots, missing/only B4/both bonuses, override precedence, unreadable/malformed
-zones (including excessive JSON depth and overflowing integers), cache refresh and preserved credit. Worker QC
-compiles server/client/menu: zero warnings. Independent reviewer did not start: local `/usr/bin/node` lacks
+zones (including excessive JSON depth and overflowing integers), cache refresh and preserved credit. Parent's
+extended seven-position test fails on the first three-directory candidate at a game-online override; corrected
+gate passes all 54 Story tests. Worker QC compiles server/client/menu: zero warnings. Independent reviewer did not start: local `/usr/bin/node` lacks
 libsimdjson.so.36; parent reviewed the source and added the numeric/depth fail-closed tests. Not independent review.
 
 **Delivery/limits.** Catalogue and backend remain pending the next guarded surfd generation: deploy the parser/course
 gate code before publishing this catalogue. Do not run story_push against the old parser. B4/B5 still need Lex's
 zones; no bonus geometry or times were invented. Existing occupied Event route/duplicate issues and historical
 Halloween/fog semantics are explicitly audited but not silently rewritten or revoked. No native binary, schema,
-recording grammar or QC Build-number change. Delivery details: game `tools/p1619-1622-delivery.md`.
+recording grammar or QC Build-number change. Final parent verification (19 Nov 05:47Z): clean implementation
+4cd92390 builds all three VMs with zero warnings, and the canonical Linux wrapper installs identical hashes.
+Story54/Groups10/focused4 and catalogue check pass. Server/client frame scans have zero hits; menu's same three
+hits are reproduced on exact baseline 163ef4ed (no new hits). Baseline also reproduces the navigation/social
+failures. Native headless console smoke passes, not rendered acceptance. Fleet entrypoint needs PowerShell
+(unavailable locally/Pi); read-only SSH works but general sudo root is unavailable. No alternative deployment
+path was invented. Actual artifacts and limits: game `tools/p1619-1622-delivery.md`.
 
 ## Patch 1621 - Stage completion belongs to editable Splits (QC only; no engine change)
 
@@ -37,8 +45,9 @@ Stage result and Stage result duration; the result cvar still permits hiding the
 recording semantics change. Worker client compile: zero warnings; offline source guards pass. Rendering, drag,
 font sizes, overlap and actual finish rank are owner checks in lextest; headless command checks are not pixels.
 
-**Delivery.** Local QC verification/install pending final parent build at this entry's commit; fleet/release not
-performed. No engine code or binary change. See game `tools/p1619-1622-delivery.md` for final artifact status.
+**Delivery.** Final parent clean build and local Linux install pass (identical artifact hashes); headless command
+smoke passes but does not run CSQC_UpdateView. Fleet/release not performed. No engine code or binary change.
+See game `tools/p1619-1622-delivery.md` for artifact hashes and the concrete deployment-environment blocker.
 
 ## Patch 1620 - Global-chat origin is the sender's map and course (QC only; no engine change)
 
