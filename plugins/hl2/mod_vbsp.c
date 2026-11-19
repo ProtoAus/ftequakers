@@ -427,6 +427,10 @@ typedef struct dispinfo_s
     vec3_t aamin;
     vec3_t aamax;
     pvscache_t pvs; //which pvs clusters this displacement is visible in...
+    //FTESurf Patch 1626: when pvs overflowed (num_leafs -1), every cluster and real area its box reaches. NULL otherwise.
+    unsigned int *pvsclusters, numpvsclusters;
+    int *pvsareas;
+    unsigned int numpvsareas;
     unsigned int contents;
     unsigned int collflags;	//FTESurf Patch 250: DISPSURF_* -- the mapper's per-displacement collision opt-out.
     qboolean lightopaque;	//Source MASK_OPAQUE, independent of movement flags/remapping.
@@ -8005,13 +8009,45 @@ Collision Stuff.
 ===============================================================================
 */
 
+/*
+FTESurf Patch 1626: a displacement whose box reaches more than 128 leaves or 32 clusters overflowed pvscache, and an
+overflowed record passed the PVS test from nearly every view (P257's fail-open; the box's top node was the map root
+for two of ahop_coast's) -- other stages' cliffs drew behind the sky. Source links a displacement to every leaf it
+reaches; this keeps every cluster and real area its box reaches instead. An empty cluster list means "never visible".
+*/
+static void VBSP_DispOwnLists(model_t *mod, dispinfo_t *d)
+{
+	int *leafs = plugfuncs->Malloc(sizeof(*leafs) * (mod->numleafs + 1)), n, i, c, a;
+	unsigned int k, nc = 0, na = 0;
+	n = VBSP_BoxLeafnums(mod, d->aamin, d->aamax, leafs, mod->numleafs, NULL);
+	d->pvsclusters = plugfuncs->GMalloc(&mod->memgroup, sizeof(*d->pvsclusters) * (n + 1));
+	d->pvsareas = plugfuncs->GMalloc(&mod->memgroup, sizeof(*d->pvsareas) * (n + 1));
+	for (i = 0; i < n; i++)
+	{
+		c = VBSP_LeafCluster(mod, leafs[i]);
+		for (k = 0; c >= 0 && k < nc && d->pvsclusters[k] != (unsigned int)c; k++)
+			;
+		if (c >= 0 && k == nc)
+			d->pvsclusters[nc++] = c;
+		a = VBSP_LeafArea(mod, leafs[i]);
+		for (k = 0; a > 0 && k < na && d->pvsareas[k] != a; k++)
+			;
+		if (a > 0 && k == na)
+			d->pvsareas[na++] = a;
+	}
+	d->numpvsclusters = nc;
+	d->numpvsareas = na;
+	plugfuncs->Free(leafs);
+}
+
 //FTESurf Patch 1235: a big prop's own clusters (see the loader) against the view's cluster PVS.
-static qboolean VBSP_PropClustersVisible(const struct staticprop_s *sp, const qbyte *pvs)
+//Patch 1626: and an overflowed displacement's (VBSP_DispOwnLists).
+static qboolean VBSP_ClustersVisible(const unsigned int *cl, unsigned int n, const qbyte *pvs)
 {
 	unsigned int i, c;
-	for (i = 0; i < sp->numpvsclusters; i++)
+	for (i = 0; i < n; i++)
 	{
-		c = sp->pvsclusters[i];
+		c = cl[i];
 		if (pvs[c >> 3] & (1 << (c & 7)))
 		{
 			vbsp_pvs_why = VBSP_PVSWHY_VISIBLE;
@@ -10618,7 +10654,8 @@ static qboolean VBSP_UnvisedPairVisible(const vbspinfo_t *prv, const qbyte *area
 }
 
 //its verdict for one object, or the test's (kept); vbsp_pvs_why as the test leaves it
-static qboolean VBSP_PVSMemoTest(qbyte *memo, size_t idx, model_t *mod, const struct staticprop_s *sp, const pvscache_t *pvs, const qbyte *surfvis, const int *areas)
+//cl: the object's own cluster list (P1235 props, P1626 displacements), or NULL for the pvscache test
+static qboolean VBSP_PVSMemoTest(qbyte *memo, size_t idx, model_t *mod, const unsigned int *cl, unsigned int ncl, const pvscache_t *pvs, const qbyte *surfvis, const int *areas)
 {
 	qboolean vis;
 	if (memo && memo[idx])
@@ -10626,7 +10663,7 @@ static qboolean VBSP_PVSMemoTest(qbyte *memo, size_t idx, model_t *mod, const st
 		vbsp_pvs_why = memo[idx] - 1;
 		return memo[idx] == 1 + VBSP_PVSWHY_VISIBLE;
 	}
-	vis = (sp && sp->numpvsclusters) ? VBSP_PropClustersVisible(sp, surfvis) : VBSP_EdictInFatPVS(mod, pvs, surfvis, areas);
+	vis = cl ? VBSP_ClustersVisible(cl, ncl, surfvis) : VBSP_EdictInFatPVS(mod, pvs, surfvis, areas);
 	if (memo)
 		memo[idx] = 1 + vbsp_pvs_why;
 	return vis;
@@ -11065,8 +11102,15 @@ static void VBSP_PrepareFrame(model_t *mod, refdef_t *r_refdef, int area, int cl
 				(*mark++)->visframe = vbsp_surfsequence;
 		}
 		for (i = 0; i < prv->numdisplacements; i++)
-			if (VBSP_UnvisedPairVisible(prv, r_refdef->areabits, &prv->displacements[i].pvs, 0))
-				prv->displacements[i].surf->visframe = vbsp_surfsequence;
+		{
+			dispinfo_t *d = &prv->displacements[i];
+			qboolean vis = !d->pvsclusters && VBSP_UnvisedPairVisible(prv, r_refdef->areabits, &d->pvs, 0);
+			unsigned int a;
+			for (a = 0; !vis && d->pvsclusters && a < d->numpvsareas; a++)	//FTESurf Patch 1626: its own areas, not "overflowed, draw"
+				vis = VBSP_UnvisedAreaVisible(prv, r_refdef->areabits, d->pvsareas[a]);
+			if (vis || (d->pvsclusters && !d->numpvsareas))
+				d->surf->visframe = vbsp_surfsequence;
+		}
 		for (i = 0; i < mod->nummodelsurfaces; i++)
 		{
 			surf = &mod->surfaces[i];
@@ -11100,7 +11144,7 @@ static void VBSP_PrepareFrame(model_t *mod, refdef_t *r_refdef, int area, int cl
 		for (i = 0; i < prv->numdisplacements; i++)
 		{
 			disp = &prv->displacements[i];
-			if (VBSP_PVSMemoTest(memo, prv->numstaticprops + i, mod, NULL, &disp->pvs, surfvis, areas))
+			if (VBSP_PVSMemoTest(memo, prv->numstaticprops + i, mod, disp->pvsclusters, disp->numpvsclusters, &disp->pvs, surfvis, areas))
 			{
 				surf = disp->surf;
 				if (surf->visframe == vbsp_surfsequence)
@@ -11473,7 +11517,7 @@ static void VBSP_PrepareFrame(model_t *mod, refdef_t *r_refdef, int area, int cl
 			//PVS/area cull, exactly like the displacement loop above (VBSP_EdictInFatPVS at ~3587).
 			//Only valid when we actually have view PVS: surfvis==NULL means portal-recursion / novis / no model vis, where everything must draw.
 			//src->pvscache.leafnums hold CLUSTERS, and surfvis is the cluster-PVS from VBSP_MarkLeaves, so this is index-consistent (same as displacements).
-			if (surfvis && !VBSP_PVSMemoTest(memo, i, mod, sent, &src->pvscache, surfvis, areas))
+			if (surfvis && !VBSP_PVSMemoTest(memo, i, mod, sent->numpvsclusters ? sent->pvsclusters : NULL, sent->numpvsclusters, &src->pvscache, surfvis, areas))
 			{
 				sent->lastpvswhy = vbsp_pvs_why;	//FTESurf Patch 257: set by the call above
 				PROP_VERDICT(PROPV_PVS);
@@ -11796,7 +11840,7 @@ static void VBSP_GenerateShadowMesh(model_t *model, dlight_t *dl, const qbyte *l
 	for (i = 0; i < prv->numdisplacements; i++)
 	{
 		disp = &prv->displacements[i];
-		if (VBSP_EdictInFatPVS(model, &disp->pvs, litvis, NULL))
+		if (disp->pvsclusters ? VBSP_ClustersVisible(disp->pvsclusters, disp->numpvsclusters, litvis) : VBSP_EdictInFatPVS(model, &disp->pvs, litvis, NULL))
 		{
 			callback(disp->surf);
 		}
@@ -14021,8 +14065,18 @@ static qboolean VBSP_LoadModel(model_t *mod, qbyte *mod_base, size_t filelen, ch
 	mod->funcs.InfoForPoint			= VBSP_InfoForPoint;
 
 	//displacements suck
-	for (i = 0; i < prv->numdisplacements; i++)
-		VBSP_FindTouchedLeafs(mod, &prv->displacements[i].pvs, prv->displacements[i].aamin, prv->displacements[i].aamax);
+	{
+		unsigned int own = 0;
+		for (i = 0; i < prv->numdisplacements; i++)
+		{
+			VBSP_FindTouchedLeafs(mod, &prv->displacements[i].pvs, prv->displacements[i].aamin, prv->displacements[i].aamax);
+			if (prv->displacements[i].pvs.num_leafs == -1)
+				VBSP_DispOwnLists(mod, &prv->displacements[i]), own++;
+		}
+		if (own)
+			Con_DPrintf("%s: %u of %u displacements reach past pvscache's 32 clusters and carry their own lists (P1626)\n",
+				mod->name, own, (unsigned int)prv->numdisplacements);
+	}
 //	if (noerrors)
 //		CM_CreatePatchesForLeafs (mod, prv);
 

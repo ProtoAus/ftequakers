@@ -1,5 +1,26 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1626 - big displacements no longer draw in other areas (ahop_coast's cliffs in the sky)
+
+**Cause.** Lex: "ahop_coast has displacements in the sky, it's behind the skybox and has weird backward culling that
+makes it vanish as you get closer." A displacement's visibility record is VBSP_FindTouchedLeafs on its box: 32
+clusters, 128 leaves. Past either it overflows to "headnode" (num_leafs -1), and an overflowed record skips the area
+test and passes whenever any leaf under that node is visible -- for two of ahop_coast's the map root. 17 of its 2047
+displacements overflowed, each drawn from 3,000-4,700 of 5,270 clusters: other stages' cliffs behind the sky, where Patch 990's
+sky depth mask (2x the sky face's distance) cuts them off as you approach. Patch 1235 fixed exactly this for
+static props; displacements never got it.
+
+**Change.** mod_vbsp.c: an overflowed displacement keeps every cluster and real area its box reaches
+(VBSP_DispOwnLists, uncapped VBSP_BoxLeafnums at load). The PVS test, the unvised area test and dynamic-light marking
+use those lists; an empty cluster list means never visible. VBSP_PropClustersVisible became VBSP_ClustersVisible.
+
+**Verified.** ahop_coast: `17 of 2047 displacements ... carry their own lists` (the investigation's offline count was
+17). Hidden rig at C0304_dest looking up: the installed exe draws a slab in the sky behind the rock, this build does
+not; the rest of the frame matches (artifacts/coast_compare.png). The investigation's offline simulation over 32
+local maps with displacements found 21 with overflowed records and 0 under-draws with own lists.
+
+**Boundary.** Render only (collision unchanged). Load cost: one uncapped box walk per overflowed displacement.
+
 ## Patch 1625 - missing content: half-installed games, leftover folders, and a warning that names the game
 
 **Cause.** Lex: surf_ace, surf_fuchnut and surf_classics lost CS:S textures and props "even though I downloaded all
