@@ -24,8 +24,11 @@ passes (remote print only). Real Windows/-Run and kernel bind-mount operations n
 Earlier P1619–P1622 missing-shell/general-sudo conclusion was overbroad: shell now installed, Pi only needs its
 normal Linux tools, and per-command sudo differs from unrestricted root. No public fleet/backend/catalogue,
 updater/release, permission change, native code/binary, recording/schema, engine pin/tag or QC Build change.
-Compile-byte agreement is not gameplay/compiler/runtime certification. Record: game tools/p1623-linux-deploy.md;
-workspace SETUP-NOTES.md. Useful failed logs, controls and reviews retained privately, not relabelled successes.
+Compile-byte agreement is not gameplay/compiler/runtime certification. Clean implementation409b01c5 repeated
+real3VM/focused7 successfully with original measured compiler6eef0cb4... and installed bytes unchanged. Retained
+historical caller still needs fresh reviewed Linux-local bindings with its actual deployment packet; no fresh live
+transaction constructed here. Record: game tools/p1623-linux-deploy.md; workspace SETUP-NOTES.md. Useful failed
+logs, controls and reviews retained privately, not relabelled successes.
 
 ## Patch 1622 - Real group targets and new Story/Event courses (surfd/data; no engine change)
 
