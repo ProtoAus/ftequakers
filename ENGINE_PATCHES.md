@@ -75,7 +75,8 @@ sandboxes still don't. The crash dialog then failed as well: Sys_Error exec'd xm
 
 **Change.** qclib initlib.c: after a collection frees anything (threaded finish and the same-thread sweep),
 `nexttempstring = 0`, so allocation refills the freed low slots first and the pointer tracks occupancy. sys_linux.c:
-the fatal-error dialog tries zenity, then kdialog, then xmessage.
+the fatal-error dialog tries zenity, then kdialog, then xmessage, and only with a DISPLAY or WAYLAND_DISPLAY and without
+WOS_NOERRORDIALOG (review: a rig redirecting stderr would otherwise hang on the modal dialog).
 
 **Verified.** The crash investigation's simulator of the 1588 rules (scratch/crash/gcsim.py, 4000 temps a frame,
 3-frame collections, 2000 kept): 131072 -> 527360 -> 1055744 -> 2112512 slots in 1500 frames without the reset,
@@ -120,15 +121,19 @@ folder: without them the six faces are r_blackimage and the sky is black (metalg
 
 **Change.** r_surf.c: the overview waits until the eye is more than `r_voidvis_margin` (512, 0 = old behaviour) from
 where it last saw open space; nearer, Patch 138's last cluster stays. Surf_WorldOnlyView (CSQC) and R_Clear read the
-same test (Surf_VoidNear). gl_backend.c / vk_backend.c: no sky batches in the primary void overview;
-GLBE_WaterViewsBegin captures nothing there. gl_warp.c: when the sky in use has no face, sky_day01_01 (in HL2 and
+same test (Surf_VoidNear); R_Clear also accepts r_renderscale's megascreeny target, as Surf_WorldOnlyView does.
+gl_backend.c: no sky batches in the primary view when R_Clear cleared it for the overview (r_voidcleared), and no water
+there (GLBE_GenerateBatchTextures refuses its batches). Vulkan keeps the sky: it has no overview clear. gl_warp.c: when the sky in use has no face, sky_day01_01 (in HL2 and
 Momentum's mount/hl2_dir.vpk) is drawn; `sky` says so.
 
 **Verified.** Hidden rig, surf_colin_blaster_69000, developer 1: stepping the noclip eye down into the floor in 32-unit
 steps, the installed exe logged `cluster -1 ... VOID VIEW` on entering solid; this build `cluster -1 ... off` (last
 cluster kept, entities still drawn), then `VOID VIEW` 4000 units below the map, where the sky is black instead of
 drawn (artifacts/void2_compare.png). Without Momentum mounted the installed exe drew a black sky on colin; this build
-HL2's day sky (sky_compare.png). Frame time was not measured.
+HL2's day sky (sky_compare.png). Frame time was not measured. One independent review: its real findings fixed --
+an early return in GLBE_WaterViewsBegin had left `chosen` NULL, sending every water batch to its own whole-map capture
+(P1386's 184-scene path) and a capture's Surf_SetupFrame then cleared r_voidview mid-view; and skipping the sky where
+nothing clears (split screen, secondary views, render targets, Vulkan) would have left stale pixels.
 
 **Boundary.** Render only. A wall thicker than 512 shows the last view until the margin; flying out still turns the
 overview on once, now only when you are really out.
@@ -174,7 +179,8 @@ warning lists at most ten, visible first, as "<game>: <name>", then "type hl2_mi
 developer and hl2_missing; `hl2_unresolved_list` publishes the ten for the banner. The game comes from
 scripts/assetgames.txt (tools/assetgames.py: every game with a file under that materials/ or models/ folder, longest
 prefix, generic top folders skipped). gl_model.c: `mod_unresolved` lists models/ files that failed since the map
-began loading. QC cl_gfx.qc: the banner lists models and materials that way, ten at most.
+began loading (Quake's maps/b_ item bsps do not restart it). QC cl_gfx.qc: the banner lists models and materials that
+way, ten at most.
 
 **Verified.** Hidden rig, disposable install, fake Steam libraries listed first. CS:S with cstrike_pak_011.vpk missing:
 installed exe `2 material(s) did not resolve`; this build `1 archive part(s) missing or unreadable (first: _011.vpk),
@@ -184,7 +190,9 @@ A CS:S folder holding only cfg/: installed exe mounted it and lost both surf_ace
 ~/.local/share/Steam's CS:S, none missing. With every game present: nothing missing, no banner. ahop_coast: the
 empty-directory error 1 -> 0.
 
-**Boundary.** A model that failed on an earlier map is not retried, so it is not listed again. Directory labels
+**Boundary.** A model that failed on an earlier map is not retried, so it is not listed again. A steam_libraries.txt
+entry holding only copied VPKs (no gameinfo.txt) now loses to a Steam library that has one. One independent review
+(crash/regression lens): no crash or memory finding in P1625. Directory labels
 name every game with that folder (materials/de_dust is "CS:S/CS:GO"), not proof the game has the file.
 
 ## Patch 1624 - FTEQCC checked builtins and literal bounds (compiler only)

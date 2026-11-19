@@ -2273,6 +2273,7 @@ R_Clear
 */
 int gldepthfunc = GL_LEQUAL;
 qboolean depthcleared;
+qboolean r_voidcleared;	//FTESurf Patch 1627: this frame's primary view cleared for the void overview (gl_backend.c skips the sky)
 void R_Clear (qboolean fbo)
 {
 	// P1345: forced void visibility leaves uncovered pixels, even with decoration on.
@@ -2282,7 +2283,8 @@ void R_Clear (qboolean fbo)
 	int cluster, area;
 	unsigned int contents;
 	if (!r_secondaryview && cl.splitclients <= 1 && r_refdef.stereomethod == STEREO_OFF &&
-		cls.state == ca_active && !r_refdef.recurse && !*r_refdef.rt_destcolour[0].texname &&
+		cls.state == ca_active && !r_refdef.recurse &&
+		(!*r_refdef.rt_destcolour[0].texname || !strcmp(r_refdef.rt_destcolour[0].texname, "megascreeny")) &&	//P1627: r_renderscale's main target, as Surf_WorldOnlyView
 		!(r_refdef.flags & RDF_NOWORLDMODEL) && r_voidvis.ival && r_refdef.playerview &&
 		(r_refdef.playerview->pmovetype == PM_SPECTATOR || r_refdef.playerview->pmovetype == PM_OLD_SPECTATOR) &&
 		w && w->loadstate == MLS_LOADED && w->funcs.InfoForPoint)
@@ -2291,6 +2293,8 @@ void R_Clear (qboolean fbo)
 		w->funcs.InfoForPoint(w, r_refdef.vieworg, &area, &cluster, &contents);
 		clearoverview = (cluster == -1) && !Surf_VoidNear(r_refdef.vieworg);	//FTESurf Patch 1627: as Surf_SetupFrame decides
 	}
+	if (!r_refdef.recurse)
+		r_voidcleared = clearoverview && r_voidview;
 	/*tbh, this entire function should be in the backend*/
 	{
 		if (!depthcleared || fbo || clearoverview)

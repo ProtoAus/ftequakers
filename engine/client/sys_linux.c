@@ -937,7 +937,7 @@ void Sys_Error (const char *error, ...)
 	fflush(stdout);
 	fflush(stderr);
 
-	if (!isatty(STDERR_FILENO))
+	if (!isatty(STDERR_FILENO) && (getenv("DISPLAY") || getenv("WAYLAND_DISPLAY")) && !getenv("WOS_NOERRORDIALOG"))	//FTESurf Patch 1629: no modal hang without a display or in a rig
 	{	//if we're a graphical x11 program then its quite likely that we have no stdout with the user never knowing why the game just disappeared
 		//the crash could have come from malloc failures, this means we can't really depend upon xlib
 		//but we can start some other program to display the message.

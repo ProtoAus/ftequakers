@@ -1824,8 +1824,8 @@ model_t *Mod_LoadModel (model_t *mod, enum mlverbosity_e verbose)
 		}
 #endif
 
-		if (!Q_strncasecmp(mod->name, "maps/", 5))
-			Cvar_ForceSet(&mod_unresolved, "");	//FTESurf Patch 1625: a world starts the list again
+		if (!Q_strncasecmp(mod->name, "maps/", 5) && Q_strncasecmp(mod->name, "maps/b_", 7))
+			Cvar_ForceSet(&mod_unresolved, "");	//FTESurf Patch 1625: a world starts the list again (Quake's b_ item bsps do not)
 		mod->loadstate = MLS_LOADING;
 		if (verbose == MLV_ERROR || verbose == MLV_WARNSYNC)
 			COM_InsertWork(WG_LOADER, Mod_LoadModelWorker, mod, NULL, verbose, 0);
