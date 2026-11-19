@@ -1,5 +1,35 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1630 - mover 13: Patch 256's re-wound displacements collide on their visible side
+
+**Cause.** Lex: "windings? of displacements cause the player to fall off the ladder when climbing ahop_coast since the
+rock wall 'bulges' out... bhopping and movement not quite right on displacements on this map." Patch 256 took a
+Source face's outward normal to be (side ? -plane : +plane) and re-wound every displacement on a side==1 face for
+collision (cidx), so com_bih's four-unit back slab would sit under the terrain. But side is only planenum's parity
+(side == planenum & 1 for all 31,152 ahop_coast faces): planenum already names the face's outward plane, as
+mod_vbsp.c's own plane read notes, and every one of ahop_coast's 2047 displacement faces winds around +plane, whose
+side the BSP finds empty. The re-wound third (P256 measured 30.2% of the library; 321 of 2047 here) therefore has its
+slab IN FRONT of the visible surface: the rock behind ahop_coast's ladder (disp 2008) pushed a climber off the rungs,
+and flipped/unflipped seams stand 4/n_z (4-8) units proud. P256's own check traced downward and could not tell which
+side the player stood on; Patch 258 then found the snag it was after elsewhere.
+
+**Change.** com_bih: a new leaf type BIH_TRIANGLE_REWOUND (appended to the enum) for those triangles; while
+`bih_dispwind` is set its trace and test use the render winding (vertices 1 and 2 swapped back), and the trace cache
+keys on the flag. pm_source.c sets bih_dispwind from `sourceversion >= 13`, like P764/P888/P1248's switches;
+PMSRC_VERSION 12 -> 13. The hl2 plugin builds the new type only for movement-tree triangles cidx re-wound and only
+when the exe's pm_sourceversion is 13 or more, so a new plugin on an older exe keeps BIH_TRIANGLE. Light/occluder
+trees and point contents are unchanged.
+
+**Verified.** Hidden rig, ahop_coast, local server, setpos at the ladder (-9773 8281 4975) facing it, +forward,
+viewpos every 0.5 s. Installed winding (hl2_dispwinding 1 at mover 12): 4975, 5091.8, 5220.2, 5264.2, then falls to
+4916.5. hl2_dispwinding 0: 4975 ... 5453.3, rests at the top, 5413. This build at mover 13 with the default
+hl2_dispwinding 1: the same climb to 5413. Independent review: REVIEW_RESULT.
+
+**Boundary.** Physics: times on maps whose routes touch a side==1 displacement are not comparable with a mover-12
+build. Recordings replay at their own pmsrcver, so older runs verify as before. Old clients on a mover-13 server
+mispredict there until updated. AG/HL1 profiles (sourceversion 1) keep the old winding. Maps with no displacements,
+or only side==0 ones, are unchanged.
+
 ## Patch 1629 - Linux: the QC temp-string table no longer climbs to its cap; error dialogs on Wayland
 
 **Cause.** metalgio (0.1.48, CachyOS/KDE Wayland) crashed twice with `menu.dat: temp-string table full at 16907264

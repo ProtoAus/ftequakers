@@ -645,6 +645,18 @@ static int BIH_TriangleBevels(mplane_t *out, const mplane_t *face, const float *
 	return count;
 }
 
+/*FTESurf Patch 1630: Patch 256 assumed a Source face's outward normal is (side ? -plane : +plane) and re-wound every
+  side==1 displacement for collision. side is only planenum's parity: planenum already names the face's outward plane
+  (mod_vbsp.c's own note at its plane read; every ahop_coast displacement face winds around +plane, whose side is
+  empty), so the re-wound third had its four-unit slab IN FRONT of the visible surface -- ahop_coast's ladder rock
+  pushed the climber off at z 5264, and seams stood 4-8 units proud. Mover 13 traces those triangles as rendered.*/
+static void BIH_RenderWinding(struct bihdata_s *d, index_t rw[3])
+{
+	rw[0] = d->tri.indexes[0];
+	rw[1] = d->tri.indexes[2];
+	rw[2] = d->tri.indexes[1];
+	d->tri.indexes = rw;
+}
 static void BIH_ClipToTriangle(struct bihtrace_s *fte_restrict tr, const struct bihdata_s *info)
 {
 	int i, j;
@@ -1374,6 +1386,16 @@ static void BIH_RecursiveTrace (struct bihtrace_s *fte_restrict tr, const struct
 		if (node->data.contents & tr->hitcontents)
 			BIH_ClipToTriangle(tr, &node->data);
 		return;
+	case BIH_TRIANGLE_REWOUND:	//FTESurf Patch 1630
+		if (node->data.contents & tr->hitcontents)
+		{
+			struct bihdata_s d = node->data;
+			index_t rw[3];
+			if (bih_dispwind)
+				BIH_RenderWinding(&d, rw);
+			BIH_ClipToTriangle(tr, &d);
+		}
+		return;
 	case BIH_MODEL:
 		{
 			trace_t sub;
@@ -1743,6 +1765,16 @@ static void BIH_RecursiveTest (struct bihtrace_s *fte_restrict tr, const struct 
 		if (node->data.contents & tr->hitcontents)
 			BIH_TestToTriangle(tr, &node->data);
 		return;
+	case BIH_TRIANGLE_REWOUND:	//FTESurf Patch 1630
+		if (node->data.contents & tr->hitcontents)
+		{
+			struct bihdata_s d = node->data;
+			index_t rw[3];
+			if (bih_dispwind)
+				BIH_RenderWinding(&d, rw);
+			BIH_TestToTriangle(tr, &d);
+		}
+		return;
 	case BIH_MODEL:
 		{	//lame...
 			trace_t sub;
@@ -1916,7 +1948,7 @@ static qboolean BIH_Trace(model_t *model, int forcehullnum, const framestate_t *
 	key.nodes = m->cnodes;
 	key.contents = contents;
 	key.forcehullnum = forcehullnum;
-	key.flags = (capsule?1u:0u) | (axis?2u:0u) | (bih_sourceclip?4u:0u) | (bih_phybrushes?8u:0u) | (bih_phyfix?16u:0u) | (bih_phypick?32u:0u);
+	key.flags = (capsule?1u:0u) | (axis?2u:0u) | (bih_sourceclip?4u:0u) | (bih_phybrushes?8u:0u) | (bih_phyfix?16u:0u) | (bih_phypick?32u:0u) | (bih_dispwind?64u:0u);
 	key.bevels = pm_trisoup_bevels.ival;
 	key.rotated = pm_rotatedboxhulls.ival;
 	VectorCopy(start, key.v+0);
@@ -2222,6 +2254,7 @@ restart:
 		}
 #endif
 	case BIH_TRIANGLE:
+	case BIH_TRIANGLE_REWOUND:	//FTESurf Patch 1630
 		return 0;
 	case BIH_MODEL:
 		{
@@ -2808,6 +2841,7 @@ static void BIH_EnumCollision_r (struct bihnode_s *node, const vec3_t mins, cons
 			en->brush (en->ctx, node->data.brush);
 		break;
 	case BIH_TRIANGLE:
+	case BIH_TRIANGLE_REWOUND:	//FTESurf Patch 1630: winding plays no part here
 		if (!en->tri)
 			break;
 		a = node->data.tri.xyz[node->data.tri.indexes[0]];
@@ -2902,6 +2936,7 @@ static qboolean BIH_HeldAirBoxEmpty_r(const struct bihnode_s *node,
 				return false;
 		return !BIH_BoundsIntersect(node->data.brush->absmins, node->data.brush->absmaxs, mins, maxs);
 	case BIH_TRIANGLE:
+	case BIH_TRIANGLE_REWOUND:	//FTESurf Patch 1630: winding plays no part here
 		if (!node->data.contents)
 			return true;
 		if (!node->data.tri.xyz || !node->data.tri.indexes)

@@ -8625,6 +8625,7 @@ static void VBSP_BuildBIHMain(void *ctx, void *unusedp, size_t unuseda, size_t u
 	size_t phypieces = 0;
 	model_t **sprpmiss;	//FTESurf Patch 1604, one slot per prop like phyprobe
 	size_t sprpmisses = 0;
+	qboolean vbsp_dispwindtype = cvarfuncs->GetFloat("pm_sourceversion") >= 13;	//FTESurf Patch 1630: the exe knows BIH_TRIANGLE_REWOUND
 
 	//FTESurf Patch 1501: every prop model, not only the solid ones below, starts loading now, while the map does,
 	//so r_mapready waits for them and warms their shaders; before, the rest loaded in the frame that first drew them,
@@ -8725,7 +8726,8 @@ static void VBSP_BuildBIHMain(void *ctx, void *unusedp, size_t unuseda, size_t u
 				Con_DPrintf("%s: %u of %u displacements re-wound outward for collision (%.1f%%)%s\n",
 					mod->name, (unsigned)flipped, (unsigned)prv->numdisplacements,
 					100.0*flipped/prv->numdisplacements,
-					hl2_dispwinding->ival ? "" : " -- DISABLED by hl2_dispwinding 0");
+					!hl2_dispwinding->ival ? " -- DISABLED by hl2_dispwinding 0" :
+					(cvarfuncs->GetFloat("pm_sourceversion") >= 13) ? "; the player traces them as rendered (mover 13, P1630)" : "");
 
 			/*
 			Patch 256: and WHERE.  An offline reimplementation of this loader got
@@ -8847,7 +8849,9 @@ static void VBSP_BuildBIHMain(void *ctx, void *unusedp, size_t unuseda, size_t u
 			index_t *v = d->cidx+j;	//FTESurf Patch 256: outward-wound, not the render copy
 			vec_t *v1 = d->xyz[v[0]], *v2 = d->xyz[v[1]], *v3 = d->xyz[v[2]];
 
-			l->type = BIH_TRIANGLE;
+			//FTESurf Patch 1630: re-wound triangles carry their own type, traced as rendered at mover 13+; only on an
+			//engine that knows the type (its pm_sourceversion >= 13), or an older exe would collide with nothing here.
+			l->type = (d->cidx != d->idx && vbsp_dispwindtype) ? BIH_TRIANGLE_REWOUND : BIH_TRIANGLE;
 			l->data.tri.xyz = d->xyz;
 			l->data.tri.indexes = v;
 

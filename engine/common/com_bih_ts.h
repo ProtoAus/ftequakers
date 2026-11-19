@@ -6,6 +6,7 @@
 typedef struct
 {
 	int sourceclip, phybrushes, phyfix, phypick;	//Patches 492, 764, 888, 1248
+	int dispwind;				//Patch 1630
 	int probe_plane;			/*0 face, 1 back slab, 2-4 in-plane edge, 5-13 bevel, 100-105 axial, -1 not a triangle*/
 	int probe_kind;				/*0 nothing, 1 BIH_TRIANGLE, 2 BIH_BRUSH, 3 BIH_PATCHBRUSH*/
 	index_t probe_idx[3];
@@ -24,6 +25,7 @@ void BIH_ThreadState(void *state);	//NULL: the main one
 #define bih_phybrushes		(bih_ts->phybrushes)
 #define bih_phyfix			(bih_ts->phyfix)
 #define bih_phypick			(bih_ts->phypick)
+#define bih_dispwind		(bih_ts->dispwind)
 #define bih_probe_plane		(bih_ts->probe_plane)
 #define bih_probe_kind		(bih_ts->probe_kind)
 #define bih_probe_idx		(bih_ts->probe_idx)
