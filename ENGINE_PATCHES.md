@@ -1,5 +1,75 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1622 - Real group targets and new Story/Event courses (surfd/data; no engine change)
+
+**Request.** Bronze should mean finishing; silver should be G4 and gold G2, not arbitrary WR multipliers.
+Add fuchnut, despair, centipedes, shape, remeanian, autumn_fix (the confirmed KSF build), ferros and highlands
+in Story; autosave, gary_barlow and Nightingale B4/B5 in Events. Lex will zone the two Nightingale bonuses.
+
+**Change.** All 73 occupied ordinary Story slots now award bronze for a full finish. The 71 courses with actual
+imported group cuts use static G4/G2 milliseconds; a strict-under cutoff adds 1 ms so the exact group boundary
+qualifies. surf_aircontrol/surf_rookie have no cuts and remain finish-only. Seven sparse ladders have equal G2/G4 cuts;
+no distinction is invented. `tools/story-groups.json` preserves aggregate source/count/cut provenance, with an
+explicit refresh tool and `tools/story-catalogue-audit.md`. Exact fixed-map identities are retained. Occupied
+slots, reserved Story59 and explicit gates stay put; eight empty Story slots and four empty Event slots are filled.
+Only mixed-tier chapter headings become neutral Chapter N. New Events are finish-only. `course zones` on the two
+Nightingale slots requires valid start/end regions for that bonus in the effective server zone file, preserving
+higher-priority overrides and failing closed on missing/malformed/unreadable data. Existing credit is independent
+of availability. The existing Story TTL/worker refresh picks up new zones; stale-while-revalidate is not instantaneous.
+
+**Verified.** Parent rerun: Story 54 tests, Groups 10, offline/source regression 4, all pass. Story tests cover
+snapshot/cutoff ties, exact requested slots, missing/only B4/both bonuses, override precedence, unreadable/malformed
+zones (including excessive JSON depth and overflowing integers), cache refresh and preserved credit. Worker QC
+compiles server/client/menu: zero warnings. Independent reviewer did not start: local `/usr/bin/node` lacks
+libsimdjson.so.36; parent reviewed the source and added the numeric/depth fail-closed tests. Not independent review.
+
+**Delivery/limits.** Catalogue and backend remain pending the next guarded surfd generation: deploy the parser/course
+gate code before publishing this catalogue. Do not run story_push against the old parser. B4/B5 still need Lex's
+zones; no bonus geometry or times were invented. Existing occupied Event route/duplicate issues and historical
+Halloween/fog semantics are explicitly audited but not silently rewritten or revoked. No native binary, schema,
+recording grammar or QC Build-number change. Delivery details: game `tools/p1619-1622-delivery.md`.
+
+## Patch 1621 - Stage completion belongs to editable Splits (QC only; no engine change)
+
+**Change.** The rounded fixed stage-time/rank pill becomes plain mono HUD text below Splits. It follows Splits
+position, size and visibility and contributes to the same hud_edit drag bounds/preview. The Splits editor exposes
+Stage result and Stage result duration; the result cvar still permits hiding the line separately. No timer/rank/
+recording semantics change. Worker client compile: zero warnings; offline source guards pass. Rendering, drag,
+font sizes, overlap and actual finish rank are owner checks in lextest; headless command checks are not pixels.
+
+**Delivery.** Local QC verification/install pending final parent build at this entry's commit; fleet/release not
+performed. No engine code or binary change. See game `tools/p1619-1622-delivery.md` for final artifact status.
+
+## Patch 1620 - Global-chat origin is the sender's map and course (QC only; no engine change)
+
+**Change.** `Social_RoomTag(entity)` freezes `[map S#]` or `[map B#]` in the posted message at send time, instead
+of the lobby number; spectating says so, and an unavailable timer course leaves the map only. The menu continues
+reading stored text, never reconstructing it from the receiving lobby/map. Older stored tags remain readable;
+wire fields, backend storage and the one-second gate are unchanged. Worker server compile: zero warnings.
+The new social transport regression passes. Full social suite: 86 pass, two existing configured-verifier errors
+under Flask 2.2.5/Python 3.14 (not claimed green).
+
+**Delivery.** Needs server QC in the lobbies for newly sent game-chat lines; no backend change is required for this
+feature. Fleet/release not performed. No engine code or binary change. Owner checks and final artifact status in
+game `lextest.md` and `tools/p1619-1622-delivery.md`.
+
+## Patch 1619 - Toggle-to-Normal boards, stable game selector and menu parity (QC only)
+
+**Change.** No optional mode selected visibly means Normal. A selected optional mode toggles off to Normal;
+other modes dim. P1590 exclusive Segmented/TAS semantics are preserved. The redundant Filter switch is removed:
+WOS/Momentum/KSF are direct source stops and the Fetch slot stays reserved so it cannot move them. The menu uses
+the same controls/order (rank/time/gap/player, optional date on wide panels), defaults to WOS and requests the
+current player's vicinity; a missing player still leaves the returned first page visible. Profile-specific seeks
+remain explicit. The map Download/Wrong build two-line label is vertically centered as a block.
+
+**Verified/limits.** Worker menu/client compiles: zero warnings; three new navigation seams pass. Parent rerun:
+11/12 navigation tests pass, the existing PF_CF4 assertion against untouched PF_CF5 fails. Shared native/legacy
+controls were inspected; real cursor interactions, narrow rendered layout and text centering remain owner checks.
+An agent's overbroad cl_scores comment replacement was caught by compilation and restored from exact recorded UI
+edits; subsequent compiles pass. Its failed log and recovery proof are retained, not treated as feature evidence.
+No independent reviewer result (Node runtime failure described above). No engine code/binary/QC Build change.
+Local final verification/install and fleet/release status: game `tools/p1619-1622-delivery.md`.
+
 ## Patch 1618 - Map downloads via the Cloudflare-cached maps.proto.bar; no Pi windows after mirror runs (r2gateway only)
 
 **Problem.** Players reported 5-10 minute map downloads (Markbeaton54, 18 Nov: "32 kbps peaks at 1mbs"). The Pi's nginx
