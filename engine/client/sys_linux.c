@@ -941,6 +941,10 @@ void Sys_Error (const char *error, ...)
 	{	//if we're a graphical x11 program then its quite likely that we have no stdout with the user never knowing why the game just disappeared
 		//the crash could have come from malloc failures, this means we can't really depend upon xlib
 		//but we can start some other program to display the message.
+		//FTESurf Patch 1629: xmessage needs X core fonts, which Wayland desktops lack ("Unable to load any usable ISO8859
+		//font"), so the window just vanished. Each exec returns only when that program is not there.
+		execlp("zenity", "zenity", "--error", "--no-wrap", "--no-markup", "--text", string, (char*)NULL);
+		execlp("kdialog", "kdialog", "--error", string, (char*)NULL);
 		execl("/usr/bin/xmessage", "xmessage", string, NULL);
 	}
 	exit (1);

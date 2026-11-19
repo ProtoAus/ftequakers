@@ -1,5 +1,31 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1629 - Linux: the QC temp-string table no longer climbs to its cap; error dialogs on Wayland
+
+**Cause.** metalgio (0.1.48, CachyOS/KDE Wayland) crashed twice with `menu.dat: temp-string table full at 16907264
+slots, 16907264 live`. PR_RunGC starts a collection only when live temps and `nexttempstring` are both past half the
+table, and the allocator searched on from wherever it stopped. After a collection freed the low slots the pointer
+wrapped low, so no collection could start until it climbed past half again, by which time the table was nearly full
+of garbage and doubled (`*2+1024`) each cycle. Windows escapes through P1481's budget trigger; Linux gained it only
+with P1605's userfaultfd write-watch (kernel 6.7+, no seccomp sandbox), so 0.1.48 had none and older kernels and
+sandboxes still don't. The crash dialog then failed as well: Sys_Error exec'd xmessage, which needs X core fonts
+("Unable to load any usable ISO8859 font"), so the window just vanished.
+
+**Change.** qclib initlib.c: after a collection frees anything (threaded finish and the same-thread sweep),
+`nexttempstring = 0`, so allocation refills the freed low slots first and the pointer tracks occupancy. sys_linux.c:
+the fatal-error dialog tries zenity, then kdialog, then xmessage.
+
+**Verified.** The crash investigation's simulator of the 1588 rules (scratch/crash/gcsim.py, 4000 temps a frame,
+3-frame collections, 2000 kept): 131072 -> 527360 -> 1055744 -> 2112512 slots in 1500 frames without the reset,
+131072 throughout with it. In-game, menu idling 3 minutes at uncapped fps with `pr_gc_writewatch 0` (the Linux
+fallback) on two diagnostic clients printing growth from 131k (PR_TEMPS_WARN lowered, one with the reset removed): without the
+reset the table grew 263168 -> 527360 -> 1055744 -> 2112512 -> 4226048 -> 8453120 -> 16907264 slots in 2 m 14 s, the
+step before the cap metalgio hit; with it, two growths in the boot burst (to 527360) and none in the next 3 minutes. The dialog order was read, not driven
+(it runs only on a fatal error).
+
+**Boundary.** Same collector, same marking; only where the next temp goes. A stale temp index held where the scan
+cannot see it (the existing hash_add hazard) reads new text sooner than before. Server VMs take the same change.
+
 ## Patch 1628 - AG/HL1 crouch: no second dip when the duck finishes (view only)
 
 **Cause.** Lex: "AG/crouching... you follow it down, and then when you finally make it all the way down, the animation

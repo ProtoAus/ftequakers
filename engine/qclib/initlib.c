@@ -1873,6 +1873,8 @@ static void PR_QCGC_Finish(progfuncs_t *progfuncs)
 	}
 	f->n = cleared;
 	prinst.livetemps -= cleared;
+	if (cleared)	//FTESurf Patch 1629: see the same-thread sweep below
+		prinst.nexttempstring = 0;
 	if (cleared)
 	{
 		f->busy = !f->oneoff;
@@ -2237,6 +2239,12 @@ void PR_RunGC (progfuncs_t *progfuncs)
 				PR_QCGC_MarkWords(marked, prinst.addressablehunk + ofs[i], len[i], prinst.maxtempstrings);
 			swept = PR_QCGC_Sweep(progfuncs, marked, prinst.tempstrings, prinst.maxtempstrings);
 			prinst.livetemps -= swept;
+			/*FTESurf Patch 1629: refill the freed low slots first. The allocator searched on from wherever it stopped,
+			  and PR_RunGC starts a collection only once that pointer is past half the table -- after a collection the
+			  pointer wrapped low and the table filled with garbage first, doubling each cycle on Linux without P1481's
+			  budget trigger (no userfaultfd): metalgio's menu.dat hit 16.9M slots, 0.1.48. Low reuse makes it track use.*/
+			if (swept)
+				prinst.nexttempstring = 0;
 
 			//if over half the (max)strings are still live, just increase the max so we are not spamming collections
 			if (prinst.livetemps >= prinst.maxtempstrings/2)
