@@ -1,5 +1,29 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1634 - Tournament lobbies (off by default): the menu signs tournament actions
+
+**Cause.** Lex asked for tournaments run like an AoE2/Worms game lobby: everyone joins one room from the main menu,
+the host sets the rules where everyone can see them, the group drafts maps, and Start sends everybody to one server.
+The main-menu room acts through signed requests (the friends key, as Friends and chat do), and CL_FriendsSign had no
+operation for it, so the menu could only answer "update the native game client".
+
+**Change.** cl_receipt.c: CL_FriendsSign accepts `op tournament` whose `who` is the 64-hex SHA256 of the exact form
+payload the backend then verifies, and only while disconnected: unlike P1009's ops not even in a loopback game, so
+a server driving the menu (stufftext, or text left in the buffer after a disconnect) cannot obtain one. The QuakeC, backend and tools are FTESurf's
+(main-menu room, in-game F6 panel, surfd tournament modules, tools/tournament_playtest.py); every part is off by
+default: tournament_enable 0 on servers, SURFD_TOURNAMENTS=0 in surfd, and the menu's TOURNAMENT tab appears only
+where the service reports tournaments enabled (or ui_tournament_tab 1).
+
+**Verified.** Engine client builds (linux64 m-rel) with no new warning. A local native fixture (two signed clients,
+dedicated server, surfd on loopback; tools/tournament_playtest.py --smoke --tour) passes create, seat/accept, a live
+settings edit, room chat both ways, ban/pick, ready, start and both clients bound on the live server, at 1920x1200,
+1024x768 and 800x600. surfd tournament suites: 60 tests. Launch is handed out only after the node reports the round
+map loaded: a client still loading the waiting map when the node changed level hung on "Changing map" (server log
+"SV_Begin_f from different level"), seen once in the fixture before the fix.
+
+**Boundary.** No live rollout: the lobbies, surfd and the menu tab stay off until the backend enables tournaments
+and nodes are qualified. Free beta only; no billing.
+
 ## Patch 1633 - Linux: the window names itself (taskbar icon); web downloads land in downloads/
 
 **Cause.** Lex: "on linux the game doesn't have an icon in the taskbar" (labwc here; a player on KDE Plasma 6 too). The

@@ -565,8 +565,8 @@ qboolean CL_Receipt_AcctSign(const char *nonce, int kind, qboolean keyed, char *
 	return true;
 }
 
-/* Fixed Friends/menu operations: never account/link consent, receipts or lobby
-   capabilities. Message targets include the exact text SHA256. MENU VM only. */
+/* Fixed Friends/menu operations: never account/link consent, receipts or bearer
+   capabilities. Message/tournament targets bind exact payload SHA256. MENU VM only. */
 qboolean CL_FriendsSign(const char *nonce, const char *op, const char *who, char *out, size_t outlen)
 {
 	char msg[256], pubhex[65], sighex[129];
@@ -596,6 +596,16 @@ qboolean CL_FriendsSign(const char *nonce, const char *op, const char *who, char
 	else if (!strcmp(op, "join"))
 	{
 		if (strlen(who) != 8) return false;
+		for (p = who; *p; p++)
+			if (!((*p >= '0' && *p <= '9') || (*p >= 'a' && *p <= 'f')))
+				return false;
+	}
+	else if (!strcmp(op, "tournament"))
+	{
+		// who is the SHA256 of the exact form payload the backend verifies. The menu
+		// acts only while disconnected, so unlike P1009's ops a loopback game is refused too.
+		if (cls.state != ca_disconnected || CL_TryingToConnect()) return false;
+		if (strlen(who) != 64) return false;
 		for (p = who; *p; p++)
 			if (!((*p >= '0' && *p <= '9') || (*p >= 'a' && *p <= 'f')))
 				return false;
