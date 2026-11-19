@@ -1,5 +1,32 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1623 - PowerShell build/deployment tooling on Linux (host tools only)
+
+**Cause/fix.** The script selected only Windows compiler names/paths, and the legacy deployer used a C: task
+root. Added native Unix QC discovery/sibling defaults/no implicit second install; Windows defaults remain.
+Windows-targeting native Engine/Full flags refuse on Unix (use existing Linux wrapper). Installed official
+checksum-verified portable PowerShell7.7.0 per-user on Lex's workstation, no system/SSH/sudo-policy change.
+The Pi does not need PowerShell. Unix legacy apply requires an ordinary explicit owned WorkRoot; its ancestors/
+owner marker and mount mappings fail closed, including hidden-origin subtree aliases. Full staging command
+quotes parent/stage/ownership text with POSIX apostrophe escaping. PlanOnly remains inert. The entire official
+Pi block's45statements are unchanged; this is not a new deployment framework or a qualified caller substitute.
+
+**Verified.** Focused Linux7/7; existing offline deployer26/26. Actual synthetic compiler/NoDeploy controls,
+quoted/injected shell payloads, ancestor sentinel, visible/hidden mount aliases and legitimate Btrfs subvolumes
+act. A reused nested collector cache initially failed24assertions; fixed its maintained caller to existing
+per-test TemporaryDirectory with freshness assertion, assertions unchanged. Same outer output then passes,
+old2,201-file failed cohort fingerprint unchanged. Independent review found/fixed two P1s; final verdict no
+issues/merge OK, not deployment approval. Real PowerShell NoDeploy compiles all3VMs with zero warnings and
+matches the canonical Linux-wrapper bytes; installed files unchanged. Actual PowerShell SSH UTF8 round-trip
+passes (remote print only). Real Windows/-Run and kernel bind-mount operations not exercised.
+
+**Limits/delivery.** Source-bound fleet/backend qualification and normal owner Root authentication remain.
+Earlier P1619–P1622 missing-shell/general-sudo conclusion was overbroad: shell now installed, Pi only needs its
+normal Linux tools, and per-command sudo differs from unrestricted root. No public fleet/backend/catalogue,
+updater/release, permission change, native code/binary, recording/schema, engine pin/tag or QC Build change.
+Compile-byte agreement is not gameplay/compiler/runtime certification. Record: game tools/p1623-linux-deploy.md;
+workspace SETUP-NOTES.md. Useful failed logs, controls and reviews retained privately, not relabelled successes.
+
 ## Patch 1622 - Real group targets and new Story/Event courses (surfd/data; no engine change)
 
 **Request.** Bronze should mean finishing; silver should be G4 and gold G2, not arbitrary WR multipliers.
