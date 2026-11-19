@@ -489,6 +489,7 @@ typedef struct QCC_def_s
 	pbool isparameter:1;		//its an engine parameter (thus preinitialised).
 	pbool addressedwarned:1;	//warned about it once, back off now.
 	pbool autoderef:1;			//like C++'s int &foo; - probably local pointers to alloca memory.
+	pbool builtinchecked:1;		//hidden checkbuiltin alias: mutes deprecation only in this scope.
 	const char *deprecated;		//reason its deprecated (or empty for no reason given)
 
 	int	fromstatement;		//statement that it is valid from.

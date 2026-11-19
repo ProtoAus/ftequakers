@@ -1,5 +1,26 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1624 - FTEQCC checked builtins and literal bounds (compiler only)
+
+**Cause/fix.** A checked builtin's internal same-name alias was inserted into the local name table
+without a runtime value; a later source call could resolve that alias instead of the declared builtin.
+Keep the call-only alias non-referable. Track its scoped deprecation exemption separately, respecting
+expired subscopes, so checked calls remain accepted and unchecked calls still warn/error normally.
+The generic jump optimizer also interpreted BOUNDCHECK's literal NULL-typed bounds as branch offsets;
+exclude that instruction in all three live generic control-flow walkers. Bounds enforcement stays on.
+
+**Validation.** Reproducers retain the actual original malformed outputs and first diagnostic-only
+regression. The read-only full32 tool distinguishes the original40-to11 bound mutation and missing
+real builtin call from corrected outputs. The small compiler controls cover checked/unchecked calls,
+separate functions, expired scopes and F326 warnings-as-errors. Exact command/results and independent
+review are recorded in tools/p1624-qcc.md. No new builtin, protocol, recorder/writer/reader or game rule
+is added by this commit. Native tournament/menu-signing experiments are explicitly excluded.
+
+**Boundary.** Source/compiler prerequisite only, not a native-engine or production gameplay release.
+No shared compiler/install copy, fleet stage, upload, restart, pin/tag or native Build change here.
+A rollout must build and identify its own pinned compiler, qualify the resulting progs/cohort and
+retain all existing recorder/reader/content/deployment gates; matching old malformed bytes is not proof.
+
 ## Patch 1623 - PowerShell build/deployment tooling on Linux (host tools only)
 
 **Cause/fix.** The script selected only Windows compiler names/paths, and the legacy deployer used a C: task

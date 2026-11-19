@@ -9011,7 +9011,10 @@ static QCC_sref_t QCC_PR_ParseFunctionCall (QCC_ref_t *funcref)	//warning, the f
 			{
 				e.ofs = param[0]->base.ofs;
 				e.cast = param[0]->cast;
-				e.sym = QCC_PR_DummyDef(e.cast, param[0]->base.sym->name, pr_scope, 0, param[0]->base.sym, 0, true, GDF_ALIAS|GDF_STRIP);
+				// This call-only alias must not shadow the global builtin in
+				// subsequent source expressions. It is not an initialized local.
+				e.sym = QCC_PR_DummyDef(e.cast, param[0]->base.sym->name, pr_scope, 0, param[0]->base.sym, 0, false, GDF_ALIAS|GDF_STRIP);
+				e.sym->builtinchecked = true;
 				e = QCC_PR_GenerateFunctionCallSref(newself, func, &e, 1);
 			}
 			else
@@ -16354,6 +16357,10 @@ static pbool QCC_FuncJumpsTo(int first, int last, int statement)
 	int st;
 	for (st = first; st < last; st++)
 	{
+		// BOUNDCHECK's NULL-typed b/c operands are immediate bounds,
+		// not relative branches. Never use them as reachability edges.
+		if (statements[st].op == OP_BOUNDCHECK)
+			continue;
 		if (pr_opcodes[statements[st].op].type_a == NULL)
 		{
 			if (st + statements[st].a.jumpofs == statement)
@@ -16508,6 +16515,10 @@ static void QCC_CompoundJumps(int first, int last)
 	int infloop;
 	for (st = first; st < last; st++)
 	{
+		// NULL operand types also describe BOUNDCHECK's literal bounds.
+		// Treating them as jump offsets can silently rewrite an array size.
+		if (statements[st].op == OP_BOUNDCHECK)
+			continue;
 		if (pr_opcodes[statements[st].op].type_a == NULL)
 		{
 			statement = st + statements[st].a.jumpofs;
@@ -16686,6 +16697,8 @@ int QCC_AStatementJumpsTo(int targ, int first, int last)
 	int st;
 	for (st = first; st < last; st++)
 	{
+		if (statements[st].op == OP_BOUNDCHECK)
+			continue;
 		if (pr_opcodes[statements[st].op].type_a == NULL)
 		{
 			if (st + statements[st].a.jumpofs == targ && statements[st].a.ofs)
@@ -18864,10 +18877,21 @@ QCC_sref_t QCC_PR_GetSRef (QCC_type_t *type, const char *name, QCC_function_t *s
 		sr.ofs = 0;
 		if (def->deprecated)
 		{
-			if (*def->deprecated)	//we have a reason for it
-				QCC_PR_ParseWarning(pr_ignoredeprecation?WARN_MUTEDEPRECATEDVARIABLE:WARN_DEPRECATEDVARIABLE, "Variable \"%s\" is deprecated: %s", def->name, def->deprecated);
-			else		//we don't have any reason for it.
-				QCC_PR_ParseWarning(pr_ignoredeprecation?WARN_MUTEDEPRECATEDVARIABLE:WARN_DEPRECATEDVARIABLE, "Variable \"%s\" is deprecated", def->name);
+			QCC_def_t *checked = NULL;
+			// Keep checkbuiltin's warning suppression, but never resolve a
+			// subsequent call through its uninitialized local alias. Scope
+			// identity prevents this exemption leaking into another function.
+			if (scope)
+				for (checked = pr.local_head.nextlocal; checked; checked = checked->nextlocal)
+					if (checked->builtinchecked && !checked->subscoped_away && checked->scope == scope && checked->symbolheader == def->symbolheader)
+						break;
+			if (!checked)
+			{
+				if (*def->deprecated)	//we have a reason for it
+					QCC_PR_ParseWarning(pr_ignoredeprecation?WARN_MUTEDEPRECATEDVARIABLE:WARN_DEPRECATEDVARIABLE, "Variable \"%s\" is deprecated: %s", def->name, def->deprecated);
+				else		//we don't have any reason for it.
+					QCC_PR_ParseWarning(pr_ignoredeprecation?WARN_MUTEDEPRECATEDVARIABLE:WARN_DEPRECATEDVARIABLE, "Variable \"%s\" is deprecated", def->name);
+			}
 		}
 		return sr;
 	}
