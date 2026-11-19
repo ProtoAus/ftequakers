@@ -724,6 +724,17 @@ static void CL_DisenqueDownload(char *filename)
 }
 
 #ifdef WEBCLIENT
+//FTESurf Patch 1633: true for the one shape a web download keeps writing into the gamedir, a top-level
+//maps/<name>.bsp: downloadmap's forced re-get must shadow a wrong build in a lower mount (pr_menu.c,
+//PF_m_downloadmap), and $gamedir/downloads/ is mounted below everything (fs.c). The rest -- a GoldSrc
+//map's wads, sounds and models -- goes to downloads/, as DL_Begun sends netchan downloads.
+static qboolean CL_WebDownloadToGamedir(const char *localname)
+{
+	if (Q_strncasecmp(localname, "maps/", 5) || strchr(localname+5, '/') || strchr(localname+5, '\\'))
+		return false;
+	return !Q_strcasecmp(COM_GetFileExtension(localname+5, NULL), ".bsp");
+}
+
 static void CL_WebDownloadFinished(struct dl_download *dl)
 {
 	if (dl->status == DL_FAILED)
@@ -827,6 +838,8 @@ static void CL_SendDownloadStartRequest(downloadlist_t *pending)
 				if (!strncmp(localname, "package/", 8))
 					Q_strncpyz(wdl->localname, localname+8, sizeof(wdl->localname));
 			}
+			else if (!CL_WebDownloadToGamedir(localname))
+				wdl->fsroot = FS_GAMEDOWNLOADS;	//FTESurf Patch 1633: the .tmp and its rename too; both read wdl->fsroot
 			if (!(flags & DLLF_TEMPORARY))
 			{
 				if (flags & (DLLF_REQUIRED|DLLF_VERBOSE))	//FTESurf Patch 1026: an optional file quietly

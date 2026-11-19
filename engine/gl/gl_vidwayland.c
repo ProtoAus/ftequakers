@@ -964,6 +964,7 @@ static inline void xdg_surface_ack_configure(struct xdg_surface *xdg_surface, ui
 #define XDG_TOPLEVEL_SET_MINIMIZED 13
 struct xdg_toplevel_listener;
 static inline void xdg_toplevel_set_title(struct xdg_toplevel *xdg_toplevel, const char *title)		{ pwl_proxy_marshal((struct wl_proxy *) xdg_toplevel, XDG_TOPLEVEL_SET_TITLE, title); }
+static inline void xdg_toplevel_set_app_id(struct xdg_toplevel *xdg_toplevel, const char *app_id)		{ pwl_proxy_marshal((struct wl_proxy *) xdg_toplevel, XDG_TOPLEVEL_SET_APP_ID, app_id); }
 static inline int xdg_toplevel_add_listener(struct xdg_toplevel *xdg_toplevel, const struct xdg_toplevel_listener *listener, void *data)		{ return pwl_proxy_add_listener((struct wl_proxy *) xdg_toplevel, (void (**)(void)) listener, data); }
 static inline void xdg_toplevel_set_min_size(struct xdg_toplevel *xdg_toplevel, int32_t width, int32_t height)		{ pwl_proxy_marshal((struct wl_proxy *) xdg_toplevel, XDG_TOPLEVEL_SET_MIN_SIZE, width, height); }
 static inline void xdg_toplevel_move(struct xdg_toplevel *xdg_toplevel, struct wl_seat *seat, uint32_t serial)		{ pwl_proxy_marshal((struct wl_proxy *) xdg_toplevel, XDG_TOPLEVEL_MOVE, seat, serial); }
@@ -2501,6 +2502,9 @@ static qboolean WL_Init (rendererstate_t *info, unsigned char *palette)
 		if (!w.xdg_toplevel)
 			return false;
 		xdg_toplevel_add_listener(w.xdg_toplevel, &myxdg_toplevel_listener, &w);
+		//FTESurf Patch 1633: taskbars find the icon through the .desktop file named by app_id (ftesurf.sh writes
+		//worldofsurf.desktop); unset, labwc and KWin show a generic one. Set before the first commit.
+		xdg_toplevel_set_app_id(w.xdg_toplevel, "worldofsurf");
 		xdg_toplevel_set_min_size(w.xdg_toplevel, 320, 200);
 	}
 #endif

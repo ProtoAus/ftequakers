@@ -1,5 +1,28 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1633 - Linux: the window names itself (taskbar icon); web downloads land in downloads/
+
+**Cause.** Lex: "on linux the game doesn't have an icon in the taskbar" (labwc here; a player on KDE Plasma 6 too). The
+Wayland toplevel had no app_id and the X11 window no WM_CLASS, so no taskbar could tie the window to a .desktop file
+or icon, and X11's window icon came only from a gamedir-root icon.png that the update allowlist refuses. Separately,
+for "GoldSrc maps... don't install sounds and textures to the ftesurf folders": netchan downloads already go to
+ftesurf/downloads/ (mounted lowest), but a web (sv_dlURL) download kept FS_GAMEONLY from DL_Create, so a server's
+sounds, models and wads would have landed loose in ftesurf/.
+
+**Change.** gl_vidwayland.c: xdg_toplevel.set_app_id("worldofsurf") right after get_toplevel. gl_vidlinuxglx.c:
+WM_CLASS worldofsurf / WorldofSurf before mapping; the window icon tries the shipped gfx/icons/worldofsurf-256.png
+first. cl_parse.c: every web download except a top-level maps/<name>.bsp (downloadmap's forced re-get must shadow a
+lower mount) goes to FS_GAMEDOWNLOADS, its .tmp and rename included. The game side (ftesurf.sh writing
+~/.local/share/applications/worldofsurf.desktop and hicolor icons; the icons in the ship set) is in FTESurf.
+
+**Verified.** Nested headless labwc, WAYLAND_DEBUG=1: `xdg_toplevel.set_app_id("worldofsurf")` before the first
+commit; labwc maps `identifier=worldofsurf`. Xwayland: xprop `WM_CLASS "worldofsurf", "WorldofSurf"` and a 256x256
+_NET_WM_ICON (FTE's built-in one is 64x64). The download predicate, cut out and compiled against
+COM_GetFileExtension: maps/x.bsp to ftesurf/; sound/, models/, textures/*.wad, maps/x.lit, maps/sub/x.bsp to
+downloads/. Not run: a live sv_dlURL download, or a real KDE/waybar taskbar.
+
+**Boundary.** Zone files are fetched by QC into maps/zones/dl/ and unaffected; admin `download <url>` keeps its path.
+
 ## Patch 1630 - mover 13: Patch 256's re-wound displacements collide on their visible side
 
 **Cause.** Lex: "windings? of displacements cause the player to fall off the ladder when climbing ahop_coast since the
