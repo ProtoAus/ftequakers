@@ -650,8 +650,8 @@ static int BIH_TriangleBevels(mplane_t *out, const mplane_t *face, const float *
   (mod_vbsp.c's own note at its plane read; every ahop_coast displacement face winds around +plane, whose side is
   empty), so the re-wound third had its four-unit slab IN FRONT of the visible surface -- ahop_coast's ladder rock
   pushed the climber off at z 5264, and seams stood 4-8 units proud. Every trace now meets those triangles as rendered;
-  only a mover below 13 (a replayed old recording) and the AG mover set bih_oldwind for Patch 256's winding (review:
-  with the old winding outside the mover, QC traces found a mover-13 player standing in the old slab).*/
+  only a Source mover below 13 (a replayed old recording) sets bih_oldwind for Patch 256's winding (reviews: with the
+  old winding outside the mover, QC traces found the player standing inside the old slab; AG, unranked, follows QC).*/
 static void BIH_RenderWinding(struct bihdata_s *d, index_t rw[3])
 {
 	rw[0] = d->tri.indexes[0];

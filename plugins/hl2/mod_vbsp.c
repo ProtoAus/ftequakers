@@ -8849,8 +8849,8 @@ static void VBSP_BuildBIHMain(void *ctx, void *unusedp, size_t unuseda, size_t u
 			index_t *v = d->cidx+j;	//FTESurf Patch 256: outward-wound, not the render copy
 			vec_t *v1 = d->xyz[v[0]], *v2 = d->xyz[v[1]], *v3 = d->xyz[v[2]];
 
-			//FTESurf Patch 1630: re-wound triangles carry their own type, traced as rendered except inside a mover below 13
-			//or AG; only on an exe that knows the type (pm_sourceversion >= 13), or an older one would collide with nothing.
+			//FTESurf Patch 1630: re-wound triangles carry their own type, traced as rendered except inside a Source mover
+			//below 13; only on an exe that knows the type (pm_sourceversion >= 13), or an older one would collide with nothing.
 			l->type = (d->cidx != d->idx && vbsp_dispwindtype) ? BIH_TRIANGLE_REWOUND : BIH_TRIANGLE;
 			l->data.tri.xyz = d->xyz;
 			l->data.tri.indexes = v;

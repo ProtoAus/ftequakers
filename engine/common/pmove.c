@@ -19,7 +19,6 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 */
 
 #include "quakedef.h"
-#include "com_bih_ts.h"	//FTESurf Patch 1630: bih_oldwind round the AG mover
 
 movevars_t		movevars;
 playermove_t	pmove;
@@ -1545,9 +1544,7 @@ void PM_PlayerMove (float gamespeed)
 	{
 		if (!PMAg_ContextValid(&movevars))
 			Host_Error("Refusing movement: unbound or mismatched AG context");
-		bih_oldwind = 1;	//FTESurf Patch 1630: AG has no mover-13 gate; it keeps Patch 256's displacement winding
 		PMAg_PlayerMove(gamespeed);
-		bih_oldwind = 0;
 		return;
 	}
 	if (movevars.physicsmode == PHYSMODE_SOURCE)

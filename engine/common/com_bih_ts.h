@@ -16,7 +16,7 @@ typedef struct
 	unsigned int probe_contents;
 	unsigned int probe_seq;
 	char probe_surf[32];
-	int oldwind;				//Patch 1630: 1 = Patch 256's winding (movers below 13, AG); last, so positional initializers keep their fields
+	int oldwind;				//Patch 1630: 1 = Patch 256's winding (Source movers below 13); last, so positional initializers keep their fields
 } bih_tstate_t;
 extern FTE_TLS bih_tstate_t *bih_ts;
 size_t BIH_ThreadStateSize(void);

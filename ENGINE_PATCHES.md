@@ -39,8 +39,7 @@ side the player stood on; Patch 258 then found the snag it was after elsewhere.
 **Change.** com_bih: a new leaf type BIH_TRIANGLE_REWOUND (appended to the enum) for those triangles, traced and
 tested in the render winding (vertices 1 and 2 swapped back) unless `bih_oldwind` is set; the trace cache keys on the
 flag. pm_source.c sets bih_oldwind for `sourceversion < 13` (a replayed old recording) like P764/P888/P1248's
-switches, and pmove.c sets it round the AG mover, which has no mover-13 gate; every other trace (QC, entity physics)
-meets the visible surface. PMSRC_VERSION 12 -> 13, and SV_PMSrcVer accepts 13. The hl2 plugin builds the new type only
+switches; every other trace (QC, entity physics, the AG/HL1 movers) meets the visible surface. PMSRC_VERSION 12 -> 13, and SV_PMSrcVer accepts 13. The hl2 plugin builds the new type only
 for movement-tree triangles cidx re-wound, and only when the exe's pm_sourceversion is 13 or more, so a new plugin on
 an older exe keeps BIH_TRIANGLE. Light/occluder trees and point contents are unchanged.
 
@@ -52,12 +51,15 @@ replay). Real defects, all fixed: SV_PMSrcVer stopped at 12, so a mover-13 serve
 pmsrcver=2 and pm_verify replayed honest runs at mover 2 (as P1248's review found); a field inserted mid-struct
 shifted bih_main_ts's positional initializer, starting the main thread with the flag on and probe_plane 0; and with
 the old winding outside the mover, QC traces (practice return, start marks) found a mover-13 player inside the old
-slab -- hence render winding by default and the old one only inside old movers and AG. Serverinfo then reads
+slab -- hence render winding by default and the old one only inside old Source movers. A re-review of those fixes
+found nothing that could rank, corrupt or crash; its one finding (the AG mover kept the old slab while QC met the
+visible surface, so a teleport could leave an AG player stuck) is why AG follows QC. Serverinfo reads
 pm_sourceversion 13.
 
 **Boundary.** Physics: times on maps whose routes touch a side==1 displacement are not comparable with a mover-12
 build. Recordings replay at their own pmsrcver, so older runs verify as before. Old clients on a mover-13 server
-mispredict there until updated. AG/HL1 profiles keep the old winding inside their mover. The hl2 plugin and the exe
+mispredict there until updated. AG/HL1 profiles (unranked) collide as rendered too, with no fence of their own: an
+older AG recording can replay differently where it touched such a displacement. The hl2 plugin and the exe
 must ship together: an old plugin on this exe advertises 13 and collides like 12. A mover bump is one-way for the
 fleet (a mover-12 verifier refuses v13 recordings), so the lobby engines move with it. Maps with no displacements,
 or only side==0 ones, are unchanged.

@@ -73,7 +73,7 @@ enum bihtype_e
 	BIH_TRIANGLE,
 	BIH_MODEL,
 	BIH_TRIANGLE_REWOUND,	//FTESurf Patch 1630: a displacement triangle Patch 256 re-wound; traced in its render winding
-							//unless bih_oldwind (movers below 13, AG). Appended: the hl2 plugin bakes these values.
+							//unless bih_oldwind (Source movers below 13). Appended: the hl2 plugin bakes these values.
 };
 struct bihdata_s
 {
