@@ -5353,6 +5353,8 @@ static void BE_SubmitMeshesSortList(batch_t *sortlist)
 
 		if (batch->shader->flags & SHADER_SKY)
 		{
+			if (r_voidview && !r_refdef.recurse)
+				continue;	//FTESurf Patch 1627: no sky in the void overview
 			if (shaderstate.mode == BEM_STANDARD || shaderstate.mode == BEM_DEPTHDARK)
 			{
 				if (R_DrawSkyChain (batch))

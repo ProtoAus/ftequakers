@@ -7615,6 +7615,11 @@ static void GLBE_WaterViewsBegin(batch_t **worldbatches)
 	wv->helddone = 0;
 	if (r_refdef.playerview && r_refdef.playerview >= cl.playerview && r_refdef.playerview < cl.playerview + MAX_SPLITS)
 		seat = r_refdef.playerview - cl.playerview;
+	if (r_voidview && !level)
+	{	//FTESurf Patch 1627: the void overview draws no reflections or refractions (they rendered the whole map again)
+		be_waterlastvalid[seat] = false;
+		return;
+	}
 	//nothing here can capture: past the recursion limit, or inside a water capture (Patch 864). A view
 	//without the world (the avatar card's renderscene) leaves the seat's hold alone.
 	if (!r_waterviews.ival || !worldbatches || level >= r_portalrecursion.ival || be_watercapture)
@@ -8851,6 +8856,8 @@ static void GLBE_SubmitMeshesSortRange(batch_t *sortlist, batch_t *end)
 				continue;
 		if (bs->flags & SHADER_SKY)
 		{
+			if (r_voidview && !r_refdef.recurse)
+				continue;	//FTESurf Patch 1627 (Lex, 20 Nov): no sky in the void overview; R_Clear has cleared it
 			if (shaderstate.mode == BEM_STANDARD || shaderstate.mode == BEM_DEPTHDARK)// || shaderstate.mode == BEM_WIREFRAME)
 			{
 				float il = shaderstate.identitylighting;	//this stuff sucks!

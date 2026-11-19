@@ -2287,8 +2287,9 @@ void R_Clear (qboolean fbo)
 		(r_refdef.playerview->pmovetype == PM_SPECTATOR || r_refdef.playerview->pmovetype == PM_OLD_SPECTATOR) &&
 		w && w->loadstate == MLS_LOADED && w->funcs.InfoForPoint)
 	{
+		extern qboolean Surf_VoidNear(const vec3_t org);
 		w->funcs.InfoForPoint(w, r_refdef.vieworg, &area, &cluster, &contents);
-		clearoverview = (cluster == -1);
+		clearoverview = (cluster == -1) && !Surf_VoidNear(r_refdef.vieworg);	//FTESurf Patch 1627: as Surf_SetupFrame decides
 	}
 	/*tbh, this entire function should be in the backend*/
 	{

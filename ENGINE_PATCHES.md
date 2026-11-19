@@ -1,5 +1,29 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1627 - noclip through walls keeps the view; no sky in the void; a stock sky when the default is missing
+
+**Cause.** Lex: "noclipping into brushes, the transition causes a massive fps spike on all maps... when in void, stop
+rendering the skybox." With `r_voidvis 1`, the first frame the noclipping eye is in solid switches to the whole-world
+overview (all-visible PVS, every displacement, water captures), so flying through a 16-unit wall drew one to three
+whole-map frames. The overview also drew the 2D skybox, every sky face being "visible". Separately,
+surf_colin_blaster_69000 names no sky and r_skybox_default (sky_cape_hill) exists only as loose files in Momentum's
+folder: without them the six faces are r_blackimage and the sky is black (metalgio's log, and here).
+
+**Change.** r_surf.c: the overview waits until the eye is more than `r_voidvis_margin` (512, 0 = old behaviour) from
+where it last saw open space; nearer, Patch 138's last cluster stays. Surf_WorldOnlyView (CSQC) and R_Clear read the
+same test (Surf_VoidNear). gl_backend.c / vk_backend.c: no sky batches in the primary void overview;
+GLBE_WaterViewsBegin captures nothing there. gl_warp.c: when the sky in use has no face, sky_day01_01 (in HL2 and
+Momentum's mount/hl2_dir.vpk) is drawn; `sky` says so.
+
+**Verified.** Hidden rig, surf_colin_blaster_69000, developer 1: stepping the noclip eye down into the floor in 32-unit
+steps, the installed exe logged `cluster -1 ... VOID VIEW` on entering solid; this build `cluster -1 ... off` (last
+cluster kept, entities still drawn), then `VOID VIEW` 4000 units below the map, where the sky is black instead of
+drawn (artifacts/void2_compare.png). Without Momentum mounted the installed exe drew a black sky on colin; this build
+HL2's day sky (sky_compare.png). Frame time was not measured.
+
+**Boundary.** Render only. A wall thicker than 512 shows the last view until the margin; flying out still turns the
+overview on once, now only when you are really out.
+
 ## Patch 1626 - big displacements no longer draw in other areas (ahop_coast's cliffs in the sky)
 
 **Cause.** Lex: "ahop_coast has displacements in the sky, it's behind the skybox and has weird backward culling that

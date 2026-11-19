@@ -200,6 +200,13 @@ void R_SetSky(const char *sky)
 		Con_DPrintf("sky %s: no face found; drawing r_skybox_default %s\n", sky, r_skybox_default.string);
 		R_LoadSky(r_skybox_default.string);
 	}
+	//FTESurf Patch 1627: r_skybox_default (sky_cape_hill) is loose files in Momentum's folder only; without them a map
+	//naming no sky (surf_colin_blaster_69000) drew six black faces. HL2's stock sky is in every HL2 and Momentum mount.
+	if (R_ForcedSkyEmpty() && *sky && Q_strcasecmp(sky, "sky_day01_01") && !*r_skyboxname.string)
+	{
+		Con_DPrintf("sky %s: no face found; drawing sky_day01_01\n", sky);
+		R_LoadSky("sky_day01_01");
+	}
 }
 static void R_LoadSky(const char *sky)
 {
@@ -381,7 +388,9 @@ static void R_ForceSky_f(void)
 			Con_Printf("Current per-map skybox is %s%s\n", cl.skyname,
 				(forcedsky && Q_strcasecmp(forcedsky->name+7, cl.skyname)) ? " (not found; drawing r_skybox_default)" : "");	//+7: "skybox_"
 		else if (*r_skybox_default.string)
-			Con_Printf("Map declares no sky; using r_skybox_default %s (loaded: %s)\n", r_skybox_default.string, forcedsky?"yes":"no");
+			Con_Printf("Map declares no sky; using r_skybox_default %s (loaded: %s)\n", r_skybox_default.string,
+				!forcedsky ? "no" : Q_strcasecmp(forcedsky->name+7, r_skybox_default.string) ? va("no; drawing %s", forcedsky->name+7) :	//P1627
+				R_ForcedSkyEmpty() ? "no faces found" : "yes");
 		else
 			Con_Printf("no skybox forced.\n");
 	}

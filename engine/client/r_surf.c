@@ -2366,6 +2366,7 @@ inherit the main view's cache.
 */
 static model_t *surf_lastgoodworld;
 static int surf_lastgoodcluster[2] = {-1, -1};
+static vec3_t surf_lastgoodorg;	//FTESurf Patch 1627: the primary eye when surf_lastgoodcluster was taken
 
 /*
 FTESurf build 17.  "The view is in the void AND the player is noclipping."
@@ -2460,6 +2461,18 @@ static qboolean Surf_PlayerIsNoclipping(playerview_t *pv)
 	return pv && (pv->pmovetype == PM_SPECTATOR || pv->pmovetype == PM_OLD_SPECTATOR);
 }
 
+//FTESurf Patch 1627: an eye in solid that is still near open space (a wall being flown through) keeps the last
+//cluster instead of the overview. The one test Surf_SetupFrame, Surf_WorldOnlyView and R_Clear share.
+qboolean Surf_VoidNear(const vec3_t org)
+{
+	extern cvar_t r_voidvis_margin;
+	vec3_t d;
+	if (r_voidvis_margin.value <= 0 || surf_lastgoodworld != cl.worldmodel || surf_lastgoodcluster[0] < 0)
+		return false;
+	VectorSubtract(org, surf_lastgoodorg, d);
+	return DotProduct(d, d) <= r_voidvis_margin.value * r_voidvis_margin.value;
+}
+
 //P1345: CSQC asks after its final camera, before submitting entities/effects.
 qboolean Surf_WorldOnlyView(playerview_t *pv)
 {
@@ -2472,7 +2485,7 @@ qboolean Surf_WorldOnlyView(playerview_t *pv)
 	if (*r_refdef.rt_destcolour[0].texname && strcmp(r_refdef.rt_destcolour[0].texname, "megascreeny"))
 		return false;
 	w->funcs.InfoForPoint(w, r_refdef.vieworg, &area, &cluster, &contents);
-	return cluster == -1;
+	return cluster == -1 && !Surf_VoidNear(r_refdef.vieworg);
 }
 
 /*
@@ -2689,7 +2702,7 @@ void Surf_SetupFrame(void)
 		  Without the noclip test it would fire on the ordinary fall into the
 		  void, which is the exact case Patch 138 exists to keep playable.
 		*/
-		if (r_viewcluster == -1 && r_voidvis.ival && Surf_PlayerIsNoclipping(r_refdef.playerview))
+		if (r_viewcluster == -1 && r_voidvis.ival && Surf_PlayerIsNoclipping(r_refdef.playerview) && !Surf_VoidNear(r_refdef.vieworg))
 		{
 			r_voidview = true;
 			if (Surf_WorldOnlyView(r_refdef.playerview))
@@ -2741,6 +2754,7 @@ void Surf_SetupFrame(void)
 			Surf_VoidVisReport(false);
 			surf_lastgoodcluster[0] = r_viewcluster;
 			surf_lastgoodcluster[1] = r_viewcluster2;
+			VectorCopy(r_refdef.vieworg, surf_lastgoodorg);	//FTESurf Patch 1627
 		}
 	}
 

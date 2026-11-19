@@ -405,6 +405,10 @@ cvar_t r_voidvis							= CVARFD ("r_voidvis", "1", CVAR_ARCHIVE,
 												"0: Patch 138 -- keep the last visible cluster you could see from.\n"
 												"1: Draw the whole world, with the frustum and area culls kept.\n"
 												"Has no effect anywhere except in the void while noclipping.");
+//FTESurf Patch 1627: noclipping through a wall put the eye in solid for 1-3 frames, each a whole-world frame (Lex,
+//20 Nov: "a massive fps spike for a frame" on every map). The overview waits until the eye is this far from open space.
+cvar_t r_voidvis_margin = CVARFD("r_voidvis_margin", "512", CVAR_ARCHIVE,
+	"With r_voidvis, how far (units) the eye must be from where it last saw open space before the void overview starts; nearer, the last visible cluster stays (Patch 138). 0: the overview starts the first frame in solid.");
 //FTESurf P1345: independent suppression control keeps identical world visibility for A/B.
 cvar_t r_voidscene = CVARFD("r_voidscene", "1", 0,
 	"Fast noclip-void overview: world and structural brush models, no props, entities, particles, decals or 3D skyroom. 0 retains the old effects for comparison; does not change r_voidvis or saved quality settings.");
@@ -1474,6 +1478,7 @@ void Renderer_Init(void)
 	Cvar_Register (&r_voidvis, GLRENDEREROPTIONS);
 	Cvar_Register (&r_voidscene, GLRENDEREROPTIONS);
 	Cvar_Register (&r_voidfog, GLRENDEREROPTIONS);	//FTESurf Patch 329
+	Cvar_Register (&r_voidvis_margin, GLRENDEREROPTIONS);	//FTESurf Patch 1627
 	Cvar_Register (&r_blendsort, GLRENDEREROPTIONS);
 	Cvar_Register (&r_blendcache, GLRENDEREROPTIONS);	//FTESurf Patch 1409
 	Cvar_Register (&r_blendsort_boxes, GLRENDEREROPTIONS);	//FTESurf Patch 1457
