@@ -4464,7 +4464,7 @@ void PMSrc_PlayerMove (float gamespeed)
 	bih_phybrushes = (movevars.sourceversion >= 7);	//Patch 764: likewise
 	bih_phyfix = (movevars.sourceversion >= 9);	//Patch 888: likewise
 	bih_phypick = (movevars.sourceversion >= 12);	//Patch 1248: likewise
-	bih_dispwind = (movevars.sourceversion >= 13);	//Patch 1630: likewise
+	bih_oldwind = (movevars.sourceversion < 13);	//Patch 1630: likewise (render winding is everyone else's default)
 
 	/* FTESurf Patch 280: once per command -- the physent set does not change
 	   inside a move.  With pm_slide 0, or on a map with no func_slide, this is
@@ -4599,7 +4599,7 @@ void PMSrc_PlayerMove (float gamespeed)
 	bih_phybrushes = 0;
 	bih_phyfix = 0;
 	bih_phypick = 0;
-	bih_dispwind = 0;
+	bih_oldwind = 0;
 }
 
 /*

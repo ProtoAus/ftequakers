@@ -36,21 +36,30 @@ slab IN FRONT of the visible surface: the rock behind ahop_coast's ladder (disp 
 and flipped/unflipped seams stand 4/n_z (4-8) units proud. P256's own check traced downward and could not tell which
 side the player stood on; Patch 258 then found the snag it was after elsewhere.
 
-**Change.** com_bih: a new leaf type BIH_TRIANGLE_REWOUND (appended to the enum) for those triangles; while
-`bih_dispwind` is set its trace and test use the render winding (vertices 1 and 2 swapped back), and the trace cache
-keys on the flag. pm_source.c sets bih_dispwind from `sourceversion >= 13`, like P764/P888/P1248's switches;
-PMSRC_VERSION 12 -> 13. The hl2 plugin builds the new type only for movement-tree triangles cidx re-wound and only
-when the exe's pm_sourceversion is 13 or more, so a new plugin on an older exe keeps BIH_TRIANGLE. Light/occluder
-trees and point contents are unchanged.
+**Change.** com_bih: a new leaf type BIH_TRIANGLE_REWOUND (appended to the enum) for those triangles, traced and
+tested in the render winding (vertices 1 and 2 swapped back) unless `bih_oldwind` is set; the trace cache keys on the
+flag. pm_source.c sets bih_oldwind for `sourceversion < 13` (a replayed old recording) like P764/P888/P1248's
+switches, and pmove.c sets it round the AG mover, which has no mover-13 gate; every other trace (QC, entity physics)
+meets the visible surface. PMSRC_VERSION 12 -> 13, and SV_PMSrcVer accepts 13. The hl2 plugin builds the new type only
+for movement-tree triangles cidx re-wound, and only when the exe's pm_sourceversion is 13 or more, so a new plugin on
+an older exe keeps BIH_TRIANGLE. Light/occluder trees and point contents are unchanged.
 
 **Verified.** Hidden rig, ahop_coast, local server, setpos at the ladder (-9773 8281 4975) facing it, +forward,
 viewpos every 0.5 s. Installed winding (hl2_dispwinding 1 at mover 12): 4975, 5091.8, 5220.2, 5264.2, then falls to
 4916.5. hl2_dispwinding 0: 4975 ... 5453.3, rests at the top, 5413. This build at mover 13 with the default
-hl2_dispwinding 1: the same climb to 5413. Independent review: REVIEW_RESULT.
+hl2_dispwinding 1: the same climb to 5413. Two independent reviews (control flow and compatibility; evidence and
+replay). Real defects, all fixed: SV_PMSrcVer stopped at 12, so a mover-13 server would have pinned every recording
+pmsrcver=2 and pm_verify replayed honest runs at mover 2 (as P1248's review found); a field inserted mid-struct
+shifted bih_main_ts's positional initializer, starting the main thread with the flag on and probe_plane 0; and with
+the old winding outside the mover, QC traces (practice return, start marks) found a mover-13 player inside the old
+slab -- hence render winding by default and the old one only inside old movers and AG. Serverinfo then reads
+pm_sourceversion 13.
 
 **Boundary.** Physics: times on maps whose routes touch a side==1 displacement are not comparable with a mover-12
 build. Recordings replay at their own pmsrcver, so older runs verify as before. Old clients on a mover-13 server
-mispredict there until updated. AG/HL1 profiles (sourceversion 1) keep the old winding. Maps with no displacements,
+mispredict there until updated. AG/HL1 profiles keep the old winding inside their mover. The hl2 plugin and the exe
+must ship together: an old plugin on this exe advertises 13 and collides like 12. A mover bump is one-way for the
+fleet (a mover-12 verifier refuses v13 recordings), so the lobby engines move with it. Maps with no displacements,
 or only side==0 ones, are unchanged.
 
 ## Patch 1629 - Linux: the QC temp-string table no longer climbs to its cap; error dialogs on Wayland

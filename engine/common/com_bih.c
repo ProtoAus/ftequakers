@@ -649,7 +649,9 @@ static int BIH_TriangleBevels(mplane_t *out, const mplane_t *face, const float *
   side==1 displacement for collision. side is only planenum's parity: planenum already names the face's outward plane
   (mod_vbsp.c's own note at its plane read; every ahop_coast displacement face winds around +plane, whose side is
   empty), so the re-wound third had its four-unit slab IN FRONT of the visible surface -- ahop_coast's ladder rock
-  pushed the climber off at z 5264, and seams stood 4-8 units proud. Mover 13 traces those triangles as rendered.*/
+  pushed the climber off at z 5264, and seams stood 4-8 units proud. Every trace now meets those triangles as rendered;
+  only a mover below 13 (a replayed old recording) and the AG mover set bih_oldwind for Patch 256's winding (review:
+  with the old winding outside the mover, QC traces found a mover-13 player standing in the old slab).*/
 static void BIH_RenderWinding(struct bihdata_s *d, index_t rw[3])
 {
 	rw[0] = d->tri.indexes[0];
@@ -1391,7 +1393,7 @@ static void BIH_RecursiveTrace (struct bihtrace_s *fte_restrict tr, const struct
 		{
 			struct bihdata_s d = node->data;
 			index_t rw[3];
-			if (bih_dispwind)
+			if (!bih_oldwind)
 				BIH_RenderWinding(&d, rw);
 			BIH_ClipToTriangle(tr, &d);
 		}
@@ -1770,7 +1772,7 @@ static void BIH_RecursiveTest (struct bihtrace_s *fte_restrict tr, const struct 
 		{
 			struct bihdata_s d = node->data;
 			index_t rw[3];
-			if (bih_dispwind)
+			if (!bih_oldwind)
 				BIH_RenderWinding(&d, rw);
 			BIH_TestToTriangle(tr, &d);
 		}
@@ -1948,7 +1950,7 @@ static qboolean BIH_Trace(model_t *model, int forcehullnum, const framestate_t *
 	key.nodes = m->cnodes;
 	key.contents = contents;
 	key.forcehullnum = forcehullnum;
-	key.flags = (capsule?1u:0u) | (axis?2u:0u) | (bih_sourceclip?4u:0u) | (bih_phybrushes?8u:0u) | (bih_phyfix?16u:0u) | (bih_phypick?32u:0u) | (bih_dispwind?64u:0u);
+	key.flags = (capsule?1u:0u) | (axis?2u:0u) | (bih_sourceclip?4u:0u) | (bih_phybrushes?8u:0u) | (bih_phyfix?16u:0u) | (bih_phypick?32u:0u) | (bih_oldwind?64u:0u);
 	key.bevels = pm_trisoup_bevels.ival;
 	key.rotated = pm_rotatedboxhulls.ival;
 	VectorCopy(start, key.v+0);
