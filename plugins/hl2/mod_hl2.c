@@ -464,6 +464,20 @@ typedef struct
 	qboolean vhvbad;		//the walk hit something it could not resolve; no table for this model
 } hl2parsecontext_t;
 
+//FTESurf Patch 1625: cdmaterials + texture name as Source joins them, then its V_FixSlashes/V_FixDoubleSlashes.
+//ahop_coast's props_wasteland bridge_railing (a doubled backslash) printed "Error: empty directory name" every load.
+static void HL2MDL_FixSlashes(char *name)
+{
+	char *i, *o;
+	for (i = o = name; *i; i++)
+	{
+		char c = (*i == '\\') ? '/' : *i;
+		if (c == '/' && (o == name || o[-1] == '/'))
+			continue;
+		*o++ = c;
+	}
+	*o = 0;
+}
 /*
 FTESurf Patch 259.  WHERE EACH OF VRAD'S BAKED COLOURS BELONGS.
 
@@ -638,7 +652,8 @@ static qboolean Mod_HL2_LoadVTX(hl2parsecontext_t *ctx, const void *buffer, size
 				Q_strlcpy(skinframe->shadername, (const char*)mdl+mpath->nameofs, sizeof(skinframe->shadername));
 				Q_strlcat(skinframe->shadername, (const char*)&mtex[m]+mtex[m].nameofs, sizeof(skinframe->shadername));
 				Q_strlcat(skinframe->shadername, ".vmt", sizeof(skinframe->shadername));
-				Q_snprintfz(fsTest, sizeof(fsTest), "materials\\%s", skinframe->shadername);
+				HL2MDL_FixSlashes(skinframe->shadername);
+				Q_snprintfz(fsTest, sizeof(fsTest), "materials/%s", skinframe->shadername);
 
 				if (fsfuncs->LocateFile(fsTest, FSLF_IFFOUND, NULL)) {
 					skinok[s + t*mdl->skin_count] = 1;	//FTESurf Patch 234
@@ -652,6 +667,7 @@ static qboolean Mod_HL2_LoadVTX(hl2parsecontext_t *ctx, const void *buffer, size
 			Q_strlcat(skinframe->shadername, "/", sizeof(skinframe->shadername));
 			Q_strlcat(skinframe->shadername, (const char*)&mtex[m]+mtex[m].nameofs, sizeof(skinframe->shadername));
 			Q_strlcat(skinframe->shadername, ".vmt", sizeof(skinframe->shadername));
+			HL2MDL_FixSlashes(skinframe->shadername);
 			//no texture-path list to probe against, so there is nothing to be wrong about
 			//and nothing to fall back to: treat it as settled.
 			skinok[s + t*mdl->skin_count] = 1;

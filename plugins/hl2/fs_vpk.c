@@ -86,6 +86,13 @@ typedef struct
 	unsigned int signaturesize;
 } dvpkheader_t;
 
+//FTESurf Patch 1625: a file whose numbered archive did not open is not installed: FLocate and BuildHash skip it,
+//so the lookup falls through to another copy or to the missing-material colours instead of "found, unreadable".
+static qboolean FSVPK_InLostArchive(const vpk_t *pak, const mvpkfile_t *pf)
+{
+	unsigned int frag = (pf->file->archiveindex[0]<<0)|(pf->file->archiveindex[1]<<8);
+	return frag != 0x7fff && (frag >= pak->numfragments || !pak->fragments || !pak->fragments[frag]);
+}
 static void QDECL FSVPK_GetPathDetails(searchpathfuncs_t *handle, char *out, size_t outlen)
 {
 	vpk_t *pak = (void*)handle;
@@ -128,6 +135,8 @@ static void QDECL FSVPK_BuildHash(searchpathfuncs_t *handle, int depth, void (QD
 
 	for (i = 0; i < pak->numfiles; i++)
 	{
+		if (FSVPK_InLostArchive(pak, &pak->files[i]))
+			continue;	//FTESurf Patch 1625
 		AddFileHash(depth, pak->files[i].name, &pak->files[i].bucket, &pak->files[i]);
 	}
 }
@@ -165,6 +174,8 @@ static unsigned int QDECL FSVPK_FLocate(searchpathfuncs_t *handle, flocation_t *
 		}
 	}
 
+	if (pf && FSVPK_InLostArchive(pak, pf))
+		return FF_NOTFOUND;	//FTESurf Patch 1625
 	if (pf)
 	{
 		if (loc)
@@ -436,7 +447,9 @@ static unsigned int FSVPK_WalkTree(vpk_t *vpk, const char *start, const char *en
 					filefuncs->CleanUpPath(vpk->files[files].name);	//just in case...
 					vpk->files[files].file = file;
 
-					if (vpk->numfragments < frag+1)
+					//FTESurf Patch 1625: 0x7fff is "inside the _dir.vpk" (P181), not an archive -- counting it made
+					//every pack with inline entries probe 32768 sibling names at mount.
+					if (frag != 0x7fff && vpk->numfragments < frag+1)
 						vpk->numfragments = frag+1;
 					files++;
 				}
@@ -574,6 +587,31 @@ static searchpathfuncs_t *QDECL FSVPK_LoadArchive (vfsfile_t *file, searchpathfu
 		f->references = 1;
 		f->mutex = Sys_CreateMutex();
 		f->pub.ClosePath			= FSVPK_ClosePath;
+	}
+	//FTESurf Patch 1625: say so when archives are gone -- a half-moved or half-deleted Steam install on another drive
+	//(Lex, 20 Nov: CS:S read from a dirty Windows volume) used to mount "found" and then fail every open.
+	{
+		unsigned int lostfiles = 0, lostparts = 0, firstlost = ~0u;
+		for (i = 0; i < vpk->numfiles; i++)
+			if (FSVPK_InLostArchive(vpk, &vpk->files[i]))
+				lostfiles++;
+		for (frag = 0; frag < vpk->numfragments; frag++)
+			if (!vpk->fragments[frag])
+			{
+				for (i = 0; i < vpk->numfiles; i++)
+					if (((vpk->files[i].file->archiveindex[0]<<0)|(vpk->files[i].file->archiveindex[1]<<8)) == frag)
+						break;
+				if (i < vpk->numfiles)
+				{
+					lostparts++;
+					if (firstlost == ~0u)
+						firstlost = frag;
+				}
+			}
+		if (lostfiles)
+			Con_Printf(CON_WARNING "%s: %u archive part(s) missing or unreadable (first: _%03u.vpk), so %u of its %i files\n"
+				"  are treated as not installed.  Verify the game's files in Steam (Properties > Installed Files).\n",
+				desc, lostparts, firstlost, lostfiles, (int)vpk->numfiles);
 	}
 	return &vpk->pub;
 }

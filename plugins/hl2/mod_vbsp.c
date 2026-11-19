@@ -116,11 +116,12 @@ cvar_t *hl2_propcollision_nophy;	//FTESurf Patch 262: likewise -- "no .phy" mean
 extern int vmt_stat_water, vmt_stat_refract, vmt_stat_translucent;
 extern int vmt_stat_missing;
 #define VMT_MISSING_LIST 256	//FTESurf Patch 174/231, must match mat_vmt.c
-#define VMT_MISSING_SHOW 24		//FTESurf Patch 231: how many of them the warning prints; `hl2_missing` prints the rest
+#define VMT_MISSING_SHOW 10		//FTESurf Patch 231 (24), Patch 1625 (Lex, 20 Nov: ten): how many the warning prints; `hl2_missing` prints the rest
 static int vmt_census_atload;	//FTESurf Patch 231: the count as of the load-time warning, see there
 //FTESurf Patch 233: what each of those names IS, worked out once while the world model is
 //in hand and kept so `hl2_missing` can print it later without one.  See VBSP_MissReason.
 static char vmt_miss_reason[VMT_MISSING_LIST][72];
+static qboolean vmt_miss_seen[VMT_MISSING_LIST];	//FTESurf Patch 1625: VBSP_MissReason's answer, for the visible-first print order
 static int vmt_miss_reasons;
 //...and how many of them are on something the player can end up looking at.  Published as
 //hl2_unresolved_visible, which is what decides whether the HUD banner is worth drawing.
@@ -8147,6 +8148,61 @@ static int VBSP_MissFaces(model_t *mod, const char *name, int *warp)
 	return n;
 }
 
+//FTESurf Patch 1625: scripts/assetgames.txt (tools/assetgames.py), "<directory> <game>[,<game>...]" -- which game ships
+//a materials/ or models/ directory, so a miss can name what to install. Longest prefix wins; "?" when none lists it
+//below the generic top folders.
+static char *vbsp_agfile;
+static const char **vbsp_agline;
+static size_t vbsp_agn;
+static qboolean vbsp_agtried;
+static const char *VBSP_AssetGame(const char *name, char *out, size_t outsize)
+{
+	char key[MAX_QPATH+16], *c, *sl;
+	size_t i, kl;
+	if (!vbsp_agtried)
+	{
+		size_t sz = 0, n = 1;
+		char *p, *e, *nlp;
+		vbsp_agtried = true;
+		vbsp_agfile = (char*)filefuncs->LoadFile("scripts/assetgames.txt", &sz);
+		if (vbsp_agfile)
+		{
+			for (p = vbsp_agfile, e = vbsp_agfile + sz; p < e; p++)
+				n += (*p == '\n');
+			vbsp_agline = plugfuncs->Malloc(sizeof(*vbsp_agline) * n);
+			for (p = vbsp_agfile; p < e && (nlp = memchr(p, '\n', e - p)); p = nlp + 1)
+			{
+				*nlp = 0;
+				if (nlp > p && nlp[-1] == '\r')
+					nlp[-1] = 0;
+				if (*p && *p != '/' && strchr(p, ' '))
+					vbsp_agline[vbsp_agn++] = p;
+			}
+		}
+	}
+	Q_snprintfz(key, sizeof(key), "%s%s", (Q_strncasecmp(name, "materials/", 10) && Q_strncasecmp(name, "models/", 7)) ? "materials/" : "", name);
+	for (c = key; *c; c++)
+		*c = (*c == '\\') ? '/' : (*c >= 'A' && *c <= 'Z') ? *c + 'a'-'A' : *c;
+	Q_strlcpy(out, "?", outsize);
+	while ((sl = strrchr(key, '/')))
+	{
+		*sl = 0;	//the file's directory first, then each parent
+		if (!strcmp(key, "materials") || !strcmp(key, "models") || !strcmp(key, "materials/models") || !strcmp(key, "materials/maps"))
+			break;	//every game has these: naming them all says nothing (ftesurf/paint, maps/<map> cubemaps)
+		kl = strlen(key);
+		for (i = 0; i < vbsp_agn; i++)
+			if (!strncmp(vbsp_agline[i], key, kl) && vbsp_agline[i][kl] == ' ')
+			{
+				Q_strlcpy(out, vbsp_agline[i] + kl + 1, outsize);
+				for (c = out; *c; c++)
+					if (*c == ',')
+						*c = '/';
+				return out;
+			}
+	}
+	return out;
+}
+
 //true if this name is something the player can actually end up looking at.
 static qboolean VBSP_MissReason(model_t *mod, const char *name, char *out, size_t outsize)
 {
@@ -9081,7 +9137,7 @@ static void VBSP_BuildBIHMain(void *ctx, void *unusedp, size_t unuseda, size_t u
 		//printed -- hl2_missing shows the rest and the visible count has to cover all of them.
 		vmt_miss_reasons = (vmt_stat_missing > VMT_MISSING_LIST) ? VMT_MISSING_LIST : vmt_stat_missing;
 		for (i = 0; i < vmt_miss_reasons; i++)
-			if (VBSP_MissReason(mod, vmt_stat_missing_name[i], vmt_miss_reason[i], sizeof(vmt_miss_reason[0])))
+			if ((vmt_miss_seen[i] = VBSP_MissReason(mod, vmt_stat_missing_name[i], vmt_miss_reason[i], sizeof(vmt_miss_reason[0]))))
 				vmt_miss_visible++;
 		//past the cap the names were never stored, so nothing can be proven inert: count them all.
 		vmt_miss_visible += vmt_stat_missing - vmt_miss_reasons;
@@ -9117,13 +9173,23 @@ static void VBSP_BuildBIHMain(void *ctx, void *unusedp, size_t unuseda, size_t u
 		allshipped = haslist && listed == vmt_stat_missing;	//names past VMT_MISSING_LIST were never stored, so never listed
 		vmt_miss_quiet = allshipped && !*nogame && (state == 0 || state == 1);
 		say = vmt_miss_quiet ? Con_DPrintf : Con_Printf;
-		say(CON_WARNING "%s: %i material(s) did not resolve:\n",
-			mod->name, vmt_stat_missing);
-		for (i = 0; i < shown; i++)
-			say(CON_WARNING "    %-42s -- %s\n",
-				vmt_stat_missing_name[i], vmt_miss_reason[i]);
+		//FTESurf Patch 1625 (Lex, 20 Nov): "<game>: <path>", ten at most, visible ones first; the why moved to developer
+		//and hl2_missing. Names past vmt_miss_reasons have no reason and are not printed here.
+		say(CON_WARNING "%s: %i material(s) did not resolve:\n", mod->name, vmt_stat_missing);
+		{
+			char game[64];
+			int pass, printed = 0;
+			for (pass = 0; pass < 2; pass++)
+				for (i = 0; i < vmt_miss_reasons && printed < shown; i++)
+					if (vmt_miss_seen[i] == !pass)
+					{
+						say(CON_WARNING "    %s: %s  (%s)\n", VBSP_AssetGame(vmt_stat_missing_name[i], game, sizeof(game)),
+							vmt_stat_missing_name[i], vmt_miss_reason[i]);
+						printed++;
+					}
+		}
 		if (vmt_stat_missing > shown)
-			say(CON_WARNING "    ...and %i more (`hl2_missing` lists every one)\n",
+			say(CON_WARNING "    ...%i more: type ^2hl2_missing^7 in the console for the full list\n",
 				vmt_stat_missing - shown);
 
 		if (*nogame)
@@ -9142,16 +9208,16 @@ static void VBSP_BuildBIHMain(void *ctx, void *unusedp, size_t unuseda, size_t u
 			break;
 		case 0:	//no pack wanted: mapdeps.txt has no line for this map (censused or not -- P1560)
 		case 1:	//its pack is mounted from disk
-			if (!haslist)	//P1560: no scripts/unshipped.txt -- the pre-P1560 wording, unchanged
+			if (!haslist)	//P1560: no scripts/unshipped.txt -- the pre-P1560 wording; P1625: developer only, hl2_missing says it
 			{
 				if (state == 0)
-					Con_Printf(CON_WARNING
+					Con_DPrintf(CON_WARNING
 						"  No asset pack supplies these.  data/mapdeps.txt names none for this map,\n"
 						"  which is tools/mapdeps.py having already resolved every material against\n"
 						"  every pack and the map's own pakfile.  Mounting something will not bring\n"
 						"  them back: this map references content that was never shipped with it.\n");
 				else
-					Con_Printf(CON_WARNING
+					Con_DPrintf(CON_WARNING
 						"  \"%s\" is already mounted for this map, so these are missing from it too.\n"
 						"  The map references content that was never shipped with it.\n", spec);
 				break;
@@ -9224,6 +9290,19 @@ static void VBSP_BuildBIHMain(void *ctx, void *unusedp, size_t unuseda, size_t u
 	cvarfuncs->SetFloat("hl2_unresolved", vmt_stat_missing);
 	cvarfuncs->SetString("hl2_unresolved_first",
 		vmt_stat_missing ? vmt_stat_missing_name[0] : "");
+	{	//FTESurf Patch 1625: the visible ones for the banner, ';'-separated, as "<game>: <name>"
+		char list[2048], game[64], one[MAX_QPATH+80];
+		int i, k = 0;
+		*list = 0;
+		for (i = 0; i < vmt_miss_reasons && k < VMT_MISSING_SHOW; i++)
+			if (vmt_miss_seen[i])
+			{
+				Q_snprintfz(one, sizeof(one), "%s%s: %s", k ? ";" : "", VBSP_AssetGame(vmt_stat_missing_name[i], game, sizeof(game)), vmt_stat_missing_name[i]);
+				Q_strlcat(list, one, sizeof(list));
+				k++;
+			}
+		cvarfuncs->SetString("hl2_unresolved_list", vmt_miss_quiet ? "" : list);
+	}
 	/*
 	FTESurf Patch 233: and how many of them are on something you can look at.
 
@@ -14410,6 +14489,7 @@ static void VBSP_PropCensus_f(void)
 static void VBSP_Missing_f(void)
 {
 	int i, n;
+	char game[64];	//FTESurf Patch 1625
 	int unsupported = Mat_VMT_ReportUnsupported();
 
 	if (!vmt_stat_missing && !vmt_stat_unparsed)
@@ -14432,7 +14512,7 @@ static void VBSP_Missing_f(void)
 		//must not be given one -- a prop skin is still identifiable by its path, and anything
 		//else gets nothing rather than a guess.
 		for (i = 0; i < n; i++)
-			Con_Printf("    %-42s -- %s\n", vmt_stat_missing_name[i],
+			Con_Printf("    %-10s %-42s -- %s\n", VBSP_AssetGame(vmt_stat_missing_name[i], game, sizeof(game)), vmt_stat_missing_name[i],
 				(i < vmt_miss_reasons) ? vmt_miss_reason[i] :
 				!Q_strncasecmp(vmt_stat_missing_name[i], "models/", 7) ? "a prop skin, loaded after the map" :
 				"loaded after the map; not measured");
@@ -14446,6 +14526,9 @@ static void VBSP_Missing_f(void)
 		if (vmt_miss_quiet)	//FTESurf Patch 1560
 			Con_Printf("Every one is on scripts/unshipped.txt as never shipped with this map, so the banner's\n"
 				"count (hl2_unresolved_visible) is published as 0 and the load-time list was developer-only.\n");
+		//FTESurf Patch 1625: the game column is scripts/assetgames.txt -- a game with a file in that folder, not proof it has this one
+		Con_Printf("The first column names the game(s) that ship that folder (? = none of them). If that game is installed,\n"
+			"type fs_steamlibs to see where it was found; a game folder with missing archive parts says so at launch.\n");
 	}
 	if (vmt_stat_unparsed)
 	{
@@ -14934,6 +15017,7 @@ qboolean VBSP_Init(void)
 		on the next launch before any map had loaded.
 		*/
 		cvarfuncs->GetNVFDG("hl2_unresolved", "0", CVAR_NOSAVE, "How many materials the map that is loaded failed to resolve. Set by the loader; see the console for the list and the fs_load line that fixes it.", MAPOPTIONS);
+		cvarfuncs->GetNVFDG("hl2_unresolved_list", "", CVAR_NOSAVE, "FTESurf Patch 1625: up to ten of hl2_unresolved_visible's materials as \"<game>: <name>\", ';'-separated, the game from scripts/assetgames.txt. Read by the missing-content banner.", MAPOPTIONS);
 		cvarfuncs->GetNVFDG("hl2_unresolved_first", "", CVAR_NOSAVE, "The first material the loaded map failed to resolve, as a hint at which asset pack it wants.", MAPOPTIONS);
 		//FTESurf Patch 233: ...and how many of them are on a face or a prop rather than only
 		//in the texdata string table.  The HUD banner draws on THIS, not on the raw count.

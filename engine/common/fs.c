@@ -8252,6 +8252,17 @@ static qboolean Sys_SteamHasFile(char *steambasedir,size_t steambasedirsize, cha
 			return ctx.found;
 		return false;
 	}
+	//FTESurf Patch 1625: a game folder left by an uninstall or a library move (cfg/, download/, custom/) passed the
+	//bare-folder test and beat the real install in a later library. First ask for the game's own gameinfo.txt
+	//(Source) or liblist.gam (GoldSrc); the bare folder stays the fallback.
+	if (!*fname)
+	{
+		static char *markers[] = {"gameinfo.txt", "liblist.gam"};
+		size_t m;
+		for (m = 0; m < countof(markers); m++)
+			if (Sys_SteamDirsWithFile(steamdir, markers[m], Sys_FoundGameData, &ctx))
+				return ctx.found;
+	}
 	return Sys_SteamDirsWithFile(steamdir, fname, Sys_FoundGameData,&ctx);
 }
 

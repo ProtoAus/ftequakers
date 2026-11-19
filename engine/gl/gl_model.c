@@ -40,6 +40,8 @@ cvar_t mod_loadentfiles						= CVAR("sv_loadentfiles", "1");
 cvar_t mod_loadentfiles_dir					= CVAR("sv_loadentfiles_dir", "");
 cvar_t sv_entfix								= CVARD("sv_entfix", "1", "FTESurf Patch 890: apply cfg/maps/entfix_<map>.cfg (Stripper:Source syntax) to a map's entities as it loads.");
 cvar_t mod_external_vis						= CVARD("mod_external_vis", "1", "Attempt to load .vis patches for quake maps, allowing transparent water to work properly.");
+//FTESurf Patch 1625: CSQC's missing-content banner lists these beside the hl2 plugin's materials.
+static cvar_t mod_unresolved				= CVARFD("mod_unresolved", "", CVAR_NOSAVE|CVAR_NOSET, "FTESurf Patch 1625, read-only: models/ files that failed to load since the last map began loading, space-separated (first failures only: a model that failed on an earlier map is not retried or listed again).");
 cvar_t mod_warnmodels						= CVARD("mod_warnmodels", "1", "Warn if any models failed to load. Set to 0 if your mod is likely to lack optional models (like its in development).");	//set to 0 for hexen2 and its otherwise-spammy-as-heck demo.
 //nettest Patch 102: read by Mod_SkipCollisionHulls (com_mesh.c) on the LOADER WORKER, so it MUST be
 //registered here on the main thread. A lazy Cvar_Get from the worker CRASHED every prop map: Cvar_Get
@@ -881,6 +883,7 @@ void Mod_Init (qboolean initial)
 	{
 		Cvar_Register(&mod_external_vis, "Graphical Nicaties");
 		Cvar_Register(&mod_warnmodels, "Graphical Nicaties");
+		Cvar_Register(&mod_unresolved, NULL);	//FTESurf Patch 1625
 		Cvar_Register(&mod_prop_hull_exclude, NULL);	//nettest Patch 102 — MUST be registered here (main thread): the loader worker only reads it
 		Cvar_Register(&mod_prop_decomp, NULL);			//FTESurf Patch 222 — same rule, same reason; see the declarations
 		Cvar_Register(&mod_prop_decomp_concavity, NULL);
@@ -1359,6 +1362,8 @@ void Mod_ModelLoaded(void *ctx, void *data, size_t a, size_t b)
 	case MLV_WARN:
 		if (*mod->name != '*' && strcmp(mod->name, "null") && mod_warnmodels.ival && !previouslyfailed)
 			Con_Printf(CON_ERROR "Unable to load %s\n", mod->name);
+		if (!previouslyfailed && !Q_strncasecmp(mod->name, "models/", 7) && strlen(mod_unresolved.string) + strlen(mod->name) + 2 < 1024)
+			Cvar_ForceSet(&mod_unresolved, *mod_unresolved.string ? va("%s %s", mod_unresolved.string, mod->name) : mod->name);	//FTESurf Patch 1625
 		break;
 	case MLV_SILENT:
 	case MLV_SILENTSYNC:
@@ -1819,6 +1824,8 @@ model_t *Mod_LoadModel (model_t *mod, enum mlverbosity_e verbose)
 		}
 #endif
 
+		if (!Q_strncasecmp(mod->name, "maps/", 5))
+			Cvar_ForceSet(&mod_unresolved, "");	//FTESurf Patch 1625: a world starts the list again
 		mod->loadstate = MLS_LOADING;
 		if (verbose == MLV_ERROR || verbose == MLV_WARNSYNC)
 			COM_InsertWork(WG_LOADER, Mod_LoadModelWorker, mod, NULL, verbose, 0);

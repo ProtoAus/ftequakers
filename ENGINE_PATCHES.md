@@ -1,5 +1,38 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1625 - missing content: half-installed games, leftover folders, and a warning that names the game
+
+**Cause.** Lex: surf_ace, surf_fuchnut and surf_classics lost CS:S textures and props "even though I downloaded all
+source games". steam_libraries.txt still named the Windows Steam library, which was mounted (a dirty NTFS volume) that
+session, so CS:S resolved there and not to the new Linux install. Two engine faults turned that into silent loss:
+FSVPK_LoadArchive skipped a numbered archive it could not open, but its files stayed in the index, so a lookup said
+"found" and every open failed (no fallback, no colour replacement); and a `steam:Game/dir` line was satisfied by any
+non-empty folder, so one left by an uninstall or library move (cfg/, download/) beat the real install in a later
+library. The warning claimed every game was found and printed a paragraph per state. Also every ahop_coast load
+printed `Error: empty directory name (materials\models\props_wasteland\\bridge_railing.vmt)`.
+
+**Change.** fs_vpk.c: files in an archive that did not open are not installed (FLocate and BuildHash skip them), with
+one line naming the count and first missing part; `0x7fff` (inside the _dir.vpk, P181) no longer counts as an
+archive index, so packs with inline entries stop probing 32768 sibling names at mount. fs.c: a steam: line first asks
+each library for the game's gameinfo.txt (Source) or liblist.gam (GoldSrc); the bare folder is the fallback.
+mod_hl2.c: MDL material paths are slash-fixed as Source's V_FixSlashes/V_FixDoubleSlashes. mod_vbsp.c: the load
+warning lists at most ten, visible first, as "<game>: <name>", then "type hl2_missing"; the per-state essays went to
+developer and hl2_missing; `hl2_unresolved_list` publishes the ten for the banner. The game comes from
+scripts/assetgames.txt (tools/assetgames.py: every game with a file under that materials/ or models/ folder, longest
+prefix, generic top folders skipped). gl_model.c: `mod_unresolved` lists models/ files that failed since the map
+began loading. QC cl_gfx.qc: the banner lists models and materials that way, ten at most.
+
+**Verified.** Hidden rig, disposable install, fake Steam libraries listed first. CS:S with cstrike_pak_011.vpk missing:
+installed exe `2 material(s) did not resolve`; this build `1 archive part(s) missing or unreadable (first: _011.vpk),
+so 893 of its 18497 files...` and `CS:S/CS:GO: de_train/train_cement_floor_02 (727 world face(s))`; surf_fuchnut's
+banner `1 material and 1 model did not load ... CS:S/CS:GO: models/props/de_tides/truck.mdl` (fz_compare.png).
+A CS:S folder holding only cfg/: installed exe mounted it and lost both surf_ace materials; this build mounted
+~/.local/share/Steam's CS:S, none missing. With every game present: nothing missing, no banner. ahop_coast: the
+empty-directory error 1 -> 0.
+
+**Boundary.** A model that failed on an earlier map is not retried, so it is not listed again. Directory labels
+name every game with that folder (materials/de_dust is "CS:S/CS:GO"), not proof the game has the file.
+
 ## Patch 1624 - FTEQCC checked builtins and literal bounds (compiler only)
 
 **Cause/fix.** A checked builtin's internal same-name alias was inserted into the local name table
