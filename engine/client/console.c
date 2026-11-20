@@ -865,7 +865,7 @@ console_t *Con_GetMain(void)
 		con_main->close = Con_Main_BlockClose;
 		//FTESurf Patch 211: this string is the window's title bar. It said "MAIN".
 		Q_strncpyz(con_main->title, "Console", sizeof(con_main->title));
-		Q_strncpyz(con_main->prompt, "]", sizeof(con_main->prompt));
+		con_main->prompt[0] = 0;	//FTESurf Patch 1644: no "]" before the input line; the caret is enough
 
 		Cvar_ForceCallback(&con_window);
 	}

@@ -1348,7 +1348,10 @@ int Con_ExecuteLine(console_t *con, const char *line)
 	Cbuf_AddText ("\n", RESTRICT_LOCAL);
 	if (!waschat || con_echochat.value)
 	{
-		Con_Printf ("%s", con->prompt);
+		if (*con->prompt)
+			Con_Printf ("%s", con->prompt);
+		else
+			Con_Printf ("^4");	//FTESurf Patch 1644: no "]" -- the command you typed shows in blue instead
 		Con_Printf ("%s\n",line);
 	}
 
@@ -2401,12 +2404,95 @@ static void Key_LineDeleteWordLeft(unsigned char **line, int lineoffset, int *li
 	}
 }
 
+/*
+FTESurf Patch 1644: Ctrl+Z / Ctrl+Y on the console's input line.
+
+	"add ctrl+z undo and remove the ] prompt please!"
+
+Key_Console is wrapped (below): it copies the line before every key and, when the
+key changed it, pushes the old line, caret and selection onto con_undo -- so every
+kind of edit is undoable without each one knowing about it: typing, Backspace,
+Delete, cut, Ctrl+U/W, Tab completion, history recall. Typing joins one step until
+a space starts a new word or the caret goes somewhere else, as in a text editor. Any
+new edit clears the redo stack; a line sent with Enter starts a fresh history. A paste
+that lands later (Wayland's clipboard answers asynchronously) records itself.
+*/
+#define CON_UNDO_MAX 100
+typedef struct
+{
+	char *text;
+	int pos, anchor;
+} conundo_t;
+static conundo_t con_undo[CON_UNDO_MAX], con_redo[CON_UNDO_MAX];
+static int con_undo_n, con_redo_n;
+static int con_undo_typed = -1;		//caret after the last typed character that joined the newest step; -1: the next edit starts one
+static qboolean con_undo_inkey;		//Key_Console is running and records its own edits (a synchronous paste included)
+
+static void Con_UndoPushTo(conundo_t *stack, int *n, const char *text, int pos, int anchor)
+{
+	if (*n == CON_UNDO_MAX)
+	{	//the oldest step goes
+		Z_Free(stack[0].text);
+		memmove(stack, stack+1, sizeof(*stack)*(CON_UNDO_MAX-1));
+		(*n)--;
+	}
+	stack[*n].text = Z_StrDup(text);
+	stack[*n].pos = pos;
+	stack[*n].anchor = anchor;
+	(*n)++;
+}
+static void Con_RedoClear(void)
+{
+	while (con_redo_n)
+		Z_Free(con_redo[--con_redo_n].text);
+}
+static void Con_UndoClear(void)
+{
+	while (con_undo_n)
+		Z_Free(con_undo[--con_undo_n].text);
+	Con_RedoClear();
+	con_undo_typed = -1;
+}
+//a new edit replaced `before`
+static void Con_UndoRecord(const char *before, int pos, int anchor)
+{
+	Con_UndoPushTo(con_undo, &con_undo_n, before, pos, anchor);
+	Con_RedoClear();
+}
+//undo (or redo): the top of `from` becomes the line, and the line goes onto `to`
+static qboolean Con_UndoStep(conundo_t *from, int *fromn, conundo_t *to, int *ton)
+{
+	conundo_t u;
+	int len;
+	if (!*fromn)
+		return false;
+	u = from[--*fromn];
+	Con_UndoPushTo(to, ton, (char*)key_lines[edit_line], key_linepos, key_selanchor);
+	len = strlen(u.text);
+	key_lines[edit_line] = BZ_Realloc(key_lines[edit_line], len+1);
+	memcpy(key_lines[edit_line], u.text, len+1);
+	key_linepos = bound(0, u.pos, len);
+	key_selanchor = (u.anchor >= 0 && u.anchor <= len && u.anchor != key_linepos) ? u.anchor : -1;
+	Z_Free(u.text);
+	con_undo_typed = -1;
+	con_commandmatch = 0;
+	con_completionscroll = 0;
+	key_caretmoved = realtime;
+	Key_ConsoleLineEdited(&key_lines[edit_line]);
+	return true;
+}
+
 static void Key_ConsolePaste(void *ctx, const char *utf8)
 {
 	unsigned char **line = ctx;
 	int *linepos = ((line == &chat_buffer)?&chat_bufferpos:&key_linepos);
 	if (utf8 && *utf8)
 	{	//FTESurf Patch 1642: a paste replaces the selection
+		if (line == &key_lines[edit_line] && !con_undo_inkey)
+		{	//FTESurf Patch 1644: an asynchronous paste, after its key's own record
+			Con_UndoRecord((char*)*line, *linepos, key_selanchor);
+			con_undo_typed = -1;
+		}
 		Key_LineDeleteSelection(line, 0, linepos);
 		Key_EntryInsert(line, linepos, utf8);
 		key_caretmoved = realtime;
@@ -2693,7 +2779,7 @@ Key_Console
 Interactive line editing and console scrollback
 ====================
 */
-qboolean Key_Console (console_t *con, int key, unsigned int unicode)
+static qboolean Key_ConsoleKey (console_t *con, int key, unsigned int unicode)
 {
 	qboolean ctrl = keydown[K_LCTRL] || keydown[K_RCTRL];
 	qboolean shift = keydown[K_LSHIFT] || keydown[K_RSHIFT];
@@ -3436,6 +3522,67 @@ qboolean Key_Console (console_t *con, int key, unsigned int unicode)
 }
 
 /*
+FTESurf Patch 1644: Key_Console is the line editor plus undo. Ctrl+Z / Ctrl+Y (and
+Ctrl+Shift+Z) are answered here; every other key goes to Key_ConsoleKey, and if the
+line it leaves differs from the one it was handed, the old one is recorded.
+*/
+qboolean Key_Console (console_t *con, int key, unsigned int unicode)
+{
+	qboolean ctrl = keydown[K_LCTRL] || keydown[K_RCTRL];
+	qboolean shift = keydown[K_LSHIFT] || keydown[K_RSHIFT];
+	char *before;
+	int bpos, banchor, bedit, len;
+	qboolean typed, r;
+
+	if (!con || !con->linebuffered || con_findmode || con->redirect)
+		return Key_ConsoleKey(con, key, unicode);
+
+	if (ctrl && !keydown[K_RALT])
+	{
+		qboolean z = (unicode == 'z' || unicode == 'Z' || unicode == 26/*sub*/);
+		qboolean y = (unicode == 'y' || unicode == 'Y' || unicode == 25/*em*/);
+		if (z && !shift)
+		{
+			Con_UndoStep(con_undo, &con_undo_n, con_redo, &con_redo_n);
+			return true;
+		}
+		if (y || z)
+		{
+			Con_UndoStep(con_redo, &con_redo_n, con_undo, &con_undo_n);
+			return true;
+		}
+	}
+
+	bedit = edit_line;
+	before = Z_StrDup((char*)key_lines[edit_line]);
+	bpos = key_linepos;
+	banchor = (key_selanchor >= 0 && key_selanchor != key_linepos) ? key_selanchor : -1;
+	//a printable character typed with nothing selected: it may join the typing step
+	typed = unicode >= ' ' && unicode != 127 && !ctrl && banchor < 0;
+
+	con_undo_inkey = true;
+	r = Key_ConsoleKey(con, key, unicode);
+	con_undo_inkey = false;
+
+	if (edit_line != bedit)
+		Con_UndoClear();	//Enter sent the line: a new line starts a new history
+	else if (strcmp(before, (char*)key_lines[edit_line]))
+	{
+		len = strlen(before);
+		if (typed && con_undo_typed == bpos && con_undo_n &&
+			!(unicode == ' ' && bpos > 0 && bpos <= len && before[bpos-1] != ' '))
+			Con_RedoClear();	//one more letter of the same word: the step already holds the line before it
+		else
+			Con_UndoRecord(before, bpos, banchor);
+		con_undo_typed = typed ? key_linepos : -1;
+	}
+	else if (key_linepos != bpos)
+		con_undo_typed = -1;	//the caret moved: the next letter starts a new step
+	Z_Free(before);
+	return r;
+}
+
+/*
 FTESurf Patch 1642: con_edittest -- the text-box keys, pressed through Key_Console.
 
 Same instrument as con_selftest: a config cannot press Shift+Left, but the editor is
@@ -3491,8 +3638,6 @@ static void Key_ConEditTest_f (void)
 	char saveline[MAXCMDLINE];
 	int savepos = key_linepos, savehist = history_line, savematch = con_commandmatch;
 	qboolean clip = !strcmp(Cmd_Argv(1), "clip");
-	conline_t *savedisplay = con ? con->display : NULL;	//PgUp below scrolls the log
-	float savescroll = con ? con->displayscroll : 0;
 
 	con_test_fails = 0;
 	Q_strncpyz(saveline, key_lines[edit_line] ? (char*)key_lines[edit_line] : "", sizeof(saveline));
@@ -3504,6 +3649,7 @@ static void Key_ConEditTest_f (void)
 	}
 	history_line = edit_line;
 	con_commandmatch = 0;
+	Con_UndoClear();
 
 	Key_ConSetLine("echo hello world"); key_selanchor = -1;
 	Key_ConEditPress(con, K_LEFTARROW, 0, 1); Key_ConEditPress(con, K_LEFTARROW, 0, 1);
@@ -3570,6 +3716,34 @@ static void Key_ConEditTest_f (void)
 	Key_ConSetLine("say gg");	//what con_settext (and a server stuffing it) does
 	Key_ConEditSel("con_settext drops the selection", "");
 
+	//FTESurf Patch 1644: undo/redo
+	Key_ConSetLine(""); Con_UndoClear();
+	Key_ConEditPress(con, 'a', 'a', 0); Key_ConEditPress(con, 'b', 'b', 0); Key_ConEditPress(con, 'c', 'c', 0);
+	Key_ConEditPress(con, K_SPACE, ' ', 0); Key_ConEditPress(con, 'd', 'd', 0); Key_ConEditPress(con, 'e', 'e', 0);
+	Key_ConEditPress(con, 'z', 26, 2);
+	Key_ConEditLine("Ctrl+Z undoes the last word", "abc", 3);
+	Key_ConEditPress(con, 'z', 26, 2);
+	Key_ConEditLine("...and the one before", "", 0);
+	Key_ConEditPress(con, 'z', 26, 2);
+	Key_ConEditLine("...and stops at the start", "", 0);
+	Key_ConEditPress(con, 'y', 25, 2);
+	Key_ConEditLine("Ctrl+Y redoes", "abc", 3);
+	Key_ConEditPress(con, 'z', 26, 3);
+	Key_ConEditLine("Ctrl+Shift+Z redoes", "abc de", 6);
+	Key_ConEditPress(con, 'a', 'a', 2);
+	Key_ConEditPress(con, 'x', 'x', 0);
+	Key_ConEditPress(con, 'z', 26, 2);
+	Key_ConEditSel("undo brings back the replaced selection", "abc de");
+	Key_ConEditPress(con, K_END, 0, 0);
+	Key_ConEditPress(con, K_BACKSPACE, 0, 0);
+	Key_ConEditPress(con, K_BACKSPACE, 0, 0);
+	Key_ConEditPress(con, 'z', 26, 2);
+	Key_ConEditLine("Backspace is undone one step at a time", "abc d", 5);
+	Key_ConEditPress(con, 'q', 'q', 0);
+	Key_ConEditPress(con, 'y', 25, 2);
+	Key_ConEditLine("a new edit clears redo", "abc dq", 6);
+	Con_UndoClear();
+
 	if (clip)
 	{
 		Key_ConSetLine("copy me"); key_selanchor = -1;
@@ -3584,10 +3758,14 @@ static void Key_ConEditTest_f (void)
 	Key_ConSetLine(saveline);
 	key_linepos = min(savepos, (int)strlen(saveline));
 	key_selanchor = -1;
+	Con_UndoClear();	//FTESurf Patch 1644: the test's steps are not the user's
 	history_line = savehist;
 	con_commandmatch = savematch;
-	con->display = savedisplay;
-	con->displayscroll = savescroll;
+	/*PgUp above scrolled the log: back to the bottom, where the report is. NOT a saved
+	  con->display -- printing reallocates the line being written, so a pointer kept
+	  across the test can dangle (it crashed Con_DrawConsoleLines on the next frame).*/
+	con->display = con->current;
+	con->displayscroll = 0;
 	if (con_test_fails)
 		Con_Printf ("^1con_edittest: %i FAILED^7\n", con_test_fails);
 	else
