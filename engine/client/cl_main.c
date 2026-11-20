@@ -6187,6 +6187,7 @@ void CL_Init (void)
 #endif
 	Cvar_Register (&host_speeds, cl_controlgroup);
 	Cvar_Register (&cl_debug_spikes, cl_controlgroup);
+	CL_Discord_Init();	//FTESurf Patch 1691
 	Cvar_Register (&cl_debug_spike_ms, cl_controlgroup);
 
 	Cvar_Register (&cfg_save_name, cl_controlgroup);
@@ -7838,6 +7839,7 @@ double Host_Frame (double time)
 	Cbuf_Execute ();
 	}
 	RSpeedEnd(RSPEED_INPUT);	//Patch 782
+	CL_Discord_Frame();	//FTESurf Patch 1691
 	if (spike_enabled)
 		spike_input = Sys_DoubleTime();
 
@@ -8690,6 +8692,7 @@ void Host_Shutdown(void)
 
 	//disconnect server/client/etc
 	CL_Disconnect_f();
+	CL_Discord_Shutdown();	//FTESurf Patch 1691: closing the pipe clears the presence
 
 	M_Shutdown(true);
 

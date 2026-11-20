@@ -789,6 +789,7 @@ CLIENT_OBJS = \
 	cl_pred.o	\
 	cl_tent.o	\
 	cl_cam.o	\
+	cl_discord.o	\
 	cl_screen.o	\
 	pr_clcmd.o	\
 	cl_ignore.o \

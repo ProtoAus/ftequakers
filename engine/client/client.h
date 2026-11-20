@@ -1369,6 +1369,9 @@ extern	int in_rawkbd_observechanges;	/*Patch 1424: transitions of the above, so 
 
 void CL_MakeActive(char *gamename);
 void CL_UpdateWindowTitle(void);
+void CL_Discord_Init(void);	//FTESurf Patch 1691, cl_discord.c
+void CL_Discord_Frame(void);
+void CL_Discord_Shutdown(void);
 
 #ifdef QUAKESTATS
 const char *IN_GetPreselectedViewmodelName(unsigned int pnum);
