@@ -1,5 +1,37 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1668 - The Linux ui_imgui plugin reaches players (files_ext; Linux launcher 0.1.7) (game tools + launcher)
+
+**Cause.** P1654 built fteplug_ui_imgui_amd64.so for Linux but no release could ship it: every installed launcher
+(through 0.1.6, source 8de1339) and every engine refuse a whole signed feed when one "files" entry is outside their
+own path policy, so naming it would have stopped every update. P1666 made the game replace the launcher from the feed,
+so a launcher that knows the name can now reach existing installs. Lex: "Well do the still open please. fix it all up."
+
+**Change.** Quakers-Launcher ftesurf-files-ext (0.1.7, from 8de1339; merged into main as 0.1.8): the payload may carry
+"files_ext", entries a launcher before 0.1.7 ignores (it parses the payload without deny_unknown_fields; the engine's
+QKU_FSValidateManifest reads only "files"). decode() appends them to "files" before every check (policy, duplicates,
+sizes, overlap, totals) and flags them; managed() gains the plugin. recover() finishes a journal from an older launcher
+that omits them, and an offline start leaves out an absent one but still verifies a present one, so a stale plugin
+refuses like any wrong file. Game tools/updatefeed.py: EXT = {"linux64": {"fteplug_ui_imgui_amd64.so"}}, a Linux
+stage's plugin goes only to files_ext, validated (exact keys, exec false, unique (path, platform) across both lists,
+its platform has its own files); a feed that drops a files_ext path the previous one shipped is refused in build and
+check_publication (nothing deletes files, so a left-behind plugin would load into a newer engine). src/release/
+release.ps1: $LinuxShipImgui on; -WindowsLauncherRoot names the published Windows bootstrap's source when only the
+Linux launcher changed (frozen, rechecked at sealing; the receipt keeps that Windows provenance for the next reuse);
+refuses a -LauncherRoot without files_ext while the plugin ships, and two launcher sources with different dependency
+sets (one notices file covers both). tools/release_smoke.py rehashes files_ext.
+
+**Review.** One independent read of the first cut (compatibility, security, failure modes) found no break in the
+shipped readers and these, all fixed: nothing kept a later launcher or feed from dropping the plugin; a 0.1.6 journal
+deadlocked 0.1.7's recovery; an offline start refused over a plugin never received; validate() missed duplicates on a
+platform without its own files; the smoke ignored files_ext; the shared notices could misdescribe the Windows launcher.
+
+**Verified.** cargo test (branch) 47 + 7, (main after the merge) 68 + 7 + 32 migrate; test_updatefeed.py 32 OK;
+test_releaselib 127 + the 2 template checks that fail on main; test_bootstrap_reuse 11. Release 0.1.53 (15:01Z,
+engine binaries unchanged from 0.1.52): end to end on the candidate and again in production from the live feed, a
+0.1.52 Linux install's 0.1.6 launcher updates and ignores files_ext, the engine's check replaces it with 0.1.7, 0.1.7
+installs the plugin, plug_list shows it loaded; release_smoke linux64 1380 (plugin and its notices) / win64 1379.
+
 ## Patch 1667 - The Linux release starts on a Wayland compositor with wl_compositor v6
 
 **Cause.** Found while testing Patch 1666, not from a report. The portable Linux build (0.1.49-0.1.51; Debian 11 rootfs,
