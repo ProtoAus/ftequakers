@@ -1,5 +1,55 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1637 - zone and map-settings files accept Ahop (Momentum gamemode 9)
+
+**Cause.** Lex: ahop_coast's published zone says bhop at 100 Hz, "if that's wrong then fix it". It is: Momentum ranks the
+map in ahop and bhop, and the name and the map index say ahop. But zone_edit offered only Surf and Bhop, the engine read
+a zone file's or the local editor file's gamemode as 1 or 2 only (anything else: the zone's ignored with a warning, the
+editor file's whole override thrown out), and the editor's own guess on a map with no settings file read 66.67 Hz as Surf.
+
+**Change.** sv_phys.c: SV_ZoneRulesetFile and SV_ReadEditorRuleset take 9 beside 1 and 2; the warning names it. QC
+(FTESurf P1637): an Ahop button and `zone_edit mode ahop` (presets air accel 10 and, entering or leaving Ahop, gravity
+600/800: mode_ahop.cfg's values, since the local file overrides the mode ruleset), sh_zones.qc reads 9, sv_zones.qc's
+mismatch note knows "ahop", and the panel guesses Ahop from serverinfo gamemode.
+
+**Verified.** Hidden rig, ahop_coast with its zone file at gamemode 9 on a dedicated server: this build "ahop (zone
+file), 18 cvars from cfg/lobby/mode_ahop.cfg" (66.67 Hz, airaccel 10, hull 72/36); the 1633 build "gamemode is not 1
+(surf) or 2 (bhop) - ignored" then "bhop (mapmeta)", and with the candidate map index (ahop_coast 9) "ahop (mapmeta)" --
+the lobby engine's path. Listen server: the panel showed "Lobbies run Ahop from the zone file", press ze_mode_ahop,
+savesettings wrote `gamemode 9 / sv_airaccelerate 10`, and the reload ran "ahop (local editor)".
+
+**Boundary.** Lobbies on older engines ignore a zone's 9 with a warning and use the map index, so the published zone and
+data/mapmeta.txt should agree; the mode is not in zone_crc, so boards do not split by it (as for surf/bhop). The zone
+service never checked gamemode; publishing needs an admin's click. An engine before this one rejects a local settings
+file with `gamemode 9` whole (speed cap and gravity too) while the QC readback says saved: ENGINE.txt pins this one.
+Ahop's timer starts on leaving the zone (sv_timer.qc sets run_t_bhopjump for bhop/bhop-hl1 only).
+
+## Patch 1636 - steam_libraries.txt: a root that is gone, or that beats Steam's own copy, is named
+
+**Cause.** Lex: "do we have a warning for this? can't find mount at location or something?" On 17 Nov a
+steam_libraries.txt from the setup pointed at a Windows Steam library on an NTFS drive flagged dirty; its roots are tried
+before Steam's own libraries, so CS:S came from there (part of its pack unreadable) while Linux Steam had a good copy,
+and nothing said which library supplied the game.
+
+**Change.** fs.c: the first time a listed root is seen and is missing or empty, a warning says it is skipped. When a
+listed root supplies a game, the resolver asks Steam's own libraries for the same game (fs_steamlibs_steamonly makes
+Sys_SteamExtraRoots answer false for that probe) and warns once per game if Steam has a different copy, naming both and
+`fs_steamlibs remove <root>` (CS:GO's two folder names are both asked). The first such line goes in fs_steamlibs_note
+(NOSAVE|NOSET), which the missing-content banner prints (FTESurf P1636) and fs_steamlibs lists; with fs_hidesyspaths
+the home folder shows as ~ (not NOUNSAFEEXPAND: PF_cvar_string would hide it from the banner). `fs_steamlibs remove
+<path>` rewrites both candidate files without the matching lines (case-sensitive off Windows), comments kept; it and
+fs_restart clear the note and the once-only list. Resolution is unchanged: the listed root still wins.
+
+**Verified.** Hidden rig: a fake library with a CS:S whose _011.vpk is missing, listed in steam_libraries.txt, with
+Linux Steam's real CS:S: the warning names both folders and surf_fuchnut's banner carries "Counter-Strike Source is read
+from <root> (steam_libraries.txt), not Steam's own copy". A file listing a comment, /mnt/nonexistent-wos-test/
+SteamLibrary and another root: "missing" once; remove dropped only that line, a second remove said "not listed". No
+steam_libraries.txt: the note stays empty and nothing prints.
+
+**Boundary.** The "rescan" is fs_restart (the resolver re-reads both lists on every rebuild). Paths outside the home
+folder (a /mnt or /run/media mount) are shown as written. Review round 1 (one reviewer): note never cleared, CS:GO
+alias, a wrong "Steam's libraries are used", home paths on screen, case-insensitive remove -- all fixed.
+
 ## Patch 1635 - Tournament pre-enable: a round-end hold ends the run; F6 closes at the countdown
 
 **Cause.** Two findings before tournaments go live (FTESurf BACKLOG, P1634). (1) A tournament server holds its
