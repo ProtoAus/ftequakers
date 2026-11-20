@@ -513,6 +513,14 @@ void Key_UpdateCompletionDesc(void)
 				else
 					Con_Footerf(NULL, false, "%s ^9<value hidden>^7", cmd);
 			}
+			else if (Cvar_ServerValue(var))
+			{	//FTESurf Patch 1641: the value the remote server runs, as the dropdown row shows it.
+				Con_EscapeConsoleMarkup(Cvar_ServerValue(var), safecur, sizeof(safecur));
+				if (desc)
+					Con_Footerf(NULL, false, "%s ^3\"%s\"^7  ^9(on the server)^7\n%s", cmd, safecur, localtext(desc));
+				else
+					Con_Footerf(NULL, false, "%s ^3\"%s\"^7  ^9(on the server)^7", cmd, safecur);
+			}
 			else
 			{
 				Con_EscapeConsoleMarkup(def, safedef, sizeof(safedef));

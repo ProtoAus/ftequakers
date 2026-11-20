@@ -219,6 +219,10 @@ void Cvar_WriteVariables (vfsfile_t *f, qboolean all, qboolean nohidden);
 
 cvar_t *Cvar_FindVar (const char *var_name);
 
+//FTESurf Patch 1641: the value a remote server publishes for this cvar (serverinfo key of the
+//same name) while this client is connected to a server it is not hosting; NULL otherwise.
+const char *Cvar_ServerValue (cvar_t *var);
+
 void Cvar_SetEngineDefault(cvar_t *var, char *val);
 
 void Cvar_Init(void);

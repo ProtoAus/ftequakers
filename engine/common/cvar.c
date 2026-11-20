@@ -1509,6 +1509,39 @@ void Cvar_LockUnsupportedRendererCvar(cvar_t *var, const char *str)
 }
 
 /*
+FTESurf Patch 1641: "I want the values to read correctly live as the server value."
+
+On a remote server the client's own sv_airaccelerate, sv_friction, sv_gravity... are a copy
+nobody uses: the server runs its own, and the client predicts from the keys the server
+publishes in serverinfo (cl_main.c reads them back into movevars; the game's QC republishes
+them on change, and CVAR_SERVERINFO cvars such as sv_maxvelocity and the pm_ ones are
+mirrored by the engine). So typing the name printed a number the game was not using.
+
+This answers "what does the server I am on run" from the same keys the prediction reads, so
+the console and the mover cannot disagree. NULL when there is no remote server to ask:
+disconnected, hosting (a listen server's cvar IS the server's), or the server publishes no
+key of that name. A userinfo cvar is the player's own and a hidden one stays hidden.
+*/
+const char *Cvar_ServerValue (cvar_t *var)
+{
+#ifdef HAVE_CLIENT
+	const char *v;
+	if (!var || cls.state < ca_connected)
+		return NULL;
+	if (var->flags & (CVAR_USERINFO|CVAR_NOUNSAFEEXPAND))
+		return NULL;
+#ifdef HAVE_SERVER
+	if (sv.state >= ss_active && !cls.demoplayback)
+		return NULL;
+#endif
+	v = InfoBuf_ValueForKey(&cl.serverinfo, var->name);
+	return (v && *v) ? v : NULL;
+#else
+	return NULL;
+#endif
+}
+
+/*
 ============
 Cvar_Command
 
@@ -1540,6 +1573,14 @@ qboolean	Cvar_Command (cvar_t *v, int level)
 // perform a variable print or set
 	if (Cmd_Argc() == 1)
 	{
+		const char *sval = Cvar_ServerValue(v);	//FTESurf Patch 1641
+		if (sval)
+		{
+			Con_Printf ("\"%s\" is \"%s\" on the server\n", v->name, COM_QuotedString(sval, buffer, sizeof(buffer), true));
+			if (strcmp(sval, v->latched_string ? v->latched_string : v->string))
+				Con_Printf ("^9Your own copy is \"%s\"; it only applies when you host a game.^7\n", COM_QuotedString(v->latched_string ? v->latched_string : v->string, buffer, sizeof(buffer), true));
+			return true;
+		}
 		if (v->latched_string)
 		{
 			if (v->flags & CVAR_MAPLATCH)
@@ -1641,6 +1682,12 @@ qboolean	Cvar_Command (cvar_t *v, int level)
 	Cmd_ExecLevel = 0;//just to try to detect any bugs that could happen from this
 	Cvar_Set (v, str);	//will use all, quote included
 	Cmd_ExecLevel = olev;
+	{	/*FTESurf Patch 1641: typed on a remote server, the set lands on the local copy
+		  and changes nothing in this game. Say so once, from the console only.*/
+		const char *sval = Cvar_ServerValue(v);
+		if (sval && level == RESTRICT_LOCAL && !Cmd_FromGamecode() && !Cmd_IsInsecure())
+			Con_Printf ("^3%s: the server runs \"%s\"; your change only applies when you host a game.^7\n", v->name, COM_QuotedString(sval, buffer, sizeof(buffer), true));
+	}
 	return true;
 }
 

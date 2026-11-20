@@ -531,6 +531,11 @@ static int Con_BuildCompletion(console_t *con, const char *text, int maxrows)
 				else
 					Con_PushCompletion(con, va("^[^%i/%s^]  ^9<value hidden> (default)^7", col, c->completions[i].text));
 			}
+			else if (Cvar_ServerValue(var))
+			{	/*FTESurf Patch 1641: on a remote server the row shows the value the game runs.*/
+				Con_EscapeConsoleMarkup(Cvar_ServerValue(var), safecur, sizeof(safecur));
+				Con_PushCompletion(con, va("^[^%i/%s^]  ^3\"%s\"^7  ^9(on the server)^7", col, c->completions[i].text, safecur));
+			}
 			else
 			{
 				Con_EscapeConsoleMarkup(def, safedef, sizeof(safedef));
