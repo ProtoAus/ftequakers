@@ -1,5 +1,50 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1640 - TAS uploads: a physics-checked upload service for .rec files from any tool (backend only)
+
+**Cause.** Lex, 20 Nov 2026: TAS records from any tool, bot or fork are fine "as long as the run makes sense physics
+wise", from Steam-linked accounts only. The TAS board took only server re-simulated runs; nothing accepted a file.
+
+**Change.** game surfd/tasupd.py (+ tasupd_wsgi.py), an isolated Flask service beside tasrevd at
+https://play.proto.bar/tasup/ (127.0.0.1:8091, own SQLite store under /srv/nvme/ftesurf-ops/tasupd-state, surfd's
+accounts read-only; no surfd schema or generation change). Steam OpenID sign-in; the SteamID must have a World of Surf
+account and no ban. An upload is a FTESURF-REC at 0.015 tick, whole courses only (no stage legs), not a KSF/Momentum
+import, header within 64 KB, ASCII samples, 8 MB max. tools/tasplaus.py judges it: PASS shown on a per-course board
+("physics checked", file downloadable), HOLD waits for the owner (`tasupd.py list/show/approve/reject/remove` as proto),
+FAIL refused with reasons. Rules (all HOLD): whole-tick samples, precision, ground friction and acceleration, jumps
+from the ground (or vz up to 140 after a clip), jump ticks within air control (|v'|^2 <= |v|^2 + 900), air and
+contact-tick turns, unexplained travel per second, finish/teleport/start-speed checks, at most one lost packet after the
+start, the larger of the zone file's and cfg/maps' sv_maxvelocity. Record backstop: anything reaching the course's best
+known time (surfd's clean ranked/momentum/ksf record or the best shown upload), ties included, and the first upload on a
+course are held, since tasplaus has no collision. Another player's motion (velocity series on the tick grid, or the path
+itself) is held with a note; removed motion is refused; own re-uploads allowed. Caps per account, address and store;
+CSRF and Origin checks; CSP without scripts. tools/install_tasupd.py: root installer (dry run by default, the commit's
+own files under /opt/ftesurf-tasupd, nginx zones in conf.d, one include in play.proto.bar's site with an exact
+predecessor hash, loopback and public health probes, everything put back on failure; --upgrade-from).
+
+**Review.** Nine rounds, three lenses each (control flow and honest runs; the live host; what a cheater gains).
+Rounds 1-4 found and fixed: header read twice, made-up runs passing without friction, velocity-only copy checks beaten
+by 1-degree turns and by sub-tick time shifts, skipped-tick padding, honest slope landings/hops held, an unbounded copy
+comparison (four uploads: ~1 GB), rollback gaps in the installer. Rounds 5-9 (21 Nov, after the branch's first owner
+stopped mid-round): a slow decoy then the same motion as a record skipped the hold; one coarse or `3_4_8.4`-printed
+number widened every bound (speed-ups shown); clocks relabelled +9 ticks, or compressed by dropped ticks (with velocities
+turned or tilted to buy room), hid copies and shown 2-4% speed-ups; removed motion came back through ownership by upload
+order or a held copy; a regex took quadratic time; honest runs held for air wall hits, slow strafing, ramp-gaining short
+courses, %g/%e printing, slopes and stairs in a lost packet, a recorder's last sample a tick early -- all fixed, most
+with a test that fails on the commit before it, every one rerun against the reviewers' own scripts. Now: plain-number syntax, per-pair %g-aware precision, the start-zone
+leave within 2.5 ticks, median + trimmed mean + fast-step counts of the clock in 2D and 3D, copies matched 16 ticks
+either way and up to 10 per account, ownership by shown (or older held) runs, budgets (100000 samples, 20 s a copy
+call, one upload in flight per account, two at once, held-cap attempts counted), `unblock`.
+
+**Verified.** test_tasplaus 75 (+ 117/117 surf_sandtrap2 bonus-4 replays PASS), test_tasupd 81, test_install_tasupd 49
+(Flask 2.3.3 / Werkzeug 2.3.8; the Pi runs 2.2.2 with Python 3.11). Every reviewer exploit of rounds 5-9 rerun: held or
+refused. 276 honest recordings: no verdict changed from round 5 on except the four "never reaches end" fixed to PASS;
+the 117 replays reprinted %g/%e/%.18e at deep coordinates all PASS; no cross-player copy match among them. **Not verified:** the install
+itself (needs root on the Pi). **Known limits (BACKLOG):** no map collision, so a made-up path is held only when it
+reaches the record; a public human replay with its import markers stripped passes; a copy re-timed as a whole by ~0.1%
+is not matched; fabricated steps can spend the fast-step allowance for 3-4 ticks; no in-game upload yet. A determined
+editor below the record remains possible without collision or re-simulation (EXACT in BACKLOG): the owner removes by id.
+
 ## Patch 1693 - Jargon opens on the course you are on and downloads its top runs (game QC only)
 
 **Cause.** Lex, 21 Nov 2026, a screenshot of surf_sandtrap2 bonus 4 with the Jargon panel showing Course "Main", no
