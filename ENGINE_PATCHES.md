@@ -1,5 +1,69 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1665 - A Counter-Strike map's eye height under the GoldSrc profiles
+
+**Cause.** Lex on bkz_goldbhop_gs, 20 Nov 2026: "my view height was to high". Patch 1659 runs every BSP-30 map under
+an AG profile (ag-250 by default), and the AG mover's standing eye was the profile's: 28 above the body's centre
+(Half-Life's VEC_VIEW) for every AG profile, 17 only under cs16. bkz_goldbhop is a Counter-Strike 1.6 map, and so are
+most of the published kz and bhop maps; their ledges, windows and crates are built around CS's lower eye. At Lex's
+save the ledge top is 59 above the feet: Half-Life's eye (64 above the feet) looked over it, CS's (53) does not.
+
+**Change.** engine server/sv_phys.c, common/pm_ag_world.c; new server cvar `sv_goldsrcview` (auto | hl | cs, default
+auto, map-latched like sv_goldsrcprofile).
+- SV_GoldSrcMapIsCS decides per BSP-30 map: its catalogue row (data/goldsrc.net.txt, Patch 1656) needs Counter-Strike
+  or Condition Zero files, or its entity lump has a CS-only class (armoury_entity, func_buyzone, info_map_parameters,
+  hostage/bomb/VIP/escape entities, CS-only weapons; not weapon_knife, which Opposing Force also has), or worldspawn's
+  wad list names cstrike.wad or a cs_*/de_* wad. The lump is read straight from the BSP (bounded to 8 MB, header and
+  lump bounds checked, two terminating NULs), before the world loads.
+  On the 923 published maps: 816 CS, 107 Half-Life (ag_bhop_master and the other AG maps).
+- SV_ApplyMovementProfile's GoldSrc branch publishes the eye through pm_viewheight: 17 under cs16, or under an AG
+  profile on a CS map (auto), or always with `cs`; 28 otherwise, or always with `hl`. The console says
+  "<map> is a Counter-Strike map: eye 17 above the body's centre (sv_goldsrcview hl for 28)". hl and cs apply only on
+  a BSP-30 map (a Source map under an explicit AG profile keeps 28).
+- PMAg_StandView (server and client prediction) takes the eye from movevars.viewheight when it is 12..28, which only
+  the GoldSrc branch publishes; anything else (a bare harness's 0, Source's 64) keeps the profile's own value. The duck
+  blend starts from that eye and still ends at 12. view_ofs follows it, so the +use button search (sv_goldsrc.qc) aims
+  from the CS eye on a CS map, as in CS.
+- PMAg_WaterEye: the waterlevel-3 sample keeps the profile's own eye (stand to stand, the blend at the same fraction,
+  ducked 12; bit-identical when the two agree), so water jumps and currents are unchanged.
+- Movement is unchanged: hull, step, jump, speeds, water and the profile identity (runs stay under ag-250-v1). Source
+  maps never reach the branch.
+
+**Review.** One independent read of the first cut: the shown eye fed the water test (a surface 17-28 above the centre
+stopped a water jump and a current pushed harder on a CS map: movement changed), fixed by PMAg_WaterEye; a one-byte
+over-read on an entity lump ending in an open quote (two NULs); weapon_knife misfiling Opposing Force maps (dropped);
+hl|cs reaching Source maps under an explicit AG profile (gated). Accepted, not fixed: a 0.1.50 client on a new
+dedicated server predicts eye 28 while the server uses 17 (GoldSrc maps are local games today; pm_agversion stays 1
+because an old client refuses a newer one).
+
+**Verified.** tools/test_pm_ag_world.c ServerEye: published 17 stands at 17, blends to 5.5 at half duck, ducks to 12,
+stands back at 17; with eye 17 shown a water surface at 60 or 50 standing and 45 at half duck stays waterlevel 2, 66 is
+3; 64 under AG gives 28; 64 under cs16 gives 17; 28 under cs16 gives 28. The first cut fails the first water check, the
+pre-patch mover the first eye check; this passes the whole harness. Server matrix (new fteqw-sv64): de_dust2 pm_viewheight 64 on old and new; bkz_goldbhop_gs 17
+(hl: 28); ag_bhop_master_gs 28 (cs: 17); kz_cellblock_gs 17 (catalogue row) and the same BSP loose as kz_cellblock 17
+(wad list only); loose ag_bhop_master 28, loose kz_man_everest 17; cs16 17, cs16 + hl 28; the old binary 28 on
+bkz_goldbhop_gs; de_dust2 under an explicit sv_movementprofile ag-250 with sv_goldsrcview cs: 28. Client rig at Lex's
+save: serverinfo pm_viewheight 17, the eye sits below the ledge top (screenshots artifacts/p1665-cs-eye-split.png in
+the lane); ag_bhop_master_gs 28. Linux release drop (Debian 11 rootfs, GCC 10) at this commit: gates all PASS.
+
+**Not verified.** Windows; a player-made BSP-30 map with an overlong wad key (the lump parser truncates a token at
+2047 characters and can misfile such a map, which only moves the camera).
+
+## Patch 1664 - GoldSrc maps: the pre-strafe assist stays off (QC client only)
+
+**Cause.** Lex on bkz_goldbhop_gs, 20 Nov 2026: "I wasn't able to crouch jump into this ledge". The pre-strafe assist
+(BUILD 13b, `run_prestrafe`, default 1) takes +forward for the whole flight of a jump made after 0.25 s on the ground
+with W held, so a standing crouch-jump onto a ledge went straight up. A debug server logged `fwd 0` from the jump
+tick on (fwd 450 the tick before); the server-side bot, which has no client game code, made the same jump.
+
+**Change.** game src/client/cl_main.qc PreStrafe_InputFrame returns (and clears run_ps_release) when
+serverkey("*bspversion") is "30". A KZ climb is exactly a standing jump with W held. Source maps unchanged; the HUD
+key block and wish arrow read run_ps_release, which stays clear there.
+
+**Verified.** Client rig at Lex's save (setpos 1866.07 -1306.37 -347.97, yaw 12.83; +forward, then +jump +duck):
+before, apex z -303 with horizontal speed 0, back on the floor; `run_prestrafe 0` or re-pressing W mid-air landed on
+the ledge; after, with default settings, on the ledge (z -289 standing). csprogs 0 warnings.
+
 ## Patch 1657 - Bhop- and ahop-mode maps: a run starts clean only from a run-up (QC server only)
 
 **Cause.** Patch 1643's rest rule left bhop-mode maps out by design: there the clock starts on a jump taken in the
