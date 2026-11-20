@@ -16,7 +16,9 @@ mismatch note knows "ahop", and the panel guesses Ahop from serverinfo gamemode.
 file), 18 cvars from cfg/lobby/mode_ahop.cfg" (66.67 Hz, airaccel 10, hull 72/36); the 1633 build "gamemode is not 1
 (surf) or 2 (bhop) - ignored" then "bhop (mapmeta)", and with the candidate map index (ahop_coast 9) "ahop (mapmeta)" --
 the lobby engine's path. Listen server: the panel showed "Lobbies run Ahop from the zone file", press ze_mode_ahop,
-savesettings wrote `gamemode 9 / sv_airaccelerate 10`, and the reload ran "ahop (local editor)".
+savesettings wrote `gamemode 9 / sv_airaccelerate 10`, and the reload ran "ahop (local editor)". After review (gravity
+kept from the session, `zone_edit mode ahop` staging Surf, timer text): on surf_ace `zone_edit mode ahop` saved gravity
+600 / air accel 10 and `mode surf` 800 / 150.
 
 **Boundary.** Lobbies on older engines ignore a zone's 9 with a warning and use the map index, so the published zone and
 data/mapmeta.txt should agree; the mode is not in zone_crc, so boards do not split by it (as for surf/bhop). The zone
@@ -48,7 +50,11 @@ steam_libraries.txt: the note stays empty and nothing prints.
 
 **Boundary.** The "rescan" is fs_restart (the resolver re-reads both lists on every rebuild). Paths outside the home
 folder (a /mnt or /run/media mount) are shown as written. Review round 1 (one reviewer): note never cleared, CS:GO
-alias, a wrong "Steam's libraries are used", home paths on screen, case-insensitive remove -- all fixed.
+alias, a wrong "Steam's libraries are used", home paths on screen, case-insensitive remove -- all fixed. Round 2 found
+the display helper printing an unfilled buffer for any root outside the home folder (exactly a /mnt library) or with
+fs_hidesyspaths 0; it now always fills it. Re-run: /mnt/nonexistent-wos-test, a hand-written ~ line and a library
+under /tmp, fs_hidesyspaths 1 then 0 -- each printed as expected, and remove dropped the ~ line as typed. Round 3:
+remove expanded ~ from an uncleaned HOME (a trailing / gave //); fixed as suggested and re-run with HOME=/home/lex/.
 
 ## Patch 1635 - Tournament pre-enable: a round-end hold ends the run; F6 closes at the countdown
 
