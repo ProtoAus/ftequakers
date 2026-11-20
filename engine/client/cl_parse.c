@@ -552,7 +552,8 @@ int CL_IsDownloading(const char *localname)
 
 //FTESurf Patch 1670: a map download queued or running would land under a local server loading that map (and the model
 //cache it shares with us), so SV_Map_f refuses the map meanwhile. Not once the running web transfer has been silent
-//for 60 s (the menu's PJ_STALL): nothing can cancel one, and a dead one would block that map for the session.
+//for 60 s (as the menu's PJ_STALL; its Play holds 62, DL_HOLD_STALL): nothing can cancel one, and a dead one would
+//block that map for the session.
 qboolean CL_MapDownloadHolds(const char *level)
 {
 	char base[MAX_QPATH], bsp[MAX_QPATH+16], gsp[MAX_QPATH+16];
