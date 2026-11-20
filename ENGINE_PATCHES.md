@@ -1,5 +1,217 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1657 - Bhop- and ahop-mode maps: a run starts clean only from a run-up (QC server only)
+
+**Cause.** Patch 1643's rest rule left bhop-mode maps out by design: there the clock starts on a jump taken in the
+START after a ground dwell (SV_TimerJumpWatch), or on the walk out while armed. Speed built before the clock stayed
+clean three ways: an idle body arms on entering a START and starts on leaving it at whatever speed it crossed; an
+armed attempt can hop inside the box (run_starthop is 0 on bhop maps, mode_bhop.cfg) and leave at the speed the
+hops built; and a jump 0.25 s after a fast landing keeps what friction has not removed, which a run in progress or
+finished can use because a START entered then arms nothing until that jump arms and starts in one tick. Owner ruling,
+20 Nov 2026: "pre-speed on bhop is not allowed, you have to start from a run, jump. Not a fly into the start zone at
+max speed." Asked the same day about ahop maps (mode_ahop.cfg also sets run_starthop 0, and they start on leaving):
+"Yes, no pre-speed please besides the run up!"
+
+**Change.** game src/server/sv_timer.qc; cvars `run_bhoprest` (default 1; 0 is the rule before this patch, and
+`run_startrest 0` turns both off) and `run_bhoprestspeed` (default 0, an exact override of the bound), cached per
+map. The rule is on for gamemode bhop, bhop-hl1 and ahop (SV_BhopRestOn).
+- SV_StartUnrested applies on bhop-mode maps: a start without `run_t_rested` takes the SV_TimerPractice funnel and
+  says "unrested start -- on a bhop map start from a run: under 300 on the ground in the start, then jump or leave
+  it (or !r)"; its arm reads AS_HOPPED on the HUD.
+- The start is judged on how it left, not on a rest the arm saw earlier. Every launch commit (an armed attempt, and
+  a run that was RUNNING or FINISHED re-arming in one tick) sets `run_t_rested` to `run_t_restnow` (Patch 1643: some
+  tick of this packet began slow on the ground). In step 1 of SV_TimerFrame, a leave of the armed box takes the same
+  if a launch was latched this packet (the launch commit then finds the run started), and otherwise is unrested when
+  the body's own horizontal speed is at or above SV_TimerRestCap.
+- SV_TimerRestCap under the rule: the larger of run_rearmspeed and SV_TimerRunupCeiling() + 10, the steady state of
+  optimal ground strafing, v^2 = (2aW - a^2) / (1 - k^2) with k = 1 - friction*tick, a = accelerate*W*tick and W the
+  fastest wish speed (sv_maxspeed, times pm_walkspeed where that is ahop's sprint): 299.95 u/s on bhop (0.01 tick)
+  and 504.09 on ahop sprinting. SV_TimerSlowGround uses it too. The formula reproduces the known CS:S prestrafe
+  ceiling, 289.95 at a 0.01 tick, and follows a profile's own numbers.
+- A map push reaching the armed attempt (run_pushed while ARMED: a booster or setspeed in the START) exempts its
+  leave from the own-speed test (`run_t_armpushed`), as SV_TimerSlowGround leaves the carrier out, until the body is
+  seen slow on the ground with no push or a save is restored.
+- Not under a `*movementprofile`: those runs never rank, and the formula does not model hl2-* sprint (a hard-coded
+  factor with pm_walkspeed 0) or the AG mover. The ceiling is worked out once a map.
+- Every new line is gated on the rule; `cmd timer`'s rest line prints `bhop B cap C`; the message names the bound.
+
+**Review.** Two lenses (control flow; what a cheater gains) on the first cut found the same hole independently: the
+armed attempt's rest was sticky, so speed built by hops in the box left clean (bounded by the box's size; a 512-unit
+box allows about 875 u/s). Also the 290 bound's lack of margin, a same-tick launch and leave applying the credit after
+the start, and `run_bhoprest 0` reading differently from control in the diagnostics. All reworked as above. A clause
+withdrawing the rest on any hop in the box was written and removed: the leave check covers the hole, and it would
+have made an honest slow hop out of the box practice. A second round on the rework found a booster in a START would
+make an honest walk-off practice (now exempt), that a launch could be vouched for by an earlier slow tick of its packet
+(Patch 1643 now clears that on a fast ground tick), and that ahop maps were not covered (the owner ruled they are). A
+narrow round on those changes and the ahop extension found the exemption lasting the whole attempt and the formula
+wrong under the hl2-* and AG profiles; both as above, and a further round read that.
+
+**Verified.** game tools/p1657-arms.md. Headless server and client, surf_ace under `sv_gamemode bhop` (run_starthop
+0), control (P1643 as delivered) against the fix, graded on the server's `starts:` line. With both bounds lowered to
+100 so that a 260 u/s run stands in for a body over 300: after `!r`, running out of the START reads rested 1 practice
+0 on control and rested 0 unrested 1 practice 1 on the fix; an idle body running through a START, 0 / unrested 1; a
+jump in the START from a run while a run is live, 0 / unrested 1; the same jump after standing reads rested 1. At the
+default bounds the walk-out, the run-through, `!r` and a jump, a re-launch at a run, and `!r`, run, jump all read
+rested 1 unrested 0 practice 0. `run_bhoprest 0` reads as control line for line. Under `sv_gamemode ahop`, after
+`!r` a run out at 190 reads clean on control and unrested with the bound lowered to 100, and at the computed bound
+(504.089 in `cmd timer`) a walk-out and a sprint-out at 320 read clean. Build 0 warnings; qcframes clean on
+qwprogs. The lobbies' 69 bhop and kz starts with a `seed` (read-only): median 265 u/s, 287 at the honest maximum,
+one at (0, 1200, 460) on bhop_sandtrap, that map's launcher, which leaves slow ground and stays clean.
+
+**Limits.** Not measured: a real bhop map, a real fast landing, an airborne exit (the rig's `!r` in the air left the
+body standing), bhop-hl1, a booster in a START, overlapping STARTs, two players, a live lobby. A launch is judged on
+any tick of its packet and a leave on the packet-end speed, so a client batching commands gains up to about 30 u/s of
+air strafe after a slow ground tick; the start is still latched per packet. A push carrier is left out of the ground
+test, and a map push in the START exempts the leave. The bound is a formula, not a measurement: on ahop nobody has
+measured what a human reaches (the lobbies have one ahop start on record). Game BACKLOG.
+
+## Patch 1652 - Lobbies set run_slowclock 1 (lobby config only)
+
+**Cause.** Patch 840 demotes a run whose game clock fell behind real time (slow-motion play) once the judged sum
+reaches `run_slowclock`, and shipped that bound at 5 s with a note that it was not calibrated. The 20 Nov audit
+flagged it: about five seconds of slowed play could be spent in one hard section of a run that still ranks.
+
+**Change.** game cfg/lobby/lobby.cfg: `set run_slowclock 1`. The QC default stays 5 for games off the lobbies. No QC
+or engine change; the value is read at map load.
+
+**Verified.** Read-only over the lobbies' recordings on 20 Nov: 1,294 files carry a `clk` record (19 players, 231
+maps, the longest 5,151 s of wall time), all written under bound 5. The judged sum is 0.000 at the median, 0.020 at
+p99 and 0.236 s at the honest maximum (a 480 s run with one credited stall); 38 runs had a stall and 14 took a
+credit (largest 0.81 s). Exactly two runs read 0.25 s or more: the owner's own slow-motion tests, 12.5 and 13.1 s
+behind over 27-28 s of wall time, already TF_SLOWCLOCK and cheat-class. So 1 s is four times the honest maximum with
+none of 1,292 honest runs within a factor of four of it.
+
+**Limits.** 19 players. A connection worse than any measured could pass 1 s; the run would then read unranked for a
+slow clock (a demotion, not an accusation). The residual patterns in Patch 840's private note (repaid pauses under the
+hysteresis) are unchanged by a lower bound.
+
+## Patch 1645 - The input report takes "Windows" from in_guard_live as well as sys_platform (QC client only)
+
+**Cause.** The same audit. cl_replay.qc's Rec_InputCvarWin reported the Windows-only input settings (in_rawinput and
+the guard cvars) only while `sys_platform` read "Win" (P1603, so a copied Windows cfg could not describe them on
+Linux). `sys_platform` is a plain cvar: a Windows game whose owner changed it reported like the Linux game, which the
+lobbies rank (marked) without the raw-input, click, touchpad and key rules.
+
+**Change.** Rec_IsWin: Windows if `sys_platform` says so, or if `in_guard_live` is read-only. That cvar exists only in
+the Windows engine (in_win.c, 1576+); `set` returns "is readonly" for a CVAR_NOSET cvar before touching its flags
+(cmd.c), and Cvar_Register replaces a name the launch line pre-set with the engine's own struct and flags (cvar.c).
+Nothing changes for a game that left sys_platform alone, on either platform.
+
+**Verified.** game tools/p1645-platform.md. Linux rig: `cmd timer` reads the same report (`ev "14 0 0 0 1 0"`,
+wouldplat 1) on main and on the patch, and again with `+set sys_platform Win` on the launch line (the cvar then reads
+back "Win", which is the hole). Build 0 warnings.
+
+**Limits.** The Windows half was not run (no Windows game on the build PC): it rests on the two engine sites above and
+on the live keyguard rule (sv_rank_keyguard 1 since 16 Nov), which already ranks a Windows run only when csprogs sees
+`in_guard_live` as read-only. One Windows check is owed (lextest). An engine older than 1576 has no such cvar and can
+still report as Linux. Patch 1646 makes `sys_platform` itself read-only in the engine.
+
+## Patch 1643 - A run starts clean only from rest in its start box (QC server only)
+
+**Cause.** The 20 Nov anti-cheat audit (Lex's request) traced the start rule. SV_TimerArm re-derives an attempt's
+class from the live movetype ("are you noclipping right now") and sv_cheats, and the hopped-start rule judges a
+commanded jump only. So an attempt armed while the body was in flight, or armed after a noclip or a setpos had already
+ended, left its START as a clean run; and a start mark or an off-the-clock save made from such an attempt was a clean
+spot for `!r`. run_startcap (0 since 20 Sep) never applied: it trims a map push's carrier, not the body's own speed.
+The game BACKLOG had carried three entries for these since September ("confirmed in code, not measured"). A read-only
+scan of the lobbies' recordings (about 1,000 clean full and bonus runs with a `seed`) found no start the map does not
+explain: ordinary starts leave at 300-346 u/s and every faster one is a booster map where all runs show the same speed.
+
+**Change.** QC server only (sv_timer.qc, sv_zones.qc, sv_player.qc, sv_saveloc.qc, sv_practicereturn.qc); cvar
+`run_startrest`, default 1, cached per map (0 is the rule before this patch). No engine, recorder, verifier, csprogs
+or surfd change.
+- `.run_t_rested`, cleared by SV_TimerArm (kept when the same armed zone is armed again: the scan re-arms the box
+  SV_ZoneMoveAt armed a tick earlier): this arm has seen the body at rest. Set by SV_TimerPlaceArm (new; the arm of
+  SV_ZoneMoveAt, which has zeroed the velocity), by SV_TimerTryArm for a map teleport that is not fast (Patch 775's
+  SV_TimerFast; its fall is the map's), by the P1008 rest re-arm, by SV_TimerJumpWatch on an armed packet where
+  SV_TimerSlowGround holds (MOVETYPE_WALK, no hold, on the ground, not rising, own horizontal speed under
+  run_rearmspeed, 290; the carrier is left out), and from `.run_t_prerest`.
+- `.run_t_prerest`: PlayerPreThink sets it when SV_TimerSlowGround holds before a command moves the body;
+  PutClientInServer and SV_TimerPlaceArm set it (the server's placement, at rest). SV_TimerFrame hands it to
+  `.run_t_restnow` and clears it once per packet, before any return. SV_TimerTryArm credits `rested` from it only if
+  the packet left the body slow (SV_TimerArriveSlow: own horizontal speed under 290 and not falling faster than 290;
+  a jump's rise passes). A held body runs no SV_TimerFrame, so a body placed and then held -- the tournament countdown
+  respawns, restarts and holds, and the hold voids the arm -- keeps the credit to the packet that lets it go.
+- SV_StartUnrested: on a start-on-leave map (not run_t_bhopjump), an attempt armed in a ZONE_START that leaves without
+  `run_t_rested` is practice; SV_TimerStart says "unrested start" and takes the SV_TimerPractice funnel. Stage boxes
+  keep Lex's 21 Sep rule (run_stagecap 0) and bhop-mode starts are not judged by it.
+- `.run_t_placed`: SV_NoclipWatch raises it at level while the body noclips, SV_SetPosSelf raises it (setpos,
+  tp_player), and SV_ZoneMoveAt raises it for a zone that arms nothing (zone_goto to an END or a checkpoint).
+  SV_TimerArm and the bhop-mode START boundary keep the attempt dirty while it stands. SV_TimerPlaceArm, a spawn and
+  the P1008 rest re-arm (which already refuses a dirty body standing higher than the restart spot) clear it.
+- The latch in saves, key `placed` (the readers are key-match loops, so old and new files read both ways).
+  SV_SaveWriteState writes SV_TimerPlacedNow (below). SV_SaveWriteAt (the position-only shape) writes 1 for a point
+  with no ring sample -- the client's own, from sl_saveview or save sync's add -- and otherwise the sample's
+  RW_PLACED, as SV_RewindWriteState does for a rewind row. The keep-window demotion rewrites the row's own value. A file without
+  the key (older than this patch, or written under run_startrest 0, which writes none): a position-only one (a point
+  its client may have typed) is placed; an off-the-clock or FINISHED one is judged by height in the feet frame -- on
+  the start's floor (no higher than SV_ZoneDestRead + 2, the rest re-arm's ledge, in the START the body is in after the
+  load) it stays a `!r` spot and loads clean, above it neither; a running one reads walked to unless its `cheat` key
+  is set. Both readers decide alike. SV_SaveReadLight keeps the answer in a row
+  column of its own, `rec_sl_placed[]` (allocated, reset, sorted and shifted with the others), and
+  SV_SaveLocPickInZone skips such a row, so `!r` does not restart there. The full restore reads the key the same
+  way, keeps it across retry, and a load or a Multi-Session resume only RAISES the latch from the row, before
+  SV_SaveLoadTag words the next start, saying "not a clean start spot". A restored attempt starts with `rested` clear.
+- What a save records is SV_TimerPlacedNow: the latch, a noclip body, sv_cheats (or an ent_fire-edited map) or an
+  engine spectator (not slow practice or TAS: they still move the body; a start mark counts every cheat level). PlayerPreThink raises the latch for a noclip body per command, before the warp op that runs a save
+  (SV_NoclipWatch runs once a packet). The rewind ring samples it (column RW_PLACED). A match's non-competitor (the
+  tournament's `*spectator`, which runs no PlayerPreThink or PostThink) has every `sl_` command but sl_holdoff refused.
+- run_t_prerest is cleared by a tick that begins on the ground but not slow (SV_TimerFastGround), so run_t_restnow
+  speaks for the packet's last ground tick, not one before a landing.
+- Start marks: `startmark set` needs FL_ONGROUND (SV_TimerMarkGround: under the rule only); `.run_mark_dirty` remembers a mark set while the latch stood or at
+  a cheat level (SV_TimerMarkClean) and `!r` at it raises the latch again over its arm (SV_TimerPlaceTaint). The
+  practice return re-places the body where it stands and keeps a standing latch.
+- SV_ArmStateStat reports an unrested arm as AS_HOPPED (the HUD's "not armed - stand below 290") and a placed one
+  reads AS_NOCLIP. `cmd timer` prints `rest: rule R rested N placed N unrested N prerest N`; a developer server logs
+  `timer: <name> starts: rested N placed N dirty N hopped N cheat N unrested N`.
+
+**Review.** Two independent reviews of the first cut (control flow; what a cheater gains), a re-review of the
+fixes, and a round on the fixes to that. The first cut observed the ground before the arm in the arming packet, so a just-spawned or just-released body
+that was already airborne read unrested: a tournament start with jump held would not have scored. It refused
+`startmark set` under any taint (marks are a practice tool under sv_cheats, slow practice and TAS), and it left the
+saved-spot restart, the mid-air mark and the in-flight armed load open. All reworked as above. The second cut kept
+the saved-spot answer by turning the row's tick into "demoted" in memory, and every load compares the row with its
+file (SV_SaveRowIs): a save taken off the clock while the latch stood could never be loaded again ("that save changed
+on disk"), nor synced, shared or prepared. It also set the latch FROM the row on a load, so a row without the key (a
+rewind's) ended a standing latch, and it read every `demoted` row as placed although the server writes that key for
+honest rows too. The third cut is the column and the `placed` rules above. A fourth round found the third cut's
+rewind rows reading placed for any practice run (it used dirty-or-cheat for the latch: now the ring samples it), the
+per-command save against the per-packet noclip watch, match spectators saving untainted, keyless files trusted, and
+rule 0 still writing the key; all as above. A fifth round found that distrusting every older off-the-clock save
+broke every player's existing "your save" spot (now judged by height), that counting a cheat level flagged slow
+practice saves with messages blaming noclip, and that a packet's earlier slow tick could vouch for a later landing;
+all as above. A sixth found old typed points no longer raising on load, the height test comparing a feet point with
+an origin under centred hulls and calling a writing zone function from a read-only picker, sv_cheats placements (fly)
+unlatched, and the two readers disagreeing; all as above. A seventh read that delta.
+
+**Verified.** game tools/p1643-arms.md. Headless dedicated server + client on surf_ace (engine as installed 20 Nov),
+sv_cheats 0, control (base QC) against the fix, graded on `cmd timer`'s own lines: the fall-through arm reads running
+practice 0 / practice 1 with "unrested start", and the next attempt after the map's fail teleport is armed, practice
+0, rested 1; a start region over the spawn room with jump held reads rested 1 at the first poll (the first cut: rested
+0); the setpos-back arm reads dirty 0 / 1; a mark set there restarts dirty 0 / 1; `!r` after a save made there lands
+on the save / on the map's spot, and its state.txt reads `placed 1`; 6 s standing clears the latch; an ordinary start
+stays practice 0. Round 3 (rows L1-L8): with a walked-to save B and a placed save C in the box `!r` lands on B; C
+loads and reads placed 1 (the second cut: "that save changed on disk"); a load of B does not end a latch a noclip
+raised (the second cut: placed 0); with B deleted `!r` is the map's spot; an sl_saveview row writes `placed 1` and
+its load raises the latch; zone_goto to the END raises it; sl_saveat writes `placed 0` in a clean run and `placed 1`
+after a setpos in the run; under run_startrest 0 a mark is set in the air. Round 4: a save with its `placed` line removed
+is, after a map reload, not where `!r` restarts and its load says "not a clean start spot" (the round-3 build restarts
+there); a hopped-start practice run writes a rewind row `placed 0` (the round-2 build wrote 1). Round 5: of two
+key-stripped saves, the one on the floor stays the `!r` spot and loads clean, the one taken in the air (z 3279) raises
+the latch on load (the round-4 build distrusted both); an older sl_saveview point raises the latch on load (the
+round-5 build loaded it clean). tools/tournament_playtest.py --smoke --round-end: 4 starts, each `rested 1 ... unrested 0` (its own
+round_end_hold_voids_run check is False on main as well: the host's run had been re-armed when the round ended).
+Build 0 warnings; qcframes clean on qwprogs. Three arms first measured nothing (a single late read, a fixture round
+one of several spawn points, a save taken after the rest had already cleared the latch) and are named in the record.
+
+**Limits.** Not measured: a stage box, a retry or Multi-Session restore, the practice return, the keep-window
+demotion, a shared save, save sync's add, the per-command noclip line, a match spectator's refusal, two players, a
+live lobby (bhop-mode maps: Patch 1657). An older save above the start's floor stops being a restart spot until it
+is saved again. In-box hops hidden from the per-packet hop tag by long packets, and carriers in a START, still give
+clean speed (the start is latched per packet). A map teleport into a START is still judged on
+horizontal speed only and does not end the latch; a keyless timed save reads walked to; a start mark is ground-tested
+when set, not when used; the start is still latched per packet. All in the game BACKLOG.
+
 ## Patch 1660 - A GoldSrc texture with no WAD here draws in its own colour
 
 **Cause.** Lex, on the GoldSrc map import: "In Source maps, I got the bot to make an Index of all the textures, so if
