@@ -1,5 +1,152 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1685 - Chat names open profiles; a picture before every name (QC client + menu)
+
+**Problem.** Lex's 21 Nov list: "allow clicking on names in chats, to see their profiles. Also ensure peoples display
+picture is always before their name." The in-game chat drew a picture only for an account mark that had loaded (a line
+without one started at the margin, one still loading left a blank square), and no name could be clicked; the menu's
+lobby chat put no picture beside an ordinary message at all (only the board's "* " lines had one).
+
+**Change.** cl_chat.qc keeps per line who to open (the account mark, else the board's guid digest), the speaker
+prefix's length ("* name", "(name", "name") and the name's initial; every player's line gets the picture's square:
+the picture, else a chip with the initial (Friends lines keep their picture-only rule). With the history open
+(typing), the picture or the prefix under the cursor is underlined and a click there closes chat (as Esc) and opens
+that player's card on its Stats page (Av_OpenAt). Chat_HistHit reports the row and x it hit. m_chat.qc draws the
+sender's picture (or initial chip) before every name; name and picture open Stats, the name underlined on hover.
+
+**Review.** One read found the click area measured after Font_Reset (console font, up to twice the name's width) and
+on HistHit's band rather than the underline's: Chat_NameAt now tests the hover underline's rectangle in ui_font_ui.
+The menu chip strips colour codes (strdecolorize). A second read of the fixes: see the lane.
+
+**Verified.** Rig (nested labwc, local surf_ace, chat_open + chat_mouse): initial chips before both lines, underline
+on hover, a click on the name opened hud_player on the speaker (open 1, Stats, the board's identity), a click 20 px
+past the name kept the selection path (open 0); menu chat with real pictures and initial chips. The in-game half
+reaches players with the lobbies' csprogs.
+
+## Patch 1684 - Open tournament rooms first in the Lobbies grid (menu QC)
+
+**Problem.** Lex: "is it possible for the main lobby selection of maps, to list Tournaments first, with a Special
+coloured name." Tournament rooms were only on the Tournament tab.
+
+**Change.** m_home.qc draws up to 3 rooms from m_tournament.qc's directory ahead of the public lobbies, in gold
+(MH_TOUR_COL): a TOURNAMENT plate where a lobby has its map picture, the room's title, phase and seats. A click opens
+the Tournament tab and joins the room (MT_Connect: Watch once it has started). Home asks the directory every 30 s
+(MT_Directory keeps its own 10 s floor); the grid counts the rooms. The chat line announcing a room is P1674's.
+
+**Review.** surfd refuses a join once a room has started, so a started room's tile only opens the tab; element ids
+carry the room id so a refresh between press and release cannot join another room.
+
+**Verified.** Rig with two fixture rooms (open, drafting): tiles first, gold plate and title, the lobbies after them.
+Joining from a tile is MT_Connect's (P1651) path; not exercised against a live room.
+
+## Patch 1683 - The Settings sky switch no longer stalls (engine gl_warp.c + menu)
+
+**Problem.** Lex: "in-game sky switch in the setting menu is really stutter when changing, I didn't even have a map
+loaded?" r_skybox (and r_skybox_default) carried CVAR_SHADERSYSTEM, so every change re-parsed every shader: measured
+on the rig's menu with no map, 96 shaders reparsed / 93 regenerated, a 21-34 ms frame per switch. The menu set
+r_skybox even with no map, where csprogs applies milk_sky at the next map anyway.
+
+**Change.** gl_warp.c: neither sky cvar has CVAR_SHADERSYSTEM; R_SkyBox_Changed already reloads the sky (R_SetSky),
+and nothing parses the name into another shader. m_settings.qc: the switch sets r_skybox only while connected.
+
+**Verified.** Rig, Settings > In-game sky flipped 3 times each way with no map: control logged "shaders 21-34ms reload
+... 96 reparsed, 93 regenerated" per switch, new no r_skybox change and no reload. Inside surf_ace (new engine): the
+switch set r_skybox milk / "" with no reload line.
+
+## Patch 1682 - Desktop audio for the visualizer on Linux; desktop audio by default (engine snd_vis + menu)
+
+**Problem.** Lex: "desktop audio porting to the main menu visuals, and skybox visuals in linux support. Make this a
+default option, so if someone turns on visualizer skybox it's already ported." The loopback source was WASAPI only
+(snd_vis_loopback_supported 0 elsewhere) and opt-in; with it unavailable the visuals had nothing.
+
+**Change.** snd_vis_loopback.h (VISLB_PULSE): libpulse.so.0 by dlopen, a pa_mainloop pumped without blocking from
+VISLB_Poll (no thread), a FLOAT32LE 48 kHz stereo record stream on @DEFAULT_MONITOR@ (0.5 s held at most, 10 ms
+fragments); a stream whose source name does not end ".monitor" is closed before any sample (never a microphone);
+connect/stream deadline 3 s, retry 5 s; holes are silence and an idle sink is zero-filled like the WASAPI path.
+snd_vis.c: snd_vis_loopback_supported is forced to 1 when libpulse loads; snd_vis_source defaults to 1; the mixer tap
+is always on and the analysis uses the game mix whenever desktop capture is unsupported or not delivering (vis.src
+reinitialises the core on a switch); snd_vis_status says which it is feeding. Menu: "game mix | desktop audio",
+platform-neutral notes; ui_vis_source_rev moves a saved 0 (every cfg holds the old default) to 1 once, on an engine
+whose default is 1 with capture supported. The menu has not autoplayed its own music since P1059, so nothing else
+changes.
+
+**Review.** One read found: no PA_STREAM_DONT_MOVE and a one-time name check (a server moving the stream off an
+unplugged sink would land it on the default source, a microphone) -- now DONT_MOVE (the stream fails and reconnects
+to the new default's monitor) and the name checked every poll; failed opens retried every 2-5 s for good (synchronous
+COM / pa_context_new on the main thread) -- now VISLB_Fail backs off 2 s doubling to 60, reset by packets or a source
+change; a capture stayed open in a game once opened -- now closed after 3 s nobody asked (no menu visuals, no
+visualiser sky). A second read: DONT_MOVE kept a PipeWire stream on the old output when the default changed, so it
+went (the per-poll name check runs before any sample is read, so a move onto a microphone still closes it); the
+backoff resets once a capture has stayed up 10 s (an idle endpoint sends no packets). Open: a desktop that is
+connected but silent while the game plays to another output does not fall back (BACKLOG).
+
+**Verified.** This PC (PipeWire 1.6.11): snd_vis_status "source 1 supported 1 active 1 available 1 packets 3833 rms
+0.028 feeding desktop" with desktop music playing (control engine: "source 0 supported 0"); pactl showed the stream
+"World of Surf visualiser" (float32le 2ch 48 kHz) on alsa_output...iec958-stereo.monitor in the menu and no capture
+in surf_ace with milk_sky 0; the migration moved the copied cfg's 0 to 1. The Windows path is not built here.
+
+## Patch 1681 - Story medals: silver G6, gold G4 (tools + surfd data)
+
+**Problem.** Lex: "Make the Story mode trophies slightly easier ... it's set at G2 and G4? maybe G6 and G4 for
+silver/gold."
+
+**Change.** tools/story_groups.py calibrates silver at the snapshot's group 6 cut and gold at group 4 (index = group:
+[Top 10, G1..G6]); surfd/story.txt regenerated from the unchanged tools/story-groups.json (95 levels with cuts, Events
+untouched); test_story.py checks the new indexes. Live once tools/story_push.py puts it on the Pi (lextest).
+
+**Verified.** test_story 54 OK (the old file fails the new test); story_push --check accepts it (rev 84d58cc6aa73).
+
+## Patch 1680 - Menu text fields scroll inside their box (menu QC)
+
+**Problem.** Lex: "text goes outside of the text box in the main menu". ui_field drew the whole text from the box's
+left edge with no clip: a long chat message ran over the send button and out of the panel.
+
+**Change.** m_main.qc: ui_field and ui_field_sel clip to the box (inside any clip already set) and scroll: the focused
+field keeps an offset moved only as far as keeps the caret in view (sui's own focus rule: sui_begin clears
+sui_text_has_focus until the field's input call), others show their start; sui_text_metrics takes the offset so
+clicks still land on the right character.
+
+**Verified.** Rig: control spills past send; new clips, shows the tail at End, the head at Home, and follows the caret.
+
+## Patch 1679 - Friends: a linear map reads Main (menu QC)
+
+**Problem.** Lex: "if a map has 1 stage, display it as main in the main menu friends list." Lobbies report "Stage 1"
+for a one-segment course, and surfd accepts only Stage/Bonus/Spectating from them (a "Main" would refuse the roster).
+
+**Change.** m_friends.qc MF_Activity: "Stage 1" on a map mapmeta calls linear (or one stage) reads Main.
+
+**Verified.** Rig: a friend on surf_nova read "surf_nova Main" (control "Stage 1"); one on surf_beginner "Stage 2".
+
+## Patch 1678 - Key-cap digits centred at larger HUD scales (QC client)
+
+**Problem.** Lex: "save-lock numbers inside the icons blocks are to low". Measured on the Save Lock menu: ink gaps
+above/below the digit 5/5 px at hud_scale 2, 7/6 at 2.5, 9/7 at 3 -- FONT_CAPDROP's fixed 0.18 over-drops as the rung
+grows.
+
+**Change.** KeyMenu_Row (every digit menu) takes back max(0, lsz - 16) / 8 px from the drop.
+
+**Verified.** Same measurement after (rig, surf_ace, 1600x900): gaps 5/5, 7/7, 8/8 at hud_scale 2, 2.5, 3.
+
+## Patch 1677 - Map filter chips keep their room (menu QC)
+
+**Problem.** Lex: "ahop and kz/climb tags disapearing and reapearing in the menu causes the rest of the menu to shift".
+P1583's chips existed only under Bhop, so the Mode group's width changed with the switch and Library/Extra/Sort moved
+(at 1600 px Library and Extra jumped to the second row).
+
+**Change.** ui_map_filters always counts them; under Surf ui_also_chips draws them inert (dim, no action element).
+
+**Verified.** Rig, Surf vs Bhop: control moved two groups a row; new identical apart from the chips' tint.
+
+## Patch 1676 - Lobby chat box at the panel bottom (menu QC)
+
+**Problem.** Lex: "global chat text box is a little far up the page because of the room it has for 'Chat service
+unavailable' can you place that under the global chat bot floating?"
+
+**Change.** MC_Panel: the field sits 22 px (compact 18) above the panel bottom, 30 px lower; the note is drawn only
+when set, in the padding under the field.
+
+**Verified.** Rig: field 30 px lower; "Chat service unavailable." under it inside the panel.
+
 ## Patch 1689 - The similarity census tells a run stored twice from a copy, and compares turning (game tools only)
 
 **Cause.** Lex's anti-cheat finish list, item 4: the similarity reader should compare angles on top runs. After P1671
