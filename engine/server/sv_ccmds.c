@@ -1279,18 +1279,10 @@ void SV_Map_f (void)
 #endif
 	}
 #ifndef SERVERONLY
-	{	//FTESurf Patch 1670: not a map whose download is queued or running: it would land under this server and the
-		//model cache it shares with the client (round-2 review). The menu's Download refuses the running map likewise.
-		char bsp[MAX_QPATH+16], gsp[MAX_QPATH+16], lower[MAX_QPATH];
-		Q_strncpyz(lower, level, sizeof(lower));
-		Q_strlwr(lower);
-		Q_snprintfz(bsp, sizeof(bsp), "maps/%s.bsp", level);
-		Q_snprintfz(gsp, sizeof(gsp), "goldsrc/%s.pk3", lower);
-		if (CL_IsDownloading(bsp) || CL_IsDownloading(gsp))
-		{
-			Con_Printf("%s is still downloading: load it once that finishes\n", level);
-			return;
-		}
+	if (CL_MapDownloadHolds(level))	//FTESurf Patch 1670: it would land under this server (cl_parse.c)
+	{
+		Con_Printf("%s is still downloading: load it once that finishes\n", level);
+		return;
 	}
 #endif
 #ifndef SERVERONLY

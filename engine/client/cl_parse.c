@@ -550,6 +550,39 @@ int CL_IsDownloading(const char *localname)
 	return 0;
 }
 
+//FTESurf Patch 1670: a map download queued or running would land under a local server loading that map (and the model
+//cache it shares with us), so SV_Map_f refuses the map meanwhile. Not once the running web transfer has been silent
+//for 60 s (the menu's PJ_STALL): nothing can cancel one, and a dead one would block that map for the session.
+qboolean CL_MapDownloadHolds(const char *level)
+{
+	char base[MAX_QPATH], path[MAX_QPATH+16];
+	char *c;
+	if (!strncmp(level, "maps/", 5))
+		level += 5;
+	Q_strncpyz(base, level, sizeof(base));
+	if ((c = strchr(base, '#')))
+		*c = 0;
+	c = base + strlen(base);
+	if (c - base > 4 && !Q_strcasecmp(c - 4, ".bsp"))
+		c[-4] = 0;
+	Q_snprintfz(path, sizeof(path), "maps/%s.bsp", base);
+	if (!CL_IsDownloading(path))
+	{
+		Q_strlwr(base);
+		Q_snprintfz(path, sizeof(path), "maps/%s.bsp", base);
+		if (!CL_IsDownloading(path))
+		{
+			Q_snprintfz(path, sizeof(path), "goldsrc/%s.pk3", base);
+			if (!CL_IsDownloading(path))
+				return false;
+		}
+	}
+	if (cls.download && cls.download->method == DL_HTTP && cls.download->progresstime &&
+		Sys_DoubleTime() - cls.download->progresstime > 60)
+		return false;
+	return true;
+}
+
 //note: this will overwrite existing files.
 //returns true if the download is going to be downloaded after the call.
 #ifdef CSQC_DAT

@@ -1597,6 +1597,8 @@ void HTTP_CL_Think(const char **curname, float *curpercent)
 		}
 		else
 			dl->qdownload.percent = dl->completed*100.0f/total;
+		if (dl->completed != dl->qdownload.completedbytes || !dl->qdownload.progresstime)
+			dl->qdownload.progresstime = Sys_DoubleTime();	//FTESurf Patch 1670: CL_MapDownloadHolds' stall test
 		dl->qdownload.completedbytes = dl->completed;
 
 		if (dl->qdownload.ratetime < currenttime)

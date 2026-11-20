@@ -412,6 +412,7 @@ typedef struct qdownload_s
 	double			ratetime;				//periodically updated
 	int				rate;					//ratebytes/ratetimedelta
 	int				ratebytes;				//updated by download reception code, and cleared when ratetime is bumped
+	double			progresstime;			//FTESurf Patch 1670: when completedbytes last grew (web downloads)
 	unsigned int	flags;
 
 	//chunked downloads uses this
@@ -1517,6 +1518,7 @@ void CL_ShowTrafficUsage(float x, float y);
 void CL_NewTranslation (int slot);
 
 int CL_IsDownloading(const char *localname);
+qboolean CL_MapDownloadHolds(const char *level);	//FTESurf Patch 1670: SV_Map_f's refusal
 qboolean CL_CheckDLFile(const char *filename);
 qboolean CL_CheckOrEnqueDownloadFile (const char *filename, const char *localname, unsigned int flags);
 qboolean CL_EnqueDownload(const char *filename, const char *localname, unsigned int flags);
