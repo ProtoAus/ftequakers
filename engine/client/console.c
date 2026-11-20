@@ -129,6 +129,11 @@ static void QDECL con_window_rect_cb(cvar_t *var, char *oldval);
 static cvar_t		con_window_rect = CVARFCD("con_window_rect", "0 0 640 480", 0, con_window_rect_cb, "Where the console window sits: x y width height, in virtual pixels. Setting it moves the window immediately, so a value in a config applies on the launch it is read.");
 static cvar_t		con_window_titlepad = CVARD("con_window_titlepad", "0", "Padding above and below the console window's title text, in virtual pixels. The title bar is the drag handle, so this is how much bigger than the text it is.");
 static cvar_t		con_scrollwidth = CVARD("con_scrollwidth", "8", "Width of the console window's scrollbar, in virtual pixels.");
+/*FTESurf Patch 1647: Lex, "give the UI of the console a little bit of padding? it's very tight, and I want it
+  to look a bit cleaner like the kitty terminal". Engine defaults keep the old window; FTESurf's default.cfg opts in.*/
+static cvar_t		con_window_padding = CVARD("con_window_padding", "0", "Space between the console window's edges and its text, in virtual pixels: left, right (inside the scrollbar), under the title bar and above the bottom edge. A gap and a hairline also separate the log from the typing line.");
+static cvar_t		con_window_alpha = CVARD("con_window_alpha", "0.8", "Opacity of the console window's background while it has focus (0.625 of it when it does not).");
+static cvar_t		con_window_clean = CVARD("con_window_clean", "0", "1: a quieter console window -- the title in soft grey instead of the highlight colour, a small close mark, a hairline border and a slim scrollbar thumb.");
 static cvar_t		con_colour_back = CVARD("con_colour_back", "0 0.05 0.1", "Console window background colour, \"r g b\" from 0 to 1. The default is the stock navy.");
 static cvar_t		con_colour_accent = CVARD("con_colour_accent", "0.55 0.7 0.95", "Console window accent colour, \"r g b\" from 0 to 1: the scrollbar thumb, its track, and the resize-edge highlights are all derived from this. The default is the stock thumb colour.");
 static cvar_t		con_completionrows = CVARD("con_completionrows", "12", "How many entries of the tab-completion dropdown are shown at once. The rest scroll.");
@@ -275,6 +280,7 @@ static int			con_popuprows;		//conline_t nodes in the chain, the ordinal row inc
 static int			con_popupl;			//the input line's left, right and BOTTOM, in physical
 static int			con_popupr;			//font space -- the same space Con_DrawConsoleLines and
 static int			con_popupb;			//Font_BeginString hand back.
+static int			con_popupwndb;		//FTESurf Patch 1647: the window's bottom edge (pixels) for a clean window, else 0
 /*The window scissor to put back afterwards. Con_DrawCompletionPopup is called
   from inside Con_DrawOneConsole -- see the essay on it for why it cannot simply
   be called at the end of Con_DrawConsole -- so it has to lift and restore the
@@ -1463,6 +1469,9 @@ void Con_Init (void)
 	Cvar_Register (&con_keepscroll, "Console controls");
 	//con_window_rect is registered at the TOP of this function -- Patch 213.
 	Cvar_Register (&con_window_titlepad, "Console controls");
+	Cvar_Register (&con_window_padding, "Console controls");
+	Cvar_Register (&con_window_alpha, "Console controls");
+	Cvar_Register (&con_window_clean, "Console controls");
 	Cvar_Register (&con_scrollwidth, "Console controls");
 	Cvar_Register (&con_colour_back, "Console controls");
 	Cvar_Register (&con_colour_accent, "Console controls");
@@ -2273,6 +2282,8 @@ int Con_DrawInput (console_t *con, qboolean focused, int left, int right, int y,
 				con_popupl    = left;
 				con_popupr    = right;
 				con_popupb    = y + Font_CharHeight();	//the bottom the caller passed in
+				if (con_popupwndb > con_popupb)
+					con_popupb = con_popupwndb + 3;		//FTESurf Patch 1647: hang below the window, clear of its padding and edge
 			}
 			/*Set even when there is nothing to show, so the drop-UP arm below
 			  cannot rebuild the chain and draw it inside the console instead.*/
@@ -3601,7 +3612,11 @@ static int Con_DrawConsoleLines(console_t *con, conline_t *l, float displayscrol
 					sstart += center;
 					send += center;
 
-					R2D_ImageColours(SRGBA(0.1,0.1,0.3, alphaval));
+					{	//FTESurf Patch 1647: the same accent blue as the other selection paths (Patch 1642)
+						vec3_t accent;
+						Con_ParseColour(&con_colour_accent, accent, 0.55f, 0.7f, 0.95f);
+						R2D_ImageColours(SRGBA(accent[0]*0.6f, accent[1]*0.6f, accent[2]*0.6f, 0.55f*alphaval));
+					}
 					if (send < sstart)
 						R2D_FillBlock((send*(float)vid.width)/(float)vid.rotpixelwidth, (y*vid.height)/(float)vid.rotpixelheight, ((sstart - send)*vid.width)/(float)vid.rotpixelwidth, (Font_CharHeight()*vid.height)/(float)vid.rotpixelheight);
 					else
@@ -4380,6 +4395,7 @@ void Con_DrawConsole (int lines, qboolean noback)
 		int keepback = -1;	//nettest: con_keepscroll - how many lines above the live tail the user was reading. -1 = not scrolled / disabled.
 		float keepscroll = 0;
 		int top, sw, gr;	//FTESurf Patch 211/213: title height, scrollbar width, grip size
+		int pad;			//FTESurf Patch 1647: the text's inset (con_window_padding)
 		if ((w->flags & (CONF_HIDDEN|CONF_ISWINDOW)) != CONF_ISWINDOW)
 			continue;
 		/*
@@ -4395,6 +4411,7 @@ void Con_DrawConsole (int lines, qboolean noback)
 		top = Con_WindowTitleHeight();
 		sw  = Con_WindowScrollWidth();
 		gr  = Con_WindowGripSize();		//Patch 213
+		pad = bound(0, con_window_padding.ival, 64);
 
 		if (Key_Dest_Has(kdm_cwindows))
 			fadetime = 0;	//nothing fades when focused.
@@ -4426,10 +4443,10 @@ void Con_DrawConsole (int lines, qboolean noback)
 		one row of text and a few columns of it: the point is that the text region
 		is never allowed to reach zero, because zero is what turns the guard off.
 		*/
-		if (w->wnd_w < CON_WNDBORDER + gr + sw + 32)
-			w->wnd_w = CON_WNDBORDER + gr + sw + 32;
-		if (w->wnd_h < top + gr + 8)
-			w->wnd_h = top + gr + 8;
+		if (w->wnd_w < CON_WNDBORDER + gr + sw + 32 + 2*pad)	//FTESurf Patch 1647: and the padding
+			w->wnd_w = CON_WNDBORDER + gr + sw + 32 + 2*pad;
+		if (w->wnd_h < top + gr + 8 + 2*pad)
+			w->wnd_h = top + gr + 8 + 2*pad;
 		//windows that move off the top of the screen somehow are bad.
 		if (w->wnd_y > vid.height - 8)
 			w->wnd_y = vid.height - 8;
@@ -4482,17 +4499,42 @@ void Con_DrawConsole (int lines, qboolean noback)
 			float back[3], accent[3], a;
 			Con_ParseColour(&con_colour_back, back, 0.0f, 0.05f, 0.1f);
 			Con_ParseColour(&con_colour_accent, accent, 0.55f, 0.7f, 0.95f);
-			a = (con_curwindow==w)?0.8f:0.5f;
+			qboolean xhot = ((w->buttonsdown == CB_CLOSE && w->mousecursor[0] > w->wnd_w-(CON_WNDBORDER+titleh) && w->mousecursor[1] < titleh) || (con_curwindow==w && w->mousecursor[0] >= w->wnd_w-(CON_WNDBORDER+titleh) && w->mousecursor[0] < w->wnd_w-CON_WNDBORDER && w->mousecursor[1] >= 0 && w->mousecursor[1] < titleh));
+			a = bound(0.05f, con_window_alpha.value, 1.0f);	//FTESurf Patch 1647: was a fixed 0.8
+			if (con_curwindow != w)
+				a *= 0.625f;
 
 			R2D_ImageColours(SRGBA(back[0], back[1], back[2], a));
 			R2D_FillBlock(w->wnd_x, w->wnd_y, w->wnd_w, w->wnd_h);
 			//the bar, lifted off the ground so it reads as a handle
 			R2D_ImageColours(SRGBA(back[0]*1.9f+0.03f, back[1]*1.9f+0.03f, back[2]*1.9f+0.03f, a));
 			R2D_FillBlock(w->wnd_x, w->wnd_y, w->wnd_w, titleh);
+			if (con_window_clean.ival)
+			{	/*FTESurf Patch 1647: a hairline round the window and under the bar, in the
+				  accent, so the edge reads without a heavy frame*/
+				R2D_ImageColours(SRGBA(accent[0], accent[1], accent[2], (con_curwindow==w)?0.22f:0.12f));
+				R2D_FillBlock(w->wnd_x, w->wnd_y, w->wnd_w, 1);
+				R2D_FillBlock(w->wnd_x, w->wnd_y+w->wnd_h-1, w->wnd_w, 1);
+				R2D_FillBlock(w->wnd_x, w->wnd_y, 1, w->wnd_h);
+				R2D_FillBlock(w->wnd_x+w->wnd_w-1, w->wnd_y, 1, w->wnd_h);
+				R2D_ImageColours(SRGBA(accent[0], accent[1], accent[2], 0.10f));
+				R2D_FillBlock(w->wnd_x+1, w->wnd_y+titleh, w->wnd_w-2, 1);
+			}
 			R2D_ImageColours(1, 1, 1, 1);
 
-			Draw_FunStringWidthFont(font_console, w->wnd_x+CON_WNDBORDER, w->wnd_y+(int)con_window_titlepad.value, w->title, w->wnd_w-CON_WNDBORDER-titleh, 0, (con_curwindow==w)?true:false);
-			Draw_FunStringWidthFont(font_console, w->wnd_x+w->wnd_w-titleh, w->wnd_y+(int)con_window_titlepad.value, "X", titleh, 2, ((w->buttonsdown == CB_CLOSE && w->mousecursor[0] > w->wnd_w-(CON_WNDBORDER+titleh) && w->mousecursor[1] < titleh) || (con_curwindow==w && w->mousecursor[0] >= w->wnd_w-(CON_WNDBORDER+titleh) && w->mousecursor[0] < w->wnd_w-CON_WNDBORDER && w->mousecursor[1] >= 0 && w->mousecursor[1] < titleh))?true:false);
+			if (con_window_clean.ival)
+			{	/*FTESurf Patch 1647: the title in soft grey (white while focused) at the text's own
+				  left edge, not the highlight red; the close mark small and quiet until hovered*/
+				Draw_FunStringWidthFont(font_console, w->wnd_x+CON_WNDBORDER+pad, w->wnd_y+(int)con_window_titlepad.value,
+					va("%s%s", (con_curwindow==w)?"^7":"^9", w->title), w->wnd_w-CON_WNDBORDER-pad-titleh, 0, false);
+				Draw_FunStringWidthFont(font_console, w->wnd_x+w->wnd_w-titleh, w->wnd_y+(int)con_window_titlepad.value,
+					xhot?"^1x":"^9x", titleh, 2, false);
+			}
+			else
+			{
+				Draw_FunStringWidthFont(font_console, w->wnd_x+CON_WNDBORDER, w->wnd_y+(int)con_window_titlepad.value, w->title, w->wnd_w-CON_WNDBORDER-titleh, 0, (con_curwindow==w)?true:false);
+				Draw_FunStringWidthFont(font_console, w->wnd_x+w->wnd_w-titleh, w->wnd_y+(int)con_window_titlepad.value, "X", titleh, 2, xhot);
+			}
 
 			if (w->backshader || *w->backimage)
 			{
@@ -4639,10 +4681,10 @@ void Con_DrawConsole (int lines, qboolean noback)
 		the grip, so the last line of text can never sit UNDER the bottom grip --
 		text you can read but cannot select, because clicking it resizes instead.
 		*/
-		srect.x = (w->wnd_x+CON_WNDBORDER) / vid.width;
-		srect.y = (w->wnd_y+top) / vid.height;
-		srect.width = (w->wnd_w-(CON_WNDBORDER+gr+sw)) / vid.width;
-		srect.height = (w->wnd_h-top-gr) / vid.height;
+		srect.x = (w->wnd_x+CON_WNDBORDER+pad) / vid.width;	//FTESurf Patch 1647: inside the padding
+		srect.y = (w->wnd_y+top+pad/2) / vid.height;
+		srect.width = (w->wnd_w-(CON_WNDBORDER+gr+sw)-2*pad) / vid.width;
+		srect.height = (w->wnd_h-top-gr-pad-pad/2) / vid.height;
 		srect.dmin = -99999;
 		srect.dmax = 99999;
 		srect.y = (1-srect.y) - srect.height;
@@ -4695,10 +4737,23 @@ void Con_DrawConsole (int lines, qboolean noback)
 				if (pos > 1) pos = 1;
 				thumby = trky + pos * (trkh - thumbh);
 				//FTESurf Patch 211: sized off sw, coloured off con_colour_accent
+				if (con_window_clean.ival)
+				{	//FTESurf Patch 1647: a slim thumb centred in the strip, on a fainter track; the strip
+					//itself still takes the clicks
+					float tw = (sw >= 10) ? sw*0.4f : (sw-2);
+					float tx = trkx + (sw - tw)*0.5f;
+					R2D_ImageColours(SRGBA(accent[0], accent[1], accent[2], 0.05f));	//track
+					R2D_FillBlock(tx, trky+2, tw, trkh-4);
+					R2D_ImageColours(SRGBA(accent[0], accent[1], accent[2], (w->buttonsdown == CB_SCROLLBAR)?0.85f:0.55f));	//thumb
+					R2D_FillBlock(tx, thumby+2, tw, max(4, thumbh-4));
+				}
+				else
+				{
 				R2D_ImageColours(SRGBA(accent[0], accent[1], accent[2], 0.10f));	//track
 				R2D_FillBlock(trkx+1, trky, sw-2, trkh);
 				R2D_ImageColours(SRGBA(accent[0], accent[1], accent[2], 0.85f));	//thumb
 				R2D_FillBlock(trkx+1, thumby, sw-2, thumbh);
+				}
 				R2D_ImageColours(1,1,1,1);
 			}
 			if (R2D_Flush)
@@ -4720,7 +4775,8 @@ void Con_DrawConsole (int lines, qboolean noback)
 			lands in fsy. At the default gr == CON_WNDBORDER this is wnd_h-top, i.e.
 			byte-identical to build 27.
 			*/
-			Con_DrawOneConsole(w, con_curwindow == w && Key_Dest_Has(kdm_console|kdm_cwindows) == kdm_cwindows, font_console, w->wnd_x+CON_WNDBORDER, w->wnd_y+top-CON_WNDBORDER, w->wnd_w-(CON_WNDBORDER+gr+sw), w->wnd_h-top+CON_WNDBORDER-gr, fadetime);
+			//FTESurf Patch 1647: the text box moves in by the padding on the left, right and bottom
+			Con_DrawOneConsole(w, con_curwindow == w && Key_Dest_Has(kdm_console|kdm_cwindows) == kdm_cwindows, font_console, w->wnd_x+CON_WNDBORDER+pad, w->wnd_y+top-CON_WNDBORDER, w->wnd_w-(CON_WNDBORDER+gr+sw)-2*pad, w->wnd_h-top+CON_WNDBORDER-gr-pad, fadetime);
 			if (R2D_Flush)
 				R2D_Flush();
 			BE_Scissor(NULL);
@@ -4919,8 +4975,11 @@ void Con_DrawOneConsole(console_t *con, qboolean focused, struct font_s *font, f
 			if (con->flags & CONF_ISWINDOW)
 			{
 				int skew = (int)(fy - con->wnd_y);
+				int skewx = (int)(fx - (con->wnd_x + CON_WNDBORDER));	//FTESurf Patch 1647: the padding moves fx in
 				selsy -= skew;
 				seley -= skew;
+				selsx -= skewx;
+				selex -= skewx;
 			}
 			Font_BeginString(font, selsx, selsy, &selsx, &selsy);
 			Font_BeginString(font, selex, seley, &selex, &seley);
@@ -4935,12 +4994,28 @@ void Con_DrawOneConsole(console_t *con, qboolean focused, struct font_s *font, f
 	{	/*FTESurf Patch 1642: the mouse in the input line's pixels, by the transform the
 		  selection box above uses (mousecursor is measured from wnd_y for a window).*/
 		int mx = con->mousecursor[0], my = con->mousecursor[1];
+		con_popupwndb = (con_window_clean.ival && (con->flags & CONF_ISWINDOW)) ?
+			(int)(((con->wnd_y + con->wnd_h) * vid.rotpixelheight) / vid.height) : 0;
 		if (con->flags & CONF_ISWINDOW)
+		{
 			my -= (int)(fy - con->wnd_y);
+			mx -= (int)(fx - (con->wnd_x + CON_WNDBORDER));	//FTESurf Patch 1647
+		}
 		Font_BeginString(font, mx, my, &mx, &my);
 		mx += x;
 		my += y;
 		sy = Con_DrawInput (con, focused, x, sx, sy, y, selactive, selsx, selex, selsy, seley, mx, my);	//FTESurf Patch 215: `y` is this window's top, and bounds the dropdown
+		if ((con->flags & CONF_ISWINDOW) && con_window_padding.ival > 0 && con->linebuffered && con->linebuffered != Con_Navigate)
+		{	/*FTESurf Patch 1647: room between the log and the typing line, and a hairline across it*/
+			int gap = (int)((con_window_padding.value * vid.rotpixelheight) / vid.height);
+			vec3_t accent;
+			Con_ParseColour(&con_colour_accent, accent, 0.55f, 0.7f, 0.95f);
+			Font_EndString(font);
+			R2D_ImageColours(SRGBA(accent[0], accent[1], accent[2], 0.16f));
+			Con_InputBlock(x, sy - gap/2, sx - x, 1);
+			R2D_ImageColours(1, 1, 1, 1);
+			sy -= gap;
+		}
 	}
 
 	sx -= con->displayoffset;
