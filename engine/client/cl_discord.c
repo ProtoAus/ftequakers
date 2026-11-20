@@ -26,8 +26,8 @@ only on a state edge.
 
 static cvar_t cl_discord = CVARFD("cl_discord", "1", CVAR_ARCHIVE|CVAR_NOTFROMSERVER,
 	"FTESurf Patch 1691. Show what you are playing on your Discord profile (map, stage, run clock, the map's picture). 0 hides it.");
-static cvar_t cl_discord_appid = CVARFD("cl_discord_appid", "", CVAR_NOTFROMSERVER,
-	"FTESurf Patch 1691. The Discord application the presence belongs to (its name is the game Discord shows). Empty: off.");
+static cvar_t cl_discord_appid = CVARFD("cl_discord_appid", "1573424786774696097", CVAR_NOTFROMSERVER,
+	"FTESurf Patch 1691. The Discord application the presence belongs to (World of Surf's; its name is the game Discord shows). Empty: off.");
 static cvar_t cl_discord_ipcdir = CVARFD("cl_discord_ipcdir", "", CVAR_NOTFROMSERVER,
 	"FTESurf Patch 1691, tests: the folder holding discord-ipc-N instead of the usual ones (not on Windows).");
 
@@ -38,6 +38,7 @@ static cvar_t cl_discord_ipcdir = CVARFD("cl_discord_ipcdir", "", CVAR_NOTFROMSE
 #define DC_STAT_TRACK			56	// 0 main, N bonus N
 #define DC_STAT_OWNER			102	// STAT_FS_STATOWNER: whose stats these are (LT_StatsAreMine); 0 = an older server
 #define DC_THUMBS "https://play.proto.bar/ftesurf/media/thumbs/"
+#define DC_LOGO "https://proto.bar/ftesurf/worldofsurf-512.png"	// the brand kit's square export (src/brand), by URL: no art asset to upload
 
 #ifdef _WIN32
 static HANDLE dc_pipe = INVALID_HANDLE_VALUE;
@@ -254,6 +255,8 @@ static void DC_Read(void)
 		}
 		else if (op == 1 && DC_Event(body, "ERROR"))
 			Con_DPrintf("discord: %.300s\n", body);
+		else if (op == 1)
+			Con_DPrintf("discord: reply %.400s\n", body);	// what Discord kept of an activity (developer 1)
 		if (!DC_OPEN)
 			return;
 	}
@@ -339,7 +342,7 @@ static void DC_Build(char *out, size_t outsize)
 	if (cls.state != ca_active || !cl.worldmodel)
 	{
 		*dc_map = 0;
-		Q_snprintfz(out, outsize, "{\"details\":\"In the menu\",\"assets\":{\"large_image\":\"logo\",\"large_text\":\"World of Surf\"}}");
+		Q_snprintfz(out, outsize, "{\"details\":\"In the menu\",\"assets\":{\"large_image\":\"" DC_LOGO "\",\"large_text\":\"World of Surf\"}}");
 		return;
 	}
 	{
@@ -414,9 +417,9 @@ static void DC_Build(char *out, size_t outsize)
 	}
 	if (!*start && !strstr(state, "(paused)"))
 		Q_snprintfz(start, sizeof(start), ",\"timestamps\":{\"start\":%lld}", (long long)dc_start);
-	image = *dc_thumb ? dc_thumb : "logo";
+	image = *dc_thumb ? dc_thumb : DC_LOGO;
 	Q_snprintfz(out, outsize, "{\"details\":\"%s\",\"state\":\"%s\"%s,\"assets\":{\"large_image\":\"%s\",\"large_text\":\"%s\","
-		"\"small_image\":\"logo\",\"small_text\":\"%s\"}}", details, state, start, image, details, local ? "Local game" : "Online");
+		"\"small_image\":\"" DC_LOGO "\",\"small_text\":\"%s\"}}", details, state, start, image, details, local ? "Local game" : "Online");
 }
 
 void CL_Discord_Frame(void)
