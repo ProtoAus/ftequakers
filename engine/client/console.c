@@ -281,6 +281,7 @@ static int			con_popupl;			//the input line's left, right and BOTTOM, in physica
 static int			con_popupr;			//font space -- the same space Con_DrawConsoleLines and
 static int			con_popupb;			//Font_BeginString hand back.
 static int			con_popupwndb;		//FTESurf Patch 1647: the window's bottom edge (pixels) for a clean window, else 0
+static int			con_popupib;		//FTESurf Patch 1647: the input row's bottom; con_popupb may be the window's instead
 /*The window scissor to put back afterwards. Con_DrawCompletionPopup is called
   from inside Con_DrawOneConsole -- see the essay on it for why it cannot simply
   be called at the end of Con_DrawConsole -- so it has to lift and restore the
@@ -2282,6 +2283,7 @@ int Con_DrawInput (console_t *con, qboolean focused, int left, int right, int y,
 				con_popupl    = left;
 				con_popupr    = right;
 				con_popupb    = y + Font_CharHeight();	//the bottom the caller passed in
+				con_popupib   = con_popupb;
 				if (con_popupwndb > con_popupb)
 					con_popupb = con_popupwndb + 3;		//FTESurf Patch 1647: hang below the window, clear of its padding and edge
 			}
@@ -4213,7 +4215,7 @@ static void Con_DrawCompletionPopup(console_t *con)
 
 	top = con_popupb;			//the bottom of the input row: the popup starts here
 	if (top + h > (int)vid.pixelheight)
-		top = con_popupb - ch - h;	//no room below: flip above the field, one row tall
+		top = con_popupib - ch - h;	//no room below: flip above the field, one row tall (Patch 1647: the field, not the window's bottom)
 	if (top < 0)
 		top = 0;
 	bot = top + h;
@@ -4852,6 +4854,7 @@ void Con_DrawConsole (int lines, qboolean noback)
 		{	//FTESurf Patch 1642: the mouse in the same pixels as the input line
 			int mx, my;
 			Font_BeginString(font_console, mousecursor_x, mousecursor_y, &mx, &my);
+			con_popupwndb = 0;	//FTESurf Patch 1647: a clean window drawn earlier must not place this popup
 			y = Con_DrawInput (con_current, Key_Dest_Has(kdm_console), x, ex - x, y, top, selactive, selsx, selex, selsy, seley, mx, my);	//FTESurf Patch 215: `top` bounds the dropdown
 		}
 
@@ -5007,7 +5010,7 @@ void Con_DrawOneConsole(console_t *con, qboolean focused, struct font_s *font, f
 		sy = Con_DrawInput (con, focused, x, sx, sy, y, selactive, selsx, selex, selsy, seley, mx, my);	//FTESurf Patch 215: `y` is this window's top, and bounds the dropdown
 		if ((con->flags & CONF_ISWINDOW) && con_window_padding.ival > 0 && con->linebuffered && con->linebuffered != Con_Navigate)
 		{	/*FTESurf Patch 1647: room between the log and the typing line, and a hairline across it*/
-			int gap = (int)((con_window_padding.value * vid.rotpixelheight) / vid.height);
+			int gap = (int)((bound(0, con_window_padding.ival, 64) * vid.rotpixelheight) / vid.height);	//the clamp the insets use
 			vec3_t accent;
 			Con_ParseColour(&con_colour_accent, accent, 0.55f, 0.7f, 0.95f);
 			Font_EndString(font);
