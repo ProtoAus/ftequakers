@@ -1,5 +1,26 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1653 - Main-menu render audit; Story and Event rows stop re-matching every lobby (QC only; no engine change)
+
+**Cause.** Lex: "audit all of the main menu/s to ensure they render 'quickly' ... all the menus when not loading into a
+map." Measured every out-of-game screen; Story and Event took 6.5-8.3 ms a frame where the rest took about 1. A skip
+test put ~5 ms in the ladder rows: Sty_LivePlayers (the live-player count on the header, the side panel and every
+visible row) compared every lobby's map with every level of the ladder on each call -- 12 lobbies x 120 levels, three
+builtins a pair, ~50,000 builtin calls a frame.
+
+**Change.** m_story.qc: Sty_LiveIndex keeps, per lobby row, whether its map is one of ladder L's levels, rebuilt only
+when the lobby list (lb_received, lb_count), the ladder (sty_lrecv, sty_nlv[L]) or L changes. Sty_LivePlayers sums
+the flagged live lobbies (on one map when `map` is set), the same answer as before.
+
+**Verified.** Nested headless labwc at 1600x900, cl_maxfps 0, menu commands driving each screen (artifacts
+menu_audit.py), r_frametime/r_budget per screen, steady average ms: home 0.8-1.8, Maps 1.4, Story 1.6 (was 6.5-7.4),
+Event 1.6 (was 6.5-8.3), Settings 1.0 (sections 1.0-1.5), Tournament 0.9, Stats 1.3, Updates 0.4, Chat 1.0, Terms 0.9.
+profile_menuqc: the largest QC self cost on every screen is sui's rounded box (_sui_round_draw, ~7 drawsubpic calls a
+box), but skipping it on Story gained little real time, so it stays in QC.
+
+**Boundary.** The first visit to Story, Stats, Settings or Maps has one 23-32 ms frame (second visits 3-6 ms), from
+first-use loading; not changed here.
+
 ## Patch 1647 - Console window: padding and a quieter look
 
 **Cause.** Lex: "give the UI of the console a little bit of padding? it's very tight, and I want it to look a bit
@@ -23,9 +44,16 @@ titlepad 7 -- padded text, grey title, hairline border, divider above the input,
 pointer drag in the log, screenshotted with the button held, highlights from the pressed character to the released one;
 a click on the input line puts the caret after the clicked character.
 
+**Review.** One independent round: with the popup hung below a clean window, its "no room below" flip still measured
+from that bottom, so the flipped list covered the typing line (and its click rows sat on it); a clean window's bottom
+stayed set for the drop-down console drawn after it; the divider gap read con_window_padding unclamped where the insets
+stop at 64. Fixed: the flip measures from the input row (con_popupib), the drop-down path clears con_popupwndb, the
+gap uses the clamp. Re-review of the fix: nothing further. After the fix, at cfg/default.cfg's values (1600x900): `sv_air`
+hangs its popup below the window; `r_` (457 matches) flips it to end on the typing line's top with the line visible; a
+log drag highlights in the accent blue from the pressed character; con_window_padding 200 insets and gaps by 64.
+
 **Boundary.** Padding applies to console windows (con_window 1), not the classic drop-down console. Line spacing is
-unchanged (the console assumes rows of one font height in ~50 places). The colour of the log's drag highlight was read
-from the code after the screenshot round.
+unchanged (the console assumes rows of one font height in ~50 places).
 
 ## Patch 1644 - Console: Ctrl+Z undo, no "]" prompt
 
