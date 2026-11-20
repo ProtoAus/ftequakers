@@ -2805,7 +2805,8 @@ qboolean QC_MenuTable(const char *name)
 {
 	static const char *const tables[] = {"mapdeps.txt", "mapdeps.net.txt", "mapmeta.txt", "mapmeta.net.txt",
 		"mapmedia.tmp", "mapdl.txt", "mapdl.net.txt", "mapdl.net.tmp", "mapmeta_override.txt",
-		"mapparticles.txt", "mapwr.txt"};
+		"mapparticles.txt", "mapwr.txt",
+		"goldsrc.net.txt", "goldsrc.net.tmp", "wadcolours.net.txt", "wadcolours.net.tmp"};	//FTESurf Patch 1656, 1660
 	const char *s = name, *seg;
 	size_t i;
 	if (!name || !QC_TasprojSeg(&s, "data", false))

@@ -263,8 +263,12 @@ NATIVE_PLUGINS+=ffmpeg
 #   a shared object".  So only fully-static-link on the windows targets.
 ifeq ($(findstring win,$(FTE_TARGET)),win)
     PLUG_FULLSTATIC=-static
+    IMGUI_LINKHIDE=
 else
     PLUG_FULLSTATIC=
+    #Patch 1654: the static libstdc++ stays private to the ImGui plugin, so a libstdc++.so already in the process
+    #(GL drivers load one) cannot interpose its symbols.
+    IMGUI_LINKHIDE=-Wl,--exclude-libs,ALL
 endif
 
 ######################################
@@ -516,7 +520,7 @@ $(OUT_DIR)/ui_imgui/vendor/%.o: ui_imgui/vendor/%.cpp $(IMGUI_HEADERS)
 	@mkdir -p $(dir $@)
 	$(CXX) $(PLUG_CXXFLAGS) -std=c++17 -DIMGUI_USE_WCHAR32 -Wall -Wextra -Werror -O1 -c $< -o $@
 $(PLUG_PREFIX)ui_imgui$(PLUG_NATIVE_EXT): $(IMGUI_OBJECTS)
-	$(CXX) -shared $(PLUG_CXXFLAGS) $^ $(PLUG_LDFLAGS) -static-libstdc++ $(PLUG_FULLSTATIC) -o $@
+	$(CXX) -shared $(PLUG_CXXFLAGS) $^ $(PLUG_LDFLAGS) -static-libstdc++ $(PLUG_FULLSTATIC) $(IMGUI_LINKHIDE) -o $@
 	$(call EMBEDMETA,ui_imgui,$@,Native ImGui Gallery,Explicit QC draw-site gallery; no real-panel or input migration.)
 #NATIVE_PLUGINS+=ui_imgui
 

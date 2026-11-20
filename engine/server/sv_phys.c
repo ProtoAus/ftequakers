@@ -4295,8 +4295,12 @@ static void SV_AGOverride(const char *name, const char *value)
 //Patch 1659: is the map about to load a GoldSrc BSP? Its package is mounted by now (SV_Map_f's automount).
 static qboolean SV_MapIsGoldSrc(const char *name)
 {
+	extern char sv_mappreferhint[];
 	int ver = 0;
-	vfsfile_t *f = FS_OpenVFS(va("maps/%s.bsp", name), "rb", FS_GAME);
+	vfsfile_t *f;
+	FS_SetPreferHint(sv_mappreferhint);	//the copy an "@spec/name" load will use (consumed later, sv_init.c)
+	f = FS_OpenVFS(va("maps/%s.bsp", name), "rb", FS_GAME);
+	FS_ClearPreferHint();
 	if (!f)
 		return false;
 	if (VFS_READ(f, &ver, sizeof(ver)) != sizeof(ver))

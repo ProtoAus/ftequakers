@@ -10776,15 +10776,45 @@ static qboolean FS_Addon_MountMomentumPack(const char *syspath, const char *pakn
 	Con_DPrintf("fs_load: automatic Source pack \"%s\"\n", pakpath);
 	return true;
 }
-//FTESurf Patch 1656: one archive as an addon mount (a GoldSrc map package). UNTRUSTED: third-party files, so
-//nothing in it answers a secure lookup or a ruleset read.
+//FTESurf Patch 1656: a GoldSrc package may hold only what tools/gsrcpack.py writes: maps/<id>.bsp, WADs at its
+//root, and models, sprites, sounds and sky images. Anything else (a cfg, shader, progs, particle script) refuses
+//the whole package, so a packing mistake cannot add a file the engine would run.
+typedef struct {const char *bsp; int bad; char first[MAX_QPATH];} gspackcheck_t;
+static int QDECL FS_Addon_PackFileOk(const char *fname, qofs_t fsize, time_t mtime, void *parm, searchpathfuncs_t *spath)
+{
+	gspackcheck_t *c = parm;
+	const char *ext = COM_GetFileExtension(fname, NULL);
+	qboolean ok;
+	if (!Q_strcasecmp(fname, c->bsp))
+		ok = true;
+	else if (!Q_strcasecmp(ext, ".wad"))
+		ok = !strchr(fname, '/');
+	else if (!Q_strncasecmp(fname, "models/", 7))
+		ok = !Q_strcasecmp(ext, ".mdl");
+	else if (!Q_strncasecmp(fname, "sprites/", 8))
+		ok = !Q_strcasecmp(ext, ".spr");
+	else if (!Q_strncasecmp(fname, "sound/", 6) || !Q_strncasecmp(fname, "media/", 6))
+		ok = !Q_strcasecmp(ext, ".wav") || !Q_strcasecmp(ext, ".mp3") || !Q_strcasecmp(ext, ".ogg");
+	else if (!Q_strncasecmp(fname, "gfx/env/", 8))
+		ok = !Q_strcasecmp(ext, ".tga") || !Q_strcasecmp(ext, ".bmp");
+	else
+		ok = false;
+	if (!ok && !c->bad++)
+		Q_strncpyz(c->first, fname, sizeof(c->first));
+	return true;
+}
+//One archive as an addon mount (a GoldSrc map package). UNTRUSTED: third-party files, so nothing in it answers a
+//secure lookup or a ruleset read.
 static qboolean FS_Addon_MountPack(const char *arg, const char *syspath)
 {
-	char dir[MAX_OSPATH];
+	static const char *const depth[] = {"*", "*/*", "*/*/*", "*/*/*/*", "*/*/*/*/*", "*/*/*/*/*/*"};
+	char dir[MAX_OSPATH], bsp[MAX_QPATH], id[MAX_QPATH];
 	searchpath_t *s, *oldpaths = NULL;
 	searchpathfuncs_t *pak;
 	vfsfile_t *file;
+	gspackcheck_t check;
 	char *sl;
+	int i;
 
 	for (s = com_searchpaths; s; s = s->next)
 		if (!Q_strcasecmp(s->logicalpath, syspath))
@@ -10795,7 +10825,20 @@ static qboolean FS_Addon_MountPack(const char *arg, const char *syspath)
 	pak = FS_OpenPackByExtension(file, NULL, COM_SkipPath(syspath), syspath, "");
 	if (!pak)
 	{
-		Con_Printf(CON_WARNING"fs_load: \"%s\" is not a readable package\n", syspath);
+		Con_Printf(CON_WARNING"fs_load: \"%s\" is not a readable package\n", COM_SkipPath(syspath));
+		return false;
+	}
+	COM_StripExtension(COM_SkipPath(syspath), id, sizeof(id));
+	Q_snprintfz(bsp, sizeof(bsp), "maps/%s.bsp", id);
+	memset(&check, 0, sizeof(check));
+	check.bsp = bsp;
+	for (i = 0; i < countof(depth); i++)
+		pak->EnumerateFiles(pak, depth[i], FS_Addon_PackFileOk, &check);
+	if (check.bad)
+	{
+		Con_Printf(CON_WARNING"%s: not mounted, it holds %i file%s a map package may not (%s)\n",
+				   COM_SkipPath(syspath), check.bad, check.bad==1?"":"s", check.first);
+		pak->ClosePath(pak);
 		return false;
 	}
 	Q_strncpyz(dir, syspath, sizeof(dir));
@@ -10998,6 +11041,26 @@ static void FS_Addon_Raise(char paths[][MAX_OSPATH], int count)
 
 	COM_WorkerLock();
 	Sys_LockMutex(fs_thread_mutex);
+	//already in place: each family's nodes, in order, right after the mod's own paths, and none further down
+	for (link = &com_searchpaths; *link && !((*link)->flags & SPF_ADDON); )
+		link = &(*link)->next;
+	for (sp = *link, i = 0; i < count; i++)
+		for (len = strlen(paths[i]); sp && len && FS_Addon_IsFamily(sp, paths[i], len); )
+			sp = sp->next;
+	for (; sp; sp = sp->next)
+	{
+		for (i = 0; i < count; i++)
+			if (*paths[i] && FS_Addon_IsFamily(sp, paths[i], strlen(paths[i])))
+				break;
+		if (i < count)
+			break;
+	}
+	if (!sp)
+	{
+		Sys_UnlockMutex(fs_thread_mutex);
+		COM_WorkerUnlock();
+		return;
+	}
 	for (i = 0; i < count; i++)
 	{
 		len = strlen(paths[i]);
@@ -12580,12 +12643,37 @@ static void FS_Cache_Clear_f(void)
 //ftesurf (P184): the drop pass, run from SV_SpawnServer once the map is committed.
 //ftesurf (P186): and the point at which the asset-cache harvest is armed, because this is the
 //first moment the set of packs that are ours is final AND the map is known to exist.
+//FTESurf Patch 1656: a GoldSrc map's mounts (its package, and the Half-Life folders this code mounted) last only as
+//long as that map: fs_gswant says whether the map now loading is one, fs_gsours what was raised for the last one.
+static qboolean fs_gsactive, fs_gswant;
+static char fs_gsours[4][MAX_OSPATH];
+static int fs_numgsours;
+static void FS_GoldSrc_AfterDrop(void)
+{
+	int i, j;
+	if (fs_gsactive && !fs_gswant)
+	{	//fs_autounmount 0 keeps other packs, never these: a Source map must not see GoldSrc files
+		for (i = 0; i < fs_numgsours; i++)
+			for (j = 0; j < fs_numautomounted; j++)
+				if (!Q_strcasecmp(fs_automounted[j], fs_gsours[i]))
+				{
+					FS_Addon_Unmount(fs_automounted[j]);
+					memmove(fs_automounted[j], fs_automounted[j+1], (fs_numautomounted-j-1)*sizeof(fs_automounted[0]));
+					fs_numautomounted--;
+					break;
+				}
+	}
+	fs_gsactive = fs_gswant;
+	if (!fs_gsactive)
+		fs_numgsours = 0;
+}
 void FS_AutoUnmountStale(void)
 {
 	int i, j;
 
 	if (!fs_automount.ival || !fs_autounmount.ival)
 	{
+		FS_GoldSrc_AfterDrop();	//P1656
 		FS_Cache_BeginMap();	//ftesurf (P186): still arm the harvest -- it does not depend on the drop
 		return;
 	}
@@ -12618,6 +12706,7 @@ void FS_AutoUnmountStale(void)
 	}
 
 	//ftesurf (P186): last, so SPF_HARVEST is computed from the set that survived the drop.
+	FS_GoldSrc_AfterDrop();	//P1656: nothing of a GoldSrc map is left in the set the harvest reads
 	FS_Cache_BeginMap();
 }
 //ftesurf (P1102): a data/map* table, read only from the gamedir's own loose files -- FS_GAMEONLY
@@ -12741,7 +12830,7 @@ static qboolean FS_GoldSrc_Id(const char *name, char *id, size_t idsize)
 		id[i] = c;
 	}
 	id[l] = 0;
-	return true;
+	return l > 3 && !strcmp(id + l - 3, "_gs");	//tools/gsrcpack.py's suffix: a catalogue can never name a Source map
 }
 static qboolean FS_GoldSrc_Hex64(const char *h)
 {
@@ -12765,12 +12854,14 @@ qboolean FS_GoldSrc_Row(const char *name, goldsrcrow_t *row)
 	file = FS_LoadTable(FS_GOLDSRC_NET);
 	if (!file)
 		return false;
-	if (!strncmp(file, "FTESURF-GOLDSRC 1", 17))
+	if (!strncmp(file, "FTESURF-GOLDSRC 1", 17) && (file[17] == '\n' || file[17] == '\r'))
 	for (line = file; line && *line && !found; line = nl)
 	{
 		nl = strchr(line, '\n');
 		if (nl)
 			*nl++ = 0;
+		if (nl && nl - line >= 2 && nl[-2] == '\r')
+			nl[-2] = 0;
 		if (strncmp(line, "gs ", 3) || sscanf(line, "gs %63s %15s %lu %lu %71s %d %d %71s",
 				rid, rkind, &rxz, &rpk3, rsha, &rneeds, &rflags, rxzsha) != 8)
 			continue;
@@ -12782,6 +12873,7 @@ qboolean FS_GoldSrc_Row(const char *name, goldsrcrow_t *row)
 			Q_strncpyz(row->sha, rsha, sizeof(row->sha));
 			Q_strncpyz(row->xzsha, rxzsha, sizeof(row->xzsha));
 			row->pk3bytes = rpk3;
+			row->xzbytes = rxz;
 			row->needs = rneeds;
 		}
 	}
@@ -12811,6 +12903,52 @@ qboolean FS_GoldSrc_Package(const char *name, char *syspath, size_t syssize, qbo
 	}
 	return true;
 }
+//Is the package at syspath the catalogue's bytes? Hashed once per session per (path, size, sha).
+static qboolean FS_GoldSrc_Verified(const char *syspath, const goldsrcrow_t *row)
+{
+	static struct {char path[MAX_OSPATH]; char sha[65]; qofs_t size; qboolean ok;} seen[16];
+	static int next;
+	qbyte buf[16384], digest[DIGEST_MAXSIZE];
+	char got[72];
+	vfsfile_t *f;
+	qofs_t size;
+	void *ctx;
+	int i, n;
+
+	f = VFSOS_Open(syspath, "rb");
+	if (!f)
+		return false;
+	size = VFS_GETLEN(f);
+	for (i = 0; i < countof(seen); i++)
+		if (seen[i].size == size && !strcmp(seen[i].sha, row->sha) && !strcmp(seen[i].path, syspath))
+		{
+			VFS_CLOSE(f);
+			return seen[i].ok;
+		}
+	if (size != row->pk3bytes)
+	{
+		VFS_CLOSE(f);
+		return false;
+	}
+	ctx = alloca(hash_sha2_256.contextsize);
+	hash_sha2_256.init(ctx);
+	while ((n = VFS_READ(f, buf, sizeof(buf))) > 0)
+		hash_sha2_256.process(ctx, buf, n);
+	VFS_CLOSE(f);
+	hash_sha2_256.terminate(digest, ctx);
+	got[Base16_EncodeBlock((const char*)digest, hash_sha2_256.digestsize, (qbyte*)got, sizeof(got)-1)] = 0;
+	i = next++ % countof(seen);
+	Q_strncpyz(seen[i].path, syspath, sizeof(seen[i].path));
+	Q_strncpyz(seen[i].sha, row->sha, sizeof(seen[i].sha));
+	seen[i].size = size;
+	seen[i].ok = !Q_strcasecmp(got, row->sha);
+	return seen[i].ok;
+}
+qboolean FS_GoldSrc_Involved(const char *map)
+{
+	qboolean have;
+	return fs_gsactive || (FS_GoldSrc_Package(COM_SkipPath(map), NULL, 0, &have) && have);
+}
 //The mounts a GoldSrc map wants, most specific first; 0 when the map has no package here.
 static int FS_GoldSrc_Wants(const char *map, char specs[][MAX_OSPATH])
 {
@@ -12823,16 +12961,21 @@ static int FS_GoldSrc_Wants(const char *map, char specs[][MAX_OSPATH])
 
 	if (!FS_GoldSrc_Package(map, specs[0], sizeof(specs[0]), &have) || !have)
 		return 0;
-	n = 1;
 	listed = FS_GoldSrc_Row(map, &row);
-	if (listed)
-		needs = row.needs;
+	if (!listed || !FS_GoldSrc_Verified(specs[0], &row))
+	{	//only the catalogue's bytes mount; a stale or foreign file is left alone (the menu offers the download again)
+		Con_Printf(CON_WARNING"goldsrc/%s: %s, not mounted\n", COM_SkipPath(specs[0]),
+				   listed ? "not the catalogue's package" : "not in the GoldSrc catalogue");
+		return 0;
+	}
+	n = 1;
+	needs = row.needs;
 	for (i = 0; i < countof(games); i++)
 	{	//A game the row names is wanted even when absent, so the miss is reported. Half-Life itself is also
 		//taken whenever installed: door, button and breakable sounds are named by number, not in the catalogue.
-		if (!(listed && (needs & bits[i])))
+		if (!(needs & bits[i]))
 		{
-			if (bits[i] == 4 || (listed && bits[i] == 2))
+			if (bits[i] != 1)
 				continue;
 			if (!FS_Addon_ResolveEx(games[i], path, sizeof(path), true))
 				continue;
@@ -12866,6 +13009,7 @@ void FS_AutoMountForMap(const char *mapname)
 	Before the fs_automount early-out, because the previous map's harvest has to be flushed
 	even if the cvar was turned off in between. */
 	FS_Cache_EndMap();
+	fs_gswant = false;	//P1656
 
 	//ftesurf (P231): "I do not know" is the honest answer on every path that gives up below,
 	//and it has to be written BEFORE the first of them -- see fs_automount_state.
@@ -12913,6 +13057,7 @@ void FS_AutoMountForMap(const char *mapname)
 	if (!file && !numgs)
 	{
 		fs_numautomountwant = 0;	//no table: this map wants nothing, so the last GoldSrc map's mounts go
+		*fs_hv_pending = 0;
 		return;
 	}
 
@@ -12973,6 +13118,7 @@ void FS_AutoMountForMap(const char *mapname)
 			wantpath[numwant][0] = 0;
 	}
 	numgs = numwant - firstgs;
+	fs_gswant = numgs > 0;
 
 	//ftesurf (P186): the name the harvest will be filed under, if this load commits.  `want` is
 	//already normalised out of the `maps/x.bsp` and `x#pak` forms, and it is promoted to
@@ -13043,8 +13189,10 @@ void FS_AutoMountForMap(const char *mapname)
 			}
 			else
 			{
-				Con_Printf("fs_automount: %s needs \"%s\"\n", want, wantspec[i]);
-				FS_Addon_MountHD(wantspec[i], ~0u);
+				qboolean pk3 = !Q_strcasecmp(COM_GetFileExtension(wantspec[i], NULL), ".pk3");	//P1656
+				Con_Printf("fs_automount: %s needs \"%s%s\"\n", want, pk3?"goldsrc/":"", pk3?COM_SkipPath(wantspec[i]):wantspec[i]);
+				if (!pk3)
+					FS_Addon_MountHD(wantspec[i], ~0u);
 				FS_Addon_Mount(wantspec[i], ~0u);
 			}
 			if (fs_thread_mutex)
@@ -13067,7 +13215,21 @@ void FS_AutoMountForMap(const char *mapname)
 	}
 
 	if (numgs)
-		FS_Addon_Raise(wantpath + firstgs, numgs);	//P1656
+	{	//P1656: only what this code mounted moves up; a Half-Life folder from fs_addons.txt keeps its own place
+		char ours[4][MAX_OSPATH];
+		int numours = 0;
+		for (i = firstgs; i < firstgs + numgs; i++)
+			for (j = 0; j < fs_numautomounted; j++)
+				if (*wantpath[i] && !Q_strcasecmp(fs_automounted[j], wantpath[i]) && numours < countof(ours))
+				{
+					Q_strncpyz(ours[numours++], wantpath[i], sizeof(ours[0]));
+					break;
+				}
+		FS_Addon_Raise(ours, numours);
+		memcpy(fs_gsours, ours, sizeof(fs_gsours));
+		fs_numgsours = numours;
+		fs_gsactive = true;
+	}
 
 	/* ftesurf (P231): and say, for the material census, what all of that came to.  Written
 	last because state 1 and state 2 are only distinguishable once `cached` is known. */
@@ -13089,8 +13251,9 @@ void FS_AutoMountForMap(const char *mapname)
 		else
 		{	//truncation here is fine: this is a diagnostic string, not a path to open.
 			state = cached?2:1;
-			for (j = 0; j < numwant; j++)
-				Q_strncatz(spec, va(j?", %s":"%s", wantspec[j]), sizeof(spec));
+			for (j = 0; j < numwant; j++)	//P1656: a package by its label, never the player's own path
+				Q_strncatz(spec, va(j?", %s%s":"%s%s", (numgs && j == firstgs)?"goldsrc/":"",
+								(numgs && j == firstgs)?COM_SkipPath(wantspec[j]):wantspec[j]), sizeof(spec));
 		}
 		Cvar_ForceSetValue(&fs_automount_state, state);
 		Cvar_ForceSet(&fs_automount_spec, spec);

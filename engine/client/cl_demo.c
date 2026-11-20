@@ -1184,6 +1184,8 @@ void CL_RecordMap_f (void)
 	Q_strncpyz(mapname, Cmd_Argv(2), sizeof(mapname));
 	CL_Disconnect_f();
 
+	FS_AutoMountForMap(mapname);	//FTESurf Patch 1656: SV_Map_f does this for `map`; this load skips it
+	COM_FlushFSCache(false, true);
 	SV_SpawnServer (mapname, NULL, false, false, 0);
 	if (!sv.state)
 		return;

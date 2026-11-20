@@ -997,7 +997,11 @@ void SV_SpawnServer (const char *server, const char *startspot, qboolean noents,
 	ss_dead here, so Patch 170's per-cvar callback returns early and does not
 	fight the values being installed; SV_LockMovementVars later in this function
 	is what makes them stick.
+
+	FTESurf Patch 1656: FS_AutoUnmountStale first, so the previous map's packs (a GoldSrc map's Half-Life
+	folders, raised above the Source games) are gone before SV_MapIsGoldSrc reads this map's BSP header.
 	*/
+	FS_AutoUnmountStale();
 	SV_ApplyGamemode(svs.name);
 
 	Cvar_ApplyLatches(CVAR_MAPLATCH, false);
@@ -1057,8 +1061,7 @@ void SV_SpawnServer (const char *server, const char *startspot, qboolean noents,
 	lives.  That runs from SV_Map_f BEFORE the COM_FCheckExists loop that decides
 	whether the map exists at all, so dropping there meant a mistyped `map` name
 	unmounted the packs of the map you were still playing and nothing put them back.
-	SV_SpawnServer is only reached once the load is committed. */
-	FS_AutoUnmountStale();
+	SV_SpawnServer is only reached once the load is committed.  (P1656: now called above SV_ApplyGamemode.) */
 
 	if (fs_maploadhash.ival)
 		FS_RehashIfStale();

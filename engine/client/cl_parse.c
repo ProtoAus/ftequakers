@@ -555,17 +555,60 @@ int CL_IsDownloading(const char *localname)
 #ifdef CSQC_DAT
 qboolean QC_DataPath(const char *name);	//ftesurf (P1102), pr_bgcmd.c
 #endif
+//FTESurf Patch 1656: GoldSrc map packages (FS_GoldSrc_Row). A listed map is fetched as
+//<CL_GOLDSRC_URL>/<sha256 of the .xz>.xz and kept as downloads/goldsrc/<map>.pk3, never as a bare maps/<map>.bsp.
+#define CL_GOLDSRC_URL "https://maps.proto.bar/objects/goldsrc"
+static qboolean CL_GoldSrc_MapOf(const char *name, const char *dir, const char *ext, char *id, size_t idsize)
+{	//"<dir><id><ext>" with nothing else in it
+	size_t dl = strlen(dir), l = strlen(name), el = strlen(ext);
+	if (l <= dl + el || l - dl - el >= idsize || Q_strncasecmp(name, dir, dl) || Q_strcasecmp(name + l - el, ext))
+		return false;
+	memcpy(id, name + dl, l - dl - el);
+	id[l - dl - el] = 0;
+	return !strchr(id, '/') && !strchr(id, '\\');
+}
+//Does any segment of the path name the goldsrc folder, as a file system would read it (any case; Windows drops
+//trailing dots and spaces)? Catches package/<gamedir>/downloads/goldsrc/..., goldsrc//x and goldsrc./x alike.
+static qboolean CL_GoldSrc_InDir(const char *path)
+{
+	const char *seg, *e, *t;
+	for (seg = path; seg && *seg; seg = *e ? e + 1 : e)
+	{
+		for (e = seg; *e && *e != '/' && *e != '\\'; e++)
+			;
+		for (t = e; t > seg && (t[-1] == '.' || t[-1] == ' '); t--)
+			;
+		if (t - seg == 7 && !Q_strncasecmp(seg, "goldsrc", 7))
+			return true;
+	}
+	return false;
+}
+//The only download that may write there: goldsrc/<id>.pk3, lower case, from the address its catalogue row names.
+static qboolean CL_GoldSrc_Canonical(const char *filename, const char *localname)
+{
+	char id[64], url[160];
+	const char *c;
+	goldsrcrow_t row;
+	if (!localname || !CL_GoldSrc_MapOf(localname, "goldsrc/", ".pk3", id, sizeof(id)) || !FS_GoldSrc_Row(id, &row))
+		return false;
+	for (c = localname; *c; c++)
+		if (*c >= 'A' && *c <= 'Z')
+			return false;
+	Q_snprintfz(url, sizeof(url), CL_GOLDSRC_URL"/%s.xz", row.xzsha);
+	return !strcmp(filename, url);
+}
+
 qboolean CL_EnqueDownload(const char *filename, const char *localname, unsigned int flags)
 {
 	extern cvar_t cl_downloads;
 	downloadlist_t *dl;
 	qboolean webdl = false;
 	char ext[8];
-	//FTESurf Patch 1656: downloads/goldsrc/ holds only packages checked against the catalogue; nothing else may
-	//write there (a server-named file, the download command), or a map load would mount it unverified.
-	if (localname && !Q_strncasecmp(localname, "goldsrc/", 8) && strncmp(filename, "https://maps.proto.bar/objects/goldsrc/", 39))
+	//FTESurf Patch 1656: downloads/goldsrc/ holds only packages checked against the catalogue; nothing else may write
+	//there (a server-named file, a package/ local name, the download command). Every enqueue comes through here.
+	if (CL_GoldSrc_InDir(localname ? localname : filename) && !CL_GoldSrc_Canonical(filename, localname))
 	{
-		Con_DPrintf("Refusing download to \"%s\"\n", localname);
+		Con_DPrintf("Refusing download to \"%s\"\n", localname ? localname : filename);
 		return false;
 	}
 	if ((flags & DLLF_TRYWEB) || !strncmp(filename, "http://", 7) || !strncmp(filename, "https://", 8))
@@ -742,68 +785,104 @@ static qboolean CL_WebDownloadToGamedir(const char *localname)
 	return !Q_strcasecmp(COM_GetFileExtension(localname+5, NULL), ".bsp");
 }
 
-//FTESurf Patch 1656: GoldSrc map packages (FS_GoldSrc_Row). A listed map is fetched as
-//<CL_GOLDSRC_URL>/<sha256 of the .xz>.xz and kept as downloads/goldsrc/<map>.pk3, never as a bare maps/<map>.bsp.
-#define CL_GOLDSRC_URL "https://maps.proto.bar/objects/goldsrc"
-static qboolean CL_GoldSrc_MapOf(const char *name, const char *dir, const char *ext, char *id, size_t idsize)
-{	//"<dir><id><ext>" with nothing else in it
-	size_t dl = strlen(dir), l = strlen(name), el = strlen(ext);
-	if (l <= dl + el || l - dl - el >= idsize || Q_strncasecmp(name, dir, dl) || Q_strcasecmp(name + l - el, ext))
-		return false;
-	memcpy(id, name + dl, l - dl - el);
-	id[l - dl - el] = 0;
-	return !strchr(id, '/') && !strchr(id, '\\');
-}
-//The .tmp holds the .xz as fetched: decode it beside itself, and keep the result only when it is the catalogue's
-//bytes. On success the decoded package sits under the .tmp name for the caller's rename.
-static qboolean CL_GoldSrc_Unpack(struct dl_download *dl)
+#ifdef AVAIL_XZDEC
+//The decoder's output: counted, hashed, and refused past the catalogue's size (a hostile stream cannot fill the disk).
+typedef struct
 {
-	char id[64], got[72], part[MAX_QPATH];
-	goldsrcrow_t row;
-	qbyte buf[65536], digest[DIGEST_MAXSIZE];
-	vfsfile_t *in, *out, *xz;
-	qofs_t size = 0;
+	vfsfile_t pub;
+	vfsfile_t *out;
+	qofs_t written, limit;
+	void *ctx;
+	qboolean over;
+} gsbounded_t;
+static int QDECL CL_GoldSrc_BoundedWrite(vfsfile_t *f, const void *buffer, int len)
+{
+	gsbounded_t *b = (gsbounded_t*)f;
+	if (len < 0 || b->over || b->written + len > b->limit)
+	{
+		b->over = true;
+		return -1;
+	}
+	hash_sha2_256.process(b->ctx, buffer, len);
+	b->written += len;
+	return VFS_WRITE(b->out, buffer, len);
+}
+static qboolean QDECL CL_GoldSrc_BoundedClose(vfsfile_t *f)
+{	//the struct is the caller's; only the file it writes to closes here
+	gsbounded_t *b = (gsbounded_t*)f;
+	qboolean ok = b->out ? VFS_CLOSE(b->out) : false;
+	b->out = NULL;
+	return ok;
+}
+static qboolean CL_GoldSrc_HashFile(const char *name, enum fs_relative root, char *hex, size_t hexsize, qofs_t *size)
+{
+	qbyte buf[16384], digest[DIGEST_MAXSIZE];
+	vfsfile_t *f = FS_OpenVFS(name, "rb", root);
 	void *ctx;
 	int n;
-	qboolean ok = true;
+	if (!f)
+		return false;
+	ctx = alloca(hash_sha2_256.contextsize);
+	hash_sha2_256.init(ctx);
+	for (*size = 0; (n = VFS_READ(f, buf, sizeof(buf))) > 0; *size += n)
+		hash_sha2_256.process(ctx, buf, n);
+	VFS_CLOSE(f);
+	hash_sha2_256.terminate(digest, ctx);
+	hex[Base16_EncodeBlock((const char*)digest, hash_sha2_256.digestsize, (qbyte*)hex, hexsize-1)] = 0;
+	return true;
+}
+#endif
+//The .tmp holds the .xz as fetched: it must be the catalogue's .xz, and decode to the catalogue's package. On
+//success the package sits under the .tmp name for the caller's rename.
+static qboolean CL_GoldSrc_Unpack(struct dl_download *dl)
+{
+#ifdef AVAIL_XZDEC
+	char id[64], got[72], part[MAX_QPATH];
+	goldsrcrow_t row;
+	qbyte buf[16384], digest[DIGEST_MAXSIZE];
+	vfsfile_t *in, *xz;
+	gsbounded_t lim;
+	qofs_t size = 0;
+	int n;
+	qboolean ok;
 
 	if (!CL_GoldSrc_MapOf(dl->qdownload.localname, "goldsrc/", ".pk3", id, sizeof(id)) ||
 		!FS_GoldSrc_Row(id, &row))
 		return false;
 	Q_snprintfz(part, sizeof(part), "goldsrc/%s.part", id);
-	in = FS_OpenVFS(dl->qdownload.tempname, "rb", dl->fsroot);
-	out = in ? FS_OpenVFS(part, "wb", dl->fsroot) : NULL;
-	xz = out ? FS_XZ_DecompressWriteFilter(out) : NULL;
-	if (!xz)
+	ok = CL_GoldSrc_HashFile(dl->qdownload.tempname, dl->fsroot, got, sizeof(got), &size) &&
+		 size == row.xzbytes && !Q_strcasecmp(got, row.xzsha);
+	if (ok)
 	{
-		if (out)
-			VFS_CLOSE(out);
-		if (in)
-			VFS_CLOSE(in);
-		return false;
-	}
-	while (ok && (n = VFS_READ(in, buf, sizeof(buf))) > 0)
-		ok = (VFS_WRITE(xz, buf, n) == n);
-	VFS_CLOSE(in);
-	VFS_CLOSE(xz);	//closes `out` too
-
-	in = ok ? FS_OpenVFS(part, "rb", dl->fsroot) : NULL;
-	if (in)
-	{
-		ctx = alloca(hash_sha2_256.contextsize);
-		hash_sha2_256.init(ctx);
-		while ((n = VFS_READ(in, buf, sizeof(buf))) > 0)
+		memset(&lim, 0, sizeof(lim));
+		lim.pub.WriteBytes = CL_GoldSrc_BoundedWrite;
+		lim.pub.Close = CL_GoldSrc_BoundedClose;
+		lim.pub.seekstyle = SS_UNSEEKABLE;
+		lim.limit = row.pk3bytes;
+		lim.ctx = alloca(hash_sha2_256.contextsize);
+		hash_sha2_256.init(lim.ctx);
+		in = FS_OpenVFS(dl->qdownload.tempname, "rb", dl->fsroot);
+		lim.out = in ? FS_OpenVFS(part, "wb", dl->fsroot) : NULL;
+		xz = lim.out ? FS_XZ_DecompressWriteFilter(&lim.pub) : NULL;
+		if (!xz)
 		{
-			hash_sha2_256.process(ctx, buf, n);
-			size += n;
+			if (lim.out)
+				VFS_CLOSE(lim.out);
+			if (in)
+				VFS_CLOSE(in);
+			ok = false;
 		}
-		VFS_CLOSE(in);
-		hash_sha2_256.terminate(digest, ctx);
-		got[Base16_EncodeBlock((const char*)digest, hash_sha2_256.digestsize, (qbyte*)got, sizeof(got)-1)] = 0;
-		ok = (size == row.pk3bytes && !Q_strcasecmp(got, row.sha));
+		else
+		{
+			while (ok && (n = VFS_READ(in, buf, sizeof(buf))) > 0)
+				ok = (VFS_WRITE(xz, buf, n) == n);
+			VFS_CLOSE(in);
+			VFS_CLOSE(xz);	//flushes the decoder into lim, which closes .part
+			hash_sha2_256.terminate(digest, lim.ctx);
+			got[Base16_EncodeBlock((const char*)digest, hash_sha2_256.digestsize, (qbyte*)got, sizeof(got)-1)] = 0;
+			ok = ok && !lim.over && lim.written == row.pk3bytes && !Q_strcasecmp(got, row.sha);
+		}
 	}
-	else
-		ok = false;
 	if (ok)
 	{
 		FS_Remove(dl->qdownload.tempname, dl->fsroot);
@@ -815,6 +894,9 @@ static qboolean CL_GoldSrc_Unpack(struct dl_download *dl)
 		Con_Printf(CON_ERROR"%s: not the catalogue's package (size or sha256), discarded\n", dl->qdownload.localname);
 	}
 	return ok;
+#else
+	return false;
+#endif
 }
 
 static void CL_WebDownloadFinished(struct dl_download *dl)
@@ -937,6 +1019,12 @@ static void CL_SendDownloadStartRequest(downloadlist_t *pending)
 			}
 			else if (!CL_WebDownloadToGamedir(localname))
 				wdl->fsroot = FS_GAMEDOWNLOADS;	//FTESurf Patch 1633: the .tmp and its rename too; both read wdl->fsroot
+			{	//P1656: a GoldSrc package's transfer ends at its catalogue size
+				char gsid[64];
+				goldsrcrow_t gsrow;
+				if (CL_GoldSrc_MapOf(localname, "goldsrc/", ".pk3", gsid, sizeof(gsid)) && FS_GoldSrc_Row(gsid, &gsrow))
+					wdl->sizelimit = gsrow.xzbytes;
+			}
 			if (!(flags & DLLF_TEMPORARY))
 			{
 				if (flags & (DLLF_REQUIRED|DLLF_VERBOSE))	//FTESurf Patch 1026: an optional file quietly
@@ -1026,7 +1114,7 @@ void CL_DownloadFinished(qdownload_t *dl)
 				CL_GoldSrc_MapOf(cl.model_name[1], "maps/", ".bsp", world, sizeof(world)) && !Q_strcasecmp(world, gsid))
 			{
 				CL_AutoMountForget_Map();
-				CL_AutoMountForConnectedMap(world);
+				CL_AutoMountForConnectedMap(cl.model_name[1]);
 			}
 			Q_snprintfz(filename, sizeof(filename), "maps/%s.bsp", gsid);
 		}
@@ -1629,9 +1717,9 @@ static void CL_AutoMountForConnectedMap(const char *worldname)
 #ifndef CLIENTONLY
 	localserver = (sv.state != ss_dead);	//SV_Map_f already did all of this
 #endif
-	if (!cl_automount.ival || localserver || cls.demoplayback)
+	if (!cl_automount.ival || localserver || !worldname || !*worldname)
 		return;
-	if (!worldname || !*worldname)
+	if (cls.demoplayback && !FS_GoldSrc_Involved(worldname))	//FTESurf Patch 1656
 		return;
 	if (!strcmp(cl_automounted_map, worldname))
 		return;								//already mounted for this map

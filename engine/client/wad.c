@@ -553,16 +553,34 @@ static int QDECL W_ColourCmp(const void *a, const void *b)
 }
 static void W_LoadColours(void)
 {
-	static const char *const names[] = {"data/wadcolours.net.txt", "scripts/wadcolours.txt"};	//the menu's copy, then the shipped one
 	char *file = NULL, *line, *nl, *sp;
-	size_t size;
+	size_t size = 0;
 	int i, max;
 	unsigned int rgb;
+	vfsfile_t *f;
 
 	wadcolours_loaded = true;
-	for (i = 0; i < countof(names) && !file; i++)
-	{
-		file = FS_LoadMallocFile(names[i], &size);
+	for (i = 0; i < 2 && !file; i++)
+	{	//the menu's copy (gamedir loose files only, as the map tables), then the shipped one
+		if (!i)
+		{
+			f = FS_OpenTableVFS("data/wadcolours.net.txt", false);
+			if (f)
+			{
+				size = VFS_GETLEN(f);
+				file = (size > 0 && size < 4*1024*1024) ? BZ_Malloc(size + 1) : NULL;
+				if (file && VFS_READ(f, file, size) != (int)size)
+				{
+					BZ_Free(file);
+					file = NULL;
+				}
+				if (file)
+					file[size] = 0;
+				VFS_CLOSE(f);
+			}
+		}
+		else
+			file = FS_LoadMallocFile("scripts/wadcolours.txt", &size);
 		if (file && (size < 21 || strncmp(file, "FTESURF-WADCOLOURS 1", 20)))
 		{
 			BZ_Free(file);

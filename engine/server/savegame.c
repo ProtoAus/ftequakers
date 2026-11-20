@@ -677,6 +677,8 @@ qboolean SV_LoadLevelCache(const char *savename, const char *level, const char *
 
 	//NOTE: This sets up the default baselines+statics+ambients.
 	//FIXME: if any model names changed, then we're screwed.
+	FS_AutoMountForMap(mapname);	//FTESurf Patch 1656: SV_Map_f does this for `map`; this load skips it
+	COM_FlushFSCache(false, true);
 	SV_SpawnServer (mapname, startspot, false, false, svs.allocated_client_slots);
 	sv.time = time;
 	if (svs.gametype != gametype)
@@ -1972,6 +1974,8 @@ static qboolean SV_Loadgame_Legacy(const char *savename, const char *filename, v
 	VFS_GETS(f, str, sizeof(str));
 	time = atof(str);
 
+	FS_AutoMountForMap(mapname);	//FTESurf Patch 1656: SV_Map_f does this for `map`; this load skips it
+	COM_FlushFSCache(false, true);
 	SV_SpawnServer (mapname, NULL, false, false, slots);	//always inits MAX_CLIENTS slots. That's okay, because we can cut the max easily.
 	if (sv.state != ss_active)
 	{
