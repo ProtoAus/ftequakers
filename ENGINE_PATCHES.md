@@ -1,5 +1,85 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1667 - The Linux release starts on a Wayland compositor with wl_compositor v6
+
+**Cause.** Found while testing Patch 1666, not from a report. The portable Linux build (0.1.49-0.1.51; Debian 11 rootfs,
+wayland 1.18 headers) aborted at start under labwc 0.9: "listener function for opcode 2 of wl_surface is NULL". Patch
+1602 (HiDPI) binds wl_compositor up to v6, bounded by WL_BindVersion with the interface table of the SYSTEM
+libwayland-client (v6 on a current distro), and gave wl_surface four handlers (enter, leave, preferred_buffer_scale,
+preferred_buffer_transform). Debian 11's header declares a two-member struct wl_surface_listener, so the struct
+initialiser dropped the two v6 handlers at compile time (an excess-initialiser warning, not an error), and the first
+preferred_buffer_scale event made libwayland abort. Builds on a current distro (the developer installs) have the
+four-member struct and never showed it. Any compositor advertising wl_compositor v6 (wlroots 0.18+, recent KWin and
+mutter) is affected when WAYLAND_DISPLAY is set.
+
+**Change.** engine gl/gl_vidwayland.c: surface_listener is a fixed table of four function pointers handed to
+wl_proxy_add_listener, independent of the header's struct size. Every other bind is capped at a version whose events
+the 1.18 headers already list (wl_output 2, wl_seat 4 and its pointer/keyboard, shm/shell/data device 1).
+
+**Verified.** 0.1.51's released ftesurf64 aborts under headless labwc (gles2) with the message above; the same tree
+built in the release rootfs (Debian 11, GCC 10) with this patch starts and runs every Patch 1666 arm there (22 checks).
+
+## Patch 1666 - The game keeps the launcher current
+
+**Cause.** Lex: "make a auto updater for the launcher or whatever you need". No feed has ever updated WOS-Launcher:
+every installed launcher (and engine) refuses a whole signed feed when one entry is outside its built-in path policy,
+and the launcher's name is in none of them, so a launcher fix or a new managed path (the Linux ui_imgui plugin, P1654)
+could only reach players who download a new launcher by hand.
+
+**Change.** game tools/updatefeed.py; engine common/qkupdate.c; cvars update_launcher (default 1, archived, not settable
+by a server) and update_launcher_state (read-only).
+- The signed payload gains "launcher": {"win64"|"linux64": {"path", "hash", "size"}}, built from the staged
+  WOS-Launcher.exe / WOS-Launcher (still never a "files" entry), its bytes stored as an ordinary object so objects.txt,
+  verify-objects and the release's R2 round trip carry it. validate() requires the canonical name per platform, 64
+  lowercase hex, 1..32 MiB, no other keys, one size per hash. A Windows-only release keeps the previous Linux entry.
+- Every shipped reader ignores the field: the launcher (5c60f69 to 8de1339) parses the payload into a struct without
+  deny_unknown_fields; the engine's QKU_JSONBadKeys refuses only dotted, escaped or repeated names.
+- The engine, after a verified check that passed the installed release's version floor (never with no usable
+  state.json, never for update_verify), hashes an installed WOS-Launcher and a pre-P1209 ftesurf-launcher (regular files
+  reached without a link; a missing one is never created; never in a source checkout with .git). A stale one is fetched
+  from the feed's mirror into .ftesurf-updater/ingame/launcher/ (.part unlinked first), verified by size and BLAKE2b
+  while written, and must be this platform's executable kind (PE x86-64 / ELF64 x86-64). Never while connected to a
+  server: the verified object waits for a later check, and is kept and reused across a failed install. Then: a verified
+  copy of the old bytes (and mode) to .ftesurf-updater/launcher-previous/; the object copied beside the launcher as
+  <name>.new (verified again) with the old mode plus u+x; both flushed to disk; the copy must START here
+  (--ui-preview exits 0 within 10 s; it returns before any lock or network in every launcher since 8de1339; the
+  client's SigChld handler is set aside for it); then one-step swap (rename(2) + directory fsync, or MoveFileExW
+  REPLACE_EXISTING, which refuses while that launcher runs). update_cancel, update_permission 0 and shutdown abandon an
+  in-flight download. The console says "update: launcher updated <names>" or why not.
+- A hash that is the wrong kind or does not start here is marked (ingame/launcher/<hash>.failed) and neither fetched
+  nor tested again until the feed names another launcher. The test is capped at 4.5 s; one timeout is a slow first
+  start (<hash>.slow), a second marks it. Once the bytes started here (<hash>.ran, kept while the hash is current) no
+  later failure with them marks them. A test that could not run at all, or an unreadable staged file, retries later.
+- Existing installs get it by the route they already take: their launcher installs the new engine, and the engine's
+  next check replaces the launcher. Consent, update_enabled and dedicated servers gate it as they gate the check.
+
+**Review.** Two independent reads of the first cut (attacker; failure modes and compatibility) found: no version floor
+on the no-state path (a replayed older signed feed could roll the launcher back); update_verify replaced it; no check
+that the bytes are a launcher for this platform, or that they start here (a Linux build needing a newer glibc would
+have left players without a working launcher); nothing flushed before the rename; cancel, a withdrawn permission and
+shutdown did not stop an in-flight download; a swap could hitch a run on a server; the backup was unverified and the
+mode widened to 0755; a failed install re-downloaded every start. All fixed (above). The tests then found two more in
+the fix itself: a backup path built from an aliased buffer, and the client's SigChld handler reaping the test run's
+child before waitpid. Generator: launcher_kind() at stage time and in verify_objects. Round 2 (no correctness or
+security defect): a hung or broken launcher hash was retried every start; unbounded wait after a kill; a terminated
+Windows test child could keep the .new mapped; narrow flush sharing; the Linux test child inherited the install lock.
+Fixed. Reads of rounds 3 and 4 found ways a good hash could still be marked failed for the whole release (a later
+name failing after the same bytes started; a single timeout; an unreadable file; proof of a start lost between
+starts), each fixed and covered by an arm.
+
+**Verified.** test_updatefeed.py 32 OK (5 new). Linux arm (tools/p1666arm.py in the lane, a loopback feed signed with
+exactly the published 0.1.51 content plus a descriptor of the published launchers): the published launcher installs
+from it; the pre-P1666 engine verifies it with no policy error; the new engine replaces stale WOS-Launcher and
+ftesurf-launcher (executable, old copies kept, no .new, staging emptied), leaves a current one untouched, refuses a
+corrupt object, does nothing with update_launcher 0 or a .git checkout, and the refreshed launcher then repairs the
+install, and with no state.json nothing happens; 22 checks. Negative arms (tools/p1666neg.py) with a scratch copy whose
+pinned key is patched to the RFC 8032 test key: a program exiting 0 installs (control); one exiting 1 is kept out, its
+hash is marked and the next check neither downloads nor tests it, while a later feed's other hash installs; a PE named
+as the Linux launcher is refused; a launcher that hangs is kept out and noted slow, the second timeout marks it; a
+successful run leaves the .ran note (14 checks). Wine arm 7 checks. Windows arm under Wine (from the
+prefix's C:): the published Windows launcher installs from the feed, the new engine replaces a stale WOS-Launcher.exe
+via MoveFileExW and keeps the old copy, the refreshed launcher repairs ftesurf64.exe.
+
 ## Patch 1665 - A Counter-Strike map's eye height under the GoldSrc profiles
 
 **Cause.** Lex on bkz_goldbhop_gs, 20 Nov 2026: "my view height was to high". Patch 1659 runs every BSP-30 map under
