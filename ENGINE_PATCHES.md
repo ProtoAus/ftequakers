@@ -1,5 +1,30 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1644 - Console: Ctrl+Z undo, no "]" prompt
+
+**Cause.** Lex, after confirming P1641-P1642 ("it works and I like it!"): "add ctrl+z undo and remove the ] prompt
+please!" Ctrl+Z typed nothing (P1642 swallows Ctrl+<key>) and the input line still began with Quake's "]".
+
+**Change.** keys.c: Key_Console is now a wrapper around the line editor (Key_ConsoleKey). It copies the line, caret
+and selection before every key and, if the key changed the line, pushes the old state onto con_undo (100 steps), so
+every edit is undoable without knowing about undo: typing, Backspace/Delete, cut, Ctrl+U/W, Tab completion, history
+recall. Typed characters join one step until a space starts a new word or the caret moves; a new edit clears redo;
+Enter (a new edit line) starts a fresh history. Ctrl+Z undoes, Ctrl+Y and Ctrl+Shift+Z redo, restoring the caret and
+the selection the edit replaced. An asynchronous paste (Wayland) records itself in Key_ConsolePaste. Not for consoles
+with a redirect, nor while the find bar is open. console.c: the main console's prompt is empty; the input line starts
+at its left edge, and a line entered from it echoes into the log in ^4 (the accent blue) instead of after "]".
+con_edittest: 8 undo/redo cases; it also no longer restores a con->display pointer saved before printing -- printing
+reallocates the line being written, so that pointer could dangle, and it crashed Con_DrawConsoleLines once (P1642's
+test only; players never run it). It now snaps the log to the bottom.
+
+**Verified.** Nested headless labwc, connected to a local dedicated server: `con_edittest` 28/28 ok (undo the last word,
+the word before, stop at the start, Ctrl+Y and Ctrl+Shift+Z redo, undo brings back a replaced selection, Backspace one
+step at a time, a new edit clears redo) and the client kept running (the previous build's dangling-pointer crash gone).
+Screenshot: the input line shows `echo typed|` with no prompt.
+
+**Boundary.** The blue echo is read from the code, not screenshotted: the rig cannot press Enter on the console line
+(Wayland keys, see P1642). Other consoles (plugins, QC) keep their own prompts and the old echo.
+
 ## Patch 1642 - The console's input line edits like a text box
 
 **Cause.** Lex: "it behaves like a terminal type, however I prefer regular text typing and selection ... I think i'm
