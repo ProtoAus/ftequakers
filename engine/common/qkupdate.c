@@ -2031,7 +2031,7 @@ static int QDECL QKU_LauncherSweep_Enum(const char *fname, qofs_t fsize, time_t 
 {
 	char full[MAX_OSPATH];
 	(void)fsize; (void)mtime; (void)spath;
-	if (strncmp(fname, qku_launcher.hash, QKU_HEXLEN) || (fname[QKU_HEXLEN] && strcmp(fname+QKU_HEXLEN, ".part") && strcmp(fname+QKU_HEXLEN, ".failed") && strcmp(fname+QKU_HEXLEN, ".slow")))
+	if (strncmp(fname, qku_launcher.hash, QKU_HEXLEN) || (fname[QKU_HEXLEN] && strcmp(fname+QKU_HEXLEN, ".part") && strcmp(fname+QKU_HEXLEN, ".failed") && strcmp(fname+QKU_HEXLEN, ".slow") && strcmp(fname+QKU_HEXLEN, ".ran")))
 	{
 		Q_snprintfz(full, sizeof(full), "%s%s", (const char*)parm, fname);
 		FS_Remove(full, FS_SYSTEM);
@@ -2196,6 +2196,21 @@ static void QKU_LauncherBegin(const qku_plan_t *plan)
 	DL_CreateThread(dl, NULL, NULL);
 }
 
+//Notes beside the current hash's object: .slow (one test run timed out), .ran (these bytes started here once, so
+//a later failure with them is transient and never marks them), .failed (QKU_LauncherMarkBad).
+static qboolean QKU_LauncherNote(const char *ext, int set)	//set: 1 create, 0 remove, -1 query
+{
+	char path[MAX_OSPATH], leaf[QKU_HEXLEN+16];
+	vfsfile_t *f;
+	Q_snprintfz(leaf, sizeof(leaf), "%s%s", qku_launcher.hash, ext);
+	if (!QKU_FSStageNoLinks("launcher/%s", leaf)) return false;
+	QKU_StagePath(path, sizeof(path), "launcher/%s", leaf);
+	if (set < 0) return QKU_FSRegular(path) == 1;
+	FS_Remove(path, FS_SYSTEM);
+	if (set && (f = FS_OpenVFS(path, "wb", FS_SYSTEM))) VFS_CLOSE(f);
+	return true;
+}
+
 //Verified backup of the old bytes (and mode) -> verified copy beside it -> flushed -> it starts here ->
 //one-step swap: rename(2), or MoveFileExW(REPLACE_EXISTING), which refuses while that launcher runs.
 static qboolean QKU_LauncherInstall(const char *staged, const char *name, char *why, size_t whysize, qboolean *bad, qboolean *slow)
@@ -2248,7 +2263,7 @@ static qboolean QKU_LauncherInstall(const char *staged, const char *name, char *
 	if (!ok || !QKU_FSFlush(sysnext)) { FS_Remove(next, FS_SYSTEM); Q_strncpyz(why, "copy did not verify", whysize); return false; }
 	switch (QKU_LauncherRuns(sysnext))
 	{
-	case 1: break;
+	case 1: QKU_LauncherNote(".slow", 0); QKU_LauncherNote(".ran", 1); break;
 	case 0: FS_Remove(next, FS_SYSTEM); *bad = true; Q_strncpyz(why, "does not start on this system (kept the old one)", whysize); return false;
 	case 2: FS_Remove(next, FS_SYSTEM); *slow = true; Q_strncpyz(why, "did not finish its test run in time (kept the old one)", whysize); return false;
 	default: FS_Remove(next, FS_SYSTEM); Q_strncpyz(why, "could not be test-run (retries at a later start)", whysize); return false;
@@ -2293,7 +2308,7 @@ static void QKU_LauncherMarkBad(const char *full)
 
 static void QKU_LauncherFinish(void)
 {
-	char full[MAX_OSPATH], slowmark[MAX_OSPATH], done[128] = "", why[96];
+	char full[MAX_OSPATH], done[128] = "", why[96];
 	unsigned i;
 	qboolean bad = false, slow = false;
 	if (!QKU_LauncherAllowed()) return;
@@ -2312,14 +2327,13 @@ static void QKU_LauncherFinish(void)
 		if (!QKU_LauncherInstall(full, qku_launchernames[i], why, sizeof(why), &bad, &slow))
 		{	//the verified object stays for the next check, unless it can never install here. Once these bytes started
 			//here (*done) a later failure is transient; one timeout is a slow first start, a second marks it.
-			if (slow && !*done && QKU_FSStageNoLinks("launcher/%s.slow", qku_launcher.hash))
+			qboolean ran = *done || QKU_LauncherNote(".ran", -1);	//across starts too (review)
+			if (slow && !ran)
 			{
-				vfsfile_t *f;
-				QKU_StagePath(slowmark, sizeof(slowmark), "launcher/%s.slow", qku_launcher.hash);
-				if (QKU_FSRegular(slowmark) == 1) bad = true;
-				else if ((f = FS_OpenVFS(slowmark, "wb", FS_SYSTEM))) VFS_CLOSE(f);
+				if (QKU_LauncherNote(".slow", -1)) bad = true;
+				else QKU_LauncherNote(".slow", 1);
 			}
-			if (bad && !*done) QKU_LauncherMarkBad(full);
+			if (bad && !ran) QKU_LauncherMarkBad(full);
 			QKU_LauncherState("failed: %s %s%s%s", qku_launchernames[i], why, *done ? "; updated " : "", done);
 			return;
 		}
