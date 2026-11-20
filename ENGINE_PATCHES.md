@@ -1,5 +1,36 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1646 - Scripts, waits and deferred presses are counted (in_script_lapses); a lapse in a run unranks it
+
+**Cause.** Lex, 20 Nov 2026, for the Normal (ranked) categories: "Scripts are not allowed, 1 button per key, no waits".
+Before this, a button press from the console, an alias, a multi-command bind or a forged key number, a `wait`, and
+plugin-injected input were indistinguishable from a key press on Linux (Windows' key guard covers injected keys only).
+
+**Change.** client/keys.c: Key_Event notes a key's own fresh press (not its repeat, not a synthetic event) when its bind
+is a single bare `+command` (+fire may carry weapon digits), with no `$`, at a bind level that may press buttons
+(CL_DirectPress). client/cl_input.c: KeyDown and +fire take the note back by command name and key number in the press's
+frame or the next (host_framecount; every frame that advances it runs Cbuf_Execute first); a new press with no note
+counts a lapse in the read-only, never-reset in_script_lapses. Counted on any thread, published on the main thread every
+frame (CL_ScriptLapseSync from Host_Frame). common/cmd.c: wait, waitms, every `in`, waitmap in a map, and an alias body
+queued below the executing level (it runs next frame) count; an old config's `alias +attack2 +button3` is dropped
+silently. +attack2/-attack2 are real commands on button 3 (the engine alias reached KeyDown without the key number, so
+every honest press counted). Smartjump's second button (noclip/fly) is judged once. common/plugin.c: plugin key/mouse
+injection counts. common/common.c: sys_platform is NOSET and NOTFROMSERVER. Game QC (P1646): csprogs steps the input
+report's bad on a change (IPG_SCRIPT 16), so a lapse during a run unranks it as `changed`; sv_rank_scriptguard (default
+0) unranks engines without the counter.
+
+**Review.** Four independent rounds. 1: waitmap and `in 0` uncounted, a smartjump double count, ring eviction within one
+frame, sys_platform settable by a map, a cvar written off the main thread. 2: the +attack2 alias, deferred alias bodies,
++fire unjudged, the smartjump skip after a repeat. 3: a note could outlive its own press and be spent by a script (now
+one frame; bare binds at a usable level only). 4: low residuals only, in the game's BACKLOG (rotate/impulse/toggle binds
+and cl_iDrive await an owner ruling; Linux outside injection).
+
+**Verified.** Linux rig (wtype under a headless compositor; game tools/p1646-arms.md): a bound key held or tapped,
++attack2 and noclip jump +0; console +jump, a forged key, an alias, a multi-command bind (+2), wait, waitms, in 0,
+waitmap, an aliaslevel body and console +fire +1 each; sys_platform and the counter refuse `set`. win64 client and
+server cross-compile clean. **Not verified:** Windows at runtime, a real gamepad, wheel or touch in hand; the smartjump
+branch (the rig cannot reach it; checked by reading).
+
 ## Patch 1670 - Map downloads start during a local game (engine + menu)
 
 **Cause.** Lex: "you need to disconnect to download a map in my game? can that be fixed and allow downloading while in
