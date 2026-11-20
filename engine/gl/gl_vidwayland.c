@@ -760,12 +760,15 @@ static void WL_surface_handle_preferred_buffer_scale(void *data, struct wl_surfa
 static void WL_surface_handle_preferred_buffer_transform(void *data, struct wl_surface *surface, uint32_t transform)
 {
 }
-static const struct wl_surface_listener surface_listener =
+//Patch 1667: wl_surface events through v6 as a fixed table, not the header's struct. Debian 11's wayland 1.18 header
+//(the release build) has a two-member wl_surface_listener, so a struct initialiser dropped the two v6 handlers while
+//WL_BindVersion still bound v6 from the system library, and libwayland aborted on preferred_buffer_scale.
+static void (*const surface_listener[4])(void) =
 {
-	WL_surface_handle_enter,
-	WL_surface_handle_leave,
-	WL_surface_handle_preferred_buffer_scale,
-	WL_surface_handle_preferred_buffer_transform,
+	(void (*)(void))WL_surface_handle_enter,
+	(void (*)(void))WL_surface_handle_leave,
+	(void (*)(void))WL_surface_handle_preferred_buffer_scale,
+	(void (*)(void))WL_surface_handle_preferred_buffer_transform,
 };
 
 //wp_tearing_control_v1: let the compositor tear (when it allows that at all) only while vsync is off
@@ -2472,7 +2475,7 @@ static qboolean WL_Init (rendererstate_t *info, unsigned char *palette)
 		Con_Printf("no compositor running, apparently\n");
 		return false;
 	}
-	pwl_proxy_add_listener((struct wl_proxy *) w.surface, (void (**)(void)) &surface_listener, &w);
+	pwl_proxy_add_listener((struct wl_proxy *) w.surface, (void (**)(void)) surface_listener, &w);
 	if (w.fractional_scale_manager && w.viewporter)
 	{	//preferred_scale only works with a viewport to scale the buffer back down
 		w.fractional_scale = (struct wp_fractional_scale_v1 *) pwl_proxy_marshal_constructor((struct wl_proxy *) w.fractional_scale_manager, WP_FRACTIONAL_SCALE_MANAGER_V1_GET_FRACTIONAL_SCALE, pwp_fractional_scale_v1_interface, NULL, w.surface);
