@@ -13209,8 +13209,9 @@ static void FS_SteamLibs_f(void)
 			const char *home = getenv("HOME");
 #endif
 			if (home && *home)
-			{
-				Q_snprintfz(raw, sizeof(raw), "%s%s", home, root + 1);
+			{	//cleaned as FS_SteamLibs_Show compares it: a trailing separator would double up
+				Sys_SteamCleanRoot(have, sizeof(have), home);
+				Q_snprintfz(raw, sizeof(raw), "%s%s", have, root + 1);
 				Q_strncpyz(root, raw, sizeof(root));
 			}
 		}
