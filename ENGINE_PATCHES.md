@@ -67,6 +67,22 @@ spectators before launch.
 
 **Boundary.** Ships with a client release (0.1.50).
 
+## Patch 1663 - Console: the completion list hangs from the window's edge
+
+**Cause.** Lex, on P1662 in a clean window: the space under the typing line (the padding plus the window's 16 px
+bottom resize grip) "looks like an extra line"; then "it's the grip, maybe just place the completion window up by like
+8 units so it's closer to your typing text". Under a clean window the list started max(3, padding) below the window.
+
+**Change.** console.c: Con_DrawInput records a clean window's bottom edge itself (was +3), and Con_DrawCompletionPopup
+puts the box's top line one virtual pixel up, on the window's bottom hairline (wnd_y+wnd_h-1), so the list reads as
+attached to the window, 9 px closer at padding 8. The grip and the text box are unchanged (a variant that reclaimed the
+grip strip under the text was set aside: Lex kept the grip). Flip, plain-window and drop-down placement are unchanged.
+
+**Verified.** Nested headless labwc, 1600x900, cfg/default.cfg: `con_window_` draws the box from y 703 (the window's
+last row) with rows from 707; con_selftest's click map row 0 at y 715, "all checks passed"; a virtual-pointer click at
+y 747 typed completion 3. Review: nothing wrong; its notes (a stale comment; one physical px is not one virtual px at
+a scaled display) were fixed before commit.
+
 ## Patch 1662 - Console: room round the completion list
 
 **Cause.** Lex, after P1647's padding: "a few pixel breathing room between your text and the drop down suggetions ...
