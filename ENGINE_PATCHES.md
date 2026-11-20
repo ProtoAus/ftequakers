@@ -1,5 +1,24 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1689 - The similarity census tells a run stored twice from a copy, and compares turning (game tools only)
+
+**Cause.** Lex's anti-cheat finish list, item 4: the similarity reader should compare angles on top runs. After P1671
+the lobby census's highest "honest" pair (match 0.9977) was one practice run written twice under one `runid`, and honest
+same-map pairs reach 0.94 on the move columns alone (forced routes), too close to a replay's 1.0.
+
+**Change.** game tools/census/recsim.py: a Rec keeps the header `runid` and each move row's yaw (a bad yaw reads 0,
+never a malformed file). yaw_agreement(a, b, d): over aligned rows where either run turns more than 0.001 deg, the share
+whose turn steps agree within 0.05 deg (wrapped). `pairs` skips pairs sharing a runid and prints the yaw distribution
+with exact and jittered (0.01 deg) replay positives. compare_paths and surfd/simcheck are unchanged: storing the figure
+is a surfd projection change for a guarded generation (tools/backend-pending.md, stage C). Test
+test_runid_and_yaw_agreement.
+
+**Review.** No independent review round: tools only, and nothing acts on the figure. One is due before surfd stores it.
+
+**Verified.** Lobby census on the Pi (21 Nov): 47 same-runid pairs skipped; honest pairs match max 0.8659, yaw agreement
+max 0.4100 (p99 0.3129, median 0.0442); exact replays 1.0, jittered 0.9957. recsim tests pass. **Not verified:** a
+replay re-aimed by hand; no real playback corpus.
+
 ## Patch 1688 - !hide / !show: other players are not drawn for you until the next map (game QC only)
 
 **Cause.** Lex, 21 Nov 2026: "option to hide the other players with !hide/!show either just toggles (reset peoples state
@@ -75,6 +94,48 @@ stale on a frame that predicted nothing. Both fixed as above.
 **Verified.** The same arm: 0 of 180 transition frames hold, largest step 0.424 u (the old 1.271 spread over the three
 frames between ticks), ending at 47 ducked and 64 standing; the same numbers after the review fixes. **Not verified:**
 the roof-clip mid-duck case (code path only), Windows, Lex's eyes (lextest.md).
+
+## Patch 1675 - A start packet's untimed ticks are counted; past 0.06 s the run is practice (QC server only)
+
+**Cause.** Lex's anti-cheat finish list, item 3 ("start latched per tick"). SV_TimerFrame latches a run's start once per
+packet, so ticks the start packet ran after the body left its START box (or after a bhop launch) were never timed. A
+stock client sends one tick a packet (the ruleset locks cl_netfps); a modified one batching commands could start up to
+about 0.48 s late with the clock none the wiser. Honest lobby packets (300 REC 14 runs): 99.49% one tick, 0.27% 6-7.
+
+**Change.** game src/server/sv_timer.qc: SV_TimerLagNote, called per one-tick part from PlayerPreThink after the
+start-cap clamp, notes the first tick this packet the body was outside the box its start latches from (ARMED: armzone;
+bhop maps RUNNING/FINISHED: azone) and the first jump-like rise (velocity_z crossing PM_NONJUMP_VEL); PlayerPostThink
+clears both every packet, so a lag can never exceed its packet. SV_TimerPacketLag gives run_movetick minus the note (a
+launch: the later of the two); the leave path and both bhop launch commits store it. SV_TimerStart converts ticks with
+run_movetickrate; above run_startlag seconds (cvar, default 0.06, 0 = off) the start is practice with "start packet too
+long" when it would otherwise be clean. Every measured start writes `startlag <ticks> <s> <max>` to the recording (off
+under held metadata, as `cseq`); a stage handover is -1, not measured. surfd/recplot.py counts the record.
+
+**Review.** Two rounds, both lenses. Round 1: a walk-out before a bhop jump uncounted, a stale jump tick (booster), a
+tick limit every AG start broke, re-entry hiding an excursion, tick 0 as a sentinel, the held-metadata reader -- all
+fixed by the per-packet note design. Round 2: no correctness bug; the 0.1 s allowance was larger than some world-record
+margins (now 0.06), record every measured start. Left in BACKLOG: stage handovers and held stage-box splits, AG/GoldSrc
+profiles (whole commands per part), a review-page flag for `startlag` of 3 ticks or more.
+
+**Verified.** Rig, surf_ace (and bhop mode): normal play 0 ticks; with `cl_c2spps 1` 2 ticks (0.030 s) clean at 0.06,
+practice + chat at 0.01; off at 0; a bhop launch 1 tick, practice at 0.005. Game tools/p1675-arms.md. **Not verified:**
+the record inside a kept `.rec` (headless runs never finish), a real batching client, a lobby (needs the QC deploy).
+
+## Patch 1671 - The similarity reader reads current recordings (REC 12 and 14) (game tools only)
+
+**Cause.** Lex's anti-cheat finish list, item 4. Every lobby run since 10 Nov is REC 14, and tools/census/recsim.py
+refused any format 12 or later that is not a held-metadata native file (a blanket guard from Patch 914), so
+surfd/simcheck compared none of them: 5,147 comparable pairs in the whole archive.
+
+**Change.** game tools/census/recsim.py: MOVE_ROW_VERSIONS = (12, 14) read as move rows -- v12's inclusive viewing clock
+adds held seconds, not input, and v14 only makes the mc counters relative. 13 still needs a valid native file; 16 and
+later are still refused. Tests: test_recsim_parsing (test_viewclock_move_rows_are_read), test_input_numeric_spelling.
+Reaches surfd with a guarded generation (tools/backend-pending.md).
+
+**Review.** No independent review round (tools only; simcheck stores scores and never acts on them).
+
+**Verified.** Pi census, 21 Nov: comparable pairs 5,147 -> 193,303; replays 1.0000. **Not verified:** surfd's own run
+(pinned SURFD_TOOLS until the next generation).
 
 ## Patch 1668 - The Linux ui_imgui plugin reaches players (files_ext; Linux launcher 0.1.7) (game tools + launcher)
 
