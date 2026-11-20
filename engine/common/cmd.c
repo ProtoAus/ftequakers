@@ -214,6 +214,9 @@ static void Cmd_Wait_f (void)
 
 	if (cmd_blockwait)
 		return;
+#ifdef HAVE_CLIENT
+	CL_ScriptLapse();	/*FTESurf Patch 1646*/
+#endif
 
 #ifdef HAVE_SERVER
 	if (cmd_didwait && sv.state)
@@ -273,6 +276,9 @@ static void Cmd_WaitMS_f (void)
 	float ms;
 	if (cmd_blockwait)
 		return;
+#ifdef HAVE_CLIENT
+	CL_ScriptLapse();	/*FTESurf Patch 1646*/
+#endif
 	cmd_didwait = true;
 	ms = atof(Cmd_Argv(1));
 	if (ms <= 0)
@@ -292,6 +298,10 @@ static void Cmd_WaitMap_f (void)
 	cmd_text[Cmd_ExecLevel].waitattime = realtime;
 	cmd_text[Cmd_ExecLevel].waituntil = realtime + timeout;
 	cmd_text[Cmd_ExecLevel].waitmap = true;
+#ifdef HAVE_CLIENT
+	if (cls.state == ca_active)
+		CL_ScriptLapse();	/*FTESurf Patch 1646 review 1: in a map it is a one-frame wait*/
+#endif
 }
 
 /*
@@ -352,7 +362,12 @@ static void Cmd_In_f(void)
 	cmd = Cmd_Args();
 
 	if (ruleset_allow_in.ival || !delay)
+	{
+#ifdef HAVE_CLIENT
+		CL_ScriptLapse();	/*FTESurf Patch 1646: a timed command, as wait (review 1: `in 0` runs a frame later too)*/
+#endif
 		Cmd_AddTimer(delay, Cmd_In_Callback, Cmd_ExecLevel, cmd, strlen(cmd));
+	}
 }
 
 /*
@@ -1505,6 +1520,10 @@ static void Cmd_Alias_f (void)
 		}
 		else
 		{
+			//FTESurf Patch 1646 review 3: configs saved before +attack2 became a command carry the engine's own old
+			//alias for it; that exact pair is dropped silently instead of printing red at every exec.
+			if ((!strcmp(s, "+attack2") && !strcmp(Cmd_Argv(2), "+button3")) || (!strcmp(s, "-attack2") && !strcmp(Cmd_Argv(2), "-button3")))
+				return;
 			Con_Printf (S_COLOR_RED"Can't register alias, %s is a command\n", s);
 			return;
 		}
@@ -3485,6 +3504,12 @@ void Cmd_ExecuteString (const char *text, int level)
 		}
 		if ((a->restriction?a->restriction:rcon_level.ival) > execlevel)
 			return;	//we expanded something it wasn't meant to see.
+#ifdef HAVE_CLIENT
+		//FTESurf Patch 1646 review 2: a body queued below the level now executing runs NEXT frame (Cbuf_Execute walks
+		//the levels upwards once a frame): a one-frame wait without `wait`. The game sets no aliaslevel.
+		if (execlevel < level && cls.state == ca_active)
+			CL_ScriptLapse();
+#endif
 
 		Cbuf_InsertText ("\n", execlevel, false);
 		if (!dpcompat_console.ival)

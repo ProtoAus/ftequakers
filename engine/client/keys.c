@@ -5054,6 +5054,12 @@ defaultedbind:
 	{
 		if (dc[0] == '+')
 		{
+			/*FTESurf Patch 1646: this key's own fresh press (not its repeat, not a plugin's event);
+			  cl_input.c's KeyDown takes the note.  The wheel, gamepad buttons and touch call Key_Event
+			  directly, so the test is "not synthetic", not IN_RealKeyDown.*/
+			qboolean IN_SynthKeyDispatch(void);
+			if (!wasdown && !IN_SynthKeyDispatch())
+				CL_DirectPress(dc, bkey, bl);
 			uc = va("-%s%s %i\n", p, dc+1, bkey);
 			dc = va("+%s%s %i\n", p, dc+1, bkey);
 		}

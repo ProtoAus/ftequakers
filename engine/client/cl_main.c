@@ -7655,6 +7655,7 @@ double Host_Frame (double time)
 	//should smooth out a few things, and increase download speeds.
 	if (!cls.timedemo)
 		CL_ReadPackets ();
+	CL_ScriptLapseSync ();	/*FTESurf Patch 1646: publish script lapses counted off the main thread*/
 
 	if (idle && cl_idlefps.value > 0 && !(vrflags&VRF_OVERRIDEFRAMETIME))
 	{
@@ -8318,10 +8319,8 @@ void CL_ExecInitialConfigs(char *resetcommand, qboolean fullvidrestart)
 	Cbuf_AddText("alias restart_ents \"changelevel . .\"\n",RESTRICT_LOCAL);
 	Cbuf_AddText("alias restart map_restart\n",RESTRICT_LOCAL);
 	Cbuf_AddText("alias startmap_sp \"map start\"\n", RESTRICT_LOCAL);
-#ifdef QUAKESTATS
-	Cbuf_AddText("alias +attack2 +button3\n", RESTRICT_LOCAL);
-	Cbuf_AddText("alias -attack2 -button3\n", RESTRICT_LOCAL);
-#endif
+	//FTESurf Patch 1646 review 2: +attack2 / -attack2 are commands now (cl_input.c); an alias of them is refused
+	//(an old saved config's `alias +attack2 "+button3"` silently, cmd.c).
 	Cbuf_AddText("cl_warncmd 0\n", RESTRICT_LOCAL);
 	Cbuf_AddText("cvar_purgedefaults\n", RESTRICT_LOCAL);	//reset cvar defaults to their engine-specified values. the tail end of 'exec default.cfg' will update non-cheat defaults to mod-specified values.
 	Cbuf_AddText("cvarreset *\n", RESTRICT_LOCAL);			//reset all cvars to their current (engine) defaults

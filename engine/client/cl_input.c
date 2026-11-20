@@ -185,6 +185,97 @@ qboolean	cursor_active;
 
 
 
+/*FTESurf Patch 1646: "1 button per key, no waits" (Lex, 20 Nov 2026).
+  A button press is the player's when Key_Event dispatched it for a real device's key whose bind is that one
+  command (CL_DirectPress); KeyDown takes the note back.  A press with no note -- an alias, a bind of several
+  commands, the console, a cfg, menu QC, a forged key argument -- is a script lapse, and so are wait/waitms/in
+  and plugin input (CL_ScriptLapse).  Releases are not judged: the game's own QC releases keys.  The count is
+  the read-only in_script_lapses; csprogs steps the ranked report on a change.  A note is matched by command and
+  key, not by keydown[] at execution: a wheel bind queues its +jump and -jump in one frame.*/
+static cvar_t in_script_lapses = CVARFD("in_script_lapses", "0", CVAR_NOSET|CVAR_NOSAVE|CVAR_NOTFROMSERVER|CVAR_NORESET, "Set by the engine: counts button presses that did not come from their own key's single-command bind, wait/waitms/in commands and plugin input. The ranked check reads a change during a run as `changed`.");
+#define DIRECTPRESS_MAX	128	//review 1: a free-spinning wheel in a hitch fills a frame; overwritten oldest-first
+//review 3: a note lives for its own frame and the next, not for a time.  Its own line runs in this frame's
+//Cbuf_Execute (or the next, for a wheel read inside CL_SendCmd), and every frame that advances host_framecount runs
+//Cbuf_Execute first -- so an honest note is always taken in time, and one its own line never took (a refused or
+//swallowed line) cannot be banked for a script to spend later.
+#define DIRECTPRESS_FRAMES	1
+static struct
+{
+	char cmd[32];
+	int key;
+	int frame;
+} directpress[DIRECTPRESS_MAX];
+static unsigned int directpress_next;
+static volatile unsigned int in_scriptinputs;	//counted on any thread (plugin input may arrive off the main one)
+static unsigned int in_scriptinputs_shown;
+static qboolean keydown_unjudged;	//review 1: a second button one press drives (smartjump) is not judged again
+static qboolean keydown_judged;		//review 2: ...only when the first call was judged (not a repeat); set by KeyDown
+
+//main thread only: the cvar is what csprogs reads.  Host_Frame calls it every frame.
+void CL_ScriptLapseSync(void)
+{
+	char s[16];
+	unsigned int n = in_scriptinputs;
+	if (n == in_scriptinputs_shown || !in_script_lapses.string)
+		return;
+	in_scriptinputs_shown = n;
+	Q_snprintfz(s, sizeof(s), "%u", n);
+	Cvar_ForceSet(&in_script_lapses, s);
+}
+void CL_ScriptLapse(void)
+{
+	in_scriptinputs++;
+	if (Sys_IsMainThread())
+		CL_ScriptLapseSync();
+}
+//bind is the key's whole bind string, level its bind level: only a single bare +command is noted.
+void CL_DirectPress(const char *bind, int key, int level)
+{
+	int l, oldest;
+	const char *a;
+	if (bind[0] != '+' || strchr(bind, ';') || strchr(bind, '\n') || strchr(bind, '\r') || strchr(bind, '"') || strchr(bind, '$'))
+		return;
+	if (level < rcon_level.ival)
+		return;	//review 3: its own line is refused before KeyDown and could never take the note
+	for (l = 0; bind[l] && bind[l] != ' ' && bind[l] != '\t'; l++)
+		;
+	if (l >= (int)sizeof(directpress[0].cmd))
+		return;
+	//review 3: bare, so its own line reads "+cmd <key>" and KeyDown sees the key (an argument reading as 0 made the
+	//press a "repeat" that left the note behind); +fire alone may carry its weapon numbers (IN_FireDown).
+	for (a = bind + l; *a == ' ' || *a == '\t'; a++)
+		;
+	if (*a)
+	{
+		if (l != 5 || Q_strncasecmp(bind, "+fire", 5))
+			return;
+		for (; *a; a++)
+			if (!((*a >= '0' && *a <= '9') || *a == ' ' || *a == '\t'))
+				return;
+	}
+	//review 1: insertion order -- every note in one frame shares realtime, so a time test always picked slot 0
+	oldest = (directpress_next++) % DIRECTPRESS_MAX;
+	memcpy(directpress[oldest].cmd, bind, l);
+	directpress[oldest].cmd[l] = 0;
+	directpress[oldest].key = key;
+	directpress[oldest].frame = host_framecount;
+}
+static qboolean CL_TakeDirectPress(const char *cmd, int key)
+{
+	int i;
+	for (i = 0; i < DIRECTPRESS_MAX; i++)
+	{
+		if (directpress[i].cmd[0] && directpress[i].key == key
+			&& (unsigned int)(host_framecount - directpress[i].frame) <= DIRECTPRESS_FRAMES
+			&& !Q_strcasecmp(directpress[i].cmd, cmd))
+		{
+			directpress[i].cmd[0] = 0;
+			return true;
+		}
+	}
+	return false;
+}
+
 static qboolean KeyDown_Scan (kbutton_t *b, kbutton_t *anti, int k)
 {
 	int pnum = CL_TargettedSplit(false);
@@ -225,6 +316,20 @@ static void KeyDown (kbutton_t *b, kbutton_t *anti)
 		k = atoi(c);
 	else
 		k = -1;		// typed manually at the console for continuous down
+
+	//FTESurf Patch 1646: a new press (not the held key's repeat) that its own key did not dispatch
+	keydown_judged = false;
+	if (!keydown_unjudged)
+	{
+		int pnum = CL_TargettedSplit(false);
+		if (k < 0 || (k != b->down[pnum][0] && k != b->down[pnum][1]))
+		{
+			keydown_judged = true;
+			if (!CL_TakeDirectPress(Cmd_Argv(0), k))
+				CL_ScriptLapse();
+		}
+	}
+	keydown_unjudged = false;	//review 2: consumed by this one call, so it can never outlive it
 
 	KeyDown_Scan(b, anti, k);
 }
@@ -718,6 +823,14 @@ void IN_FireDown(void)
 	else
 		IN_DoPostSelect();
 
+	//FTESurf Patch 1646 review 2: judged as KeyDown judges (+fire went straight to KeyDown_Scan). A key below 32
+	//(Tab, Enter) reads as k = -1 above, so its note is looked up by the raw last argument too.
+	if (k < 0 || (k != in_attack.down[pnum][0] && k != in_attack.down[pnum][1]))
+	{
+		int kraw = atoi(Cmd_Argv(Cmd_Argc()-1));
+		if (!CL_TakeDirectPress(Cmd_Argv(0), k) && !(k < 0 && kraw > 0 && CL_TakeDirectPress(Cmd_Argv(0), kraw)))
+			CL_ScriptLapse();
+	}
 	KeyDown_Scan(&in_attack, NULL, k);
 }
 static void IN_DoWeaponHide(void)
@@ -970,6 +1083,10 @@ static void IN_UseUp (void) {KeyUp(&in_use);}
 //stands you up. Both commands still fold into bit 3, so +button4 is unaffected.
 static void IN_DuckDown (void) {KeyDown(&in_duck, NULL);}
 static void IN_DuckUp (void) {KeyUp(&in_duck);}
+//FTESurf Patch 1646 review 2: +attack2 was `alias +attack2 +button3` (cl_main.c), which reaches KeyDown without the
+//key number for the reason +duck gives -- every honest press would count as a script. A real command on button 3.
+static void IN_Attack2Down (void) {KeyDown(&in_button[3], NULL);}
+static void IN_Attack2Up (void) {KeyUp(&in_button[3]);}
 static void IN_JumpDown (void)
 {
 	qboolean up;
@@ -1025,7 +1142,10 @@ static void IN_JumpDown (void)
 	engine is shared with, for no benefit here.
 	*/
 	if (flying)
+	{
+		keydown_unjudged = keydown_judged;	//Patch 1646: the same press, if it was judged for in_up (review 2)
 		KeyDown(&in_jump, NULL);
+	}
 }
 static void IN_JumpUp (void)
 {
@@ -3687,6 +3807,8 @@ void CL_InitInput (void)
 	Cvar_Register (&cl_netfps_snap, inputnetworkcvargroup);	//FTESurf Patch 252
 	Cvar_Register (&cl_run, inputnetworkcvargroup);
 	Cvar_Register (&cl_iDrive, inputnetworkcvargroup);
+	Cvar_Register (&in_script_lapses, inputnetworkcvargroup);	/*FTESurf Patch 1646*/
+	Cvar_ForceSet (&in_script_lapses, "0");	//a launch +set of the name leaves its string behind
 
 #ifdef NQPROT
 	Cvar_Register (&cl_movement, inputnetworkcvargroup);
@@ -3750,6 +3872,8 @@ void CL_InitInput (void)
 	Cmd_AddCommand ("-use",			IN_UseUp);
 	Cmd_AddCommandD("+duck",		IN_DuckDown, "Crouch. Sets usercmd button bit 3, which pm_physicsmode 1 reads as Source's IN_DUCK.");
 	Cmd_AddCommand ("-duck",		IN_DuckUp);
+	Cmd_AddCommandD("+attack2",		IN_Attack2Down, "Secondary attack: usercmd button 3, as +button3.");	/*Patch 1646*/
+	Cmd_AddCommand ("-attack2",		IN_Attack2Up);
 	Cmd_AddCommand ("+jump",		IN_JumpDown);
 	Cmd_AddCommand ("-jump",		IN_JumpUp);
 	Cmd_AddCommandD("impulse",		IN_Impulse, "Sends an impulse number to the server (read: weapon change).");

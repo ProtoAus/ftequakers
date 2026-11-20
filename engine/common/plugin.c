@@ -2166,6 +2166,9 @@ void IN_SynthOrigin(qboolean on);	/*Patch 625, in_generic.c*/
 static void QDECL Plug_IN_KeyEvent(unsigned int devid, int down, int keycode, int unicode)
 {
 	IN_Journal_MarkSynth("plugin");
+#ifdef HAVE_CLIENT
+	CL_ScriptLapse();	/*FTESurf Patch 1646: counted where the server reads it*/
+#endif
 	IN_SynthOrigin(true);
 	IN_KeyEvent(devid, down, keycode, unicode);
 	IN_SynthOrigin(false);
@@ -2173,21 +2176,33 @@ static void QDECL Plug_IN_KeyEvent(unsigned int devid, int down, int keycode, in
 static void QDECL Plug_IN_MouseMove(unsigned int devid, int abs, float x, float y, float z, float size)
 {
 	IN_Journal_MarkSynth("plugin");
+#ifdef HAVE_CLIENT
+	CL_ScriptLapse();	/*FTESurf Patch 1646: counted where the server reads it*/
+#endif
 	IN_MouseMove(devid, abs, x, y, z, size);
 }
 static void QDECL Plug_IN_JoystickAxisEvent(unsigned int devid, int axis, float value)
 {
 	IN_Journal_MarkSynth("plugin");
+#ifdef HAVE_CLIENT
+	CL_ScriptLapse();	/*FTESurf Patch 1646: counted where the server reads it*/
+#endif
 	IN_JoystickAxisEvent(devid, axis, value);
 }
 static void QDECL Plug_IN_Accelerometer(unsigned int devid, float x, float y, float z)
 {
 	IN_Journal_MarkSynth("plugin");
+#ifdef HAVE_CLIENT
+	CL_ScriptLapse();	/*FTESurf Patch 1646: counted where the server reads it*/
+#endif
 	IN_Accelerometer(devid, x, y, z);
 }
 static void QDECL Plug_IN_Gyroscope(unsigned int devid, float pitch, float yaw, float roll)
 {
 	IN_Journal_MarkSynth("plugin");
+#ifdef HAVE_CLIENT
+	CL_ScriptLapse();	/*FTESurf Patch 1646: counted where the server reads it*/
+#endif
 	IN_Gyroscope(devid, pitch, yaw, roll);
 }
 

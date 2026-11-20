@@ -606,6 +606,7 @@ static volatile unsigned int in_jrn_dropped;
 */
 static qboolean in_synth_origin;
 static qboolean in_real_keydown;
+static qboolean in_synth_dispatch;	/*Patch 1646: the key event being dispatched came from a plugin's shim*/
 static qbyte in_real_held[K_MAX];
 void IN_SynthOrigin(qboolean on)
 {
@@ -615,12 +616,19 @@ qboolean IN_RealKeyDown(void)
 {
 	return in_real_keydown;
 }
+/*Patch 1646: not IN_RealKeyDown: the wheel, a gamepad's buttons and touch reach Key_Event without the queue,
+  and they are the player's.  Only a queued event a plugin made is not.*/
+qboolean IN_SynthKeyDispatch(void)
+{
+	return in_synth_dispatch;
+}
 /*A QC error inside the key handler longjmps out of Host_Frame, past the line
   that takes the flag down again (the review traced it).  Host_Frame's landing
   calls this, and so does every IN_Commands before it dispatches anything.*/
 void IN_RealKeyAbort(void)
 {
 	in_real_keydown = false;
+	in_synth_dispatch = false;
 }
 /*The window lost its keys.  Key_ClearStates is the Windows GL, D3D11 and X11
   backends' focus path, and the last two release keys without this queue
@@ -3167,7 +3175,9 @@ static void IN_Commands_Internal(qboolean deliverpaste)
 			if (!ev->synth && ev->keyboard.scancode > 0 && ev->keyboard.scancode < K_MAX
 				&& !in_real_held[ev->keyboard.scancode])
 				in_real_keydown = in_real_held[ev->keyboard.scancode] = true;
+			in_synth_dispatch = ev->synth;
 			Key_Event(ev->devid, ev->keyboard.scancode, ev->keyboard.unicode, true);
+			in_synth_dispatch = false;
 			in_real_keydown = false;
 			break;
 		case IEV_JOYAXIS:

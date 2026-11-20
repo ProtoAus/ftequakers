@@ -1382,6 +1382,9 @@ qboolean IN_DrawWeaponWheel(int pnum);
 qboolean IN_WeaponWheelIsShown(void);	//to decide when the game should be auto-paused.
 #endif
 void CL_InitInput (void);
+void CL_ScriptLapse(void);
+void CL_ScriptLapseSync(void);	/*FTESurf Patch 1646 (cl_input.c)*/
+void CL_DirectPress(const char *bind, int key, int level);
 void CL_SendCmd (double frametime, qboolean mainloop);
 void CL_SendMove (usercmd_t *cmd);
 void CL_AngleHistoryFollow(int plnum, const vec3_t before);	//FTESurf Patch 396
