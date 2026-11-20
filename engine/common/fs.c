@@ -10784,8 +10784,13 @@ static int QDECL FS_Addon_PackFileOk(const char *fname, qofs_t fsize, time_t mti
 {
 	gspackcheck_t *c = parm;
 	const char *ext = COM_GetFileExtension(fname, NULL);
+	size_t len = strlen(fname);
 	qboolean ok;
-	if (!Q_strcasecmp(fname, c->bsp))
+	if (strchr(fname, '\\') || len >= MAX_QPATH)
+		ok = false;
+	else if (len && fname[len-1] == '/')
+		ok = true;	//a directory entry
+	else if (!Q_strcasecmp(fname, c->bsp))
 		ok = true;
 	else if (!Q_strcasecmp(ext, ".wad"))
 		ok = !strchr(fname, '/');
@@ -10807,14 +10812,12 @@ static int QDECL FS_Addon_PackFileOk(const char *fname, qofs_t fsize, time_t mti
 //secure lookup or a ruleset read.
 static qboolean FS_Addon_MountPack(const char *arg, const char *syspath)
 {
-	static const char *const depth[] = {"*", "*/*", "*/*/*", "*/*/*/*", "*/*/*/*/*", "*/*/*/*/*/*"};
 	char dir[MAX_OSPATH], bsp[MAX_QPATH], id[MAX_QPATH];
 	searchpath_t *s, *oldpaths = NULL;
 	searchpathfuncs_t *pak;
 	vfsfile_t *file;
 	gspackcheck_t check;
 	char *sl;
-	int i;
 
 	for (s = com_searchpaths; s; s = s->next)
 		if (!Q_strcasecmp(s->logicalpath, syspath))
@@ -10832,8 +10835,7 @@ static qboolean FS_Addon_MountPack(const char *arg, const char *syspath)
 	Q_snprintfz(bsp, sizeof(bsp), "maps/%s.bsp", id);
 	memset(&check, 0, sizeof(check));
 	check.bsp = bsp;
-	for (i = 0; i < countof(depth); i++)
-		pak->EnumerateFiles(pak, depth[i], FS_Addon_PackFileOk, &check);
+	pak->EnumerateFiles(pak, NULL, FS_Addon_PackFileOk, &check);	//NULL: every member (fs_zip.c), not one directory level
 	if (check.bad)
 	{
 		Con_Printf(CON_WARNING"%s: not mounted, it holds %i file%s a map package may not (%s)\n",
@@ -10888,6 +10890,7 @@ static qboolean FS_Addon_AutoSourceBase(void)
 	return base;
 }
 
+static qboolean fs_addon_nosiblings;	//P1656: set around a GoldSrc map's Half-Life mounts
 static qboolean FS_Addon_Mount(const char *arg, unsigned int loadstuff)
 {
 	char syspath[MAX_OSPATH];
@@ -10924,7 +10927,7 @@ static qboolean FS_Addon_Mount(const char *arg, unsigned int loadstuff)
 		searchpath_t *ds;
 		searchpathfuncs_t *dlhandle;
 		Q_snprintfz(dlpath, sizeof(dlpath), "%s_downloads", syspath);
-		if (!Sys_EnumerateFiles(dlpath, "*", FS_DirDoesHaveGame, NULL, NULL))	//returns false => callback cancelled => dir has >=1 entry
+		if (!fs_addon_nosiblings && !Sys_EnumerateFiles(dlpath, "*", FS_DirDoesHaveGame, NULL, NULL))	//returns false => callback cancelled => dir has >=1 entry
 		{
 			for (ds = com_searchpaths; ds; ds = ds->next)
 				if (!Q_strcasecmp(ds->logicalpath, dlpath))
@@ -11572,8 +11575,10 @@ static char fs_automountwant[FS_MAXAUTOMOUNT][MAX_OSPATH];	//ftesurf (P184): wha
 static int fs_numautomountwant;
 // One fixed client asset request may retain its pack for this FS session.
 static double fs_knife_assets_retry;
+static void FS_GoldSrc_Forget(void);
 static void FS_AutoMount_Forget(void)	//ftesurf (P184): forward-declared at the top of the file, called from FS_FreePaths
 {
+	FS_GoldSrc_Forget();	//P1656
 	fs_numautomounted = 0;
 	fs_numautomountwant = 0;
 	fs_knife_assets_path[0] = 0;
@@ -12646,26 +12651,38 @@ static void FS_Cache_Clear_f(void)
 //FTESurf Patch 1656: a GoldSrc map's mounts (its package, and the Half-Life folders this code mounted) last only as
 //long as that map: fs_gswant says whether the map now loading is one, fs_gsours what was raised for the last one.
 static qboolean fs_gsactive, fs_gswant;
-static char fs_gsours[4][MAX_OSPATH];
+static char fs_gsours[FS_MAXAUTOMOUNT][MAX_OSPATH];	//every GoldSrc mount this code made and has not dropped
 static int fs_numgsours;
-static void FS_GoldSrc_AfterDrop(void)
+static void FS_GoldSrc_Forget(void)
 {
-	int i, j;
-	if (fs_gsactive && !fs_gswant)
-	{	//fs_autounmount 0 keeps other packs, never these: a Source map must not see GoldSrc files
-		for (i = 0; i < fs_numgsours; i++)
-			for (j = 0; j < fs_numautomounted; j++)
-				if (!Q_strcasecmp(fs_automounted[j], fs_gsours[i]))
-				{
-					FS_Addon_Unmount(fs_automounted[j]);
-					memmove(fs_automounted[j], fs_automounted[j+1], (fs_numautomounted-j-1)*sizeof(fs_automounted[0]));
-					fs_numautomounted--;
-					break;
-				}
+	fs_gsactive = fs_gswant = false;
+	fs_numgsours = 0;
+}
+static void FS_GoldSrc_AfterDrop(void)
+{	//fs_autounmount 0 keeps other packs, never these: a map that does not want one must not see GoldSrc files
+	int i, j, k;
+	for (i = 0; i < fs_numgsours; )
+	{
+		for (k = 0; k < fs_numautomountwant; k++)
+			if (!Q_strcasecmp(fs_automountwant[k], fs_gsours[i]))
+				break;
+		if (k < fs_numautomountwant)
+		{
+			i++;
+			continue;
+		}
+		for (j = 0; j < fs_numautomounted; j++)
+			if (!Q_strcasecmp(fs_automounted[j], fs_gsours[i]))
+			{
+				FS_Addon_Unmount(fs_automounted[j]);
+				memmove(fs_automounted[j], fs_automounted[j+1], (fs_numautomounted-j-1)*sizeof(fs_automounted[0]));
+				fs_numautomounted--;
+				break;
+			}
+		memmove(fs_gsours[i], fs_gsours[i+1], (fs_numgsours-i-1)*sizeof(fs_gsours[0]));
+		fs_numgsours--;
 	}
 	fs_gsactive = fs_gswant;
-	if (!fs_gsactive)
-		fs_numgsours = 0;
 }
 void FS_AutoUnmountStale(void)
 {
@@ -12903,6 +12920,7 @@ qboolean FS_GoldSrc_Package(const char *name, char *syspath, size_t syssize, qbo
 	}
 	return true;
 }
+static qboolean fs_gsverify_reset;	//set when a package is written (FS_GoldSrc_Reverify)
 //Is the package at syspath the catalogue's bytes? Hashed once per session per (path, size, sha).
 static qboolean FS_GoldSrc_Verified(const char *syspath, const goldsrcrow_t *row)
 {
@@ -12915,6 +12933,11 @@ static qboolean FS_GoldSrc_Verified(const char *syspath, const goldsrcrow_t *row
 	void *ctx;
 	int i, n;
 
+	if (fs_gsverify_reset)
+	{
+		memset(seen, 0, sizeof(seen));
+		fs_gsverify_reset = false;
+	}
 	f = VFSOS_Open(syspath, "rb");
 	if (!f)
 		return false;
@@ -12946,8 +12969,23 @@ static qboolean FS_GoldSrc_Verified(const char *syspath, const goldsrcrow_t *row
 }
 qboolean FS_GoldSrc_Involved(const char *map)
 {
+	char id[MAX_QPATH];
 	qboolean have;
-	return fs_gsactive || (FS_GoldSrc_Package(COM_SkipPath(map), NULL, 0, &have) && have);
+	COM_StripExtension(COM_SkipPath(map), id, sizeof(id));	//callers pass maps/<id>.bsp
+	return fs_gsactive || (FS_GoldSrc_Package(id, NULL, 0, &have) && have);
+}
+//N4/N3: installed means present AND the catalogue's bytes; a fresh download resets the verdicts
+void FS_GoldSrc_Reverify(void)
+{
+	fs_gsverify_reset = true;
+}
+qboolean FS_GoldSrc_Ready(const char *name)
+{
+	char path[MAX_OSPATH];
+	goldsrcrow_t row;
+	qboolean have;
+	return FS_GoldSrc_Package(name, path, sizeof(path), &have) && have && FS_GoldSrc_Row(name, &row) &&
+		   FS_GoldSrc_Verified(path, &row);
 }
 //The mounts a GoldSrc map wants, most specific first; 0 when the map has no package here.
 static int FS_GoldSrc_Wants(const char *map, char specs[][MAX_OSPATH])
@@ -13193,7 +13231,9 @@ void FS_AutoMountForMap(const char *mapname)
 				Con_Printf("fs_automount: %s needs \"%s%s\"\n", want, pk3?"goldsrc/":"", pk3?COM_SkipPath(wantspec[i]):wantspec[i]);
 				if (!pk3)
 					FS_Addon_MountHD(wantspec[i], ~0u);
+				fs_addon_nosiblings = numgs && i >= firstgs;	//P1656: no Half-Life *_downloads for a GoldSrc map
 				FS_Addon_Mount(wantspec[i], ~0u);
+				fs_addon_nosiblings = false;
 			}
 			if (fs_thread_mutex)
 				Sys_UnlockMutex(fs_thread_mutex);
@@ -13226,8 +13266,14 @@ void FS_AutoMountForMap(const char *mapname)
 					break;
 				}
 		FS_Addon_Raise(ours, numours);
-		memcpy(fs_gsours, ours, sizeof(fs_gsours));
-		fs_numgsours = numours;
+		for (i = 0; i < numours; i++)
+		{
+			for (j = 0; j < fs_numgsours; j++)
+				if (!Q_strcasecmp(fs_gsours[j], ours[i]))
+					break;
+			if (j == fs_numgsours && fs_numgsours < FS_MAXAUTOMOUNT)
+				Q_strncpyz(fs_gsours[fs_numgsours++], ours[i], sizeof(fs_gsours[0]));
+		}
 		fs_gsactive = true;
 	}
 

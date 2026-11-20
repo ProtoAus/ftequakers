@@ -631,7 +631,9 @@ int FS_AddonState(const char *spec);			//ftesurf (Patch 480): 0 not installed, 1
 typedef struct {char sha[65]; char xzsha[65]; qofs_t pk3bytes; qofs_t xzbytes; int needs;} goldsrcrow_t;	//FTESurf Patch 1656: a GoldSrc map package's catalogue row: the package's sha256, its .xz's, its size, games (1 Half-Life 2 CS 4 CZ)
 qboolean FS_GoldSrc_Row(const char *name, goldsrcrow_t *row);
 qboolean FS_GoldSrc_Package(const char *name, char *syspath, size_t syssize, qboolean *have);
-qboolean FS_GoldSrc_Involved(const char *map);	//P1656: a GoldSrc package is mounted now, or this map has one installed	//P1656: its file, downloads/goldsrc/<map>.pk3
+qboolean FS_GoldSrc_Involved(const char *map);
+qboolean FS_GoldSrc_Ready(const char *name);	//P1656: the package is here and is the catalogue's bytes
+void FS_GoldSrc_Reverify(void);	//P1656: a package was just written; forget cached verdicts	//P1656: a GoldSrc package is mounted now, or this map has one installed	//P1656: its file, downloads/goldsrc/<map>.pk3
 void FS_AutoMountForMap(const char *mapname);	//ftesurf (P175): mount this map's extra asset pack, per data/mapdeps.txt
 void FS_AutoUnmountStale(void);					//ftesurf (P184): give back packs the map now loading does not want. MUST be called only once the load is committed -- see the essay above FS_AutoUnmountStale
 void FS_LoadStats_Begin(void);					//ftesurf (P180): bracket a map load and report what it cost the filesystem

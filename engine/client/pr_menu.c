@@ -2638,8 +2638,7 @@ static void QCBUILTIN PF_m_downloadmap(pubprogfuncs_t *prinst, struct globalvars
 	}
 	else
 	{	//FTESurf Patch 1656: an installed GoldSrc package is not mounted until its map loads
-		qboolean have = false;
-		if (FS_GoldSrc_Package(name, NULL, 0, &have) && have)
+		if (FS_GoldSrc_Ready(name))	//present and the catalogue's bytes; a stale one is fetched again
 		{
 			G_FLOAT(OFS_RETURN) = 2;
 			return;

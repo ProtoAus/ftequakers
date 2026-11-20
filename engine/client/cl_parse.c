@@ -1110,6 +1110,7 @@ void CL_DownloadFinished(qdownload_t *dl)
 		char gsid[64], world[MAX_QPATH];
 		if (CL_GoldSrc_MapOf(filename, "goldsrc/", ".pk3", gsid, sizeof(gsid)))
 		{
+			FS_GoldSrc_Reverify();
 			if (cls.state >= ca_connected && cl.model_name[1] &&
 				CL_GoldSrc_MapOf(cl.model_name[1], "maps/", ".bsp", world, sizeof(world)) && !Q_strcasecmp(world, gsid))
 			{
@@ -1317,8 +1318,10 @@ qboolean	CL_CheckOrEnqueDownloadFile (const char *filename, const char *localnam
 		if (!(flags & DLLF_NONGAME) && CL_GoldSrc_MapOf(localname, "maps/", ".bsp", gsid, sizeof(gsid)) &&
 			FS_GoldSrc_Row(gsid, &gsrow) && FS_GoldSrc_Package(gsid, NULL, 0, &have))
 		{
-			if (have && !(flags & DLLF_OVERWRITE))
+			if (have && FS_GoldSrc_Ready(gsid) && !(flags & DLLF_OVERWRITE))
 				return true;
+			if (have)
+				flags |= DLLF_OVERWRITE;	//a stale or foreign package: fetch the catalogue's
 			Q_strlwr(gsid);
 			Q_snprintfz(gsurl, sizeof(gsurl), CL_GOLDSRC_URL"/%s.xz", gsrow.xzsha);
 			Q_snprintfz(gslocal, sizeof(gslocal), "goldsrc/%s.pk3", gsid);
