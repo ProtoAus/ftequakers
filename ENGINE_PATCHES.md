@@ -1,5 +1,41 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1693 - Jargon opens on the course you are on and downloads its top runs (game QC only)
+
+**Cause.** Lex, 21 Nov 2026, a screenshot of surf_sandtrap2 bonus 4 with the Jargon panel showing Course "Main", no
+guide run and an empty box: "when I open the Tas menu it's broken? doesn't display correctly?". Three causes: the panel's
+course was always the first (Main) whatever course the player was on; with no guide run TASOptUI_DrawJargon returned
+before the dropdown's list was drawn, so the Course dropdown opened an invisible list and the course could not be
+changed; and guide runs came only from leaderboard lines, data/online, KSF/Momentum replays and loose data/*.rec, never
+data/runs/<map>/<leg>/ where the player's own recordings are (Lex had no copy of any bonus 4 run).
+
+**Change.** game src/client/cl_tasoptui.qc: TASOptUI_FollowCourse picks the course you are on -- the leg being recorded
+(STAT_FS_RUNLEG, read only while TF_RECORDING: it outlives the run) else the timer's track and start stage -- whenever
+that changes, never re-picking between Main and Stage 1 (one start box) and never while Jargon surfs or is armed, so a
+dropdown pick stays. The dropdown list is TASOptUI_DropList, drawn on both paths. With no guide run the panel offers
+"Download the top runs of <course>" (also `tas jargon download`). cl_jargon.qc TASJargon_Dl*: Online_Fetch for the
+course on the KSF board, then World of Surf's (ranked), then Momentum's; up to three rows' replays through
+Online_ReplayFetchRow into data/online/<map>/<leg>/; it shares the one replay slot with the leaderboard's line fetches
+(waits while they hold it, counts only its own rep or the file on disk), refuses while a leaderboard name search is
+set, moves to the next board when the files fit no course here (a variant map's base replays), and says why when it
+cannot. TASJargon_Own lists up to two of your own clean runs (pb or run tags; FS_RunClass of the header's flags; the
+movement profile's folder), labelled "my run 52.89s" from movetickrate. `tas jargon guides` prints the course.
+
+**Review.** Two rounds (QuakeC control flow and what the player sees). Round 1: own runs missed PBs and offered cheated
+or segmented runs; the download could steal or miscount the leaderboard's line fetch and sent a stale name search;
+`!s 1` mapped to Main. Round 2: the RUNLEG fix brought Lex's bug back after a finished run (the stat outlives it);
+Main/Stage 1 flipped and wiped undo; a busy wait was timed from the wrong moment; a variant map's base replays ended
+"done" with nothing listed. All fixed above.
+
+**Verified.** fteqcc cl_progs and sv_progs 0 warnings on main c94477ca. An isolated copy of the game with Lex's data
+(not the shared install) in a headless labwc, 1920x1200: surf_sandtrap2, `!b 4` -> the panel opens on Bonus 4 with the
+download button; the download fetched 00m07.830s agentflwrs, 00m07.830s farsh and 00m07.860s x from the KSF board and
+the panel drew the full route (4 points, "Arm Bonus 4"); `tas jargon download` before the panel opened took Bonus 4;
+a dropdown pick of Main stayed; `tas jargon drop 1` draws the list with no guide run; surf_ace offers "my run 52.89s"
+(and a copy named _pb first); surf_dragonfall's only own run (flags 457) is not offered. Control, main's csprogs: the
+same steps open on Main and the open dropdown draws nothing. **Not driven:** the mouse click (the verb calls the same
+function), a finished run then `!b 4` (needs a live recording), a line fetch racing the download, a variant map's board.
+
 ## Patch 1692 - A mid-run retry charges its time away to the clock (QC server only)
 
 **Cause.** Lex, 20 Nov 2026: a mid-run `retry` "stays clean; record a cut marker; add the away time to the clock".
