@@ -539,11 +539,13 @@ static int LP_Process(lpfilter_t *lp, int rate, int nc, float target, float tau,
 #include "snd_vis_loopback.h"
 extern cvar_t _snd_mixahead;
 static void SNDVIS_SourceChanged(cvar_t *var, char *oldvalue);
-static cvar_t snd_vis_source = CVARFCD("snd_vis_source", "0", CVAR_ARCHIVE|CVAR_NOTFROMSERVER, SNDVIS_SourceChanged, "Visualiser source: 0 game mix (default), 1 Windows default output loopback. Local opt-in only; no microphone or playback.");
+//FTESurf Patch 1682: desktop audio by default (it carries the game's own sound too), on Linux through PulseAudio/PipeWire;
+//the game mix stands in whenever desktop capture is unsupported or not delivering.
+static cvar_t snd_vis_source = CVARFCD("snd_vis_source", "1", CVAR_ARCHIVE|CVAR_NOTFROMSERVER, SNDVIS_SourceChanged, "Visualiser source: 0 the game's own mix, 1 desktop audio (default): what the default output device plays (Windows render loopback, Linux PulseAudio/PipeWire monitor), the game mix while that is unavailable. Local only; no microphone, nothing recorded.");
 #if defined(_WIN32) && !defined(SERVERONLY)
-static cvar_t snd_vis_loopback_supported = CVARFD("snd_vis_loopback_supported", "1", CVAR_NOSET|CVAR_NOTFROMSERVER, "Whether Windows render loopback is supported by this build.");
+static cvar_t snd_vis_loopback_supported = CVARFD("snd_vis_loopback_supported", "1", CVAR_NOSET|CVAR_NOTFROMSERVER, "Whether desktop audio capture is available here (Windows render loopback).");
 #else
-static cvar_t snd_vis_loopback_supported = CVARFD("snd_vis_loopback_supported", "0", CVAR_NOSET|CVAR_NOTFROMSERVER, "Whether Windows render loopback is supported by this build.");
+static cvar_t snd_vis_loopback_supported = CVARFD("snd_vis_loopback_supported", "0", CVAR_NOSET|CVAR_NOTFROMSERVER, "Whether desktop audio capture is available here (Linux: 1 when libpulse loads, for PulseAudio or PipeWire).");
 #endif
 
 static cvar_t snd_vis				= CVARD("snd_vis", "1", "Analyse the software mix for snd_getvis/snd_visimage. 0 removes the mixer tap entirely.");
@@ -587,7 +589,7 @@ static int lp_running;					//filters not bypassed; 0 with no target = no work at
 static unsigned int lp_paints;
 
 enum {VISNA_OK, VISNA_DISABLED, VISNA_NOCARD, VISNA_EXTERNAL, VISNA_NOSAMPLES, VISNA_LOOPBACK};
-static const char *vis_reasons[] = {"", "snd_vis is 0", "no sound card", "the output device mixes externally (OpenAL)", "no samples mixed yet", "Windows output loopback unavailable (retrying on Windows)"};
+static const char *vis_reasons[] = {"", "snd_vis is 0", "no sound card", "the output device mixes externally (OpenAL)", "no samples mixed yet", "desktop audio unavailable (retrying)"};
 enum {VISSRC_CVAR, VISSRC_CURSOR, VISSRC_QUEUE, VISSRC_MIXAHEAD};
 static const char *vis_latsrcs[] = {"snd_vis_latency", "measured: the device's play cursor, extrapolated from the last mix", "estimated: the device's queue length", "fallback: s_mixahead"};
 
@@ -595,6 +597,7 @@ static struct
 {
 	viscore_t core;
 	int coreinit, rate;
+	int src;							//P1682: the ring the core was fed from, 1 desktop audio, 0 the game mix
 	unsigned int resets;
 	quint64_t lastend;					//ring frame the previous window ended at
 	int haveend;
@@ -629,7 +632,7 @@ static void SNDVIS_SourceChanged(cvar_t *var, char *oldvalue)
 #endif
 	(void)var; (void)oldvalue;
 	VISLB_Close();
-	vislb.retry = 0;
+	vislb.retry = vislb.backoff = 0;
 #ifdef MULTITHREAD
 	if (mixermutex) S_LockMixer(); //cvar registration precedes mixer mutex creation
 #endif
@@ -748,7 +751,7 @@ void SNDVIS_Lowpass(soundcardinfo_t *sc, int *pb, int stride, int frames)
 void SNDVIS_Latch(void)
 {
 	float f;
-	vistap.tapon = !!snd_vis.ival && snd_vis_source.ival != 1;
+	vistap.tapon = !!snd_vis.ival;	//P1682: even under desktop audio, which falls back to it
 	if (!vistap.tapon)
 		vistap.card = NULL;	//re-enabling starts a fresh ring
 	f = snd_fx_lowpass.value;
@@ -805,7 +808,7 @@ static int SNDVIS_Update(void)
 	unsigned int resets = 0, i, len, on0, on1;
 	float visrate = snd_vis_rate.value, dt;
 	const float *ring;
-	int loopback = snd_vis_source.ival == 1;
+	int loopback = snd_vis_source.ival == 1 && snd_vis_loopback_supported.ival;
 
 	if (!snd_vis.ival)
 	{
@@ -818,11 +821,10 @@ static int SNDVIS_Update(void)
 	else if (visrate < 10)
 		visrate = 10;
 	now = Sys_DoubleTime();
+	if (loopback)
+		vislb.lastuse = now;
 	if (loopback && !VISLB_Poll(now))
-	{
-		vis.reason = VISNA_LOOPBACK;
-		return 0;
-	}
+		loopback = 0;	//P1682: not delivering (yet): the game mix rather than nothing
 
 	S_LockMixer();
 	sc = sndcardinfo;
@@ -865,7 +867,7 @@ static int SNDVIS_Update(void)
 		vis.ringfill = (total < VIS_RING) ? (unsigned int)total : VIS_RING;
 
 		step = rate / visrate;
-		reinit = !vis.coreinit || resets != vis.resets || rate != vis.rate;
+		reinit = !vis.coreinit || resets != vis.resets || rate != vis.rate || loopback != vis.src;
 		if (reinit || !vis.haveend)
 			vis.nextend = end;	//the grid starts at the newest audible window
 		if ((quint64_t)vis.nextend <= end)
@@ -907,6 +909,7 @@ static int SNDVIS_Update(void)
 	{
 		Vis_Init(&vis.core, rate);
 		vis.coreinit = 1;
+		vis.src = loopback;
 		vis.resets = resets;
 		vis.rate = rate;
 		vis.haveend = 0;
@@ -1003,13 +1006,15 @@ static void SNDVIS_Status_f(void)
 	int live;
 	if (Cmd_IsInsecure()) return;
 	live = SNDVIS_Update();
-	Con_Printf("snd_vis_status: source %i supported %i active %i available %i packets %u rms %.6f\n",
-		snd_vis_source.ival, snd_vis_loopback_supported.ival, vislb.active, live, vislb.packets, live ? vis.core.out[11] : 0);
+	Con_Printf("snd_vis_status: source %i supported %i active %i available %i packets %u rms %.6f feeding %s\n",
+		snd_vis_source.ival, snd_vis_loopback_supported.ival, vislb.active, live, vislb.packets, live ? vis.core.out[11] : 0,
+		!live ? "nothing" : vis.src ? "desktop" : "game");
 }
 
 void SNDVIS_Frame(void)
 {
-	if ((!snd_vis.ival || snd_vis_source.ival != 1) && vislb.active)
+	//P1682: and when nothing has asked for 3 s (no menu visuals, no visualiser sky): no capture left open in a game
+	if ((!snd_vis.ival || snd_vis_source.ival != 1 || Sys_DoubleTime() - vislb.lastuse > 3) && vislb.active)
 		VISLB_Close();
 	else if (vislb.active)
 		VISLB_Poll(Sys_DoubleTime()); //drain between QC polls, avoiding capture queue overruns
@@ -1021,6 +1026,10 @@ void SNDVIS_Init(void)
 {
 	Cvar_Register(&snd_vis_source, "Sound visualiser");
 	Cvar_Register(&snd_vis_loopback_supported, "Sound visualiser");
+#ifdef VISLB_PULSE
+	if (VISLB_PulseLoad())
+		Cvar_ForceSet(&snd_vis_loopback_supported, "1");
+#endif
 	Cmd_AddCommandD("snd_vis_status", SNDVIS_Status_f, "Local visualiser source, capture activity and RMS; no endpoint identity.");
 	Cvar_Register(&snd_vis, "Sound visualiser");
 	Cvar_Register(&snd_vis_rate, "Sound visualiser");
