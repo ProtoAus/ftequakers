@@ -10776,6 +10776,36 @@ static qboolean FS_Addon_MountMomentumPack(const char *syspath, const char *pakn
 	Con_DPrintf("fs_load: automatic Source pack \"%s\"\n", pakpath);
 	return true;
 }
+//FTESurf Patch 1656: one archive as an addon mount (a GoldSrc map package). UNTRUSTED: third-party files, so
+//nothing in it answers a secure lookup or a ruleset read.
+static qboolean FS_Addon_MountPack(const char *arg, const char *syspath)
+{
+	char dir[MAX_OSPATH];
+	searchpath_t *s, *oldpaths = NULL;
+	searchpathfuncs_t *pak;
+	vfsfile_t *file;
+	char *sl;
+
+	for (s = com_searchpaths; s; s = s->next)
+		if (!Q_strcasecmp(s->logicalpath, syspath))
+			return true;
+	file = VFSOS_Open(syspath, "rb");
+	if (!file)
+		return false;
+	pak = FS_OpenPackByExtension(file, NULL, COM_SkipPath(syspath), syspath, "");
+	if (!pak)
+	{
+		Con_Printf(CON_WARNING"fs_load: \"%s\" is not a readable package\n", syspath);
+		return false;
+	}
+	Q_strncpyz(dir, syspath, sizeof(dir));
+	sl = strrchr(dir, '/');
+	if (sl)
+		*sl = 0;
+	FS_AddPathHandleOrigin(&oldpaths, arg, syspath, pak, "",
+		SPF_ADDON|SPF_COPYPROTECTED|SPF_PRIVATE|SPF_UNTRUSTED, 0, FSORIGIN_OSFILE, 0, 0, syspath, dir);
+	return true;
+}
 static qboolean FS_Addon_MountSourceBase(const char *syspath)
 {
 	return FS_Addon_MountMomentumPack(syspath, "hl2_dir.vpk");
@@ -10825,6 +10855,8 @@ static qboolean FS_Addon_Mount(const char *arg, unsigned int loadstuff)
 		return false;
 	if (!Q_strcasecmp(arg, FS_MOMENTUM_BASE_SPEC))
 		return FS_Addon_MountSourceBase(syspath);	//old generated deps and saved mounts
+	if (!Q_strcasecmp(COM_GetFileExtension(syspath, NULL), ".pk3"))
+		return FS_Addon_MountPack(arg, syspath);	//P1656
 
 	for (s = com_searchpaths; s; s = s->next)	//skip if already mounted
 		if (!Q_strcasecmp(s->logicalpath, syspath))
@@ -10951,6 +10983,51 @@ static int FS_Addon_Unmount(const char *syspath)
 	Sys_UnlockMutex(fs_thread_mutex);
 	COM_WorkerUnlock();
 	return removed;
+}
+//FTESurf Patch 1656: move these mounted addons, in the order given, ahead of every other addon (still below the
+//mod's own paths). A GoldSrc map's sound/x.wav or models/x.mdl must not be answered by a Source game's file.
+static void FS_Addon_Raise(char paths[][MAX_OSPATH], int count)
+{
+	searchpath_t *sp, **link, *up = NULL, **tail = &up;
+	size_t len;
+	int i;
+
+	COM_AssertMainThread("FS_Addon_Raise");
+	if (!com_searchpaths || !fs_thread_mutex)
+		return;
+
+	COM_WorkerLock();
+	Sys_LockMutex(fs_thread_mutex);
+	for (i = 0; i < count; i++)
+	{
+		len = strlen(paths[i]);
+		if (!len)
+			continue;
+		for (link = &com_searchpaths; *link; )
+		{
+			sp = *link;
+			if (FS_Addon_IsFamily(sp, paths[i], len))
+			{
+				*link = sp->next;
+				sp->next = NULL;
+				*tail = sp;
+				tail = &sp->next;
+			}
+			else
+				link = &sp->next;
+		}
+	}
+	if (up)
+	{
+		for (link = &com_searchpaths; *link && !((*link)->flags & SPF_ADDON); )
+			link = &(*link)->next;
+		*tail = *link;
+		*link = up;
+		FS_FlushFSHashReally(false);	//depths moved
+		fs_listgen++;
+	}
+	Sys_UnlockMutex(fs_thread_mutex);
+	COM_WorkerUnlock();
 }
 
 //nettest: mount `spec`'s HIGH-DEFINITION sibling ("<spec>_hd") if fs_hdmodels is set.
@@ -12626,7 +12703,11 @@ static void FS_AutoMountStep(const char *spec, qboolean cached)
 {
 	char step[64];
 	const char *g = "content";
-	if (strstr(spec, "/csgo"))
+	if (strstr(spec, "/goldsrc/"))	//P1656
+		g = "map package";
+	else if (strstr(spec, "Half-Life/"))
+		g = "Half-Life";
+	else if (strstr(spec, "/csgo"))
 		g = "CS:GO";
 	else if (strstr(spec, "/tf"))
 		g = "TF2";
@@ -12640,8 +12721,130 @@ static void FS_AutoMountStep(const char *spec, qboolean cached)
 	SCR_SetLoadingFileNow(step);
 }
 #endif
+/*FTESurf Patch 1656: GoldSrc map packages.
+<gamedir>/downloads/goldsrc/<map>.pk3 holds one BSP-30 map and the files only it needs (tools/gsrcpack.py). It is
+mounted, with the Half-Life game folders it names, only while that map is loaded, so a Source map never sees a
+GoldSrc file. The menu fetches the catalogue (id, sizes, sha256, games) to data/goldsrc.net.txt.*/
+#define FS_GOLDSRC_NET "data/goldsrc.net.txt"
+static qboolean FS_GoldSrc_Id(const char *name, char *id, size_t idsize)
+{
+	size_t i, l = name ? strlen(name) : 0;
+	if (!l || l > 60 || l >= idsize)
+		return false;
+	for (i = 0; i < l; i++)
+	{
+		char c = name[i];
+		if (c >= 'A' && c <= 'Z')
+			c += 'a' - 'A';
+		if (!((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_' || c == '-'))
+			return false;
+		id[i] = c;
+	}
+	id[l] = 0;
+	return true;
+}
+static qboolean FS_GoldSrc_Hex64(const char *h)
+{
+	int i;
+	for (i = 0; i < 64; i++)
+		if (!((h[i] >= '0' && h[i] <= '9') || (h[i] >= 'a' && h[i] <= 'f')))
+			return false;
+	return !h[64];
+}
+//The catalogue's row for a map; false when the map is not listed (see tools/gsrcpack.py for the columns).
+qboolean FS_GoldSrc_Row(const char *name, goldsrcrow_t *row)
+{
+	char id[64], rid[64], rkind[16], rsha[72], rxzsha[72];
+	unsigned long rxz, rpk3;
+	char *file, *line, *nl;
+	int rneeds, rflags;
+	qboolean found = false;
+
+	if (!FS_GoldSrc_Id(name, id, sizeof(id)))
+		return false;
+	file = FS_LoadTable(FS_GOLDSRC_NET);
+	if (!file)
+		return false;
+	if (!strncmp(file, "FTESURF-GOLDSRC 1", 17))
+	for (line = file; line && *line && !found; line = nl)
+	{
+		nl = strchr(line, '\n');
+		if (nl)
+			*nl++ = 0;
+		if (strncmp(line, "gs ", 3) || sscanf(line, "gs %63s %15s %lu %lu %71s %d %d %71s",
+				rid, rkind, &rxz, &rpk3, rsha, &rneeds, &rflags, rxzsha) != 8)
+			continue;
+		if (strcmp(rid, id) || !FS_GoldSrc_Hex64(rsha) || !FS_GoldSrc_Hex64(rxzsha) || rneeds < 0 || rneeds > 7)
+			continue;
+		found = true;
+		if (row)
+		{
+			Q_strncpyz(row->sha, rsha, sizeof(row->sha));
+			Q_strncpyz(row->xzsha, rxzsha, sizeof(row->xzsha));
+			row->pk3bytes = rpk3;
+			row->needs = rneeds;
+		}
+	}
+	BZ_Free(file);
+	return found;
+}
+//Where a map's package is kept; `have` says whether it is there now.
+qboolean FS_GoldSrc_Package(const char *name, char *syspath, size_t syssize, qboolean *have)
+{
+	char id[64], path[MAX_OSPATH];
+	vfsfile_t *f;
+	if (!FS_GoldSrc_Id(name, id, sizeof(id)))
+		return false;
+	if (!syspath)
+	{
+		syspath = path;
+		syssize = sizeof(path);
+	}
+	if (!FS_SystemPath(va("goldsrc/%s.pk3", id), FS_GAMEDOWNLOADS, syspath, syssize))
+		return false;
+	if (have)
+	{
+		f = VFSOS_Open(syspath, "rb");
+		*have = !!f;
+		if (f)
+			VFS_CLOSE(f);
+	}
+	return true;
+}
+//The mounts a GoldSrc map wants, most specific first; 0 when the map has no package here.
+static int FS_GoldSrc_Wants(const char *map, char specs[][MAX_OSPATH])
+{
+	static const char *const games[] = {"steam:Half-Life/cstrike", "steam:Half-Life/czero", "steam:Half-Life/valve"};
+	static const int bits[] = {2, 4, 1};
+	char path[MAX_OSPATH];
+	goldsrcrow_t row;
+	qboolean have, listed;
+	int needs = 0, n = 0, i;
+
+	if (!FS_GoldSrc_Package(map, specs[0], sizeof(specs[0]), &have) || !have)
+		return 0;
+	n = 1;
+	listed = FS_GoldSrc_Row(map, &row);
+	if (listed)
+		needs = row.needs;
+	for (i = 0; i < countof(games); i++)
+	{	//A game the row names is wanted even when absent, so the miss is reported. Half-Life itself is also
+		//taken whenever installed: door, button and breakable sounds are named by number, not in the catalogue.
+		if (!(listed && (needs & bits[i])))
+		{
+			if (bits[i] == 4 || (listed && bits[i] == 2))
+				continue;
+			if (!FS_Addon_ResolveEx(games[i], path, sizeof(path), true))
+				continue;
+		}
+		Q_strncpyz(specs[n++], games[i], sizeof(specs[0]));
+	}
+	return n;
+}
 void FS_AutoMountForMap(const char *mapname)
 {
+	char gsspec[4][MAX_OSPATH];
+	int numgs, firstgs;
 	char *file, *net, *line, *nl, *e, *spec;
 	char stampfile[15], stampnet[15];
 	char tmp[MAX_QPATH], want[MAX_QPATH];
@@ -12706,8 +12909,12 @@ void FS_AutoMountForMap(const char *mapname)
 		else
 			BZ_Free(net);
 	}
-	if (!file)
+	numgs = FS_GoldSrc_Wants(want, gsspec);	//P1656
+	if (!file && !numgs)
+	{
+		fs_numautomountwant = 0;	//no table: this map wants nothing, so the last GoldSrc map's mounts go
 		return;
+	}
 
 	for (line = file; line && *line; line = nl)
 	{
@@ -12756,7 +12963,16 @@ void FS_AutoMountForMap(const char *mapname)
 		//No break: a map may name more than one pack, and mounting both is
 		//cheaper than being wrong about which one wins.
 	}
-	BZ_Free(file);
+	if (file)
+		BZ_Free(file);
+	firstgs = numwant;
+	for (i = 0; i < numgs && numwant < FS_MAXAUTOMOUNT; i++, numwant++)
+	{	//P1656: the package, then the Half-Life folders it takes files from
+		Q_strncpyz(wantspec[numwant], gsspec[i], sizeof(wantspec[0]));
+		if (!FS_Addon_ResolveEx(gsspec[i], wantpath[numwant], sizeof(wantpath[0]), true))
+			wantpath[numwant][0] = 0;
+	}
+	numgs = numwant - firstgs;
 
 	//ftesurf (P186): the name the harvest will be filed under, if this load commits.  `want` is
 	//already normalised out of the `maps/x.bsp` and `x#pak` forms, and it is promoted to
@@ -12764,6 +12980,8 @@ void FS_AutoMountForMap(const char *mapname)
 	//SV_SpawnServer, writes no manifest.  Set before the completeness check below, which reads
 	//the manifest belonging to exactly this name.
 	Q_strncpyz(fs_hv_pending, want, sizeof(fs_hv_pending));
+	if (numgs)
+		*fs_hv_pending = 0;	//P1656: Half-Life's folders are small loose dirs; nothing to cache
 
 	/* ftesurf (P197): decide cached-or-not FIRST, because it changes what "this map wants".
 
@@ -12777,7 +12995,7 @@ void FS_AutoMountForMap(const char *mapname)
 	There is no global cache mount any more, so a proven load mounts each pack's cache
 	DIRECTORY in that pack's place -- and the want-set has to name those directories, or
 	P184's drop pass would unmount them again on the very next map for not being wanted. */
-	cached = fs_assetcache.ival && numwant && FS_Cache_MapIsComplete(want, wantpath, numwant);
+	cached = fs_assetcache.ival && numwant && !numgs && FS_Cache_MapIsComplete(want, wantpath, numwant);
 	for (i = 0; i < numwant; i++)
 	{
 		cachedir[i][0] = 0;
@@ -12847,6 +13065,9 @@ void FS_AutoMountForMap(const char *mapname)
 				Q_strncpyz(fs_automounted[fs_numautomounted++], path, sizeof(fs_automounted[0]));
 		}
 	}
+
+	if (numgs)
+		FS_Addon_Raise(wantpath + firstgs, numgs);	//P1656
 
 	/* ftesurf (P231): and say, for the material census, what all of that came to.  Written
 	last because state 1 and state 2 are only distinguishable once `cached` is known. */

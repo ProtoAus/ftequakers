@@ -561,6 +561,13 @@ qboolean CL_EnqueDownload(const char *filename, const char *localname, unsigned 
 	downloadlist_t *dl;
 	qboolean webdl = false;
 	char ext[8];
+	//FTESurf Patch 1656: downloads/goldsrc/ holds only packages checked against the catalogue; nothing else may
+	//write there (a server-named file, the download command), or a map load would mount it unverified.
+	if (localname && !Q_strncasecmp(localname, "goldsrc/", 8) && strncmp(filename, "https://maps.proto.bar/objects/goldsrc/", 39))
+	{
+		Con_DPrintf("Refusing download to \"%s\"\n", localname);
+		return false;
+	}
 	if ((flags & DLLF_TRYWEB) || !strncmp(filename, "http://", 7) || !strncmp(filename, "https://", 8))
 	{
 		flags |= DLLF_TRYWEB;
@@ -735,11 +742,101 @@ static qboolean CL_WebDownloadToGamedir(const char *localname)
 	return !Q_strcasecmp(COM_GetFileExtension(localname+5, NULL), ".bsp");
 }
 
+//FTESurf Patch 1656: GoldSrc map packages (FS_GoldSrc_Row). A listed map is fetched as
+//<CL_GOLDSRC_URL>/<sha256 of the .xz>.xz and kept as downloads/goldsrc/<map>.pk3, never as a bare maps/<map>.bsp.
+#define CL_GOLDSRC_URL "https://maps.proto.bar/objects/goldsrc"
+static qboolean CL_GoldSrc_MapOf(const char *name, const char *dir, const char *ext, char *id, size_t idsize)
+{	//"<dir><id><ext>" with nothing else in it
+	size_t dl = strlen(dir), l = strlen(name), el = strlen(ext);
+	if (l <= dl + el || l - dl - el >= idsize || Q_strncasecmp(name, dir, dl) || Q_strcasecmp(name + l - el, ext))
+		return false;
+	memcpy(id, name + dl, l - dl - el);
+	id[l - dl - el] = 0;
+	return !strchr(id, '/') && !strchr(id, '\\');
+}
+//The .tmp holds the .xz as fetched: decode it beside itself, and keep the result only when it is the catalogue's
+//bytes. On success the decoded package sits under the .tmp name for the caller's rename.
+static qboolean CL_GoldSrc_Unpack(struct dl_download *dl)
+{
+	char id[64], got[72], part[MAX_QPATH];
+	goldsrcrow_t row;
+	qbyte buf[65536], digest[DIGEST_MAXSIZE];
+	vfsfile_t *in, *out, *xz;
+	qofs_t size = 0;
+	void *ctx;
+	int n;
+	qboolean ok = true;
+
+	if (!CL_GoldSrc_MapOf(dl->qdownload.localname, "goldsrc/", ".pk3", id, sizeof(id)) ||
+		!FS_GoldSrc_Row(id, &row))
+		return false;
+	Q_snprintfz(part, sizeof(part), "goldsrc/%s.part", id);
+	in = FS_OpenVFS(dl->qdownload.tempname, "rb", dl->fsroot);
+	out = in ? FS_OpenVFS(part, "wb", dl->fsroot) : NULL;
+	xz = out ? FS_XZ_DecompressWriteFilter(out) : NULL;
+	if (!xz)
+	{
+		if (out)
+			VFS_CLOSE(out);
+		if (in)
+			VFS_CLOSE(in);
+		return false;
+	}
+	while (ok && (n = VFS_READ(in, buf, sizeof(buf))) > 0)
+		ok = (VFS_WRITE(xz, buf, n) == n);
+	VFS_CLOSE(in);
+	VFS_CLOSE(xz);	//closes `out` too
+
+	in = ok ? FS_OpenVFS(part, "rb", dl->fsroot) : NULL;
+	if (in)
+	{
+		ctx = alloca(hash_sha2_256.contextsize);
+		hash_sha2_256.init(ctx);
+		while ((n = VFS_READ(in, buf, sizeof(buf))) > 0)
+		{
+			hash_sha2_256.process(ctx, buf, n);
+			size += n;
+		}
+		VFS_CLOSE(in);
+		hash_sha2_256.terminate(digest, ctx);
+		got[Base16_EncodeBlock((const char*)digest, hash_sha2_256.digestsize, (qbyte*)got, sizeof(got)-1)] = 0;
+		ok = (size == row.pk3bytes && !Q_strcasecmp(got, row.sha));
+	}
+	else
+		ok = false;
+	if (ok)
+	{
+		FS_Remove(dl->qdownload.tempname, dl->fsroot);
+		ok = FS_Rename(part, dl->qdownload.tempname, dl->fsroot);
+	}
+	if (!ok)
+	{
+		FS_Remove(part, dl->fsroot);
+		Con_Printf(CON_ERROR"%s: not the catalogue's package (size or sha256), discarded\n", dl->qdownload.localname);
+	}
+	return ok;
+}
+
 static void CL_WebDownloadFinished(struct dl_download *dl)
 {
+	char gsid[64];
+	qboolean gsbad = false;
+	if (dl->status == DL_FINISHED && CL_GoldSrc_MapOf(dl->qdownload.localname, "goldsrc/", ".pk3", gsid, sizeof(gsid)))
+	{	//P1656: before the rename below can put undecoded or wrong bytes under the package's name
+		if (dl->file)
+			VFS_CLOSE(dl->file);
+		dl->file = NULL;
+		if (!CL_GoldSrc_Unpack(dl))
+		{
+			gsbad = true;
+			dl->status = DL_FAILED;
+		}
+	}
 	if (dl->status == DL_FAILED)
 	{
-		if (dl->replycode == 404)	//regular file-not-found
+		if (gsbad)
+			CL_DownloadFailed(dl->url, &dl->qdownload, DLFAIL_CORRUPTED);
+		else if (dl->replycode == 404)	//regular file-not-found
 			CL_DownloadFailed(dl->url, &dl->qdownload, DLFAIL_SERVERFILE);
 		else	//other stuff is PROBABLY 403forbidden, but lets blame the server's config if its a tls issue etc.
 			CL_DownloadFailed(dl->url, &dl->qdownload, DLFAIL_SERVERCVAR);
@@ -903,6 +1000,8 @@ static void CL_SendDownloadStartRequest(downloadlist_t *pending)
 }
 
 //Do any reloading for the file that just reloaded.
+static void CL_AutoMountForConnectedMap(const char *worldname);
+static void CL_AutoMountForget_Map(void);
 void CL_DownloadFinished(qdownload_t *dl)
 {
 	int i;
@@ -918,6 +1017,20 @@ void CL_DownloadFinished(qdownload_t *dl)
 
 	FS_FlushFSHashWritten(filename);
 
+	{	//FTESurf Patch 1656: a GoldSrc map package is not an engine package (no fs restart): mount it if it is
+		//this server's map, then go on as if maps/<id>.bsp itself had arrived.
+		char gsid[64], world[MAX_QPATH];
+		if (CL_GoldSrc_MapOf(filename, "goldsrc/", ".pk3", gsid, sizeof(gsid)))
+		{
+			if (cls.state >= ca_connected && cl.model_name[1] &&
+				CL_GoldSrc_MapOf(cl.model_name[1], "maps/", ".bsp", world, sizeof(world)) && !Q_strcasecmp(world, gsid))
+			{
+				CL_AutoMountForget_Map();
+				CL_AutoMountForConnectedMap(world);
+			}
+			Q_snprintfz(filename, sizeof(filename), "maps/%s.bsp", gsid);
+		}
+	}
 	COM_FileExtension(filename, ext, sizeof(ext));
 
 
@@ -1107,6 +1220,25 @@ qboolean	CL_CheckOrEnqueDownloadFile (const char *filename, const char *localnam
 	if (sv.state)
 		return true;
 #endif
+
+	{	//FTESurf Patch 1656: a listed GoldSrc map comes as its package from the catalogue's address, web only
+		static char gsurl[160], gslocal[MAX_QPATH];
+		char gsid[64];
+		goldsrcrow_t gsrow;
+		qboolean have;
+		if (!(flags & DLLF_NONGAME) && CL_GoldSrc_MapOf(localname, "maps/", ".bsp", gsid, sizeof(gsid)) &&
+			FS_GoldSrc_Row(gsid, &gsrow) && FS_GoldSrc_Package(gsid, NULL, 0, &have))
+		{
+			if (have && !(flags & DLLF_OVERWRITE))
+				return true;
+			Q_strlwr(gsid);
+			Q_snprintfz(gsurl, sizeof(gsurl), CL_GOLDSRC_URL"/%s.xz", gsrow.xzsha);
+			Q_snprintfz(gslocal, sizeof(gslocal), "goldsrc/%s.pk3", gsid);
+			filename = gsurl;
+			localname = gslocal;
+			flags = (flags & ~DLLF_ALLOWWEB) | DLLF_TRYWEB;
+		}
+	}
 
 	if (!(flags & DLLF_OVERWRITE))
 	{
@@ -1509,6 +1641,10 @@ static void CL_AutoMountForConnectedMap(const char *worldname)
 	COM_FlushFSCache(false, true);			//SV_Map_f does this for the same reason:
 											//a searchpath added after the cache was
 											//built is invisible to the next locate
+}
+static void CL_AutoMountForget_Map(void)
+{	//P1656: the map's package arrived after the first mount pass
+	cl_automounted_map[0] = 0;
 }
 void CL_AutoMountForget(void)
 {	//a disconnect may have dropped the packs; do not trust the cached name across one.

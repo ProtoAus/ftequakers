@@ -628,6 +628,9 @@ qboolean FS_FileIsAddonOnly(const char *name);	//nettest: file's top hit is in a
 void FS_SetPreferHint(const char *spec);		//nettest (P26 Part 2): bias the NEXT locate to a game spec's resolved dir
 void FS_ClearPreferHint(void);					//nettest (P26 Part 2): stop biasing (call right after the BSP load)
 int FS_AddonState(const char *spec);			//ftesurf (Patch 480): 0 not installed, 1 installed, 2 mounted, -1 cannot tell
+typedef struct {char sha[65]; char xzsha[65]; qofs_t pk3bytes; int needs;} goldsrcrow_t;	//FTESurf Patch 1656: a GoldSrc map package's catalogue row: the package's sha256, its .xz's, its size, games (1 Half-Life 2 CS 4 CZ)
+qboolean FS_GoldSrc_Row(const char *name, goldsrcrow_t *row);
+qboolean FS_GoldSrc_Package(const char *name, char *syspath, size_t syssize, qboolean *have);	//P1656: its file, downloads/goldsrc/<map>.pk3
 void FS_AutoMountForMap(const char *mapname);	//ftesurf (P175): mount this map's extra asset pack, per data/mapdeps.txt
 void FS_AutoUnmountStale(void);					//ftesurf (P184): give back packs the map now loading does not want. MUST be called only once the load is committed -- see the essay above FS_AutoUnmountStale
 void FS_LoadStats_Begin(void);					//ftesurf (P180): bracket a map load and report what it cost the filesystem
