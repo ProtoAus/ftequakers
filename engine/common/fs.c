@@ -346,6 +346,12 @@ static cvar_t fs_automount_state	= CVARFD	("fs_automount_state", "4", CVAR_NOSAV
 //census stops saying "never shipped" when the game the map was checked against is just not found.
 static cvar_t fs_addons_missing		= CVARFD	("fs_addons_missing", "", CVAR_NOSAVE, "ftesurf (P1382): the steam: lines of fs_addons.txt that did not mount at the last filesystem build, comma-separated (Steam folder/game dir). Read by the missing-material warning; setting it by hand only lies to that warning.");
 static cvar_t fs_steamlibs_note		= CVARFD	("fs_steamlibs_note", "", CVAR_NOSAVE|CVAR_NOSET, "FTESurf Patch 1636: the first steam_libraries.txt problem this run found (a listed root that is missing, or one that beats Steam's own copy of a game); the missing-content banner shows it. Empty when there is none.");
+static char fs_steamlibs_seen[4096] = "\n";	//P1636: "<kind>:<key>\n" per steam_libraries.txt root/game already checked
+static void FS_SteamLibs_Reset(void)
+{	//fs_restart and a successful fs_steamlibs remove look again
+	strcpy(fs_steamlibs_seen, "\n");
+	Cvar_ForceSet(&fs_steamlibs_note, "");
+}
 static cvar_t fs_automount_spec		= CVARFD	("fs_automount_spec", "", CVAR_NOSAVE, "ftesurf (P231): the data/mapdeps.txt spec behind fs_automount_state -- the pack the loaded map asks for, or empty when it asks for none. In state 3 this is the one an fs_load would name.");
 //nettest: Half-Life ships its high-definition model pack as a SEPARATE gamedir sibling
 //("valve" -> "valve_hd", "bshift" -> "bshift_hd", "anticlimax" -> "anticlimax_hd", ...),
@@ -7413,6 +7419,7 @@ static void FS_ReloadPackFiles_f(void)
 		Con_Printf("Blocking insecure command: %s %s\n", Cmd_Argv(0), Cmd_Args());
 		return;
 	}
+	FS_SteamLibs_Reset();	//P1636: a remounted drive or an edited list is looked at again
 
 	if (Sys_LockMutex(fs_thread_mutex))
 	{
@@ -7599,7 +7606,6 @@ static qboolean Sys_SteamParseLibraries(void(*callback)(void*ctx,const char*base
 static qboolean Sys_SteamDirsWithFile(char *steamdir, char *fname, void(*callback)(void*ctx,const char*basepath),void*ctx);
 static qboolean FS_SteamRootLooksReal(const char *root, char *out, size_t outsize);
 static qboolean fs_steamlibs_steamonly;	//Sys_SteamExtraRoots answers false: probe Steam's own libraries
-static char fs_steamlibs_seen[4096] = "\n";	//"<kind>:<key>\n" per root/game already checked
 static qboolean FS_SteamLibs_FirstTime(const char *kind, const char *key)
 {
 	char tag[MAX_OSPATH + 8];
@@ -7613,6 +7619,24 @@ static void FS_SteamLibs_Note(const char *text)
 {	//the first one wins: the banner has room for one line
 	if (!*fs_steamlibs_note.string)
 		Cvar_ForceSet(&fs_steamlibs_note, text);
+}
+//fs_hidesyspaths: the home folder as ~ (the note reaches the banner, screenshots and csprogs)
+static const char *FS_SteamLibs_Show(const char *path, char *buf, size_t bufsize)
+{
+#ifdef _WIN32
+	const char *home = getenv("USERPROFILE");
+	size_t l = home ? strlen(home) : 0;
+	if (fs_hidesyspaths.ival && l > 3 && !Q_strncasecmp(path, home, l) && (!path[l] || path[l] == '/' || path[l] == '\\'))
+#else
+	const char *home = getenv("HOME");
+	size_t l = home ? strlen(home) : 0;
+	if (fs_hidesyspaths.ival && l > 1 && !strncmp(path, home, l) && (!path[l] || path[l] == '/'))
+#endif
+	{
+		Q_snprintfz(buf, bufsize, "~%s", path + l);
+		return buf;
+	}
+	return path;
 }
 static qboolean FS_SteamSameDir(const char *a, const char *b)
 {
@@ -7637,31 +7661,38 @@ static void FS_SteamLibs_FirstDir(void *vctx, const char *basepath)
 }
 static void FS_SteamLibs_CheckRoot(const char *root)
 {
-	char probe[MAX_OSPATH];
+	char probe[MAX_OSPATH], shown[MAX_OSPATH];
 	if (!FS_SteamLibs_FirstTime("root", root) || FS_SteamRootLooksReal(root, probe, sizeof(probe)))
 		return;
-	Con_Printf(CON_WARNING"%s lists \"%s\", which is missing or empty (a drive that is not mounted?). "
-		"Skipped; Steam's own libraries are used. ^2fs_steamlibs remove %s^7 drops the line.\n", FS_STEAMLIBS_FILE, root, root);
-	FS_SteamLibs_Note(va("%s lists %s, which is missing. Console: fs_steamlibs", FS_STEAMLIBS_FILE, root));
+	FS_SteamLibs_Show(root, shown, sizeof(shown));
+	Con_Printf(CON_WARNING"%s lists \"%s\", which is missing or empty (a drive that is not mounted?), so it is skipped. "
+		"^2fs_steamlibs remove %s^7 drops the line.\n", FS_STEAMLIBS_FILE, shown, shown);
+	FS_SteamLibs_Note(va("%s lists %s, which is missing. Console: fs_steamlibs", FS_STEAMLIBS_FILE, shown));
 }
 static void FS_SteamLibs_CheckShadow(const char *root, const char *gamedir, char *steamdir, char *fname)
 {
 	char own[MAX_OSPATH];
 	if (fs_steamlibs_steamonly || !FS_SteamLibs_FirstTime("game", steamdir))
 		return;
+	char shown[3][MAX_OSPATH];
 	*own = 0;
 	fs_steamlibs_steamonly = true;
 	Sys_SteamDirsWithFile(steamdir, fname, FS_SteamLibs_FirstDir, own);
+	if (!*own && !Q_strcasecmp(steamdir, "csgo legacy/csgo"))	//Sys_SteamHasFile's CS:GO aliases
+		Sys_SteamDirsWithFile("Counter-Strike Global Offensive/csgo", fname, FS_SteamLibs_FirstDir, own);
+	else if (!*own && !Q_strcasecmp(steamdir, "Counter-Strike Global Offensive/csgo"))
+		Sys_SteamDirsWithFile("csgo legacy/csgo", fname, FS_SteamLibs_FirstDir, own);
 	fs_steamlibs_steamonly = false;
 	if (!*own || FS_SteamSameDir(own, gamedir))
 		return;
 	Con_Printf(CON_WARNING"%s: using %s from %s, not Steam's own copy at %s. "
 		"If that library is an old install, type ^2fs_steamlibs remove %s^7 then fs_restart.\n",
-		steamdir, gamedir, FS_STEAMLIBS_FILE, own, root);
+		steamdir, FS_SteamLibs_Show(gamedir, shown[0], sizeof(shown[0])), FS_STEAMLIBS_FILE,
+		FS_SteamLibs_Show(own, shown[1], sizeof(shown[1])), FS_SteamLibs_Show(root, shown[2], sizeof(shown[2])));
 	Q_strncpyz(own, steamdir, sizeof(own));
 	if (strchr(own, '/'))
 		*strchr(own, '/') = 0;	//"Counter-Strike Source/cstrike" -> the game's name
-	FS_SteamLibs_Note(va("%s is read from %s (%s), not Steam's own copy. Console: fs_steamlibs", own, root, FS_STEAMLIBS_FILE));
+	FS_SteamLibs_Note(va("%s is read from %s (%s), not Steam's own copy. Console: fs_steamlibs", own, shown[2], FS_STEAMLIBS_FILE));
 }
 
 //probe one root both ways.  `basepath` receives the resolved game dir on success.
@@ -13159,6 +13190,19 @@ static void FS_SteamLibs_f(void)
 			*--e = 0;
 		while (*root == '"')
 			memmove(root, root+1, strlen(root));
+		if (root[0] == '~' && (!root[1] || root[1] == '/' || root[1] == '\\'))
+		{	//the warnings print the home folder as ~ (FS_SteamLibs_Show)
+#ifdef _WIN32
+			const char *home = getenv("USERPROFILE");
+#else
+			const char *home = getenv("HOME");
+#endif
+			if (home && *home)
+			{
+				Q_snprintfz(raw, sizeof(raw), "%s%s", home, root + 1);
+				Q_strncpyz(root, raw, sizeof(root));
+			}
+		}
 		Sys_SteamCleanRoot(want, sizeof(want), root);
 		*prevp = 0;
 		for (i = 0; i < 2; i++)
@@ -13182,7 +13226,11 @@ static void FS_SteamLibs_f(void)
 				for (e = raw+strlen(raw); e > raw && (e[-1]==' '||e[-1]=='\t'||e[-1]=='\r'||e[-1]=='"'); )
 					*--e = 0;
 				Sys_SteamCleanRoot(have, sizeof(have), raw);
+#ifdef _WIN32
 				if (*want && !Q_strcasecmp(have, want))
+#else
+				if (*want && !strcmp(have, want))
+#endif
 				{
 					here++;
 					continue;
@@ -13204,7 +13252,10 @@ static void FS_SteamLibs_f(void)
 			FS_FreeFile(file);
 		}
 		if (removed)
+		{
+			FS_SteamLibs_Reset();
 			Con_Printf("run ^2fs_restart^7 (or relaunch) to remount without it.\n");
+		}
 		else
 			Con_Printf("fs_steamlibs: \"%s\" is not listed in %s\n", root, FS_STEAMLIBS_FILE);
 		return;
