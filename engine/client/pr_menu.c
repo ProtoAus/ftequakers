@@ -2645,6 +2645,19 @@ static void QCBUILTIN PF_m_downloadmap(pubprogfuncs_t *prinst, struct globalvars
 		}
 	}
 
+#ifdef HAVE_SERVER
+	if (sv.state)
+	{	//FTESurf Patch 1670: during a local game, from the web mirror (cl_parse.c) -- except the map that game runs,
+		//whose world the server holds in the model cache it shares with us: 3, "after this game" (menu P1094).
+		if (!Q_strcasecmp(name, svs.name))
+		{
+			G_FLOAT(OFS_RETURN) = 3;
+			return;
+		}
+		flags |= DLLF_WEBONLY;
+	}
+#endif
+
 	//CL_CheckOrEnqueDownloadFile returns TRUE for "do not wait" -- already held, a
 	//local server, or the enqueue failed -- and FALSE once it is really queued.
 	if (!CL_CheckOrEnqueDownloadFile(rel, rel, flags))
@@ -3911,6 +3924,8 @@ static void MP_Profile_f(void)
 			Con_Printf("Enabled menuqc Profiling.\n");
 }
 
+//FTESurf Patch 1670: read-only; tells the menu a Download may start during a local game (older engines refuse it there)
+static cvar_t cl_download_localgame = CVARFD("cl_download_localgame", "1", CVAR_NOSET|CVAR_NOSAVE, "Read-only: the menu's map downloads start during a local game too (from the web mirror).");
 void MP_RegisterCvarsAndCmds(void)
 {
 	Cmd_AddCommand("coredump_menuqc", MP_CoreDump_f);
@@ -3928,6 +3943,7 @@ void MP_RegisterCvarsAndCmds(void)
 	Cvar_Register(&forceqmenu, MENUPROGSGROUP);
 	Cvar_Register(&pr_menu_coreonerror, MENUPROGSGROUP);
 	Cvar_Register(&pr_menu_memsize, MENUPROGSGROUP);
+	Cvar_Register(&cl_download_localgame, MENUPROGSGROUP);
 }
 
 qboolean MP_UsingGamecodeLoadingScreen(void)

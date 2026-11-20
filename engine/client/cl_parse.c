@@ -1306,7 +1306,8 @@ qboolean	CL_CheckOrEnqueDownloadFile (const char *filename, const char *localnam
 
 #ifndef CLIENTONLY
 	/*no downloading if we're the one we'd be downloading from*/
-	if (sv.state)
+	//FTESurf Patch 1670: except a map the menu asked for (PF_m_downloadmap), which comes from the web mirror
+	if (sv.state && !(flags & DLLF_WEBONLY))
 		return true;
 #endif
 
@@ -1411,6 +1412,12 @@ qboolean	CL_CheckOrEnqueDownloadFile (const char *filename, const char *localnam
 		}
 	}
 
+	if (flags & DLLF_WEBONLY)
+	{	//FTESurf Patch 1670: never re-queued over the netchan, which here is the server we host
+		if (!(flags & DLLF_TRYWEB))
+			return true;
+		flags &= ~DLLF_ALLOWWEB;
+	}
 	if (!CL_EnqueDownload(filename, localname, flags))
 		return true;	/*don't stall waiting for it if it failed*/
 
@@ -2349,8 +2356,11 @@ void CL_RequestNextDownload (void)
 {
 
 	int stage;
+	/*FTESurf Patch 1670: a menu download begun during a local game (DLLF_WEBONLY) is no signon's: a map change or
+	  a join that needs no file goes on beside it rather than waiting for it to end*/
+	qboolean aside = cls.download && !cls.demoplayback && (cls.download->flags & DLLF_WEBONLY);
 	/*already downloading*/
-	if (cls.download && !cls.demoplayback)
+	if (cls.download && !cls.demoplayback && !aside)
 		return;
 
 	/*FTESurf Patch 465: an http download needs no server, so don't make it wait for one.
@@ -2363,6 +2373,8 @@ void CL_RequestNextDownload (void)
 	if (cls.state < ca_connected && !cl.sendprespawn && cl.downloadlist)
 	{
 		downloadlist_t *wdl;
+		if (aside)
+			return;	//P1670: one transfer at a time
 		for (wdl = cl.downloadlist; wdl; wdl = wdl->next)
 		{
 			if (wdl->flags & DLLF_TRYWEB)
@@ -2377,6 +2389,8 @@ void CL_RequestNextDownload (void)
 	/*request downloads only if we're at the point where we've received a complete list of them*/
 	if (cl.sendprespawn || cls.state == ca_active)
 	{
+		if (cl.downloadlist && aside)
+			return;	//P1670: files this signon needs start once that transfer ends; until then it waits as before
 		if (cl.downloadlist)
 		{
 			downloadlist_t *dl;
@@ -2418,7 +2432,7 @@ void CL_RequestNextDownload (void)
 				}
 			}
 		}
-		else if (cls.download && requiredownloads.value)
+		else if (cls.download && !aside && requiredownloads.value)
 			return;
 	}
 
