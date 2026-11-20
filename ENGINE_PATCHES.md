@@ -67,6 +67,30 @@ spectators before launch.
 
 **Boundary.** Ships with a client release (0.1.50).
 
+## Patch 1662 - Console: room round the completion list
+
+**Cause.** Lex, after P1647's padding: "a few pixel breathing room between your text and the drop down suggetions ...
+both would be nice to modernize and make feel better." The completion popup started on the typing row's bottom edge (or
+3 px under a clean window), and its rows ran flush against the box's left edge, top and bottom.
+
+**Change.** console.c, `con_completion_padding` (virtual px, 0..32; engine default 0 = the old list; FTESurf's
+cfg/default.cfg sets 8). Con_DrawCompletionPopup keeps top/bot as the ROWS and draws the box padx wider each side and
+pady (half the padding) taller above and below, so the suggestion text stays lined up with the typed text; the box sits
+the padding below the typing row (below a clean window, max(3, padding) from its edge), and a popup that flips ends the
+padding above the typing row. padx is clamped to the row's left edge and never negative (a window dragged left keeps
+the old box). Con_PopupCovers takes the box; Con_CompletionRowAt and Con_CompletionPopupRows (con_selftest) read the
+rows' own rectangle (con_popuphitrowx/rowsw/rowy/rowsh), so a click in the padding types nothing.
+
+**Verified.** Nested headless labwc, 1600x900, cfg/default.cfg values: `con_window_` hangs the list 8 px below the
+window with the text inset 8 px and level with the typed text; con_selftest's click map puts row 0 at y 724 (704 window
+edge + 8 + 4 + half a row) and "all checks passed"; a virtual-pointer click at row 3's y typed completion 3; `r_` (457)
+flips the list to end 8 px above the typing row; with con_window_padding 0 / clean 0 the list starts 8 px under the
+typing row; con_completion_padding 0 draws the old flush list.
+
+**Review.** One round: padx went negative for a window dragged off the left (rows outside the box, at padding 0 too),
+and a click in the side padding still picked a row. Both fixed (padx = max(0, con_popupl); the row test checks x);
+re-review found nothing further.
+
 ## Patch 1661 - QC strtolower/strtoupper no longer overrun their 8 KB result
 
 **Cause.** Found in review of P1653, which sends every map-name lookup and lobby map name through strtolower.
