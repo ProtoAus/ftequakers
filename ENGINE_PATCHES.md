@@ -96,7 +96,7 @@ downloads from the published object and plays (surfaces without a texture draw d
 and the tooltip is up over it in card and list view (screenshots p1670_warn_cards/list). The published catalogue is
 byte-identical to the built one.
 
-## Patch 1691 - Discord Rich Presence: map, stage, run clock and the map's picture (off until the application id is set)
+## Patch 1691 - Discord Rich Presence: map, stage, run clock and the map's picture
 
 **Cause.** Lex, 21 Nov 2026: "discord intergration, is it possible for people to see the map thumbnail and like your
 Stage and map name, your time on discord when you're playing?" -- "yes I want it, Ill sign up tomorrow".
@@ -112,8 +112,10 @@ says whose stats they are), "(paused)" when the ticks stop; large image = the ma
 (https://play.proto.bar/ftesurf/media/thumbs/<id>.jpg, the menu's P1099 table) or the application's "logo" asset.
 At most one update per 4 s and only on a change; one start time per run. CL_Discord_Frame runs once a second from
 Host_Frame; closing the connection (cl_discord 0, quit) clears the presence. Cvars (CVAR_NOTFROMSERVER, which also
-refuses stuffcmd and CSQC localcmd/cvar_set): cl_discord 1 (archived), cl_discord_appid (empty = off; the default becomes
-Lex's application id once he has made it), cl_discord_ipcdir (tests only).
+refuses stuffcmd and CSQC localcmd/cvar_set): cl_discord 1 (archived; 0 hides), cl_discord_appid (default
+1573424786774696097, Lex's "World of Surf" application, made 21 Nov; empty = off), cl_discord_ipcdir (tests only). The
+logo is the brand kit's square export by URL (https://proto.bar/ftesurf/worldofsurf-512.png), so the application needs
+no art assets.
 
 **Review.** Round 1 (robustness, trust, correctness): no crash or memory-safety defect; real ones, all fixed above: a
 spectator's or demo's run shown as yours; the start re-rounded every second (a send every 4 s) and drifted while paused;
@@ -124,8 +126,10 @@ backoff, a 32+ digit id reconnected every second, a run could begin "(paused)" -
 **Verified.** Linux build with no warnings in the file; mingw -fsyntax-only clean. Rig against a fake IPC server
 (never the real Discord): handshake with the configured id, READY, "In the menu", then bhop_sandtrap2 with its
 thumbnail URL and the map's start time; ahop_coast after !r: "In the start zone"; cl_discord 0 closes the connection,
-1 reconnects and re-sends; disconnect -> "In the menu"; quit closes. **Not verified:** the real Discord client (needs
-the application id), a running-run clock in the rig (the arm's walk did not leave ahop_coast's start box), Windows.
+1 reconnects and re-sends; disconnect -> "In the menu"; quit closes. With the id set, against Lex's running Discord (21 Nov): READY, and each
+SET_ACTIVITY reply names "World of Surf" / application_id 1573424786774696097 and keeps both image URLs (as Discord's
+mp:external proxies). **Not verified:** a running-run clock in the rig (the arm's walk did not leave ahop_coast's start
+box), Windows.
 
 ## Patch 1690 - GoldSrc doors that hurt or heal knock the player back under the AG modes (game QC only)
 
