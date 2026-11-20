@@ -1,5 +1,101 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1670 - Map downloads start during a local game (engine + menu)
+
+**Cause.** Lex: "you need to disconnect to download a map in my game? can that be fixed and allow downloading while in
+a server?" CL_CheckOrEnqueDownloadFile refused every download while this process hosts a game (sv.state: "no
+downloading if we're the one we'd be downloading from"), so the menu (P1094) queued a Download until the local game
+ended ("downloads when you leave this game"). On a remote server menu downloads already ran.
+
+**Change.** engine client/client.h DLLF_WEBONLY (1<<11), qdownload_t.progresstime; client/pr_menu.c
+PF_m_downloadmap; client/cl_parse.c CL_CheckOrEnqueDownloadFile, CL_RequestNextDownload, CL_DownloadFinished,
+CL_MapDownloadHolds; server/sv_ccmds.c SV_Map_f; http/httpclient.c HTTP_CL_Think; read-only cvar cl_download_localgame
+(1, WEBCLIENT builds only). Lane FTESurf-worktrees/launcherupd-20261120-75 (arms tools/p1670arm.py, p1670arm2.py).
+- During a local game the builtin marks its request DLLF_WEBONLY, which passes the sv.state refusal. Such a request is
+  queued only when it has a web address (the map mirror, or P1656's catalogue object for a GoldSrc package) and never
+  falls back to the netchan, which here is the player's own server; with no address it is refused (the menu says the
+  download failed).
+- The map the local game runs (svs.name, any case) is never fetched over: the server and client share one model cache
+  and a finished download reloads that world. The builtin returns 3, "after this game", and the menu queues it as P1094
+  did.
+- CL_RequestNextDownload returned at the top while any download ran, so a map change or join waited for the menu's
+  download to end. A DLLF_WEBONLY transfer no longer holds a signon that needs no file; one that has files queued still
+  waits for it (the world model does not wait for its own queued download).
+- A WEBONLY transfer is "aside" only while the local server runs: once the player leaves, a join whose world is that
+  very file waits for it as before.
+- SV_Map_f refuses a map whose download is queued or running (maps/<name>.bsp or goldsrc/<name>.pk3; maps/ prefix,
+  .bsp suffix, #modifier and case folded): it would land under the server and the model cache it shares with the
+  client. Not once the running web transfer has been silent 60 s (the menu's PJ_STALL; progresstime is stamped when
+  its bytes grow): nothing can cancel a web download, and a dead one would block that map for the session. The menu's
+  Play (ui_dl_holds) refuses the same map with a status line, by the engine's own dlstate and the same 60 s.
+- CL_DownloadFinished during a local game, as a net: a finished map that is the server's world (sv.modelname, or a
+  GoldSrc id equal to svs.name) is not purged, reloaded or remounted under the server; no CL_CheckModelResources scan
+  of a finished map (nothing may fetch what it names there, and it reads the whole BSP mid-run). Builds without
+  WEBCLIENT refuse WEBONLY.
+- Menu (game m_main.qc ui_dl_start): with cl_download_localgame it asks the engine at once; 3, or an engine without the
+  cvar, keeps the deferral. Older menus defer by themselves and never ask during a local game. A download that lands
+  with no menu open reloads the map list when the menu next opens (dl_reload, through ui_maplist_changed so the picked
+  map and a GoldSrc row's scroll stay), not mid-run.
+
+**Review.** Round 1, two readers (engine; menu and packer). Engine: the aside outlived the local game, so leaving and
+joining a server on the map still downloading went on to CL_LoadModels without its world ("Couldn't find ... cannot
+fully connect"); switching the local game to a map whose forced re-get was in flight purged the shared world model
+under the server when the file landed (a different build crashed the client); the finished map's resource scan read
+the whole BSP mid-run; no WEBCLIENT guard. Menu: the list reloaded mid-game when a download landed; the loading card
+lacked the warning; stale comments. All fixed, each reproduced first where it could be (arms Aw and B fail on the
+round-1 build and pass on the fix). Round 2 (one reader): the net above left the old build cached, or a GoldSrc package
+mounted, after the local game, so a later join on that map failed its checksum; hence SV_Map_f's refusal, which keeps
+the sequence from starting; the cvar now exists only with WEBCLIENT; the deferred reload kept neither selection nor
+scroll. Round 3: no blocking bug; a stalled transfer would have blocked its map for the session (hence the 60 s
+release); the menu-open already-present reload shifted the selection; Play followed menu state, not the engine's.
+Round 4: no high-severity bug; the in-flight test compared names exactly (a join fetches the server's spelling); Play
+let go of a map queued behind another transfer, and released a stalled netchan transfer the engine never releases;
+the menu's 60 s could end a frame before the engine's (now 62). Fixed. Round 5: nothing significant; the menu's stall
+clock now restarts when the engine's current file changes.
+
+**Verified.** tools/p1670arm.py (lane launcherupd-20261120-75) on a copy of the production 0.1.53 install under
+headless labwc, real downloads from the public mirrors: hosting surf_prelude, Download of agtricks (Source) and of
+bhop_continuous_gs (a P1669 package) both arrive during the game, which keeps running; bhop_alien_sewers (54 MB) is in
+flight when `map surf_prelude` restarts the level, the client is back in game after 2.4 s and the download then
+completes; a forced re-get of surf_prelude while hosting it is deferred (nothing fetched) and starts when the game
+ends; the GoldSrc map then loads and plays; no list reload in the game, the list reloads when the menu opens.
+Control: 0.1.53's engine with the new menu still defers (after local 1) and fetches once the game ends.
+tools/p1670arm2.py: Aw, hosting surf_prelude with another map's BSP installed as bhop_alien_sewers, force re-get it and
+`map bhop_alien_sewers` while it downloads: the round-1 build switches and its client dies when the file lands; the
+final build refuses the typed map and the menu's Play, stays on surf_prelude, and once the file is in loads the new
+build (1665 ms against 296 ms for the stand-in). S, the same re-get from a local HTTP server that sends 64 KB and goes
+silent: refused at once; after 60 s silent, Play loads the map; the dead transfer is still there. B, download kz_unicorn_gs
+(124 MB xz, nothing missing) in a local game, leave and join a dedicated server running it (a copy of the same install,
+so the join queues no file of its own) while it downloads: round 1 "Couldn't find maps/kz_unicorn_gs.bsp - cannot fully
+connect"; the fix waits for the package and joins. All of the above pass again on the landed trees (engine over main
+b8c359102, game over 8cf3dda6); linux64 and win64 build.
+Not fixed (BACKLOG): the package unpack (xz decode + sha256, P1656) runs on the main thread, about 12 MB/s here, so a
+download that lands during play stalls the frame for that long: 0.1 s for the median package (1.2 MB xz), 0.4 s or more
+for 137 packages over 5 MB, 4 to 10 s for the 4 over 50 MB (measured 11 s for kz_unicorn_gs).
+
+## Patch 1669 - Every GoldSrc map in the archive is offered, with a warning for missing files (game tools + data + menu)
+
+**Cause.** Lex: "Can you allow downloading and playing of all AG maps regardless of if it's missing assets please?
+just a warning, maybe a hover tool tip 'warning' in red." P1658 offered 923 of 1,308 maps: a map was left out (a gx
+row, greyed) when anything it names was found nowhere, or when it is not a bhop or kz map.
+
+**Change.** game tools/gsrcpack.py: every map whose BSP parses and whose name is usable is a gs row; what nobody has is
+left out of the package as before and flagged in the catalogue's flags field: 8 sky, 16 textures, 32 models, 64
+sounds (beside 1 KZ timer, 2 ladders, 4 water). gx keeps only bsp (unreadable) and name (unusable id); none today.
+Older readers take the new rows unchanged: the engine's FS_GoldSrc_Row never reads flags, and the 0.1.53 menu accepts
+a flags field of up to three digits and kind other (those rows show without the warning). Menu m_goldsrc.qc,
+m_maprows.qc: a flagged row downloads and plays like any other, with a red "warning" in its detail line (card and
+list) and a hover tooltip naming only what it lacks and what that looks like in game.
+Packages: 385 new (1,598 MB xz; largest kz_gigablockier_gs, 120 MB xz, 159 MB pk3), the 923 published rows
+byte-identical; uploaded with the Pi root's r2mirror (all 1,308 bodies verified), catalogue published 20 Nov 2026
+17:33Z (1,308 gs rows, 361 with a warning: 333 sky, 9 textures, 7 models, 26 sounds; 29 kind other).
+
+**Verified.** A dedicated server loads the smallest new map of each missing-file combination (13 maps: sky, textures,
+models, sounds, other, and their mixes) with no error. tools/p1670arm.py: bhop_continuous_gs (textures missing)
+downloads from the published object and plays (surfaces without a texture draw dark); its row shows the red warning
+and the tooltip is up over it in card and list view (screenshots p1670_warn_cards/list). The published catalogue is
+byte-identical to the built one.
+
 ## Patch 1691 - Discord Rich Presence: map, stage, run clock and the map's picture (off until the application id is set)
 
 **Cause.** Lex, 21 Nov 2026: "discord intergration, is it possible for people to see the map thumbnail and like your
@@ -60,7 +156,6 @@ activation, not when triggered; Tour_Hold leaves a queued knock for Tour_Unhold.
 ag-250 five knocks, the player thrown on at the 2000 u/s per-axis cap (y -3641 -> -3481 -> -3321 ... in 0.08 s
 samples); sv_goldsrcprofile cs16 no knock line, walks through at 250. Before the patch (instrumented build): the doors
 fire and block on the player with no effect. **Not verified:** a damaging rotating door (no test map has one).
-
 ## Patch 1685 - Chat names open profiles; a picture before every name (QC client + menu)
 
 **Problem.** Lex's 21 Nov list: "allow clicking on names in chats, to see their profiles. Also ensure peoples display
