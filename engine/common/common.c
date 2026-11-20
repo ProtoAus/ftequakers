@@ -3625,7 +3625,7 @@ size_t unicode_strtoupper(const char *in, char *out, size_t outsize, qboolean ma
 	//also it can't easily cope with accent prefixes.
 	int error;
 	unsigned int c;
-	size_t l = 0;
+	size_t l, total = 0;	//FTESurf Patch 1661: a running total; the limit used the last character's length
 	outsize -= 1;
 
 	while(*in)
@@ -3635,12 +3635,15 @@ size_t unicode_strtoupper(const char *in, char *out, size_t outsize, qboolean ma
 			c = towupper(c & 0x7f) + (c & 0xff80);
 		else
 			c = towupper(c);
-		l = unicode_encode(out, c, outsize - l, markup);
+		l = unicode_encode(out, c, outsize - total, markup);
+		if (!l)
+			break;	//did not fit: stop, so the result is a prefix (the encoders write nothing then)
 		out += l;
+		total += l;
 	}
 	*out = 0;
 
-	return l;
+	return total;
 }
 
 size_t unicode_strtolower(const char *in, char *out, size_t outsize, qboolean markup)
@@ -3649,7 +3652,7 @@ size_t unicode_strtolower(const char *in, char *out, size_t outsize, qboolean ma
 	//also it can't easily cope with accent prefixes.
 	int error;
 	unsigned int c;
-	size_t l = 0;
+	size_t l, total = 0;	//FTESurf Patch 1661: a running total; the limit used the last character's length
 	outsize -= 1;
 
 	while(*in)
@@ -3659,12 +3662,15 @@ size_t unicode_strtolower(const char *in, char *out, size_t outsize, qboolean ma
 			c = towlower(c & 0x7f) + (c & 0xff80);
 		else
 			c = towlower(c);
-		l = unicode_encode(out, c, outsize - l, markup);
+		l = unicode_encode(out, c, outsize - total, markup);
+		if (!l)
+			break;	//did not fit: stop, so the result is a prefix (the encoders write nothing then)
 		out += l;
+		total += l;
 	}
 	*out = 0;
 
-	return l;
+	return total;
 }
 
 ///=====================================
