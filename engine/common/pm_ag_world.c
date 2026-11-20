@@ -16,10 +16,19 @@ static void PMAg_Hull(void)
 // CS 1.6 eyes sit 17 above the centre (VEC_VIEW), HL/AG's 28; both duck to 12.
 // Patch 1665: the server publishes the map's eye as pm_viewheight (17 on a Counter-Strike map under the AG profiles,
 // sv_phys.c); anything outside 12..28 (a bare harness's 0, Source's 64) is not an AG eye and the profile's own applies.
+static float PMAg_OwnStandView(void) { return movevars.profilekind == PMPROFILE_CS16 ? 17 : 28; }
 static float PMAg_StandView(void)
 {
 	if (movevars.viewheight >= 12 && movevars.viewheight <= 28) return movevars.viewheight;
-	return movevars.profilekind == PMPROFILE_CS16 ? 17 : 28;
+	return PMAg_OwnStandView();
+}
+// The water test keeps the profile's own eye: a published CS eye moves the camera (and what reads view_ofs), never
+// physics. Same posture, same duck fraction: stand maps to stand, the blend to the profile's blend, ducked is 12 in both.
+static float PMAg_WaterEye(void)
+{
+	float shown = PMAg_StandView(), own = PMAg_OwnStandView();
+	if (shown == own || pmove.ducked) return pmove.viewheight;
+	return own - (own + 6) * (shown - pmove.viewheight) / (shown + 6);
 }
 static float PMAg_DuckingView(float fraction) { return PMAg_StandView() - (PMAg_StandView() + 6) * fraction; }
 
@@ -65,7 +74,7 @@ static void PMAg_Water(void)
 	pmove.watertype = contents; pmove.waterlevel = 1;
 	sample[2] = pmove.origin[2];
 	if (!(PM_PointContents(sample) & (FTECONTENTS_WATER|FTECONTENTS_SLIME|FTECONTENTS_LAVA))) return;
-	pmove.waterlevel = 2; sample[2] = pmove.origin[2] + pmove.viewheight;
+	pmove.waterlevel = 2; sample[2] = pmove.origin[2] + PMAg_WaterEye();	//Patch 1665: never the shown eye
 	if (PM_PointContents(sample) & (FTECONTENTS_WATER|FTECONTENTS_SLIME|FTECONTENTS_LAVA)) pmove.waterlevel = 3;
 }
 

@@ -62,7 +62,7 @@ static int sv_agprofile; //map-spawn authority, never derived from raw pm_physic
 static int sv_profilekind; //Patch 1589: PMPROFILE_* applied at map spawn
 static cvar_t sv_movementprofile = CVARFD("sv_movementprofile", "", CVAR_NOTFROMSERVER|CVAR_MAPLATCH, "Experimental unranked movement, applied only on map spawn: default (or empty); ag-100, ag-250, ag-1000 and cs16 (GoldSrc-style, CS 1.6 with its jump stamina and bhop cap); hl2-pre and hl2-post (Source mover with HL2 settings and its jump boost before/after the limiter; +speed sprints). Every profile autohops under pm_autobunny. Ladder intent uses analog signs; no longjump equipment.");
 static cvar_t sv_goldsrcprofile = CVARFD("sv_goldsrcprofile", "ag-250", CVAR_NOTFROMSERVER|CVAR_MAPLATCH, "Patch 1659: the movement a GoldSrc (BSP 30) map runs while sv_movementprofile is default: ag-100, ag-250, ag-1000 or cs16 (anything else: ag-250). Never applied on a tournament server.");
-static cvar_t sv_goldsrcview = CVARFD("sv_goldsrcview", "auto", CVAR_NOTFROMSERVER|CVAR_MAPLATCH, "Patch 1665: the eye height of a GoldSrc movement. auto: a Counter-Strike map's (17 above the body's centre) on a CS 1.6 map or under cs16, Half-Life's (28) otherwise; hl: always 28; cs: always 17. Movement is unchanged.");
+static cvar_t sv_goldsrcview = CVARFD("sv_goldsrcview", "auto", CVAR_NOTFROMSERVER|CVAR_MAPLATCH, "Patch 1665: the eye height on a GoldSrc (BSP 30) map. auto: Counter-Strike's (17 above the body's centre) on a CS 1.6 map or under cs16, Half-Life's (28) otherwise; hl: always 28; cs: always 17. The camera and what aims from the eye (+use) move; movement and the water test keep the profile's eye.");
 
 static cvar_t pm_sourceversion = CVARFD("pm_sourceversion", STRINGIFY(PMSRC_VERSION), CVAR_SERVERINFO|CVAR_NOSET, "Source mover version used by this server (read-only). 3 adds swimming; 4 linked portals; 5 keeps a linked portal landing exact; 6 keeps moving as the hull clears a linked door; 7 traces a static prop's collision hull as its convex pieces; 8 recovers a surfer pinned to the face it is sliding along; 9 traces a prop hull whose indices overflowed as it really is; 10 honours Momentum's limitmovement and slide triggers; 11 adds Source's ceiling eye clearance and water-lip assist; 12 meets a prop hull's pieces where they really are, so a crease between two pieces no longer snags a surfer; 13 collides the displacements Patch 256 re-wound on their visible side, not four units in front of it. Old clients need updating to predict them correctly.");
 cvar_t	sv_friction			 = CVAR( "sv_friction", "4");
@@ -4337,7 +4337,7 @@ static qboolean SV_GoldSrcMapIsCS(const char *name)
 {
 	static const char *csonly[] = {"armoury_entity", "func_buyzone", "info_map_parameters", "hostage_entity",
 		"func_bomb_target", "info_bomb_target", "func_hostage_rescue", "info_hostage_rescue", "func_vip_safetyzone",
-		"info_vip_start", "func_escapezone", "weapon_knife", "weapon_usp", "weapon_glock18", "weapon_deagle",
+		"info_vip_start", "func_escapezone", "weapon_usp", "weapon_glock18", "weapon_deagle",	//not weapon_knife: Opposing Force has one
 		"weapon_ak47", "weapon_m4a1", "weapon_awp", "weapon_scout", NULL};
 	extern char sv_mappreferhint[];
 	char key[256], value[2048];
@@ -4365,11 +4365,11 @@ static qboolean SV_GoldSrcMapIsCS(const char *name)
 		return false;
 	}
 	len = LittleLong(header[2]);
-	lump = BZ_Malloc(len + 1);
+	lump = BZ_Malloc(len + 2);	//two NULs: COM_ParseType steps past the NUL ending an unterminated quote
 	if (VFS_READ(f, lump, len) != (int)len)
 		len = 0;
 	VFS_CLOSE(f);
-	lump[len] = 0;
+	lump[len] = lump[len+1] = 0;
 	for (data = lump; !cs && (data = COM_ParseOut(data, key, sizeof(key))); )
 	{
 		if (!strcmp(key, "{")) { inent = true; ents++; continue; }
@@ -4441,13 +4441,16 @@ static void SV_ApplyMovementProfile(const char *mapname)
 	}
 	else
 	{
-		qboolean cs = p->kind == PMPROFILE_CS16, cseye = cs;	//Patch 1665: the eye follows the map (sv_goldsrcview)
-		if (!strcmp(sv_goldsrcview.string, "cs") || !strcmp(sv_goldsrcview.string, "hl"))
-			cseye = !strcmp(sv_goldsrcview.string, "cs");
-		else if (!cs && SV_MapIsGoldSrc(mapname) && SV_GoldSrcMapIsCS(mapname))
+		qboolean cs = p->kind == PMPROFILE_CS16, cseye = cs;	//Patch 1665: a GoldSrc map's eye follows the map (sv_goldsrcview)
+		if (SV_MapIsGoldSrc(mapname))
 		{
-			cseye = true;
-			Con_Printf("%s is a Counter-Strike map: eye 17 above the body's centre (sv_goldsrcview hl for 28)\n", mapname);
+			if (!strcmp(sv_goldsrcview.string, "cs") || !strcmp(sv_goldsrcview.string, "hl"))
+				cseye = !strcmp(sv_goldsrcview.string, "cs");
+			else if (!cs && SV_GoldSrcMapIsCS(mapname))
+			{
+				cseye = true;
+				Con_Printf("%s is a Counter-Strike map: eye 17 above the body's centre (sv_goldsrcview hl for 28)\n", mapname);
+			}
 		}
 		SV_AGOverride("pm_physicsmode", "2"); SV_AGOverride("sv_gravity", "800");
 		SV_AGOverride("sv_stopspeed", cs ? "75" : "100"); SV_AGOverride("sv_accelerate", cs ? "5" : "10");

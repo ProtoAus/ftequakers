@@ -317,6 +317,14 @@ static void ServerEye(void)
 	for(i=0;i<20;i++) PMAg_PlayerMove(1);
 	CHECK(pmove.ducked); NEAR(pmove.viewheight,12,0.001f);
 	ceilingz=10000; pmove.cmd.buttons=0; PMAg_PlayerMove(1); CHECK(!pmove.ducked); NEAR(pmove.viewheight,17,0.0001f);
+	/* the water test keeps the profile's eye: a surface between the shown 17 and the own 28 is waist deep (2), not 3,
+	   standing and at half duck (shown 5.5, own 11) */
+	Reset(); movevars.viewheight=17; waterz=60; PMAg_PlayerMove(1); NEAR(pmove.viewheight,17,0.0001f); CHECK(pmove.waterlevel==2);
+	waterz=50; PMAg_PlayerMove(1); CHECK(pmove.waterlevel==2);
+	waterz=66; PMAg_PlayerMove(1); CHECK(pmove.waterlevel==3);
+	Reset(); movevars.viewheight=17; waterz=45; pmove.cmd.buttons=BUTTON_DUCK; PMAg_PlayerMove(1);
+	for(i=0;i<20;i++) PMAg_PlayerMove(1);
+	NEAR(pmove.viewheight,5.5f,0.0001f); CHECK(pmove.ducking && pmove.waterlevel==2);
 	Reset(); movevars.viewheight=64; PMAg_PlayerMove(1); NEAR(pmove.viewheight,28,0.0001f);
 	Reset(); movevars.viewheight=64; movevars.profilekind=PMPROFILE_CS16; PMAg_PlayerMove(1); NEAR(pmove.viewheight,17,0.0001f);
 	Reset(); movevars.viewheight=28; movevars.profilekind=PMPROFILE_CS16; PMAg_PlayerMove(1); NEAR(pmove.viewheight,28,0.0001f);
