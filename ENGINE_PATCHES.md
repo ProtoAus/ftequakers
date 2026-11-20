@@ -1,5 +1,66 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1691 - Discord Rich Presence: map, stage, run clock and the map's picture (off until the application id is set)
+
+**Cause.** Lex, 21 Nov 2026: "discord intergration, is it possible for people to see the map thumbnail and like your
+Stage and map name, your time on discord when you're playing?" -- "yes I want it, Ill sign up tomorrow".
+
+**Change.** engine client/cl_discord.c (new; Makefile, CMakeLists.txt, cl_main.c, client.h): talks to the running
+Discord client over its local IPC -- a unix socket discord-ipc-0..9 under $XDG_RUNTIME_DIR, $TMPDIR or /tmp (and the
+Flatpak/Snap folders), or the Windows pipe \\.\pipe\discord-ipc-N (PIPE_NOWAIT) -- with Discord's framing (LE opcode,
+length, JSON): handshake, READY, SET_ACTIVITY, ping/pong, close. No SDK or library. The engine builds the activity
+itself: details = the map (only when the local map table data/mapmeta*.txt or the GoldSrc catalogue lists it, else "a
+custom map"; " (bonus N)" on a bonus track), state = "Stage s/n" / "Linear" with Discord's elapsed clock from the run's
+start, "In the start zone", "Finished a run", "Local game" / "Online", "Spectating" or "Watching a replay" (stat 102
+says whose stats they are), "(paused)" when the ticks stop; large image = the map's thumbnail
+(https://play.proto.bar/ftesurf/media/thumbs/<id>.jpg, the menu's P1099 table) or the application's "logo" asset.
+At most one update per 4 s and only on a change; one start time per run. CL_Discord_Frame runs once a second from
+Host_Frame; closing the connection (cl_discord 0, quit) clears the presence. Cvars (CVAR_NOTFROMSERVER, which also
+refuses stuffcmd and CSQC localcmd/cvar_set): cl_discord 1 (archived), cl_discord_appid (empty = off; the default becomes
+Lex's application id once he has made it), cl_discord_ipcdir (tests only).
+
+**Review.** Round 1 (robustness, trust, correctness): no crash or memory-safety defect; real ones, all fixed above: a
+spectator's or demo's run shown as yours; the start re-rounded every second (a send every 4 s) and drifted while paused;
+a third-party server's map file name on the player's profile; a blocking Windows pipe write; no reconnect on an appid
+change; a wrong appid printing every 60 s; CMake missing the file. Round 2: a corrected appid waited out the wrong one's
+backoff, a 32+ digit id reconnected every second, a run could begin "(paused)" -- fixed (ids of 1-20 digits).
+
+**Verified.** Linux build with no warnings in the file; mingw -fsyntax-only clean. Rig against a fake IPC server
+(never the real Discord): handshake with the configured id, READY, "In the menu", then bhop_sandtrap2 with its
+thumbnail URL and the map's start time; ahop_coast after !r: "In the start zone"; cl_discord 0 closes the connection,
+1 reconnects and re-sends; disconnect -> "In the menu"; quit closes. **Not verified:** the real Discord client (needs
+the application id), a running-run clock in the rig (the arm's walk did not leave ahop_coast's start box), Windows.
+
+## Patch 1690 - GoldSrc doors that hurt or heal knock the player back under the AG modes (game QC only)
+
+**Cause.** Lex, 21 Nov 2026, on bkz_goldbhop_gs's "healers" (five invisible func_doors over the start, dmg -10000,
+speed 10000, lip -32, triggered by trigger_multiples under them): "in AG mode I would prefer the knockback, in CS mode,
+nothing". GS_DoorBlocked ignored dmg, so they did nothing. Half-Life's CBaseDoor::Blocked calls TakeDamage(dmg), whose
+CBaseMonster::TakeDamage adds `dir * -DamageForce(dmg)` to the player (dir from the player's centre to the inflictor's
+minus 10 z; DamageForce = dmg * 5 * 73728 / volume, capped at +1000 only), so a negative dmg throws the player toward
+the door at sv_maxvelocity: the Half-Life ports' booster (HL kz files a run that used it as "pro", not "pure").
+
+**Change.** game src/server/sv_goldsrc.qc: GS_DamageKnock, called first in GS_DoorBlocked, under an ag-* profile only
+(serverkey *movementprofile; cs16 and Source modes push nothing), for a walking player; dmg truncated as
+CBasePlayer::TakeDamage's (int). A sliding door is moved back and the player restored before .blocked (WPhys_Push), so
+it applies at once, as HL does; a rotating door calls .blocked before either (WPhys_PushAngles), so it aims at its
+origin (HL's Center() for a rotated brush) and queues the knock for GS_KnockPost in PlayerPreThink (beside
+SV_VsVelPost; dropped across !r, skipped while held). GS_KnockApply records it as trigger_setspeed does: run_pushed for a
+lift, SV_RecWarp "speed"; GS_DoorActivate keeps the activator's bank_attempt and SV_BankSourceTaint, and the knock calls
+SV_BankCauseAffect, so a door another player opened makes the run practice.
+
+**Review.** Round 1 (control flow; evidence): the first cut wrote the warp from inside a rotating door's .blocked,
+where the player's origin is the engine's 1/8-unit nudge (a replay would start off and fail every sample after it), aimed
+at the rotated box, and never tainted a knock from a door someone else opened -- all fixed above. Round 2: a second
+rotating door in the same tick overwrote the first's cause (fixed); left in BACKLOG because GoldSrc profiles are unranked
+and never run on tournament servers: a delayed fire (gs_delay, multi_manager) reads the activator's attempt at
+activation, not when triggered; Tour_Hold leaves a queued knock for Tour_Unhold.
+
+**Verified.** Rig, dedicated server on bkz_goldbhop_gs, developer 1, walking from y -3720 through the healer column:
+ag-250 five knocks, the player thrown on at the 2000 u/s per-axis cap (y -3641 -> -3481 -> -3321 ... in 0.08 s
+samples); sv_goldsrcprofile cs16 no knock line, walks through at 250. Before the patch (instrumented build): the doors
+fire and block on the player with no effect. **Not verified:** a damaging rotating door (no test map has one).
+
 ## Patch 1685 - Chat names open profiles; a picture before every name (QC client + menu)
 
 **Problem.** Lex's 21 Nov list: "allow clicking on names in chats, to see their profiles. Also ensure peoples display
