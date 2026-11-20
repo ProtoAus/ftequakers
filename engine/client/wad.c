@@ -539,6 +539,90 @@ qbyte *W_ConvertWAD3Texture(miptex_t *tex, size_t lumpsize, int *width, int *hei
 	return data;
 }
 
+//FTESurf Patch 1660: a GoldSrc map's texture whose WAD is not on this PC (Half-Life or Counter-Strike not
+//installed) draws in the average colour tools/wadcolours.py measured for that name, as scripts/matcolours.txt
+//does for Source materials. Only while the world is a BSP 30.
+typedef struct {char name[16]; qbyte rgb[3];} wadcolour_t;
+static qboolean wad_hlmap;
+static wadcolour_t *wadcolours;
+static int numwadcolours;
+static qboolean wadcolours_loaded;
+static int QDECL W_ColourCmp(const void *a, const void *b)
+{
+	return strncmp(((const wadcolour_t*)a)->name, ((const wadcolour_t*)b)->name, 16);
+}
+static void W_LoadColours(void)
+{
+	static const char *const names[] = {"data/wadcolours.net.txt", "scripts/wadcolours.txt"};	//the menu's copy, then the shipped one
+	char *file = NULL, *line, *nl, *sp;
+	size_t size;
+	int i, max;
+	unsigned int rgb;
+
+	wadcolours_loaded = true;
+	for (i = 0; i < countof(names) && !file; i++)
+	{
+		file = FS_LoadMallocFile(names[i], &size);
+		if (file && (size < 21 || strncmp(file, "FTESURF-WADCOLOURS 1", 20)))
+		{
+			BZ_Free(file);
+			file = NULL;
+		}
+	}
+	if (!file)
+		return;
+	for (max = 0, line = file; (line = strchr(line, '\n')); line++)
+		max++;
+	wadcolours = Z_Malloc(sizeof(*wadcolours) * (max + 1));
+	for (line = file; line && *line; line = nl)
+	{
+		nl = strchr(line, '\n');
+		if (nl)
+			*nl++ = 0;
+		sp = strchr(line, ' ');
+		if (*line == '#' || !sp || sp == line || sp - line > 15 || strlen(sp + 1) < 6 || numwadcolours >= max)
+			continue;	//the header, a comment, or not a row
+		if (sscanf(sp + 1, "%6x", &rgb) != 1)
+			continue;
+		memcpy(wadcolours[numwadcolours].name, line, sp - line);	//Z_Malloc zeroed the rest
+		wadcolours[numwadcolours].rgb[0] = (rgb >> 16) & 0xff;
+		wadcolours[numwadcolours].rgb[1] = (rgb >> 8) & 0xff;
+		wadcolours[numwadcolours].rgb[2] = rgb & 0xff;
+		numwadcolours++;
+	}
+	BZ_Free(file);
+	qsort(wadcolours, numwadcolours, sizeof(*wadcolours), W_ColourCmp);
+}
+static qbyte *W_ColourTexture(const char *texname, int *width, int *height, uploadfmt_t *format)
+{
+	wadcolour_t key, *c;
+	qbyte *data;
+	int i;
+
+	W_LockWads();
+	if (!wadcolours_loaded)
+		W_LoadColours();
+	W_UnlockWads();
+	if (!numwadcolours)
+		return NULL;
+	memset(&key, 0, sizeof(key));
+	Q_strncpyz(key.name, texname, sizeof(key.name));
+	c = bsearch(&key, wadcolours, numwadcolours, sizeof(*wadcolours), W_ColourCmp);
+	if (!c)
+		return NULL;
+	Con_DPrintf("wad: %s is not in any WAD here, flat colour %02x%02x%02x\n", texname, c->rgb[0], c->rgb[1], c->rgb[2]);
+	*width = *height = 16;
+	*format = PTI_RGBA8;
+	data = BZ_Malloc(16 * 16 * 4);
+	for (i = 0; i < 16 * 16; i++)
+	{
+		data[i*4+0] = c->rgb[0];
+		data[i*4+1] = c->rgb[1];
+		data[i*4+2] = c->rgb[2];
+		data[i*4+3] = 255;
+	}
+	return data;
+}
 qbyte *W_GetTexture(const char *name, int *width, int *height, uploadfmt_t *format)//returns rgba
 {
 	char texname[17];
@@ -692,6 +776,8 @@ qbyte *W_GetTexture(const char *name, int *width, int *height, uploadfmt_t *form
 		}
 	}	
 	W_UnlockWads();
+	if (wad_hlmap && !asdecal)
+		return W_ColourTexture(texname, width, height, format);	//P1660
 	return NULL;
 }
 
@@ -970,6 +1056,7 @@ void Mod_ParseInfoFromEntityLump(model_t *wmodel)	//actually, this should be in 
 		strcpy(wads, "decals.wad");
 	else
 		wads[0] = '\0';
+	wad_hlmap = (wmodel && wmodel->fromgame == fg_halflife);	//P1660
 #endif
 
 	cl.skyrotate = 0;
