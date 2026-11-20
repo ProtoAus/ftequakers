@@ -7,7 +7,8 @@ $XDG_RUNTIME_DIR, $TMPDIR, /tmp (and the Flatpak/Snap subfolders); Windows: \\.\
 
 Everything shown comes from the engine: the map from the world model, its picture from the map table the menu keeps
 (data/mapmeta*.txt, a thumbnail id), and the run from the timer stats (STAT_FS_TIMER*, sh_defs.qc). A server picks only
-the map's file name (printable ASCII kept) and those numbers. Discord takes about one activity per 4 s; ours changes
+the map and those numbers: a map is named only when the local map table or the GoldSrc catalogue knows it (otherwise
+"a custom map"), and the numbers are clamped. Discord takes about one activity per 4 s; ours changes
 only on a state edge.
 */
 #include "quakedef.h"
@@ -35,6 +36,7 @@ static cvar_t cl_discord_ipcdir = CVARFD("cl_discord_ipcdir", "", CVAR_NOTFROMSE
 #define DC_STAT_SEG				54	// 0-based segment: stage seg+1
 #define DC_STAT_SEGS			55	// 1 = linear
 #define DC_STAT_TRACK			56	// 0 main, N bonus N
+#define DC_STAT_OWNER			102	// STAT_FS_STATOWNER: whose stats these are (LT_StatsAreMine); 0 = an older server
 #define DC_THUMBS "https://play.proto.bar/ftesurf/media/thumbs/"
 
 #ifdef _WIN32
@@ -52,7 +54,12 @@ static size_t dc_inlen;
 static unsigned int dc_nonce;
 static qboolean dc_said;
 static char dc_map[MAX_QPATH], dc_thumb[128];
-static time_t dc_start;
+static time_t dc_start, dc_runstart;
+static float dc_lastticks;
+static double dc_tickmoved;
+static qboolean dc_known;		// the map is in the local map table or the GoldSrc catalogue: its name may show
+static char dc_appid[32];		// the id the open connection was made with
+static int dc_closes;
 
 static void DC_Close(double retry)
 {
@@ -81,7 +88,11 @@ static qboolean DC_Connect(void)
 		Q_snprintfz(name, sizeof(name), "\\\\.\\pipe\\discord-ipc-%i", i);
 		dc_pipe = CreateFileA(name, GENERIC_READ|GENERIC_WRITE, 0, NULL, OPEN_EXISTING, 0, NULL);
 		if (dc_pipe != INVALID_HANDLE_VALUE)
+		{
+			DWORD mode = PIPE_READMODE_BYTE | PIPE_NOWAIT;	// a full pipe fails the write instead of freezing the frame
+			SetNamedPipeHandleState(dc_pipe, &mode, NULL, NULL);
 			return true;
+		}
 	}
 	return false;
 #else
@@ -228,13 +239,17 @@ static void DC_Read(void)
 			DC_Send(4, body);
 		else if (op == 2)
 		{
-			Con_Printf("discord: closed by Discord: %.200s\n", body);
-			DC_Close(60);
+			if (!dc_closes++)
+				Con_Printf("discord: closed by Discord: %.200s\n", body);	// a wrong cl_discord_appid, say
+			else
+				Con_DPrintf("discord: closed by Discord: %.200s\n", body);
+			DC_Close(dc_closes > 2 ? 600 : 60);
 			return;
 		}
 		else if (op == 1 && DC_Event(body, "READY"))
 		{
 			dc_state = 2;
+			dc_closes = 0;
 			Con_DPrintf("discord: ready\n");
 		}
 		else if (op == 1 && DC_Event(body, "ERROR"))
@@ -301,14 +316,25 @@ static void DC_FindThumb(const char *map)
 	}
 	if (*best)
 		Q_snprintfz(dc_thumb, sizeof(dc_thumb), DC_THUMBS"%s.jpg", best);
+	{
+		goldsrcrow_t gr;	//filled in place: never NULL
+		dc_known = *best || FS_GoldSrc_Row(map, &gr);
+	}
+}
+
+static float DC_Stat(const playerview_t *pv, int i, float lo, float hi)
+{
+	float v = pv->statsf[i];
+	return isfinite(v) ? bound(lo, v, hi) : lo;
 }
 
 static void DC_Build(char *out, size_t outsize)
 {
 	char details[160], state[96], start[48] = "";
-	qboolean local = false;
+	qboolean local = false, mine;
 	playerview_t *pv = &cl.playerview[0];
 	const char *image;
+	int owner;
 
 	if (cls.state != ca_active || !cl.worldmodel)
 	{
@@ -324,41 +350,69 @@ static void DC_Build(char *out, size_t outsize)
 			Q_strncpyz(dc_map, map, sizeof(dc_map));
 			DC_FindThumb(dc_map);
 			dc_start = time(NULL);
+			dc_runstart = 0;
 		}
 	}
 #ifdef HAVE_SERVER
 	local = sv.state != ss_dead;
 #endif
 	*details = 0;
-	DC_Esc(details, sizeof(details), dc_map);
-	if ((int)pv->statsf[DC_STAT_TRACK] > 0)
-		Q_strncatz(details, va(" (bonus %i)", (int)pv->statsf[DC_STAT_TRACK]), sizeof(details));
-	switch ((int)pv->statsf[DC_STAT_STATE])
+	if (dc_known)
+		DC_Esc(details, sizeof(details), dc_map);
+	else
+		Q_strncpyz(details, "a custom map", sizeof(details));
+	owner = DC_Stat(pv, DC_STAT_OWNER, 0, MAX_CLIENTS);
+	mine = owner > 0 ? owner == pv->playernum + 1 : pv->viewentity == pv->playernum + 1;
+	if (cls.demoplayback || !mine)
 	{
-	case 2:
-		{
-			int segs = pv->statsf[DC_STAT_SEGS], seg = pv->statsf[DC_STAT_SEG];
-			float tick = movevars.ticrate > 0 ? movevars.ticrate : 0.015;
-			if (segs > 1)
-				Q_snprintfz(state, sizeof(state), "Stage %i/%i", bound(1, seg + 1, segs), segs);
-			else
-				Q_strncpyz(state, "Linear", sizeof(state));
-			// whole seconds, so the clock's own advance never reads as a change
-			Q_snprintfz(start, sizeof(start), ",\"timestamps\":{\"start\":%lld}",
-				(long long)(time(NULL) - (time_t)(pv->statsf[DC_STAT_TICKS] * tick)));
-		}
-		break;
-	case 3:
-		Q_strncpyz(state, "Finished a run", sizeof(state));
-		break;
-	case 1:
-		Q_strncpyz(state, "In the start zone", sizeof(state));
-		break;
-	default:
-		Q_strncpyz(state, local ? "Local game" : "Online", sizeof(state));
-		break;
+		Q_strncpyz(state, cls.demoplayback ? "Watching a replay" : "Spectating", sizeof(state));
+		dc_runstart = 0;
 	}
-	if (!*start)
+	else
+	{
+		int track = DC_Stat(pv, DC_STAT_TRACK, 0, 99);
+		if (track > 0)
+			Q_strncatz(details, va(" (bonus %i)", track), sizeof(details));
+		switch ((int)DC_Stat(pv, DC_STAT_STATE, 0, 3))
+		{
+		case 2:
+			{
+				int segs = DC_Stat(pv, DC_STAT_SEGS, 1, 999), seg = DC_Stat(pv, DC_STAT_SEG, 0, 998);
+				float ticks = DC_Stat(pv, DC_STAT_TICKS, 0, 1e8);
+				float tick = movevars.ticrate > 0 ? movevars.ticrate : 0.015;
+				time_t at = time(NULL) - (time_t)(ticks * tick);
+				if (segs > 1)
+					Q_snprintfz(state, sizeof(state), "Stage %i/%i", bound(1, seg + 1, segs), segs);
+				else
+					Q_strncpyz(state, "Linear", sizeof(state));
+				if (ticks != dc_lastticks)
+				{
+					dc_lastticks = ticks;
+					dc_tickmoved = realtime;
+				}
+				// one start per run: a second's rounding must not resend, a restart or rewind (> 2 s off) must
+				if (!dc_runstart || at > dc_runstart + 2 || at < dc_runstart - 2)
+					dc_runstart = at;
+				if (realtime - dc_tickmoved > 2)
+					Q_strncatz(state, " (paused)", sizeof(state));	// the clock stopped (a local game's menu)
+				else
+					Q_snprintfz(start, sizeof(start), ",\"timestamps\":{\"start\":%lld}", (long long)dc_runstart);
+			}
+			break;
+		case 3:
+			Q_strncpyz(state, "Finished a run", sizeof(state));
+			break;
+		case 1:
+			Q_strncpyz(state, "In the start zone", sizeof(state));
+			break;
+		default:
+			Q_strncpyz(state, local ? "Local game" : "Online", sizeof(state));
+			break;
+		}
+		if (DC_Stat(pv, DC_STAT_STATE, 0, 3) != 2)
+			dc_runstart = 0;
+	}
+	if (!*start && !strstr(state, "(paused)"))
 		Q_snprintfz(start, sizeof(start), ",\"timestamps\":{\"start\":%lld}", (long long)dc_start);
 	image = *dc_thumb ? dc_thumb : "logo";
 	Q_snprintfz(out, outsize, "{\"details\":\"%s\",\"state\":\"%s\"%s,\"assets\":{\"large_image\":\"%s\",\"large_text\":\"%s\","
@@ -370,10 +424,10 @@ void CL_Discord_Frame(void)
 	qboolean want = cl_discord.ival && *cl_discord_appid.string && strspn(cl_discord_appid.string, "0123456789") == strlen(cl_discord_appid.string);
 	char frame[sizeof(dc_sent) + 160];
 
-	if (!want)
+	if (!want || (DC_OPEN && strcmp(dc_appid, cl_discord_appid.string)))
 	{
 		if (DC_OPEN)
-			DC_Close(1);	// closing the pipe is what clears the presence
+			DC_Close(1);	// closing the pipe is what clears the presence (and a new id needs a new handshake)
 		return;
 	}
 	if (!DC_OPEN)
@@ -385,7 +439,8 @@ void CL_Discord_Frame(void)
 			dc_nexttry = realtime + 15;	// Discord not running
 			return;
 		}
-		Q_snprintfz(frame, sizeof(frame), "{\"v\":1,\"client_id\":\"%s\"}", cl_discord_appid.string);
+		Q_strncpyz(dc_appid, cl_discord_appid.string, sizeof(dc_appid));
+		Q_snprintfz(frame, sizeof(frame), "{\"v\":1,\"client_id\":\"%s\"}", dc_appid);
 		if (!DC_Send(0, frame))
 			return;
 		dc_state = 1;
