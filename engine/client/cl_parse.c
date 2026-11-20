@@ -555,8 +555,10 @@ int CL_IsDownloading(const char *localname)
 //for 60 s (the menu's PJ_STALL): nothing can cancel one, and a dead one would block that map for the session.
 qboolean CL_MapDownloadHolds(const char *level)
 {
-	char base[MAX_QPATH], path[MAX_QPATH+16];
+	char base[MAX_QPATH], bsp[MAX_QPATH+16], gsp[MAX_QPATH+16];
 	char *c;
+	downloadlist_t *dl;
+	qboolean found = false;
 	if (!strncmp(level, "maps/", 5))
 		level += 5;
 	Q_strncpyz(base, level, sizeof(base));
@@ -565,18 +567,14 @@ qboolean CL_MapDownloadHolds(const char *level)
 	c = base + strlen(base);
 	if (c - base > 4 && !Q_strcasecmp(c - 4, ".bsp"))
 		c[-4] = 0;
-	Q_snprintfz(path, sizeof(path), "maps/%s.bsp", base);
-	if (!CL_IsDownloading(path))
-	{
-		Q_strlwr(base);
-		Q_snprintfz(path, sizeof(path), "maps/%s.bsp", base);
-		if (!CL_IsDownloading(path))
-		{
-			Q_snprintfz(path, sizeof(path), "goldsrc/%s.pk3", base);
-			if (!CL_IsDownloading(path))
-				return false;
-		}
-	}
+	Q_snprintfz(bsp, sizeof(bsp), "maps/%s.bsp", base);
+	Q_snprintfz(gsp, sizeof(gsp), "goldsrc/%s.pk3", base);
+	for (dl = cl.downloadlist; dl && !found; dl = dl->next)	//any case: a join fetches the server's spelling
+		found = !Q_strcasecmp(dl->localname, bsp) || !Q_strcasecmp(dl->localname, gsp);
+	if (!found && cls.download)
+		found = !Q_strcasecmp(cls.download->localname, bsp) || !Q_strcasecmp(cls.download->localname, gsp);
+	if (!found)
+		return false;
 	if (cls.download && cls.download->method == DL_HTTP && cls.download->progresstime &&
 		Sys_DoubleTime() - cls.download->progresstime > 60)
 		return false;
