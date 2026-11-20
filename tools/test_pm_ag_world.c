@@ -305,4 +305,20 @@ static void Autohop(void)
 	NEAR(apex[0],45,0.5f); CHECK(apex[1]>20 && apex[1]<apex[0]*0.9f); NEAR(pmove.velocity[0],240,1);
 	printf("PASS CS16 autohop: %d jumps, apex %.2f then %.2f (fuser2), speed %.2f after the 400 cap\n",hops,apex[0],apex[1],pmove.velocity[0]);
 }
-int main(void) {Dry();Clock();CollisionAndNoEquipment();CS16();Autohop();Duck();WaterLadder();ReviewedControls();puts("PASS AG world solver fixtures (not BSP/socket/oracle acceptance)");return 0;}
+/* Patch 1665: the server's pm_viewheight is the eye (17 on a Counter-Strike map under ag-250); 0 and Source's 64 are not
+   AG eyes and leave the profile's. The duck still ends at 12 and its blend starts from the published eye. */
+static void ServerEye(void)
+{
+	int i;
+	Reset(); movevars.viewheight=17; PMAg_PlayerMove(1); NEAR(pmove.viewheight,17,0.0001f);
+	pmove.cmd.buttons=BUTTON_DUCK; PMAg_PlayerMove(1); CHECK(pmove.ducking);
+	for(i=0;i<20;i++) PMAg_PlayerMove(1);
+	NEAR(pmove.viewheight,5.5f,0.0001f);
+	for(i=0;i<20;i++) PMAg_PlayerMove(1);
+	CHECK(pmove.ducked); NEAR(pmove.viewheight,12,0.001f);
+	ceilingz=10000; pmove.cmd.buttons=0; PMAg_PlayerMove(1); CHECK(!pmove.ducked); NEAR(pmove.viewheight,17,0.0001f);
+	Reset(); movevars.viewheight=64; PMAg_PlayerMove(1); NEAR(pmove.viewheight,28,0.0001f);
+	Reset(); movevars.viewheight=64; movevars.profilekind=PMPROFILE_CS16; PMAg_PlayerMove(1); NEAR(pmove.viewheight,17,0.0001f);
+	Reset(); movevars.viewheight=28; movevars.profilekind=PMPROFILE_CS16; PMAg_PlayerMove(1); NEAR(pmove.viewheight,28,0.0001f);
+}
+int main(void) {Dry();Clock();CollisionAndNoEquipment();CS16();Autohop();Duck();ServerEye();WaterLadder();ReviewedControls();puts("PASS AG world solver fixtures (not BSP/socket/oracle acceptance)");return 0;}
