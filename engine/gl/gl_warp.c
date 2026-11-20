@@ -39,7 +39,9 @@ cvar_t r_fastsky							= CVARF ("r_fastsky", "0",	CVAR_ARCHIVE);
 static cvar_t r_fastskycolour						= CVARF ("r_fastskycolour", "0",	CVAR_RENDERERCALLBACK|CVAR_SHADERSYSTEM);
 static cvar_t gl_skyboxdist						= CVARD  ("gl_skyboxdist", "0", "The distance of the skybox. If 0, the engine will determine it based upon the far clip plane distance.");	//0 = guess.
 static cvar_t r_skycloudalpha						= CVARFD ("r_skycloudalpha", "1", CVAR_RENDERERLATCH, "Controls how opaque the front layer of legacy scrolling skies should be.");
-cvar_t r_skyboxname							= CVARFC ("r_skybox", "", CVAR_RENDERERCALLBACK | CVAR_SHADERSYSTEM, R_SkyBox_Changed);
+//FTESurf Patch 1683: no CVAR_SHADERSYSTEM on either sky name: R_SkyBox_Changed reloads the sky itself, and the flag
+//re-parsed every shader on each change (the Settings sky switch hitched the menu, a map or not).
+cvar_t r_skyboxname							= CVARFC ("r_skybox", "", CVAR_RENDERERCALLBACK, R_SkyBox_Changed);
 /*
 FTESurf Patch 211: a sky for a map that declares none.
 
@@ -60,7 +62,7 @@ overriding anything -- r_skybox still wins over both, which is the ordering
 below and is the whole design.  Empty by default so nothing outside FTESurf's
 own cfg changes.
 */
-cvar_t r_skybox_default						= CVARFCD("r_skybox_default", "", CVAR_ARCHIVE | CVAR_RENDERERCALLBACK | CVAR_SHADERSYSTEM, R_SkyBox_Changed, "Skybox to use on a map that declares no sky of its own. Empty (the default) leaves such a map drawing whatever its own sky surfaces carry. r_skybox overrides this, and also overrides a map that DOES declare a sky.");
+cvar_t r_skybox_default						= CVARFCD("r_skybox_default", "", CVAR_ARCHIVE | CVAR_RENDERERCALLBACK, R_SkyBox_Changed, "Skybox to use on a map that declares no sky of its own. Empty (the default) leaves such a map drawing whatever its own sky surfaces carry. r_skybox overrides this, and also overrides a map that DOES declare a sky.");
 cvar_t r_skybox_orientation					= CVARFD ("r_glsl_skybox_orientation", "0 0 0 0", CVAR_SHADERSYSTEM, "Defines the axis around which skyboxes will rotate (the first three values). The fourth value defines the speed the skybox rotates at, in degrees per second.");
 cvar_t r_skybox_autorotate					= CVARFD ("r_glsl_skybox_autorotate", "1", CVAR_SHADERSYSTEM, "Defines the axis around which skyboxes will rotate (the first three values). The fourth value defines the speed the skybox rotates at, in degrees per second.");
 cvar_t r_skyfog								= CVARD  ("r_skyfog", "0.5", "This controls an alpha-blend value for fog on skyboxes, cumulative with regular fog alpha.");
