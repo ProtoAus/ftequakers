@@ -61,6 +61,7 @@ cvar_t	sv_wateraccelerate	 = CVAR( "sv_wateraccelerate", "10");
 static int sv_agprofile; //map-spawn authority, never derived from raw pm_physicsmode
 static int sv_profilekind; //Patch 1589: PMPROFILE_* applied at map spawn
 static cvar_t sv_movementprofile = CVARFD("sv_movementprofile", "", CVAR_NOTFROMSERVER|CVAR_MAPLATCH, "Experimental unranked movement, applied only on map spawn: default (or empty); ag-100, ag-250, ag-1000 and cs16 (GoldSrc-style, CS 1.6 with its jump stamina and bhop cap); hl2-pre and hl2-post (Source mover with HL2 settings and its jump boost before/after the limiter; +speed sprints). Every profile autohops under pm_autobunny. Ladder intent uses analog signs; no longjump equipment.");
+static cvar_t sv_goldsrcprofile = CVARFD("sv_goldsrcprofile", "ag-250", CVAR_NOTFROMSERVER|CVAR_MAPLATCH, "Patch 1659: the movement a GoldSrc (BSP 30) map runs while sv_movementprofile is default: ag-100, ag-250, ag-1000 or cs16. Empty: this game's own movement. Never applied on a tournament server.");
 
 static cvar_t pm_sourceversion = CVARFD("pm_sourceversion", STRINGIFY(PMSRC_VERSION), CVAR_SERVERINFO|CVAR_NOSET, "Source mover version used by this server (read-only). 3 adds swimming; 4 linked portals; 5 keeps a linked portal landing exact; 6 keeps moving as the hull clears a linked door; 7 traces a static prop's collision hull as its convex pieces; 8 recovers a surfer pinned to the face it is sliding along; 9 traces a prop hull whose indices overflowed as it really is; 10 honours Momentum's limitmovement and slide triggers; 11 adds Source's ceiling eye clearance and water-lip assist; 12 meets a prop hull's pieces where they really are, so a crease between two pieces no longer snags a surfer; 13 collides the displacements Patch 256 re-wound on their visible side, not four units in front of it. Old clients need updating to predict them correctly.");
 cvar_t	sv_friction			 = CVAR( "sv_friction", "4");
@@ -201,6 +202,7 @@ void WPhys_Init(void)
 	Cvar_Register (&sv_airaccelerate,					cvargroup_serverphysics);
 	Cvar_Register (&sv_wateraccelerate,					cvargroup_serverphysics);
 	Cvar_Register (&sv_movementprofile, cvargroup_serverphysics);
+	Cvar_Register (&sv_goldsrcprofile, cvargroup_serverphysics);
 	Cmd_AddCommandD ("movementprofile", SV_MovementProfile_f, "Patch 1598: set sv_movementprofile for a game you host and reload the map (the hud_gamemode picker). Not hosting: refused.");
 	Cvar_Register (&pm_sourceversion,					cvargroup_serverphysics);
 	//Early +set survives registration even for NOSET cvars. Never advertise
@@ -4290,20 +4292,46 @@ static void SV_AGOverride(const char *name, const char *value)
 	Cvar_ForceSet(var, value);
 }
 
-static void SV_ApplyMovementProfile(void)
+//Patch 1659: is the map about to load a GoldSrc BSP? Its package is mounted by now (SV_Map_f's automount).
+static qboolean SV_MapIsGoldSrc(const char *name)
+{
+	int ver = 0;
+	vfsfile_t *f = FS_OpenVFS(va("maps/%s.bsp", name), "rb", FS_GAME);
+	if (!f)
+		return false;
+	if (VFS_READ(f, &ver, sizeof(ver)) != sizeof(ver))
+		ver = 0;
+	VFS_CLOSE(f);
+	return LittleLong(ver) == 30;	//bspfile.h BSPVERSIONHL
+}
+static void SV_ApplyMovementProfile(const char *mapname)
 {
 	const pmprofile_t *p;
+	const char *sel = sv_movementprofile.string;
 	char tick[16];
 	sv_agprofile = 0;
 	sv_profilekind = 0;
 	InfoBuf_SetValueForStarKey(&svs.info, "*movementprofile", "");
 	InfoBuf_SetValueForKey(&svs.info, "pm_agversion", "");
 	InfoBuf_SetValueForKey(&svs.info, "pm_agautohop", "");
-	if (!*sv_movementprofile.string || !strcmp(sv_movementprofile.string, "default")) return;
-	p = PM_ProfileBySelector(sv_movementprofile.string);
+	if (!*sel || !strcmp(sel, "default"))
+	{	//Patch 1659: the style follows the map. A tournament server keeps its pinned movement (its maps are Source).
+		cvar_t *te = Cvar_FindVar("tournament_enable"), *tr = Cvar_FindVar("tournament_reserved");
+		sel = sv_goldsrcprofile.string;
+		if (!*sel || !strcmp(sel, "default") || (te && te->value) || (tr && *tr->string) || !SV_MapIsGoldSrc(mapname))
+			return;
+		p = PM_ProfileBySelector(sel);
+		if (!p || PM_ProfileHL2(p->kind))
+		{
+			Con_Printf(CON_WARNING"sv_goldsrcprofile %s is not a GoldSrc movement; %s keeps this game's own\n", sel, mapname);
+			return;
+		}
+	}
+	else
+		p = PM_ProfileBySelector(sel);
 	if (!p)
 	{
-		Host_Error("Refusing map: unknown sv_movementprofile %s", sv_movementprofile.string);
+		Host_Error("Refusing map: unknown sv_movementprofile %s", sel);
 		return;
 	}
 	Q_snprintfz(tick, sizeof(tick), "%g", p->tick);
@@ -4355,7 +4383,7 @@ void SV_ApplyGamemode(const char *mapname)
 		return;
 	SV_BareMapName(mapname, name, sizeof(name));
 	SV_LoadMapRuleset(name);
-	SV_ApplyMovementProfile();
+	SV_ApplyMovementProfile(name);
 
 	if (pms_mapover)
 		Con_Printf("^5movement^7: %s adds %i cvar%s from %s\n",
