@@ -1,5 +1,72 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1648 - Tournament lobbies run themselves (QC + lobby; no engine change)
+
+**Cause.** Lex asked for a stream tournament with strangers. The 20 Nov research found the in-game Ready/Start
+buttons unreachable (F6 was bound only in the playtest harness), so every match would abort after 120 s of loading; a
+competitor missing at the countdown aborted everyone; and a dedicated server keeps every model name it loads
+(gl_model.c mod_known, 8192 slots; Mod_Purge frees data, never the slot), so one lobby process dies of MAX_MOD_KNOWN after
+~17-36 map loads (measured by tournament_qualify_live: 30 crashes over 1104 maps).
+
+**Change.** sv_tournament.qc: Tour_AutoReady sends P1650's server-only `autostart` tournament_autostart (20) s after every
+competitor is present on the arrived map (a live linked slot via Tour_Client); a competitor missing for 60 s on end, at
+least 120 s after arrival and not while anyone is still connecting, is named in `absent` (forfeited by surfd); every
+grace is capped so any absence forfeits by arrival + 300 s; the host's Start in auto mode means start now. An older surfd's
+refusal ("token required") switches the match to the manual buttons (serverinfo tournament_auto 0, cvar
+tournament_noauto = match id). Loading limit 600 s, host-gone 180 s outside loading (120 s in manual/host-only mode), no
+countdown abort. Players' requests are capped (one queued each, 32 total, a 3 s pause while a server op waits). Forced
+spectators carry *tqspec and rejoin through the engine's `join` at release, with an account re-hello and their old avatar
+freed. Tour_Recycle: an empty, unreserved lobby (120 s) past lobby_maploads_max 12 / _tour 4 loads quits and systemd
+restarts it. Tour_Reply no longer find()s the empty token; AG movement names normalised to surfd's spelling.
+
+**Verified.** Native two-client playtests against the live and the P1650 backends: auto start ("Everyone is here" ->
+countdown -> GO), round end under both rule sets, announcements; a two-server arm showed the recycle quitting at its cap
+while a control (cap 0) stayed up. Seven independent review rounds (control flow; integrity/compat); none above P3 open.
+
+**Boundary.** A lobby deploy carries it; before P1650 surfd the auto start falls back to the manual buttons. The engine
+fix (reusing freed mod_known slots) is not done; the QC restart is the mitigation.
+
+## Patch 1649 - Tournament guidance in game (QC only)
+
+**Cause.** Nothing outside the F6 panel showed the phase, round, clock, standings or winner; F6 itself was unbound; F6
+standings printed times with ticks-per-second as seconds-per-tick (a 60 s run read ~74 hours).
+
+**Change.** cl_tournament.qc: Tour_Key gives F6 to the tournament while the server holds a match (both key branches in
+CSQC_InputEvent; a report box keeps its F6); Tour_Hud draws a top-left banner (phase, round, map, clock, next step) and
+standings with plain draw calls (an always-on sui bracket emptied sui's hit-test list and cleared other menus' clicks),
+plus centre lines (countdown, GO, round over, out, winner/shared, no contest). sv_tournament.qc Tour_Announce: chat lines
+per phase, every new best with its rank, who is out, who won. Why a finish did not count; leave confirmation; PLAYED /
+WINNER / round order in F6 (tourney_map gains a 5th field, the client accepts 4 or 5); the time unit fix.
+
+**Verified.** Playtest screenshots at 1280x800 (banner clear of the run timer and the map card); see P1648.
+
+**Boundary.** csprogs is served by the lobby, so the client half ships with the lobby deploy.
+
+## Patch 1650 - Tournament rules and rooms that don't end in no contest (surfd)
+
+**Cause.** settle aborted on two non-finishers or a tied slowest; a leave after lock aborted; no early finish; AFK
+drafters stalled rooms; late viewers were locked out; ordinary map requests could occupy the tournament servers.
+
+**Change.** surfd tournament_rules/party_lobbies/tournaments/surfd.py: every non-finisher (or the tied slowest) is out,
+nobody finished = everyone goes through, shared places, early finish, the reserve map once then shared first; leave
+after launch = forfeit, before = back to the lobby (launched() sticky); server-only autostart readies the present and
+forfeits `absent`; plain abort reasons; 45 s draft clock with a deterministic auto ban/pick; host unseat/kick before
+launch; join any phase as a spectator with a cooldown; leave/ban/pick exempt from the revision check; no-op repeats;
+notes capped (160 bytes, short name lists); idle tournament nodes are last choice for ordinary joins (SURFD_TOURNAMENT_HOLD).
+
+**Verified.** test_tournaments 31 -> 52, test_party_lobbies 27 -> 42, each new test failing without its change; three
+independent review rounds; guarded generation gen1650 (independent token CLEAR).
+
+**Boundary.** Live with gen1650. The live 0.1.49 menu does not show the draft clock or notes; P1651 does.
+
+## Patch 1651 - Tournament tab explains itself (menu QC)
+
+**Change.** m_tournament.qc: confirm before leaving or closing; Rejoin / Watch on the server; Link Steam from the tab;
+plain-language errors; the rules in one line; the room code in the header; the draft clock (turn_left); Kick for
+spectators before launch.
+
+**Boundary.** Ships with a client release (0.1.50).
+
 ## Patch 1661 - QC strtolower/strtoupper no longer overrun their 8 KB result
 
 **Cause.** Found in review of P1653, which sends every map-name lookup and lobby map name through strtolower.
