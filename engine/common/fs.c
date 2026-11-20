@@ -345,6 +345,7 @@ static cvar_t fs_automount_state	= CVARFD	("fs_automount_state", "4", CVAR_NOSAV
 //FTESurf Patch 1382: the fs_addons.txt games FS_RemountAddons could not mount, so the material
 //census stops saying "never shipped" when the game the map was checked against is just not found.
 static cvar_t fs_addons_missing		= CVARFD	("fs_addons_missing", "", CVAR_NOSAVE, "ftesurf (P1382): the steam: lines of fs_addons.txt that did not mount at the last filesystem build, comma-separated (Steam folder/game dir). Read by the missing-material warning; setting it by hand only lies to that warning.");
+static cvar_t fs_steamlibs_note		= CVARFD	("fs_steamlibs_note", "", CVAR_NOSAVE|CVAR_NOSET, "FTESurf Patch 1636: the first steam_libraries.txt problem this run found (a listed root that is missing, or one that beats Steam's own copy of a game); the missing-content banner shows it. Empty when there is none.");
 static cvar_t fs_automount_spec		= CVARFD	("fs_automount_spec", "", CVAR_NOSAVE, "ftesurf (P231): the data/mapdeps.txt spec behind fs_automount_state -- the pack the loaded map asks for, or empty when it asks for none. In state 3 this is the one an fs_load would name.");
 //nettest: Half-Life ships its high-definition model pack as a SEPARATE gamedir sibling
 //("valve" -> "valve_hd", "bshift" -> "bshift_hd", "anticlimax" -> "anticlimax_hd", ...),
@@ -7593,6 +7594,76 @@ static qboolean Sys_SteamParseLibraries(void(*callback)(void*ctx,const char*base
 #define FS_STEAMLIBS_FILE "steam_libraries.txt"
 #define FTESURF_STEAMLIBS 1		//the guard above is long; this records that the helpers below exist
 
+//FTESurf Patch 1636: a listed root that is gone, or one that beats Steam's own copy of a game (Lex, 17 Nov:
+//a Windows library on a dirty NTFS drive supplied CS:S over Linux Steam's), warned once per process each.
+static qboolean Sys_SteamDirsWithFile(char *steamdir, char *fname, void(*callback)(void*ctx,const char*basepath),void*ctx);
+static qboolean FS_SteamRootLooksReal(const char *root, char *out, size_t outsize);
+static qboolean fs_steamlibs_steamonly;	//Sys_SteamExtraRoots answers false: probe Steam's own libraries
+static char fs_steamlibs_seen[4096] = "\n";	//"<kind>:<key>\n" per root/game already checked
+static qboolean FS_SteamLibs_FirstTime(const char *kind, const char *key)
+{
+	char tag[MAX_OSPATH + 8];
+	Q_snprintfz(tag, sizeof(tag), "\n%s:%s\n", kind, key);
+	if (strstr(fs_steamlibs_seen, tag) || strlen(fs_steamlibs_seen) + strlen(tag) >= sizeof(fs_steamlibs_seen))
+		return false;
+	Q_strncatz(fs_steamlibs_seen, tag + 1, sizeof(fs_steamlibs_seen));
+	return true;
+}
+static void FS_SteamLibs_Note(const char *text)
+{	//the first one wins: the banner has room for one line
+	if (!*fs_steamlibs_note.string)
+		Cvar_ForceSet(&fs_steamlibs_note, text);
+}
+static qboolean FS_SteamSameDir(const char *a, const char *b)
+{
+	char ca[MAX_OSPATH], cb[MAX_OSPATH];
+#ifndef _WIN32
+	char *ra = realpath(a, NULL), *rb = realpath(b, NULL);
+	qboolean same = ra && rb && !strcmp(ra, rb);
+	free(ra);
+	free(rb);
+	if (same)
+		return true;
+#endif
+	Sys_SteamCleanRoot(ca, sizeof(ca), a);
+	Sys_SteamCleanRoot(cb, sizeof(cb), b);
+	return !Q_strcasecmp(ca, cb);
+}
+static void FS_SteamLibs_FirstDir(void *vctx, const char *basepath)
+{
+	char *out = vctx;
+	if (!*out)
+		Q_strncpyz(out, basepath, MAX_OSPATH);
+}
+static void FS_SteamLibs_CheckRoot(const char *root)
+{
+	char probe[MAX_OSPATH];
+	if (!FS_SteamLibs_FirstTime("root", root) || FS_SteamRootLooksReal(root, probe, sizeof(probe)))
+		return;
+	Con_Printf(CON_WARNING"%s lists \"%s\", which is missing or empty (a drive that is not mounted?). "
+		"Skipped; Steam's own libraries are used. ^2fs_steamlibs remove %s^7 drops the line.\n", FS_STEAMLIBS_FILE, root, root);
+	FS_SteamLibs_Note(va("%s lists %s, which is missing. Console: fs_steamlibs", FS_STEAMLIBS_FILE, root));
+}
+static void FS_SteamLibs_CheckShadow(const char *root, const char *gamedir, char *steamdir, char *fname)
+{
+	char own[MAX_OSPATH];
+	if (fs_steamlibs_steamonly || !FS_SteamLibs_FirstTime("game", steamdir))
+		return;
+	*own = 0;
+	fs_steamlibs_steamonly = true;
+	Sys_SteamDirsWithFile(steamdir, fname, FS_SteamLibs_FirstDir, own);
+	fs_steamlibs_steamonly = false;
+	if (!*own || FS_SteamSameDir(own, gamedir))
+		return;
+	Con_Printf(CON_WARNING"%s: using %s from %s, not Steam's own copy at %s. "
+		"If that library is an old install, type ^2fs_steamlibs remove %s^7 then fs_restart.\n",
+		steamdir, gamedir, FS_STEAMLIBS_FILE, own, root);
+	Q_strncpyz(own, steamdir, sizeof(own));
+	if (strchr(own, '/'))
+		*strchr(own, '/') = 0;	//"Counter-Strike Source/cstrike" -> the game's name
+	FS_SteamLibs_Note(va("%s is read from %s (%s), not Steam's own copy. Console: fs_steamlibs", own, root, FS_STEAMLIBS_FILE));
+}
+
 //probe one root both ways.  `basepath` receives the resolved game dir on success.
 static qboolean Sys_SteamRootHasGame(char *basepath, int basepathlen, const char *root, const char *steamdir, const char *fname)
 {
@@ -7625,8 +7696,10 @@ static qboolean Sys_SteamExtraRootsFile(void(*callback)(void*ctx,const char*base
 		if (!*line || *line == '#' || (line[0]=='/' && line[1]=='/'))
 			continue;
 
+		FS_SteamLibs_CheckRoot(line);
 		if (Sys_SteamRootHasGame(basepath,sizeof(basepath), line, steamdir, fname))
 		{
+			FS_SteamLibs_CheckShadow(line, basepath, steamdir, fname);
 			callback(ctx, basepath);
 			FS_FreeFile(listfile);
 			return true;
@@ -7659,6 +7732,8 @@ static qboolean Sys_SteamExtraRoots(void(*callback)(void*ctx,const char*basepath
 	int idx;
 
 	*prev = 0;
+	if (fs_steamlibs_steamonly)
+		return false;
 	for (idx = 0; idx < 2; idx++)
 	{
 		if (!FS_SteamLibsFilePath(p, sizeof(p), idx))
@@ -13068,13 +13143,81 @@ static void FS_SteamLibs_f(void)
 		Con_Printf("run ^2fs_restart^7 (or relaunch) to mount what it finds.\n");
 		return;
 	}
+	if (!Q_strcasecmp(Cmd_Argv(1), "remove") && Cmd_Argc() > 2)
+	{	//FTESurf Patch 1636: drop a root, as its warnings say; comments and other lines are kept as written
+		char root[MAX_OSPATH], want[MAX_OSPATH], raw[MAX_OSPATH], have[MAX_OSPATH], prevp[MAX_OSPATH];
+		char *out, *t;
+		int removed = 0, here;
+		vfsfile_t *f;
+
+		while (*args && *args != ' ' && *args != '\t')
+			args++;
+		while (*args == ' ' || *args == '\t')
+			args++;
+		Q_strncpyz(root, args, sizeof(root));
+		for (e = root+strlen(root); e > root && (e[-1]==' '||e[-1]=='\t'||e[-1]=='"'); )
+			*--e = 0;
+		while (*root == '"')
+			memmove(root, root+1, strlen(root));
+		Sys_SteamCleanRoot(want, sizeof(want), root);
+		*prevp = 0;
+		for (i = 0; i < 2; i++)
+		{
+			if (!FS_SteamLibsFilePath(path, sizeof(path), i) || !Q_strcasecmp(path, prevp))
+				continue;
+			Q_strncpyz(prevp, path, sizeof(prevp));
+			if (!(file = FS_MallocFile(path, FS_SYSTEM, NULL)))
+				continue;
+			out = BZ_Malloc(strlen(file) + 2);
+			*out = 0;
+			here = 0;
+			for (line = file; line && *line; line = nl)
+			{
+				nl = strchr(line, '\n');
+				if (nl)
+					*nl++ = 0;
+				for (t = line; *t == ' ' || *t == '\t' || *t == '"'; t++)
+					;
+				Q_strncpyz(raw, t, sizeof(raw));
+				for (e = raw+strlen(raw); e > raw && (e[-1]==' '||e[-1]=='\t'||e[-1]=='\r'||e[-1]=='"'); )
+					*--e = 0;
+				Sys_SteamCleanRoot(have, sizeof(have), raw);
+				if (*want && !Q_strcasecmp(have, want))
+				{
+					here++;
+					continue;
+				}
+				strcat(out, line);
+				if (nl)
+					strcat(out, "\n");
+			}
+			if (here && (f = VFSOS_Open(path, "wb")))
+			{
+				VFS_WRITE(f, out, strlen(out));
+				VFS_CLOSE(f);
+				Con_Printf("fs_steamlibs: removed \"%s\" from %s\n", root, path);
+				removed += here;
+			}
+			else if (here)
+				Con_Printf(CON_ERROR"fs_steamlibs: could not write %s\n", path);
+			BZ_Free(out);
+			FS_FreeFile(file);
+		}
+		if (removed)
+			Con_Printf("run ^2fs_restart^7 (or relaunch) to remount without it.\n");
+		else
+			Con_Printf("fs_steamlibs: \"%s\" is not listed in %s\n", root, FS_STEAMLIBS_FILE);
+		return;
+	}
 	if (Cmd_Argc() > 1)
 	{
-		Con_Printf("usage: fs_steamlibs [add <path>]\n");
+		Con_Printf("usage: fs_steamlibs [add <path> | remove <path>]\n");
 		return;
 	}
 
 	Con_Printf("^2Steam library overrides^7 (tried before the registry / libraryfolders.vdf):\n");
+	if (*fs_steamlibs_note.string)
+		Con_Printf("  "CON_WARNING"%s\n", fs_steamlibs_note.string);	//P1636
 	*resolved = 0;
 	for (i = 0; i < 2; i++)
 	{
@@ -13169,7 +13312,7 @@ void COM_InitFilesystem (void)
 	Cmd_AddCommandD("fs_unload",  FS_Unload_f,  "nettest: remove a game added with fs_load and rebuild the searchpaths.");
 	Cmd_AddCommandD("fs_loadlist",FS_LoadList_f,"nettest: list the games added with fs_load.");
 #ifdef FTESURF_STEAMLIBS
-	Cmd_AddCommandD("fs_steamlibs",FS_SteamLibs_f,"ftesurf (P276): show where the engine looked for your Steam games and how every fs_addons.txt spec resolved. `fs_steamlibs add <path>` records an extra Steam library root in steam_libraries.txt -- the fix when Steam is somewhere the registry and libraryfolders.vdf do not mention.");
+	Cmd_AddCommandD("fs_steamlibs",FS_SteamLibs_f,"ftesurf (P276): show where the engine looked for your Steam games and how every fs_addons.txt spec resolved. `fs_steamlibs add <path>` records an extra Steam library root in steam_libraries.txt -- the fix when Steam is somewhere the registry and libraryfolders.vdf do not mention. `fs_steamlibs remove <path>` drops one (P1636).");
 #endif
 	Cmd_AddCommandD("fs_cache_info", FS_Cache_Info_f, "ftesurf (P186/P197): report how much disk the runtime asset cache is using. Reports the whole cache regardless of which packs happen to be mounted.");
 	Cmd_AddCommandD("fs_cache_clear",FS_Cache_Clear_f,"ftesurf (P186/P197): empty the runtime asset cache. With a map name, forgets just that map -- it keeps its cached files but must re-prove them, which is the fix if one map ever looks short. With no argument, deletes the lot.");
@@ -13215,6 +13358,7 @@ void COM_InitFilesystem (void)
 	Cvar_Register(&fs_automount_state, "Filesystem");	//ftesurf (P231)
 	Cvar_Register(&fs_automount_spec, "Filesystem");	//ftesurf (P231)
 	Cvar_Register(&fs_addons_missing, "Filesystem");	//FTESurf Patch 1382
+	Cvar_Register(&fs_steamlibs_note, "Filesystem");	//FTESurf Patch 1636
 	Cvar_Register(&fs_loadstats, "Filesystem");		//ftesurf (P180)
 	Cvar_Register(&fs_maploadhash, "Filesystem");	//ftesurf (P180)
 	Cvar_Register(&fs_mapmaterials, "Filesystem");	//ftesurf (P765)
