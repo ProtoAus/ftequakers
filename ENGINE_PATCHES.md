@@ -1,5 +1,149 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1660 - A GoldSrc texture with no WAD here draws in its own colour
+
+**Cause.** Lex, on the GoldSrc map import: "In Source maps, I got the bot to make an Index of all the textures, so if
+any are missing, we can flat colour it at least the colour of the texture, could we do the same here?" A BSP-30 map
+takes most of its textures from Half-Life's and Counter-Strike's WADs; without those games every such face was the
+pink and black missing pattern.
+
+**Change.** wad.c: on a WAD miss while the world is a BSP 30 (wad_hlmap, set where the map's wad list is read),
+W_GetTexture returns a 16x16 block of the colour listed for that name in data/wadcolours.net.txt (the menu's copy, read
+from the gamedir's loose files only, like the map tables) or scripts/wadcolours.txt (shipped). FTESURF-WADCOLOURS 1,
+`<name> <rrggbb>` per line: 6,664 names from valve, cstrike and czero (ftesurf tools/wadcolours.py: linear-light mean of
+mip 0, a '{' texture's transparent index skipped, names normalised as W_CleanupName does). No pixels are stored. Decal
+requests are not answered. QC_MenuTable keeps CSQC from writing wadcolours.net.txt.
+
+**Verified.** Rig client on bhop_assault_gs (84 textures from halflife.wad) with HOME pointed at an empty folder so no
+Steam library resolves: table present, flat colours; table absent, the missing pattern (two screenshots, same view). A
+Source map never reaches the branch (the flag follows the world's format).
+
+**Boundary.** One colour per face: fences and grates ('{' textures) are solid. Skies are not covered. Not run on Windows.
+
+## Patch 1659 - A GoldSrc map runs AG 250 unless the host picked a mode
+
+**Cause.** Lex: "AG250 as most people play AG maps on"; "is it possible for the Lobbys to state their movement style
+(Surf/Bhop/AG250) with the map they are playing? and have an ability to swap per map?" The profile was one global
+setting (sv_movementprofile): a BSP-30 map ran Source movement until someone typed it, and then every map ran it.
+
+**Change.** sv_phys.c: sv_goldsrcprofile (default "ag-250", CVAR_NOTFROMSERVER|CVAR_MAPLATCH). With sv_movementprofile at
+default, SV_ApplyMovementProfile reads the incoming map's BSP header (SV_MapIsGoldSrc, under the map's @spec prefer-hint)
+and a version 30 map runs that profile; the next Source map runs the game's own movement. A value that is not a GoldSrc
+profile (empty, an HL2 one) warns and runs ag-250: a BSP-30 map never runs this game's own movement, so its runs stay
+unranked and filed apart (review). Never on a tournament server (tournament_enable or tournament_reserved set;
+worldofsurf-ed: surfd pins each tournament map's movement). An explicit sv_movementprofile still wins on every map.
+sv_init.c: FS_AutoUnmountStale now runs before SV_ApplyGamemode, so the previous GoldSrc map's raised Half-Life folders
+are gone when the header is read (review: a CS:S de_dust2 after a GoldSrc map read Half-Life's CS 1.6 de_dust2.bsp and
+got AG 250).
+
+**Verified.** Rig server, bhop_assault_gs then surf_mom_training in one process: default -> *movementprofile ag-250-v1
+at pm_ticrate 0.004, then no profile at 0.015; tournament_enable 1 and sv_goldsrcprofile "" -> no profile; cs16 ->
+cs16-v1; sv_movementprofile ag-100 -> ag-100-v1 on both. After the review fixes (r3_*): default, "" and hl2-pre ->
+ag-250-v1, cs16 -> cs16-v1, tournament_enable 1 -> none, the Source map none in all five; a CS:S de_dust2 loaded after
+bhop_assault_gs runs Momentum movement at 0.015 with the three GoldSrc mounts dropped first (r2_srv).
+
+**Boundary.** The lobby directory does not carry the style yet (tools/backend-pending.md). Lobbies host no GoldSrc map.
+
+## Patch 1658 - GoldSrc maps in the map finder; a compact list (menu QC only)
+
+**Cause.** P1656 installs GoldSrc packages from data/goldsrc.net.txt, which nothing fetched, and the finder had no row for
+them and no dense view. Lex: "display them in the list, maybe including the rest with reason why not included"; "a small
+list without thumbnails ... Just an option if people want it."
+
+**Change.** m_goldsrc.qc fetches https://maps.proto.bar/goldsrc/catalog.txt once a session (online tier), checks every row
+under P1099's rules (ids ending _gs, 64-hex hashes, # stamp and a matching # end) and replaces the saved table through
+.tmp and a rename. Its rows are appended after the Source ones and listed only under a new goldsrc Library chip (Mode
+all/bhop/kz/installed; unavailable rows last, greyed, with the reason; Play is the local game, no zone fetch, no record
+requests). ui_classify never files Half-Life's folders as CS:S. m_maprows.qc adds Cards | List for every library
+(ui_maps_list, default cards; 26 px rows, no record requests).
+
+**Verified.** 0 warnings. Source rows pixel-identical to the pristine menu at 1600x900 (only the Library strip and the
+switch differ); live fetch byte-identical to the CDN; nine bad replies refused; real downloads sha256-matched; a 404 reads
+failed; Play reaches kz_man_everest_gs. One independent review, five defects fixed. Linux only.
+
+## Patch 1656 - GoldSrc map packages in downloads/goldsrc
+
+**Cause.** Lex's AG/GoldSrc archive (1,308 BSP-30 maps) was never published. Momentum ships Source ports under the same
+names, GoldSrc sound/ and models/ paths collide with Source games', and the menu's download fetched one maps/<name>.bsp
+into the game folder. Lex: "maybe we need a 'goldsrc' folder in downloads where all the goldsrc content gets downloaded
+to"; Valve's files "we just mount them like every other game".
+
+**Change.** One package per map, <gamedir>/downloads/goldsrc/<name>_gs.pk3 (ftesurf tools/gsrcpack.py: the BSP and only
+the custom files it names, custom WADs cut to the textures used, Valve's files left to Steam). fs.c FS_AutoMountForMap
+adds, for a map whose package is there AND matches its catalogue row (size and sha256, verdict cached), the package
+(FS_Addon_MountPack: SPF_ADDON|COPYPROTECTED|PRIVATE|UNTRUSTED; refused whole if it holds anything but maps/<id>.bsp, root
+WADs, models/*.mdl, sprites/*.spr, sound|media audio, gfx/env images), steam:Half-Life/valve whenever installed, and
+cstrike / czero when the row names them. FS_Addon_Raise moves only what this code mounted ahead of the other addons (below
+the mod); FS_GoldSrc_AfterDrop drops them when the next map is not GoldSrc, whatever fs_autounmount says. Catalogue ids
+must end _gs. cl_parse.c: a listed map's maps/<id>.bsp request becomes a web download of
+https://maps.proto.bar/objects/goldsrc/<sha256 of the .xz>.xz into goldsrc/<id>.tmp, stopped at the row's .xz size; the
+.xz is hashed, then decoded through a counter that refuses output past the package size and hashes it; only the
+catalogue's bytes are renamed into place. CL_EnqueDownload refuses any local name with a goldsrc segment (Windows
+trailing dots and spaces stripped) unless it is exactly goldsrc/<id>.pk3 from its row's address. A package that arrives
+while connecting is mounted and its map loaded without an fs restart; demos of a GoldSrc map, savegame loads and
+recordmap run the mount pair too. pr_menu.c: downloadmap() reports an installed package as held; mapfilekb() its size.
+QC_MenuTable keeps CSQC from writing data/goldsrc.net.txt. fs_automount_spec and the console name the package
+goldsrc/<file>, never the player's path.
+
+**Verified.** Rig, 20 Nov: server `map bhop_assault_gs` mounts package, cstrike, valve directly under the game folder;
+`map surf_mom_training` drops all three; `map kz_cellblock_gs` remounts (pristine engine: map not found). Client:
+`ui_dlmap kz_man_everest_gs` fetched, decoded and installed the package; a row with one wrong digit was discarded; a client
+without the package joined a server on ag_bhop_master_gs, fetched it and loaded in (screenshots). Two independent
+reviews (security; file-system ordering) found 17 issues; three rounds of fixes, each re-reviewed (the last found no high
+or medium item left open). After them (rig, artifacts/f_*): a CS:S de_dust2 loaded after bhop_assault_gs runs Momentum
+movement with the three GoldSrc mounts dropped first; a package holding particles/map_evil_gs.cfg is refused whole; a
+package that is not the catalogue's bytes is refused; with fs_autounmount 0, bhop_assault_gs -> kz_cellblock_gs ->
+surf_mom_training leaves no GoldSrc path mounted; a Half-Life folder listed in fs_addons.txt keeps its own slot; a
+server-stuffed download to package/ftesurf/downloads/goldsrc/... and two from the player's console print the refusal
+and write nothing while a control name is requested; a real download installs with the catalogue's sha256 and a wrong
+row is discarded; a stale ag_bhop_master_gs.pk3 is refused at join, fetched again and mounted.
+
+**Boundary.** Windows not built or run. The unpack runs on the main thread (largest package 130 MB). Three pre-existing
+download weaknesses the review found are recorded privately, not fixed here.
+
+## Patch 1655 - GoldSrc map entities: ladders, liquids, doors, buttons, map logic
+
+**Cause.** BSP-30 maps load under the AG profiles but their entities spawned the Source way: ladders were walls, liquid
+skins all water, doors/buttons/trains static, pushes ignored players, teleports kept velocity, spawns sat 36 high and
+target-chain entities were deleted. The AG mover also took a ladder's plane only from a wall behind it. Lex: "it would be
+nice if we could support the regular ladders/water/door/buttons for goldsrc maps", without "messing with my Source maps".
+
+**Change.** QC sv_gsdefs.qc / sv_goldsrc.qc behind GS_Map() (cvar halflifebsp) with six gated hooks (CheckSpawn,
+ED_ParseUnknownEpair, SV_UseFrame, SV_EntityIOBuild, SV_EntityDamageInner, PutClientInServer's spawn lift); GoldSrc keys go
+to private gs_* fields. func_ladder is a SOLID_BSP skin -16 volume; liquids keep their map skin; doors, buttons (+use
+search as the SDK, touch, shot), trains, breakables, teleports (velocity zeroed), trigger_push, conveyors and
+multi_manager / trigger_relay / trigger_auto / multisource / trigger_changetarget / env_global / game_counter /
+func_wall_toggle run. cl_triggers.qc translates teleport/push/conveyor keys when *bspversion is 30. Engine pm_ag_world.c /
+pmovetst.c: PMAg_Ladder falls back to the ladder brush's own face on a Half-Life world (PM_LadderEntPlane).
+
+**Verified.** Server-only arms (rig, ag-250): bhop_assault 6/6 ladders climb (control 0/6); 163 of 165 touchable ladders
+over 60 maps with the engine fix; slime jump-out 78.7 against 98.4 in water; 13,951 of 13,951 stood-on touch doors start
+(319 maps); every targetname fired once on 319 maps with no QC error; teleport -397 in, 0 out. Source maps unchanged: 18
+of 18 spawn-frame comparisons (QC core dump + level cache + log) identical to the pristine progs on nine Source maps.
+Independent isolation review: no change on a Source map or to Source runs; its two GoldSrc-only findings fixed
+(GS_MapStart also runs with vbsp_entity_io 0; killtarget and trigger_changetarget held on lobbies like GS_Break).
+
+**Boundary.** No client prediction run. trigger_hurt is inert (no health model; Lex to decide). 728 maps not loaded yet.
+
+## Patch 1654 - Linux builds the ui_imgui plugin
+
+**Cause.** Lex: "I don't have imgui on linux?? can you fix that please?" The plugin's objects were compiled without
+-DMULTITHREAD, which only Windows gets implicitly (bothdefs.h), so pmove.h's FTE_TLS externs did not parse; its link line
+passed -static, which cannot make an ELF shared object.
+
+**Change.** plugins/Makefile: -DMULTITHREAD in IMGUI_FLAGS; $(PLUG_FULLSTATIC) (-static on Windows only) on the link line;
+on Linux -Wl,--exclude-libs,ALL keeps the static libstdc++ private (a GL driver's libstdc++.so cannot interpose; dynamic
+symbols 142 -> 1). Release half (ftesurf): tools/linux/build.sh builds and hashes it, gates G1/G2/G10 cover it,
+release.ps1 can ship it behind $LinuxShipImgui (off): every installed launcher refuses a whole update feed naming a file it
+does not know, so it ships with the first worldofsurf feed (P1593 stage 3).
+
+**Verified.** fteplug_ui_imgui_amd64.so builds (needs libm/libc only); a Linux client loads it (plug_list) and
+ui_imgui_status answers version=1.91.9b. Release tooling: test_releaselib.ps1 and test_updatefeed.py pass; gates.sh and
+linux-pack.sh checked on scratch fixtures with origin/main controls.
+
+**Boundary.** Not in any release yet; this PC gets it from wos-build.sh. A drawn panel on Linux not screenshotted. The
+bullseye release build of the plugin has not run.
+
 ## Patch 1648 - Tournament lobbies run themselves (QC + lobby; no engine change)
 
 **Cause.** Lex asked for a stream tournament with strangers. The 20 Nov research found the in-game Ready/Start
