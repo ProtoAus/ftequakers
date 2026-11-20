@@ -7620,23 +7620,31 @@ static void FS_SteamLibs_Note(const char *text)
 	if (!*fs_steamlibs_note.string)
 		Cvar_ForceSet(&fs_steamlibs_note, text);
 }
-//fs_hidesyspaths: the home folder as ~ (the note reaches the banner, screenshots and csprogs)
+//Always fills buf: path, or with fs_hidesyspaths the home folder as ~ (the note reaches the banner,
+//screenshots and csprogs). Compared with separators normalised: USERPROFILE has '\\', built paths '/'.
 static const char *FS_SteamLibs_Show(const char *path, char *buf, size_t bufsize)
 {
+	char home[MAX_OSPATH], clean[MAX_OSPATH];
+	const char *env;
+	size_t l;
 #ifdef _WIN32
-	const char *home = getenv("USERPROFILE");
-	size_t l = home ? strlen(home) : 0;
-	if (fs_hidesyspaths.ival && l > 3 && !Q_strncasecmp(path, home, l) && (!path[l] || path[l] == '/' || path[l] == '\\'))
+	env = getenv("USERPROFILE");
 #else
-	const char *home = getenv("HOME");
-	size_t l = home ? strlen(home) : 0;
-	if (fs_hidesyspaths.ival && l > 1 && !strncmp(path, home, l) && (!path[l] || path[l] == '/'))
+	env = getenv("HOME");
 #endif
-	{
-		Q_snprintfz(buf, bufsize, "~%s", path + l);
+	Q_strncpyz(buf, path, bufsize);
+	if (!fs_hidesyspaths.ival || !env || !*env)
 		return buf;
-	}
-	return path;
+	Sys_SteamCleanRoot(home, sizeof(home), env);
+	Sys_SteamCleanRoot(clean, sizeof(clean), path);
+	l = strlen(home);
+#ifdef _WIN32
+	if (l > 2 && !Q_strncasecmp(clean, home, l) && (!clean[l] || clean[l] == '/'))
+#else
+	if (l > 1 && !strncmp(clean, home, l) && (!clean[l] || clean[l] == '/'))
+#endif
+		Q_snprintfz(buf, bufsize, "~%s", clean + l);
+	return buf;
 }
 static qboolean FS_SteamSameDir(const char *a, const char *b)
 {
@@ -7662,19 +7670,20 @@ static void FS_SteamLibs_FirstDir(void *vctx, const char *basepath)
 static void FS_SteamLibs_CheckRoot(const char *root)
 {
 	char probe[MAX_OSPATH], shown[MAX_OSPATH];
+	const char *s;
 	if (!FS_SteamLibs_FirstTime("root", root) || FS_SteamRootLooksReal(root, probe, sizeof(probe)))
 		return;
-	FS_SteamLibs_Show(root, shown, sizeof(shown));
+	s = FS_SteamLibs_Show(root, shown, sizeof(shown));
 	Con_Printf(CON_WARNING"%s lists \"%s\", which is missing or empty (a drive that is not mounted?), so it is skipped. "
-		"^2fs_steamlibs remove %s^7 drops the line.\n", FS_STEAMLIBS_FILE, shown, shown);
-	FS_SteamLibs_Note(va("%s lists %s, which is missing. Console: fs_steamlibs", FS_STEAMLIBS_FILE, shown));
+		"^2fs_steamlibs remove %s^7 drops the line.\n", FS_STEAMLIBS_FILE, s, s);
+	FS_SteamLibs_Note(va("%s lists %s, which is missing. Console: fs_steamlibs", FS_STEAMLIBS_FILE, s));
 }
 static void FS_SteamLibs_CheckShadow(const char *root, const char *gamedir, char *steamdir, char *fname)
 {
-	char own[MAX_OSPATH];
+	char own[MAX_OSPATH], shown[3][MAX_OSPATH];
+	const char *sroot;
 	if (fs_steamlibs_steamonly || !FS_SteamLibs_FirstTime("game", steamdir))
 		return;
-	char shown[3][MAX_OSPATH];
 	*own = 0;
 	fs_steamlibs_steamonly = true;
 	Sys_SteamDirsWithFile(steamdir, fname, FS_SteamLibs_FirstDir, own);
@@ -7685,14 +7694,15 @@ static void FS_SteamLibs_CheckShadow(const char *root, const char *gamedir, char
 	fs_steamlibs_steamonly = false;
 	if (!*own || FS_SteamSameDir(own, gamedir))
 		return;
+	sroot = FS_SteamLibs_Show(root, shown[2], sizeof(shown[2]));
 	Con_Printf(CON_WARNING"%s: using %s from %s, not Steam's own copy at %s. "
 		"If that library is an old install, type ^2fs_steamlibs remove %s^7 then fs_restart.\n",
 		steamdir, FS_SteamLibs_Show(gamedir, shown[0], sizeof(shown[0])), FS_STEAMLIBS_FILE,
-		FS_SteamLibs_Show(own, shown[1], sizeof(shown[1])), FS_SteamLibs_Show(root, shown[2], sizeof(shown[2])));
+		FS_SteamLibs_Show(own, shown[1], sizeof(shown[1])), sroot);
 	Q_strncpyz(own, steamdir, sizeof(own));
 	if (strchr(own, '/'))
 		*strchr(own, '/') = 0;	//"Counter-Strike Source/cstrike" -> the game's name
-	FS_SteamLibs_Note(va("%s is read from %s (%s), not Steam's own copy. Console: fs_steamlibs", own, shown[2], FS_STEAMLIBS_FILE));
+	FS_SteamLibs_Note(va("%s is read from %s (%s), not Steam's own copy. Console: fs_steamlibs", own, sroot, FS_STEAMLIBS_FILE));
 }
 
 //probe one root both ways.  `basepath` receives the resolved game dir on success.
@@ -13176,7 +13186,7 @@ static void FS_SteamLibs_f(void)
 	}
 	if (!Q_strcasecmp(Cmd_Argv(1), "remove") && Cmd_Argc() > 2)
 	{	//FTESurf Patch 1636: drop a root, as its warnings say; comments and other lines are kept as written
-		char root[MAX_OSPATH], want[MAX_OSPATH], raw[MAX_OSPATH], have[MAX_OSPATH], prevp[MAX_OSPATH];
+		char root[MAX_OSPATH], want[MAX_OSPATH], typed[MAX_OSPATH], raw[MAX_OSPATH], have[MAX_OSPATH], prevp[MAX_OSPATH];
 		char *out, *t;
 		int removed = 0, here;
 		vfsfile_t *f;
@@ -13190,6 +13200,7 @@ static void FS_SteamLibs_f(void)
 			*--e = 0;
 		while (*root == '"')
 			memmove(root, root+1, strlen(root));
+		Sys_SteamCleanRoot(typed, sizeof(typed), root);	//a hand-written "~/..." line matches as typed
 		if (root[0] == '~' && (!root[1] || root[1] == '/' || root[1] == '\\'))
 		{	//the warnings print the home folder as ~ (FS_SteamLibs_Show)
 #ifdef _WIN32
@@ -13227,9 +13238,9 @@ static void FS_SteamLibs_f(void)
 					*--e = 0;
 				Sys_SteamCleanRoot(have, sizeof(have), raw);
 #ifdef _WIN32
-				if (*want && !Q_strcasecmp(have, want))
+				if (*want && (!Q_strcasecmp(have, want) || !Q_strcasecmp(have, typed)))
 #else
-				if (*want && !strcmp(have, want))
+				if (*want && (!strcmp(have, want) || !strcmp(have, typed)))
 #endif
 				{
 					here++;
