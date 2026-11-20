@@ -3841,7 +3841,7 @@ static qboolean SV_ReadEditorRuleset(const char *mapname, sv_editorrules_t *out,
 	static const char *names[] = {"sv_maxvelocity", "sv_gravity", "sv_airaccelerate",
 		"sv_accelerate", "sv_maxspeed", "sv_friction", "gamemode"};
 	static const double mins[] = {1, 1, 0, 0, 1, 0, 1};
-	static const double maxs[] = {100000, 10000, 10000, 10000, 10000, 100, 2};
+	static const double maxs[] = {100000, 10000, 10000, 10000, 10000, 100, 9};
 	char path[MAX_OSPATH], *file, *l, *e, *p, *end;
 	size_t sz;
 	int i;
@@ -3869,7 +3869,7 @@ static qboolean SV_ReadEditorRuleset(const char *mapname, sv_editorrules_t *out,
 		if (*end || end == com_token || !(v >= mins[i] && v <= maxs[i])) { valid = false; break; }
 		if (i == 6)
 		{
-			if (v != 1 && v != 2) { valid = false; break; }
+			if (v != 1 && v != 2 && v != 9) { valid = false; break; }	//P1637: 9 ahop
 			out->mode = (int)v;
 		}
 		else
@@ -3954,7 +3954,7 @@ static qboolean SV_ZoneAnyRegion(json_t *t, int depth)
 	return false;
 }
 
-//The file's maxVelocity, 0 if none, and P1371 gamemode: 0 none, 1/2, or -1 for anything else.
+//The file's maxVelocity, 0 if none, and P1371 gamemode: 0 none, 1/2/9, or -1 for anything else.
 //FALSE when this path is not a zone file at all.
 static qboolean SV_ZoneRulesetFile(const char *path, char *found, size_t foundsz, double *maxvel, int *mode)
 {
@@ -3986,15 +3986,15 @@ static qboolean SV_ZoneRulesetFile(const char *path, char *found, size_t foundsz
 	}
 	mv = zones ? SV_JsonChild(root, "maxVelocity") : NULL;
 	*maxvel = (mv && mv->type == json_type_number) ? JSON_ReadFloat(mv, 0) : 0;
-	//zone_edit offers Surf and Bhop only (Momentum ids 1, 2), so a published file may name
-	//nothing else (review: a hand-made upload could reach rj/defrag). sh_zones.qc agrees.
+	//zone_edit offers Surf, Bhop and (P1637) Ahop only (Momentum ids 1, 2, 9), so a published file
+	//may name nothing else (review: a hand-made upload could reach rj/defrag). sh_zones.qc agrees.
 	gm = zones ? SV_JsonChild(root, "gamemode") : NULL;
 	*mode = 0;
 	if (gm)
 	{
 		g = (gm->type == json_type_number) ? JSON_ReadFloat(gm, 0) : 0;
 		g = (float)g;	//as QC's json_get_float sees it, so 2.0000001 is 2 on both sides
-		*mode = (g == 1 || g == 2) ? (int)g : -1;
+		*mode = (g == 1 || g == 2 || g == 9) ? (int)g : -1;
 	}
 	JSON_Destroy(root);
 	FS_FreeFile(file);
@@ -4209,7 +4209,7 @@ static void SV_ApplyGamemodeModes(const char *mapname)
 		int zmode = 0;
 
 		if (SV_FindZoneFile(mapname, zfile, sizeof(zfile), &zmv, &zmode) && zmode < 0)
-			Con_Printf(CON_WARNING"movement: %s \"gamemode\" is not 1 (surf) or 2 (bhop) - ignored\n", zfile);
+			Con_Printf(CON_WARNING"movement: %s \"gamemode\" is not 1 (surf), 2 (bhop) or 9 (ahop) - ignored\n", zfile);
 		else if (zmode > 0)
 		{
 			mode = zmode;
