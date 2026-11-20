@@ -61,7 +61,7 @@ cvar_t	sv_wateraccelerate	 = CVAR( "sv_wateraccelerate", "10");
 static int sv_agprofile; //map-spawn authority, never derived from raw pm_physicsmode
 static int sv_profilekind; //Patch 1589: PMPROFILE_* applied at map spawn
 static cvar_t sv_movementprofile = CVARFD("sv_movementprofile", "", CVAR_NOTFROMSERVER|CVAR_MAPLATCH, "Experimental unranked movement, applied only on map spawn: default (or empty); ag-100, ag-250, ag-1000 and cs16 (GoldSrc-style, CS 1.6 with its jump stamina and bhop cap); hl2-pre and hl2-post (Source mover with HL2 settings and its jump boost before/after the limiter; +speed sprints). Every profile autohops under pm_autobunny. Ladder intent uses analog signs; no longjump equipment.");
-static cvar_t sv_goldsrcprofile = CVARFD("sv_goldsrcprofile", "ag-250", CVAR_NOTFROMSERVER|CVAR_MAPLATCH, "Patch 1659: the movement a GoldSrc (BSP 30) map runs while sv_movementprofile is default: ag-100, ag-250, ag-1000 or cs16. Empty: this game's own movement. Never applied on a tournament server.");
+static cvar_t sv_goldsrcprofile = CVARFD("sv_goldsrcprofile", "ag-250", CVAR_NOTFROMSERVER|CVAR_MAPLATCH, "Patch 1659: the movement a GoldSrc (BSP 30) map runs while sv_movementprofile is default: ag-100, ag-250, ag-1000 or cs16 (anything else: ag-250). Never applied on a tournament server.");
 
 static cvar_t pm_sourceversion = CVARFD("pm_sourceversion", STRINGIFY(PMSRC_VERSION), CVAR_SERVERINFO|CVAR_NOSET, "Source mover version used by this server (read-only). 3 adds swimming; 4 linked portals; 5 keeps a linked portal landing exact; 6 keeps moving as the hull clears a linked door; 7 traces a static prop's collision hull as its convex pieces; 8 recovers a surfer pinned to the face it is sliding along; 9 traces a prop hull whose indices overflowed as it really is; 10 honours Momentum's limitmovement and slide triggers; 11 adds Source's ceiling eye clearance and water-lip assist; 12 meets a prop hull's pieces where they really are, so a crease between two pieces no longer snags a surfer; 13 collides the displacements Patch 256 re-wound on their visible side, not four units in front of it. Old clients need updating to predict them correctly.");
 cvar_t	sv_friction			 = CVAR( "sv_friction", "4");
@@ -4321,14 +4321,15 @@ static void SV_ApplyMovementProfile(const char *mapname)
 	if (!*sel || !strcmp(sel, "default"))
 	{	//Patch 1659: the style follows the map. A tournament server keeps its pinned movement (its maps are Source).
 		cvar_t *te = Cvar_FindVar("tournament_enable"), *tr = Cvar_FindVar("tournament_reserved");
-		sel = sv_goldsrcprofile.string;
-		if (!*sel || !strcmp(sel, "default") || (te && te->value) || (tr && *tr->string) || !SV_MapIsGoldSrc(mapname))
+		if ((te && te->value) || (tr && *tr->string) || !SV_MapIsGoldSrc(mapname))
 			return;
+		//a BSP-30 map always runs a GoldSrc movement (unranked, its runs filed apart), never this game's own (review)
+		sel = sv_goldsrcprofile.string;
 		p = PM_ProfileBySelector(sel);
 		if (!p || PM_ProfileHL2(p->kind))
 		{
-			Con_Printf(CON_WARNING"sv_goldsrcprofile %s is not a GoldSrc movement; %s keeps this game's own\n", sel, mapname);
-			return;
+			Con_Printf(CON_WARNING"sv_goldsrcprofile \"%s\" is not a GoldSrc movement; %s runs ag-250\n", sel, mapname);
+			p = PM_ProfileBySelector("ag-250");
 		}
 	}
 	else

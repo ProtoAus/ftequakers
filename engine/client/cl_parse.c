@@ -608,7 +608,7 @@ qboolean CL_EnqueDownload(const char *filename, const char *localname, unsigned 
 	//there (a server-named file, a package/ local name, the download command). Every enqueue comes through here.
 	if (CL_GoldSrc_InDir(localname ? localname : filename) && !CL_GoldSrc_Canonical(filename, localname))
 	{
-		Con_DPrintf("Refusing download to \"%s\"\n", localname ? localname : filename);
+		Con_Printf(CON_WARNING"Refusing download to \"%s\" (only verified map packages go there)\n", localname ? localname : filename);
 		return false;
 	}
 	if ((flags & DLLF_TRYWEB) || !strncmp(filename, "http://", 7) || !strncmp(filename, "https://", 8))
