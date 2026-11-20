@@ -1,5 +1,81 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1688 - !hide / !show: other players are not drawn for you until the next map (game QC only)
+
+**Cause.** Lex, 21 Nov 2026: "option to hide the other players with !hide/!show either just toggles (reset peoples state
+to show when they join a map)".
+
+**Change.** game src/server/sv_player.qc: a bare `!hide` or `!show` in chat (each toggles, as asked) stuffs the client
+command `hideplayers` and is not broadcast. src/client: `hideplayers` (cl_main.qc; no argument toggles, 0|1 sets, a line
+says which) sets pb_hideothers (cl_keys.qc), a plain CSQC global, so every map load clears it (CL_ParseServerData shuts
+csprogs down). While set, Body_Predraw draws no pose-stream body (and so no kit or glow), cl_playerlabels.qc draws no
+name, and turning it on empties the other players' trail lines at once (PTrail_ClearBodies) instead of letting them fade.
+
+**Review.** One independent read with P1686/P1687: the trails faded over up to 3 s after hiding (fixed). Left in BACKLOG:
+with `lobby_av_stream 0` avatars take the engine's entity path and are not hidden (default is 1); aim-to-share
+(cl_share.qc) can still pick a hidden player.
+
+**Verified.** Rig, lobby-mode dedicated server on bhop_sandtrap2 with a second (headless) client standing 150 u in
+front: `!hide` prints "Other players hidden until the next map", the partner's body and name tag vanish (21,000-23,000
+pixels in its box), `!show` brings them back (only the chat line differs), and after `map bhop_sandtrap2` the partner is
+drawn again and the next `!hide` hides (the state was reset, not toggled back). Screenshots in the lane's artifacts/.
+**Not verified:** a real lobby (needs the lobby QC deploy).
+
+## Patch 1687 - GoldSrc: the eye follows the mode, CS 1.6 never autohops, noclip flies like the rest of the game
+
+**Cause.** Lex, 21 Nov 2026, on bkz_goldbhop_gs: "CS 1.6 is a lower view hight then HL/AG, currently HL/AG has the
+counter-strike view height", "CS 1.6 isn't suppoed to have autohop", "noclip in cs1.6 sinks you into the ground, and you
+have a max move speed of 250". P1665 chose the eye from the MAP (a Counter-Strike map showed 17 under ag-250 too);
+P1591 let every profile autohop under the server's pm_autobunny (1 in default.cfg); and PMAg_Tick flew PM_SPECTATOR
+through PMAg_Wish's swim branch, which adds a 60 u/s sink when no key is held and caps the speed at sv_maxspeed (250 under
+cs16, 320 under ag-*), then the 2000 maxvelocity clamp.
+
+**Change.** server/sv_phys.c SV_ApplyMovementProfile, GoldSrc branch: pm_viewheight is the profile's own (cs16 17,
+ag-100/250/1000 28) unless sv_goldsrcview is hl or cs (BSP-30 maps only, as before); SV_GoldSrcMapIsCS and
+SV_GoldSrcWadIsCS are removed (no other user). cs16 adds SV_AGOverride("pm_autobunny", "0"), which
+SV_ClearGamemodeOverrides restores at the next map; clients predict it from serverinfo, and sv_user.c's old-client refusal
+no longer fires under cs16. common/pm_ag_world.c: noclip and spectators take PMSrc_NoClipMove's rule -- direction from the
+command, speed pm_noclipspeed x sv_maxspeed (1000 under cs16, 1280 under ag-*), doubled on +speed, a held jump does not
+climb (P154), no maxvelocity clamp. The duck crop no longer changes it. sv_movementprofile's and sv_goldsrcview's
+descriptions say so.
+
+**Review.** One independent read with P1686/P1688: no defects in this part; it asked for the noclip clamp to go (done)
+and noted that a pre-1687 client on a 1687 server mispredicts noclip on GoldSrc profiles. Accepted: GoldSrc profiles run
+only in local games today (lobbies set no sv_movementprofile, tournament servers never apply one), where client and
+server are one binary.
+
+**Verified.** tools/test_pm_ag_world.c Noclip (gnu99 -Wall -Wextra -Werror): idle holds z, cs16 1000 u/s also ducked,
++speed 2560 u/s (velocity too), held jump stays, +moveup climbs; the whole harness passes, and the old mover fails the
+first noclip check. Rig, dedicated server on bkz_goldbhop_gs, this build against the installed one (patch-1666):
+serverinfo under ag-250 pm_viewheight 28 (installed 17) and pm_autobunny 1; under sv_goldsrcprofile cs16 pm_viewheight 17
+and pm_autobunny 0 (installed 1). Held jump: ag-250 keeps hopping; cs16 makes one jump and stays on the ground (installed:
+keeps hopping). Noclip, 2 s with no key: z unchanged on both profiles (installed: -122 u, through the floor); 1 s of
++forward: 1280 u ag-250, 1000 u cs16 and 1000 u ducked (installed 320, 250, 150).
+
+## Patch 1686 - The duck's eye height moves every rendered frame (Source mover)
+
+**Cause.** Lex, 21 Nov 2026: "i'm not convinced that the crouching transition mechanic, isn't being smoothed perfectly to
+my 300fps, it looks not as smooth as it should when you hold crouch and your view lowers to the ground". cl_pred.c lerps
+the feet between the two kept movement ticks (P269c), but took the eye offset from the newest tick (P132b) unless a roof
+clipped it (P1301). Source's duck slides the eye over 0.4 s (SimpleSpline, pm_source.c), so the slide advanced once a
+tick. cl_predtrace on bhop_sandtrap2 (dedicated server, cl_maxfps 300, 10 ms ticks): 117 of the 177 frames in a duck and
+unduck kept the previous frame's eye, then it jumped up to 1.271 u. AG already lerps its eye (P1628): bkz_goldbhop_gs at
+250 Hz moved every frame.
+
+**Change.** client/cl_pred.c: CL_SourceEyeKeep also keeps the unclipped offset (srceye_t.raw). When both ticks are kept
+and neither is clipped, the eye lerps from the from-tick's kept world eye to the to-tick's (to.state's origin +
+pmove.viewheight) by the feet's fraction, exactly as P1301 does under a roof; under a roof the raw cap passed to
+PMSrc_ClipRenderEye lerps the same way (review). Display only: the mover, prediction state, recordings and the stat are
+unchanged; pv->crouch (stair smoothing) is still added by V_CalcRefdef.
+
+**Review.** One independent read with P1687/P1688: no correctness defect; it found the roof-clip branch still capped by
+the newest tick's raw offset (a mid-duck step under a roof edge) and that the new branch read pmove's origin, which can be
+stale on a frame that predicted nothing. Both fixed as above.
+
+**Verified.** The same arm: 0 of 180 transition frames hold, largest step 0.424 u (the old 1.271 spread over the three
+frames between ticks), ending at 47 ducked and 64 standing; the same numbers after the review fixes. **Not verified:**
+the roof-clip mid-duck case (code path only), Windows, Lex's eyes (lextest.md).
+
 ## Patch 1668 - The Linux ui_imgui plugin reaches players (files_ext; Linux launcher 0.1.7) (game tools + launcher)
 
 **Cause.** P1654 built fteplug_ui_imgui_amd64.so for Linux but no release could ship it: every installed launcher
