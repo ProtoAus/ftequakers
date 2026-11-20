@@ -301,7 +301,7 @@ be. Cleared by Con_DrawCompletionPopup itself on the first frame it declines.
 */
 static console_t	*con_popupshown;
 static float		con_popuphit[4];	//x, y, w, h
-static float		con_popuphitrowy, con_popuphitrowsh;	//FTESurf Patch 1662: the rows' top and height inside that box (virtual)
+static float		con_popuphitrowx, con_popuphitrowsw, con_popuphitrowy, con_popuphitrowsh;	//FTESurf Patch 1662: the rows inside that box (virtual)
 //FTESurf Patch 846: which completions those rows were, for Con_CompletionRowAt
 static int			con_buildfirst, con_buildentries;	//Con_BuildCompletion's last window
 static int			con_popupfirst, con_popupentries;	//as recorded for this frame's popup
@@ -4224,7 +4224,7 @@ static void Con_DrawCompletionPopup(console_t *con)
 	pady = (int)(((pad/2) * vid.pixelheight) / vid.height);
 	gap  = (int)((pad * vid.pixelheight) / vid.height);
 	if (padx > con_popupl)
-		padx = con_popupl;	//the box would start off the left of the screen
+		padx = max(0, con_popupl);	//not off the left of the screen; none when the row already starts there (a window dragged left)
 	if (con_popupb != con_popupib)
 		top = con_popupb - 3 + max(3, gap);	//below a clean window (Patch 1647)
 	else
@@ -4355,6 +4355,8 @@ static void Con_DrawCompletionPopup(console_t *con)
 	con_popuphitfirst = con_popupfirst;
 	con_popuphitentries = con_popupentries;
 	con_popuphitrow = ch * syv;
+	con_popuphitrowx = con_popupl * sxv;
+	con_popuphitrowsw = w * sxv;
 	con_popuphitrowy = top * syv;
 	con_popuphitrowsh = h * syv;
 }
@@ -4376,8 +4378,8 @@ int Con_CompletionRowAt(console_t *con, float x, float y)
 	int r;
 	if (!Con_PopupCovers(con, x, y) || con_popuphitrow <= 0)
 		return -1;
-	if (y < con_popuphitrowy)
-		return 0;	//FTESurf Patch 1662: the padding above the rows
+	if (y < con_popuphitrowy || x < con_popuphitrowx || x >= con_popuphitrowx + con_popuphitrowsw)
+		return 0;	//FTESurf Patch 1662: the padding round the rows
 	r = (int)((y - con_popuphitrowy) / con_popuphitrow);
 	if (r < 0 || r >= con_popuphitentries)
 		return 0;
