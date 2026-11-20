@@ -167,6 +167,7 @@ typedef struct
 	int			frame, servercount;
 	vec3_t		feet;	//a kept eye is used only while from.state is still here
 	float		eye;	//world z, as P917's limit
+	float		raw;	//P1686: the unclipped eye offset, lerped under a clip too
 	qboolean	clipped;
 } srceye_t;
 static srceye_t srceye[MAX_SPLITS][SRCEYE_RING];
@@ -177,7 +178,8 @@ static void CL_SourceEyeKeep (int seat, int frame, const vec3_t feet)
 	e->servercount = cl.servercount;
 	VectorCopy(feet, e->feet);
 	e->eye = feet[2] + pmove.viewheight;
-	e->clipped = movevars.physicsmode == PHYSMODE_SOURCE && pmove.pm_type == PM_NORMAL && pmove.viewheight < PMSrc_UnclippedViewHeight();
+	e->raw = movevars.physicsmode == PHYSMODE_SOURCE ? PMSrc_UnclippedViewHeight() : pmove.viewheight;
+	e->clipped = movevars.physicsmode == PHYSMODE_SOURCE && pmove.pm_type == PM_NORMAL && pmove.viewheight < e->raw;
 }
 #define PRING_KEEP 120		//report files kept in data/prederr/ (a report is two)
 static cvar_t	cl_pushlatency = CVAR("pushlatency","-999");
@@ -1903,6 +1905,7 @@ void CL_PredictMovePNum (int seat)
 	float		source_eye_raw = 0, source_eye_limit = 0;
 	qboolean	source_eye_valid = false;
 	float		source_eye_f = -1;	/*P1301: the fraction the feet were lerped by, -1 if they were not*/
+	float		source_eye_to = 0;	/*P1686: the to-tick's world eye, from to.state rather than pmove's origin*/
 	float		ag_eye = 0;			/*P1628: AG's newest world eye z, when ag_eye_valid*/
 	qboolean	ag_eye_valid = false;
 	int			pt_rec = -1;		/*P1301: this frame's cl_predtrace record, if any*/
@@ -2502,6 +2505,7 @@ void CL_PredictMovePNum (int seat)
 				source_eye_raw = PMSrc_UnclippedViewHeight();
 				source_eye_clipped = (pmove.viewheight < source_eye_raw);
 				source_eye_limit = pmove.origin[2] + pmove.viewheight;
+				source_eye_to = to.state->origin[2] + pmove.viewheight;
 				source_eye_valid = true;
 			}
 			if (movevars.sourceversion >= 4)
@@ -2866,16 +2870,20 @@ void CL_PredictMovePNum (int seat)
 	{
 		srceye_t *e = &srceye[seat][from.frame & (SRCEYE_RING-1)];
 		vec3_t moved;
+		qboolean kept;
 		VectorSubtract(e->feet, from.state->origin, moved);
-		if (source_eye_f >= 0 && e->frame == from.frame && e->servercount == cl.servercount &&
-			DotProduct(moved, moved) < 1 && (e->clipped || source_eye_clipped))
+		kept = source_eye_f >= 0 && e->frame == from.frame && e->servercount == cl.servercount &&
+			DotProduct(moved, moved) < 1;
+		if (kept && (e->clipped || source_eye_clipped))
 		{
 			float up = max(0, pv->crouch);
 			float fromeye = e->clipped ? e->eye : e->eye + up;
 			float toeye = source_eye_clipped ? source_eye_limit : source_eye_limit + up;
-			pv->viewheight = PMSrc_ClipRenderEye(source_eye_raw,
+			pv->viewheight = PMSrc_ClipRenderEye(e->raw + (source_eye_raw - e->raw) * source_eye_f,	//P1686: the raw cap lerps too
 				fromeye + (toeye - fromeye) * source_eye_f, pv->simorg[2] + pv->crouch);
 		}
+		else if (kept)	//P1686: unclipped too, or the 0.4 s duck slide steps once a tick (3 frames at 300 fps, 100 Hz)
+			pv->viewheight = e->eye + (source_eye_to - e->eye) * source_eye_f - pv->simorg[2];
 		else if (source_eye_clipped)
 			pv->viewheight = PMSrc_ClipRenderEye(source_eye_raw, source_eye_limit,
 				pv->simorg[2] + pv->crouch);
