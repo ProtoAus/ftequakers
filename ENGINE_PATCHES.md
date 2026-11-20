@@ -1,5 +1,38 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1635 - Tournament pre-enable: a round-end hold ends the run; F6 closes at the countdown
+
+**Cause.** Two findings before tournaments go live (FTESurf BACKLOG, P1634). (1) A tournament server holds its
+competitors during the countdown, results and finished/aborted/broken states (Tour_Hold: run_pmhold, velocity zeroed).
+A player mid-run when the round clock ran out stayed TS_RUNNING while frozen, and Tour_Unhold released the body with
+no rollback, so that attempt could continue from a standstill and post to the ordinary board. (2) An open F6 panel
+makes CSQC_Input_Frame send empty moves; the host clicks Start in it, so at GO the host could not move until they
+closed it.
+
+**Change.** QuakeC only. sv_tournament.qc Tour_Hold: on the hold's first edge, after SV_SpecRelease, SV_TimerVoid(e,
+"tournament hold") -- the attempt ends like a teleport ends one (recording discarded, "run cancelled (tournament
+hold)"); repeated hold frames do not void again. An armed player in the start box re-arms after GO as before.
+cl_tournament.qc: a snapshot that moves the phase to countdown closes an open panel (F6 reopens it). Review
+rounds: Tour_Finished also refuses TF_MULTISESSION (resumed from a park), TF_SPEC (paused to spectate) and TF_UNCERT
+(slow clock, no ruleset, ...) finishes, all clean by class, and tells the player; a journal opt-out (TF_NOJOURNAL, the
+player's privacy choice) still scores -- Lex's call (BACKLOG).
+tools/tournament_playtest.py --round-end (60 s round; the host walks out of the start and the round ends mid-run);
+tools/test_tournament_server.py's snapshot carries the settings/ruleset_id that Tour_Adopt has required since the
+settings work (11 of its checks had been failing silently), stubs Tour_Observe around the finish checks so the
+eligibility predicates run on its zone-less map, and adds hold-void, multi-session, spectate, slow-clock and
+journal-opt-out checks plus --mutant-no-hold-void.
+
+**Verified.** Native two-client playtest --round-end (1280x800): panel closed at GO, run started, "run cancelled
+(tournament hold)" at round end, timer idle after; the same build without the server line: timer still "running"
+while held at results. Full --tour smoke at 1920x1200 passes all gates. Server fixture: 36 checks pass;
+--mutant-no-hold-void fails exactly "hold ends a running ordinary run", --mutant-no-score the four scoring checks,
+and the old server code fails the multi-session, spectate and slow-clock checks. Two independent review rounds: no
+P1; round 1's P2 (resumed runs scoring) and round 2's P2 (uncertified runs scoring, pre-existing) fixed here, the
+second without a third round; P3 leads in BACKLOG. All three VMs compile with 0 warnings.
+
+**Boundary.** Only opt-in tournament servers are affected (Tour_Hold and Tour_Finished need an owned match). The
+transport fixture's round flow still needs a zoned, rule-locked synthetic course (BACKLOG).
+
 ## Patch 1634 - Tournament lobbies (off by default): the menu signs tournament actions
 
 **Cause.** Lex asked for tournaments run like an AoE2/Worms game lobby: everyone joins one room from the main menu,
