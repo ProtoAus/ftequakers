@@ -1,5 +1,32 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1692 - A mid-run retry charges its time away to the clock (QC server only)
+
+**Cause.** Lex, 20 Nov 2026: a mid-run `retry` "stays clean; record a cut marker; add the away time to the clock".
+`retry` writes the player's state, restarts the map and restores the run at its saved ticks, so the restart -- the
+server's reload and the client's -- stood outside the clock: a free pause, reachable on a lobby by a lone player through
+`cmd rec_retry`. The cut marker (`retry <ticks>`, `pause retry`, `session`) already existed.
+
+**Change.** game src/server: SV_RetryPoint stamps gettime(1) into the registered, unarchived cvar rec_retry_at (latched
+and cleared with rec_retry_armed in SV_TimerMapInit); SV_RetryApply hands it to a running run (a missing or future stamp
+makes it practice). SV_RetryCharge adds ceil(now - stamp) whole seconds, at least 1, to run_t_viewsec -- the viewing
+carry SV_TimerTicks and SV_TimerElapsed already include -- and writes `parkclock <gap> <total>` right after
+SV_RecSession's session line, exactly as Multi-Session's offline gap (sv_resume.qc); an unrecorded run is charged after
+the restart latch. A gap that is unmeasurable, overflows, or cannot be stated makes the run practice. A retry, replay or
+Multi-Session park is refused while a charge is owed; a retry of a running recording in a format other than 13/14 is
+refused. No engine, verifier or backend change: the engine verifier already refuses retried runs before simulating, and
+tools/reccheck.py accepts a `parkclock` after a session.
+
+**Review.** Three independent rounds. 1: a second retry before the charge dropped the first; an early retry's bound read
+two clocks (false practice); Multi-Session could park an unrecorded run first; a missing stamp failed open. 2: a 0 s
+charge from a lowered local stamp; a replay could open before the charge (reccheck faults a `parkclock` inside a viewing
+window). 3: low notes only (game BACKLOG).
+
+**Verified.** Rig on surf_ace (game tools/p1692-arms.md): main's clock fell 1.70 s short of the wall across a retry;
+P1692 said "2 s away added to the clock" and ran 0.28-0.43 s ahead of the wall (the round-up), clean, also for a retry
+0.135 s into the run. **Not verified:** the record in a kept `.rec` (the arm's run never finishes), a listen-server
+retry through the client's own `retry`, a lobby (needs the QC deploy).
+
 ## Patch 1646 - Scripts, waits and deferred presses are counted (in_script_lapses); a lapse in a run unranks it
 
 **Cause.** Lex, 20 Nov 2026, for the Normal (ranked) categories: "Scripts are not allowed, 1 button per key, no waits".
