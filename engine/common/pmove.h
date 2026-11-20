@@ -424,6 +424,7 @@ void PM_CategorizePosition (void);
 int PM_HullPointContents (hull_t *hull, int num, vec3_t p);
 
 int PM_ExtraBoxContents (vec3_t p);	//Peeks for HL-style water.
+int PM_LadderEntPlane (vec3_t origin, vec3_t normal);	//FTESurf Patch 1655: a GoldSrc ladder brush's own plane
 int PM_PointContents (vec3_t point);
 qboolean PM_TestPlayerPosition (vec3_t point, qboolean ignoreportals);
 qboolean PM_AnyPortals (void);	//FTESurf Patch 206: pm_source.c's plain trace sites need to know

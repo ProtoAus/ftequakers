@@ -229,6 +229,47 @@ int PM_ExtraBoxContents (vec3_t p)
 	return pc;
 }
 
+/* FTESurf Patch 1655: the plane of the ladder brush entity the player's box touches -- a point trace from the
+   origin toward the brush model's centre, as GoldSrc's PM_LadderMove takes it (PM_TraceModel).  Only
+   non-blocking ladder-contents physents with a model qualify: a GoldSrc func_ladder.  0 none touched,
+   1 normal filled, 2 the origin is inside the brush (no face to hit). */
+int PM_LadderEntPlane (vec3_t origin, vec3_t normal)
+{
+	int			num, inside = 0;
+	physent_t	*pe;
+	model_t		*pm;
+	trace_t		tr;
+	vec3_t		centre;
+
+	for (num = 1; num < pmove.numphysent; num++)
+	{
+		pe = &pmove.physents[num];
+		if (!pe->nonsolid || !(pe->forcecontentsmask & FTECONTENTS_LADDER))
+			continue;
+		pm = pe->model;
+		if (!pm || pm->loadstate != MLS_LOADED)
+			continue;
+		if (!PM_TransformedHullCheck(pm, PE_FRAMESTATE, origin, origin, pmove.player_mins, pmove.player_maxs, &tr, pe->origin, pe->angles, pe->scale))
+			continue;
+		if (!tr.startsolid && !tr.inwater)
+			continue;
+		VectorAdd(pm->mins, pm->maxs, centre);
+		VectorMA(pe->origin, 0.5, centre, centre);
+		if (!PM_TransformedHullCheck(pm, PE_FRAMESTATE, origin, centre, vec3_origin, vec3_origin, &tr, pe->origin, pe->angles, pe->scale))
+			continue;
+		if (tr.startsolid || tr.allsolid)
+		{
+			inside = 2;
+			continue;
+		}
+		if (tr.fraction == 1)
+			continue;
+		VectorCopy(tr.plane.normal, normal);
+		return 1;
+	}
+	return inside;
+}
+
 /*
 ===============================================================================
 

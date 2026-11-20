@@ -297,8 +297,17 @@ static qboolean PMAg_Ladder(void)
 	AngleVectors(pmove.angles, forward, right, up);
 	VectorMA(pmove.origin, 24, forward, end);
 	contact = PM_PlayerTrace(pmove.origin, end, MASK_PLAYERSOLID|FTECONTENTS_LADDER);
-	if (contact.fraction == 1 || fabsf(contact.plane.normal[2]) >= 0.999f) return false;
-	VectorCopy(contact.plane.normal, normal);
+	if (contact.fraction == 1 || fabsf(contact.plane.normal[2]) >= 0.999f)
+	{	/* Patch 1655: on a Half-Life BSP a ladder is a brush entity, often with no wall behind it. Its own
+		 * face is the plane then; inside it the last plane is kept. Other worlds return here as before. */
+		int found;
+		if (!pmove.physents[0].model || pmove.physents[0].model->fromgame != fg_halflife) return false;
+		found = PM_LadderEntPlane(pmove.origin, normal);
+		if (found == 2 && pmove.srcladder) VectorCopy(pmove.srcladdernormal, normal);
+		else if (found != 1) return false;
+		if (fabsf(normal[2]) >= 0.999f) return false;
+	}
+	else VectorCopy(contact.plane.normal, normal);
 	pmove.srcladder = true; VectorCopy(normal, pmove.srcladdernormal);
 	if (pmove.cmd.buttons & BUTTON_JUMP) { VectorScale(normal, 270, pmove.velocity); pmove.srcladder = pmove.onladder = false; pmove.onground = false; pmove.jump_held = true; PMAg_Slide(); return true; }
 	speed = min(200, movevars.maxspeed); VectorClear(intent);

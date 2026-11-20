@@ -42,6 +42,7 @@ int PM_PointContents(vec3_t point)
 	if (ladder && point[0]>-20 && point[0]<20) result|=FTECONTENTS_LADDER;
 	return result;
 }
+int PM_LadderEntPlane(vec3_t origin, vec3_t normal) { (void)origin; (void)normal; return 0; } // Patch 1655: no brush ladder here
 int PM_ExtraBoxContents(vec3_t point)
 {
 	(void)point; extraboxcalls++;
