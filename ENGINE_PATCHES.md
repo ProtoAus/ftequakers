@@ -1,5 +1,32 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1647 - Console window: padding and a quieter look
+
+**Cause.** Lex: "give the UI of the console a little bit of padding? it's very tight, and I want it to look a bit
+cleaner like the kitty terminal". The text ran to within 8 px of the window's left edge and straight to the scrollbar,
+the title bar and the bottom; the title was drawn in the highlight colour (red), the close mark was a big X, the
+scrollbar a 16 px slab, and the completion list started inside the window's bottom edge.
+
+**Change.** console.c, three cvars, engine defaults keeping the old window (FTESurf's cfg/default.cfg opts in):
+`con_window_padding` (px) moves the text box in on the left, right (inside the scrollbar strip) and bottom, and the
+scissor in on all four sides (half the padding under the title bar); a gap of the padding and a hairline in the accent
+separate the log from the typing line; the window's minimum size grows by it. Con_DrawOneConsole shifts the log
+selection box and the input-line mouse by the same x offset as the y one it already had (Patch 213), so selection and
+caret clicks stay on the characters. `con_window_alpha` is the focused background opacity (0.625 of it unfocused; was a
+fixed 0.8/0.5). `con_window_clean 1`: the title in soft grey (^7 focused, ^9 not) at the text's own left edge, a small
+"x" that turns red on hover, a 1 px accent border round the window and under the bar, a slim scrollbar thumb centred
+in its strip (the strip still takes the clicks), and the completion popup hangs just below the window instead of over
+its padding. The log's drag-selection highlight now uses the same accent blue as the other selection paths (P1642).
+
+**Verified.** Nested headless labwc, in game: before/after screenshots at con_window_padding 12, alpha 0.92, clean 1,
+titlepad 7 -- padded text, grey title, hairline border, divider above the input, popup below the window. A virtual
+pointer drag in the log, screenshotted with the button held, highlights from the pressed character to the released one;
+a click on the input line puts the caret after the clicked character.
+
+**Boundary.** Padding applies to console windows (con_window 1), not the classic drop-down console. Line spacing is
+unchanged (the console assumes rows of one font height in ~50 places). The colour of the log's drag highlight was read
+from the code after the screenshot round.
+
 ## Patch 1644 - Console: Ctrl+Z undo, no "]" prompt
 
 **Cause.** Lex, after confirming P1641-P1642 ("it works and I like it!"): "add ctrl+z undo and remove the ] prompt
