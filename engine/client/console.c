@@ -131,6 +131,7 @@ static cvar_t		con_window_titlepad = CVARD("con_window_titlepad", "0", "Padding 
 static cvar_t		con_scrollwidth = CVARD("con_scrollwidth", "8", "Width of the console window's scrollbar, in virtual pixels.");
 /*FTESurf Patch 1647: Lex, "give the UI of the console a little bit of padding? it's very tight, and I want it
   to look a bit cleaner like the kitty terminal". Engine defaults keep the old window; FTESurf's default.cfg opts in.*/
+static cvar_t		con_completion_padding = CVARD("con_completion_padding", "0", "FTESurf Patch 1662. Room round the completion list, in virtual pixels: the gap between the typing line (or a window's bottom edge) and the list, the text's inset from the list's left and right edges, and half of it above and below the rows. The text stays lined up with the typing line; the box grows outward. 0 is the old flush list.");
 static cvar_t		con_window_padding = CVARD("con_window_padding", "0", "Space between the console window's edges and its text, in virtual pixels: left, right (inside the scrollbar), under the title bar and above the bottom edge. A gap and a hairline also separate the log from the typing line.");
 static cvar_t		con_window_alpha = CVARD("con_window_alpha", "0.8", "Opacity of the console window's background while it has focus (0.625 of it when it does not).");
 static cvar_t		con_window_clean = CVARD("con_window_clean", "0", "1: a quieter console window -- the title in soft grey instead of the highlight colour, a small close mark, a hairline border and a slim scrollbar thumb.");
@@ -300,6 +301,7 @@ be. Cleared by Con_DrawCompletionPopup itself on the first frame it declines.
 */
 static console_t	*con_popupshown;
 static float		con_popuphit[4];	//x, y, w, h
+static float		con_popuphitrowy, con_popuphitrowsh;	//FTESurf Patch 1662: the rows' top and height inside that box (virtual)
 //FTESurf Patch 846: which completions those rows were, for Con_CompletionRowAt
 static int			con_buildfirst, con_buildentries;	//Con_BuildCompletion's last window
 static int			con_popupfirst, con_popupentries;	//as recorded for this frame's popup
@@ -1471,6 +1473,7 @@ void Con_Init (void)
 	//con_window_rect is registered at the TOP of this function -- Patch 213.
 	Cvar_Register (&con_window_titlepad, "Console controls");
 	Cvar_Register (&con_window_padding, "Console controls");
+	Cvar_Register (&con_completion_padding, "Console controls");	//FTESurf Patch 1662
 	Cvar_Register (&con_window_alpha, "Console controls");
 	Cvar_Register (&con_window_clean, "Console controls");
 	Cvar_Register (&con_scrollwidth, "Console controls");
@@ -4191,6 +4194,7 @@ focused consoles, which is not a state this engine has.
 static void Con_DrawCompletionPopup(console_t *con)
 {
 	int ch, h, w, top, bot;
+	int pad, padx, pady, gap;	//FTESurf Patch 1662: con_completion_padding in physical pixels
 	int selsx, selsy, selex, seley;
 	unsigned int oldflags;
 	float back[3], accent[3];
@@ -4213,11 +4217,23 @@ static void Con_DrawCompletionPopup(console_t *con)
 	if (w < ch*4)
 		w = ch*4;
 
-	top = con_popupb;			//the bottom of the input row: the popup starts here
-	if (top + h > (int)vid.pixelheight)
-		top = con_popupib - ch - h;	//no room below: flip above the field, one row tall (Patch 1647: the field, not the window's bottom)
-	if (top < 0)
-		top = 0;
+	/*FTESurf Patch 1662: top/bot stay the ROWS; the box is padx/pady bigger round them and
+	  `gap` away from the typing line (or a clean window's edge, which already had 3).*/
+	pad  = bound(0, con_completion_padding.ival, 32);
+	padx = (int)((pad * vid.pixelwidth) / vid.width);
+	pady = (int)(((pad/2) * vid.pixelheight) / vid.height);
+	gap  = (int)((pad * vid.pixelheight) / vid.height);
+	if (padx > con_popupl)
+		padx = con_popupl;	//the box would start off the left of the screen
+	if (con_popupb != con_popupib)
+		top = con_popupb - 3 + max(3, gap);	//below a clean window (Patch 1647)
+	else
+		top = con_popupb + gap;			//the bottom of the input row: the popup starts here
+	top += pady;
+	if (top + h + pady > (int)vid.pixelheight)
+		top = con_popupib - ch - gap - pady - h;	//no room below: flip above the field, one row tall (Patch 1647: the field, not the window's bottom)
+	if (top - pady < 0)
+		top = pady;
 	bot = top + h;
 
 	/*
@@ -4259,10 +4275,10 @@ static void Con_DrawCompletionPopup(console_t *con)
 
 	sxv = (float)vid.width  / vid.pixelwidth;	//physical font space -> virtual, the
 	syv = (float)vid.height / vid.pixelheight;	//same conversion Con_DrawImageClip does
-	vx = con_popupl * sxv;
-	vy = top * syv;
-	vw = w * sxv;
-	vh = h * syv;
+	vx = (con_popupl - padx) * sxv;
+	vy = (top - pady) * syv;
+	vw = (w + 2*padx) * sxv;
+	vh = (h + 2*pady) * syv;
 
 	Con_ParseColour(&con_colour_back,   back,   0.0f, 0.05f, 0.1f);
 	Con_ParseColour(&con_colour_accent, accent, 0.55f, 0.7f, 0.95f);
@@ -4339,6 +4355,8 @@ static void Con_DrawCompletionPopup(console_t *con)
 	con_popuphitfirst = con_popupfirst;
 	con_popuphitentries = con_popupentries;
 	con_popuphitrow = ch * syv;
+	con_popuphitrowy = top * syv;
+	con_popuphitrowsh = h * syv;
 }
 
 //FTESurf Patch 226: is (x,y) over the popup the console last painted? Virtual pixels.
@@ -4358,7 +4376,9 @@ int Con_CompletionRowAt(console_t *con, float x, float y)
 	int r;
 	if (!Con_PopupCovers(con, x, y) || con_popuphitrow <= 0)
 		return -1;
-	r = (int)((y - con_popuphit[1]) / con_popuphitrow);
+	if (y < con_popuphitrowy)
+		return 0;	//FTESurf Patch 1662: the padding above the rows
+	r = (int)((y - con_popuphitrowy) / con_popuphitrow);
 	if (r < 0 || r >= con_popuphitentries)
 		return 0;
 	return con_popuphitfirst + r + 1;
@@ -4369,9 +4389,9 @@ int Con_CompletionPopupRows(console_t *con, float *x, float *y, float *rowh)
 	if (con_popupshown != con || con_popuphitrow <= 0)
 		return 0;
 	*x = con_popuphit[0] + con_popuphit[2]/2;
-	*y = con_popuphit[1];
+	*y = con_popuphitrowy;
 	*rowh = con_popuphitrow;
-	return (int)(con_popuphit[3] / con_popuphitrow + 0.5f);
+	return (int)(con_popuphitrowsh / con_popuphitrow + 0.5f);
 }
 
 void Con_DrawConsole (int lines, qboolean noback)
