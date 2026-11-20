@@ -1530,9 +1530,15 @@ const char *Cvar_ServerValue (cvar_t *var)
 		return NULL;
 	if (var->flags & (CVAR_USERINFO|CVAR_NOUNSAFEEXPAND))
 		return NULL;
-#ifdef HAVE_SERVER
-	if (sv.state >= ss_active && !cls.demoplayback)
+	//a server cvar only: a key that happens to share a client cvar's name (sensitivity,
+	//cl_maxfps) is not that cvar's value
+	if (!(var->flags & CVAR_SERVERINFO) && strncmp(var->name, "sv_", 3) && strncmp(var->name, "pm_", 3))
 		return NULL;
+	if (cls.demoplayback)
+		return NULL;	//a demo's serverinfo is not a server you can be on
+#ifdef HAVE_SERVER
+	if (sv.state != ss_dead)
+		return NULL;	//hosting (loading included): the local cvar IS the server's
 #endif
 	v = InfoBuf_ValueForKey(&cl.serverinfo, var->name);
 	return (v && *v) ? v : NULL;

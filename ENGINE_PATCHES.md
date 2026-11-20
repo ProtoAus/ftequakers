@@ -1,5 +1,89 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1642 - The console's input line edits like a text box
+
+**Cause.** Lex: "it behaves like a terminal type, however I prefer regular text typing and selection ... I think i'm
+even missing the | that you know where your typing, and it does the copy on select and weird stuff I don't like."
+The caret was the Quake charset glyph 0xe00b drawn over the character under it, flashing 4 times a second; this game's
+fonts have no such glyph, so there was no caret and the character under it blinked out. The line had no selection at
+all. A mouse selection in the log was copied on release (on Windows straight into the clipboard; Wayland/X11 into the
+primary buffer, pasted by middle-click). Ctrl+<letter>/digit typed Quake glyphs from two tables (and the plain letter
+for any letter not in them), Alt+<letter> typed red text, Ctrl+C/Ctrl+X with nothing selected copied or cut the whole
+line, Delete at the end of the line backspaced, and plain Home/End scrolled the log instead of moving the caret.
+
+**Change.** keys.c: key_selanchor (byte offset, -1 none) with key_linepos is the input line's selection. Shift +
+arrows/Home/End extend it (Ctrl for words), an arrow without Shift collapses it to that end, Ctrl+A selects the line;
+typing, Backspace, Delete and Ctrl+V replace it (the paste callback deletes it, so an empty clipboard deletes nothing);
+Ctrl+C/Ctrl+X copy/cut it, else the log selection (Ctrl+C), else nothing. Ctrl+Backspace and Ctrl+Delete delete a word;
+Delete at the end does nothing. Control codes and Ctrl+<key> insert nothing (AltGr, which Windows reports as Ctrl+right
+Alt, still types); the Alt red-text bit is gone. No middle-click paste. Key_Console clears the selection on entry for
+every key but modifiers, PgUp/PgDn, the wheel and mouse2, and gives it back just before Key_EntryLine, so only the
+editor keeps one. Plain Home/End move the caret on a line with text (Shift selects); Ctrl+Home/End, and Home/End on an
+empty line, still jump to the top/bottom of the log. The engine chat line has no selection and keeps whole-line copy/cut.
+Mouse: a mouse1 press on the input line (con->mouseoninput, set by the last draw) records CB_INPUTSEL (CB_INPUTWORD on a
+double-click; Shift keeps the old anchor); release makes it CB_INPUTUP; Con_DrawInput maps the mouse x to the nearest
+byte boundary against the previous frame's layout (con->inputorigin; prefix-parse widths, the same trick it uses for its
+cursor), sets the caret/anchor and finishes the state (also when mouse1 is no longer held). A click in the log drops the
+input selection, and an input click drops the log selection. console.c: a caret bar between characters (2 px at 16 px
+text, the glyphs flushed first so it sits on top), solid for 0.53 s after any edit or move then blinking at about 1 Hz,
+hidden when the window is not active; the input selection drawn under the text in con_colour_accent, and the log's
+selection now in the same colour (was dark navy). Log selections are no longer copied on release or double-click; they
+stay highlighted for Ctrl+C. The line scrolls like a text box: it keeps last frame's position and moves only as far as
+needed to keep the caret in view (it used to re-centre on the caret whenever it overflowed, sliding under every move);
+dragging past an edge scrolls it. New `con_edittest [clip]` presses key sequences through Key_Console and checks the line.
+
+Review (independent, read-only): a held click on an overflowing line re-centred each frame under a still mouse and ran
+the caret to one end, selecting text nobody picked -- fixed by the text-box scrolling above; the hit test parsed once per
+byte every frame (now bisects, monotonic widths); Right with a selection at the end accepted the completion hint (now it
+only collapses); con_settext, Key_ConsoleReplace/Insert, Key_ClearTyping and history load now drop the selection, and an
+anchor inside a UTF-8 sequence is discarded; any key pressed mid-drag ends the drag, a Shift release does not, and a drag
+whose release went elsewhere is cancelled rather than finished at the current mouse.
+
+**Verified.** Nested headless labwc, 1600x900, connected to a local dedicated server, windowed console (con_window 1):
+`con_edittest clip` 22/22 ok (20 without clip). A virtual pointer (artifacts/vptr, wlr-virtual-pointer) clicked the input line (caret
+after "echo"), dragged ("echo h" selected), double-clicked ("hello" selected), dragged in the log (log text highlighted,
+input selection gone); the same click/drag on the classic drop-down console (con_window 0). After the review: a
+400 ms hold mid-way along a 130-character line places the caret with no selection and the text does not move; a drag
+from mid-line past the left edge scrolls to the start, selecting back to the press point; a short line sits flush left. With a real pointer event
+first (Wayland needs an input serial), Ctrl+X put "me" on the system clipboard (wl-paste), and a later log drag left it
+"me" -- no copy on select. Screenshots show the caret bar and the blink-off frame with the character intact. Engine
+builds with no new warnings.
+
+**Boundary.** Real keyboard typing was not injected: this engine's Wayland input maps keys by evdev keycode, and wtype's
+generated keymap makes its first letter arrive as Escape -- every key was driven through Key_Console by con_edittest
+instead. A first click into a just-opened in-game console in the rig closed it on the old build too (pointer still
+locked); not this patch. Lex's own keyboard/mouse check is in lextest.md. No undo (Ctrl+Z) yet.
+
+## Patch 1641 - The console and hud_debug read a remote server's live values
+
+**Cause.** Lex: "Can you ensure hud_debug reads the server values correctly, same with the console cvars for
+sv_airaccelerate and friction and whatnot, I want the values to read correctly live as the server value." On a remote
+server, typing `sv_airaccelerate` printed the client's own copy -- a value no game was using (150 on a bhop server
+running 1000). hud_debug's `tick` row printed a compile-time 0.015, so bhop (100 Hz) read as surf, and its eye/hull row
+compared against the surf hull (62/45, eyes 64/47), so on an ahop/HL2 server every duck went amber.
+
+**Change.** cvar.c: Cvar_ServerValue(var) returns the serverinfo key of the same name while connected to a server the
+client is not hosting (NULL when disconnected, hosting -- sv.state not dead, loading included --, playing a demo,
+for userinfo or NOUNSAFEEXPAND cvars, for a cvar that is not a server one -- CVAR_SERVERINFO or an sv_/pm_ name, so a key
+that shares a client cvar's name is never shown as its value -- or when the server publishes no such key) -- the keys cl_main.c already copies into movevars, which the game's QC republishes on
+change. Cvar_Command prints `"sv_airaccelerate" is "1000" on the server`, plus `Your own copy is "150"; it only applies
+when you host a game.` when they differ; setting one at the local level (console, or a cfg/bind run while connected)
+adds a one-line note that the server runs X. The
+completion dropdown row and footer show the server's value. QC (cl_hud.qc, P1641 in the game repo): hud_debug's tick
+reads pm_ticrate (seconds and Hz), new rows accel, stop, maxspd, maxvel (pm_maxvelocity when set, else sv_maxvelocity,
+the engine's order) and mode beside aacc/fric/grav, `--` for a key the server does not publish; the eye/hull row takes
+pm_standheight/pm_duckheight/pm_viewheight/pm_duckviewheight, the state gate pm_standablenormal.
+
+**Verified.** Client connected to a separate fteqw-sv64 (so remote): on surf_ace the console printed the server's 150
+and the panel read tick 0.0150 66.67 Hz, aacc 150, accel 5, fric 4, stop 75, grav 800, maxspd 260, maxvel 3500, mode
+surf. A locked server refused `sv_airaccelerate 555` and the client correctly kept reading 150. On a bhop-mode map with
+`sv_cheats 1; sv_airaccelerate 555; sv_friction 5.5` on the server, the panel went 1000 -> 555 and 4.0 -> 5.5 and the
+console query followed within 2 s; tick read 0.0100 100.00 Hz. Setting the local copy printed the note and the query
+then showed both values. A local-only cvar (sv_mapcompletion) and a client cvar (sensitivity) printed as before.
+
+**Boundary.** Only cvars the server publishes under their own name are covered (the movement set, CVAR_SERVERINFO cvars,
+anything the QC forceinfokeys); others still print the local copy. QC cvar() reads in CSQC are unchanged.
+
 ## Patch 1639 - Tournaments on bhop maps: the default profile keeps each map kind's tick
 
 **Cause.** The live map qualification pilot (20 Nov) refused every bhop map: the lobbies run bhop at 100 Hz

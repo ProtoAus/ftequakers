@@ -1123,6 +1123,7 @@ void Key_ClearTyping (void)
 	key_lines[edit_line] = BZ_Realloc(key_lines[edit_line], 1);
 	key_lines[edit_line][0] = 0;	// clear any typing
 	key_linepos = 0;
+	key_selanchor = -1;	//FTESurf Patch 1642
 }
 
 void Con_History_Load(void)
@@ -1138,6 +1139,7 @@ void Con_History_Load(void)
 	}
 	edit_line = 0;
 	key_linepos = 0;
+	key_selanchor = -1;	//FTESurf Patch 1642
 
 	if (file)
 	{
@@ -2124,24 +2126,42 @@ static int Con_InputWidthTo(console_t *con, unsigned char *text, int b)
 	return w;
 }
 
-//the byte boundary of the line nearest pixel x, against the layout of the last draw
+//the byte boundary of the line nearest pixel x, against the layout of the last draw.
+//The width only grows with b, so this bisects: a few prefix parses, not one per byte
+//(a held button calls this every frame, and a pasted line can be kilobytes long).
 static int Con_InputHit(console_t *con, unsigned char *text, int mx)
 {
-	int len = strlen((char*)text), b, best = 0, bestd = 0x7fffffff, d;
-	if (len > 4000)
-		return key_linepos;	//not walked per frame; nobody clicks inside a line that long
-	for (b = 0; b <= len; b++)
-	{
-		if ((text[b] & 0xc0) == 0x80)
-			continue;	//inside a UTF-8 sequence: not a boundary
-		d = abs(con->inputorigin + Con_InputWidthTo(con, text, b) - mx);
-		if (d < bestd)
+	int len = strlen((char*)text), lo = 0, hi = len, mid, prev, target = mx - con->inputorigin;
+	while (lo < hi)
+	{	//the first boundary whose width reaches the target
+		mid = (lo + hi) / 2;
+		while (mid < len && (text[mid] & 0xc0) == 0x80)
+			mid++;	//inside a UTF-8 sequence: not a boundary
+		if (mid >= hi)
 		{
-			bestd = d;
-			best = b;
+			hi = mid;
+			break;
 		}
+		if (Con_InputWidthTo(con, text, mid) >= target)
+			hi = mid;
+		else
+			lo = mid + 1;
 	}
-	return best;
+	while (lo < len && (text[lo] & 0xc0) == 0x80)
+		lo++;
+	if (lo > len)
+		lo = len;
+	//...or the boundary before it, whichever is nearer
+	prev = lo;
+	while (prev > 0)
+	{
+		prev--;
+		if ((text[prev] & 0xc0) != 0x80)
+			break;
+	}
+	if (prev < lo && abs(Con_InputWidthTo(con, text, prev) - target) <= abs(Con_InputWidthTo(con, text, lo) - target))
+		return prev;
+	return lo;
 }
 
 //a solid block in pixel coordinates, inside a font string (the console's own idiom)
@@ -2300,7 +2320,7 @@ int Con_DrawInput (console_t *con, qboolean focused, int left, int right, int y,
 	  the characters' positions are known -- mapped against the LAST frame's layout, which
 	  is what was on screen when the button went down. Keys.c only records the press.*/
 	if (con->buttonsdown == CB_INPUTSEL && !keydown[K_MOUSE1])
-		con->buttonsdown = CB_INPUTUP;	//the release went somewhere else (the console closed mid-drag): end it here
+		con->buttonsdown = CB_NONE;	//the release went somewhere else (the console closed mid-drag): keep what the last frame made
 	if (con->buttonsdown == CB_INPUTSEL || con->buttonsdown == CB_INPUTUP || con->buttonsdown == CB_INPUTWORD)
 	{
 		int b = Con_InputHit(con, text, mx);
@@ -2457,14 +2477,29 @@ int Con_DrawInput (console_t *con, qboolean focused, int left, int right, int y,
 		rhs += Font_CharWidth(codeflags, codepoint);
 	}
 
-	//put the cursor in the middle
-	x = (right-left)/2 + left;
-	//move the line to the right if there's not enough text to touch the right hand side
-	if (x < right-rhs - Font_CharWidth(CON_WHITEMASK, 0xe000|11))
-		x = right - rhs - Font_CharWidth(CON_WHITEMASK, 0xe000|11);
-	//if the left hand side is on the right of the left point (overrides right alignment)
-	if (x > lhs + left)
-		x = lhs + left;
+	/*
+	FTESurf Patch 1642: scroll like a text box. The line used to put the caret in the
+	MIDDLE whenever it overflowed, so every caret move slid the whole line -- and a
+	click, which moves the caret, moved the text out from under the mouse (a held
+	button then ran the caret to one end, re-centring each frame). Now the line keeps
+	last frame's position and scrolls only as far as it must to keep the caret in
+	view; a drag past an edge scrolls it, as in any text box. `lhs` is the width up to
+	the caret and `rhs` the rest (with the completion hint); the origin is where the
+	prompt's first character goes.
+	*/
+	{
+		int room = max(2, (Font_CharHeight() + 5) / 10) + 1;	//the caret bar at the very end
+		int origin = con->inputorigin;
+		if (origin > left || lhs + rhs + room <= right - left)
+			origin = left;							//it fits, or would leave a gap on the left
+		else if (origin + lhs + rhs + room < right)
+			origin = right - room - (lhs + rhs);	//scrolled, but no gap on the right either
+		if (origin + lhs < left)
+			origin = left - lhs;					//caret off the left edge
+		else if (origin + lhs + room > right)
+			origin = right - room - lhs;			//caret off the right edge
+		x = origin + lhs;
+	}
 
 	lhs = x - lhs;
 	con->inputorigin = lhs;	//FTESurf Patch 1642: where the next click is measured from

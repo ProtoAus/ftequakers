@@ -881,6 +881,7 @@ static void Key_ConSetLine (const char *s)
 	key_lines[edit_line] = BZ_Realloc(key_lines[edit_line], l+1);
 	memcpy(key_lines[edit_line], s, l+1);
 	key_linepos = l;
+	key_selanchor = -1;	//FTESurf Patch 1642: a new line has no selection
 }
 
 /*
@@ -1504,6 +1505,7 @@ void Key_ConsoleInsert(const char *instext)
 	int i;
 	int len, olen;
 	char *old;
+	key_selanchor = -1;	//FTESurf Patch 1642: text put in from outside the editor ends any selection
 	if (!*instext)
 		return;
 	Key_ConsoleLineEdited(&key_lines[edit_line]);
@@ -1532,6 +1534,7 @@ void Key_ConsoleReplace(const char *instext)
 
 	key_linepos = 0;
 	key_lines[edit_line][key_linepos] = 0;
+	key_selanchor = -1;	//FTESurf Patch 1642
 	Key_ConsoleInsert(instext);
 }
 
@@ -1980,7 +1983,7 @@ void Key_ConsoleRelease(console_t *con, int key, unsigned int unicode)
 		}
 	}
 	if (con->buttonsdown == CB_SELECTED || con->buttonsdown == CB_TAPPED ||
-		con->buttonsdown == CB_INPUTUP || con->buttonsdown == CB_INPUTWORD)	//FTESurf Patch 1642
+		con->buttonsdown == CB_INPUTSEL || con->buttonsdown == CB_INPUTUP || con->buttonsdown == CB_INPUTWORD)	//FTESurf Patch 1642: a Shift or key release does not end a drag
 		;	//will time out in the drawing code.
 	else
 //	if (con->buttonsdown == CB_MOVE)	//window title(move)
@@ -2336,8 +2339,8 @@ static qboolean Key_LineGetSelection(unsigned char *line, int lineoffset, int *l
 	int len = strlen((char*)line);
 	if (!anchor || *anchor < 0)
 		return false;
-	if (*anchor < lineoffset || *anchor > len || *linepos > len)
-	{
+	if (*anchor < lineoffset || *anchor > len || *linepos > len || (line[*anchor] & 0xc0) == 0x80)
+	{	//past the end, or inside a UTF-8 sequence: not a selection this line can have
 		*anchor = -1;
 		return false;
 	}
@@ -2703,7 +2706,12 @@ qboolean Key_Console (console_t *con, int key, unsigned int unicode)
 	if (!(key == K_LSHIFT || key == K_RSHIFT || key == K_LCTRL || key == K_RCTRL || key == K_LALT || key == K_RALT ||
 		  key == K_PGUP || key == K_KP_PGUP || key == K_PGDN || key == K_KP_PGDN ||
 		  key == K_MWHEELUP || key == K_MWHEELDOWN || key == K_MOUSE2))
+	{
 		key_selanchor = -1;
+		//a key pressed during an input-line drag ends it: the line it was measuring may be about to change
+		if (key != K_MOUSE1 && (con->buttonsdown == CB_INPUTSEL || con->buttonsdown == CB_INPUTUP || con->buttonsdown == CB_INPUTWORD))
+			con->buttonsdown = CB_NONE;
+	}
 
 	//weirdness for the keypad.
 	if ((unicode >= '0' && unicode <= '9') || unicode == '.' || key < 0)
@@ -3355,6 +3363,7 @@ qboolean Key_Console (console_t *con, int key, unsigned int unicode)
 	//must keep typing a digit. K_GP_DPAD_RIGHT is excluded: it is the only way to move the caret
 	//with a pad, and there is no Tab to fall back on.
 	if ((key == K_RIGHTARROW || key == K_KP_RIGHTARROW) &&
+		(selanchor < 0 || selanchor == key_linepos) &&	//FTESurf Patch 1642: with a selection, Right just collapses it
 		!ctrl && !shift && !keydown[K_LALT] && !keydown[K_RALT] &&
 		!con_findmode && con->commandcompletion &&
 		con_showcompletion.ival && con_acceptcompletion.ival &&
@@ -3552,6 +3561,14 @@ static void Key_ConEditTest_f (void)
 	Key_ConEditPress(con, K_LSHIFT, 0, 1);
 	Key_ConEditPress(con, K_PGUP, 0, 0);
 	Key_ConEditSel("Shift and PgUp keep it", "abc");
+
+	Key_ConSetLine("sv_air"); key_selanchor = -1;
+	Key_ConEditPress(con, 'a', 'a', 2);
+	Key_ConEditPress(con, K_RIGHTARROW, 0, 0);
+	Key_ConEditLine("Right with a selection does not complete", "sv_air", 6);
+	Key_ConEditPress(con, 'a', 'a', 2);
+	Key_ConSetLine("say gg");	//what con_settext (and a server stuffing it) does
+	Key_ConEditSel("con_settext drops the selection", "");
 
 	if (clip)
 	{
