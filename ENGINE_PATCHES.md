@@ -1,25 +1,57 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
-## Patch 1653 - Main-menu render audit; Story and Event rows stop re-matching every lobby (QC only; no engine change)
+## Patch 1661 - QC strtolower/strtoupper no longer overrun their 8 KB result
+
+**Cause.** Found in review of P1653, which sends every map-name lookup and lobby map name through strtolower.
+unicode_strtolower/unicode_strtoupper (common.c) passed `outsize - l` to the encoder, where `l` was the length of the
+LAST character written, not the running total, so the limit never shrank and a string that maps to 8192+ bytes wrote
+past PF_strtolower's `char result[8192]` (stack). The lobby directory's map names have no length cap, and m_board.qc /
+m_mapcards.qc already lowercase directory JSON.
+
+**Change.** Both keep a running total, pass `outsize - total`, return it (no caller reads the return value), and stop
+at the first character that does not fit (the encoders write nothing and return 0 then), so the result is a prefix.
+
+**Verified.** The real functions from common.c (decoders, encoders, both helpers) in an AddressSanitizer harness:
+before, a 9000-byte input is a stack-buffer-overflow; after, it gives 8191 bytes; 8000 two-byte UTF-8 characters give
+8190; 8190 ASCII bytes then "\xc3\x89x" give the 8190 (no character after the one that did not fit); 100 and 8191
+bytes are unchanged. Review: one round on the fix; its note (a wider character skipped, narrower ones after it still
+written) became the stop.
+
+## Patch 1653 - Main-menu render audit: Story/Event rows, map-name lookups (QC only; no engine change)
 
 **Cause.** Lex: "audit all of the main menu/s to ensure they render 'quickly' ... all the menus when not loading into a
 map." Measured every out-of-game screen; Story and Event took 6.5-8.3 ms a frame where the rest took about 1. A skip
 test put ~5 ms in the ladder rows: Sty_LivePlayers (the live-player count on the header, the side panel and every
 visible row) compared every lobby's map with every level of the ladder on each call -- 12 lobbies x 120 levels, three
-builtins a pair, ~50,000 builtin calls a frame.
+builtins a pair, ~50,000 builtin calls a frame. First visits (r_spikes + profile_menuqc over the first 0.4 s at
+cl_maxfps 30) showed ui_map_index scanning all ~1650 map rows, two builtins a row, per lookup: Story's first visit
+spent 11.3 ms (profiled) there resolving its level rows, the home lobby cells 2.2 ms a poll.
 
 **Change.** m_story.qc: Sty_LiveIndex keeps, per lobby row, whether its map is one of ladder L's levels, rebuilt only
-when the lobby list (lb_received, lb_count), the ladder (sty_lrecv, sty_nlv[L]) or L changes. Sty_LivePlayers sums
-the flagged live lobbies (on one map when `map` is set), the same answer as before.
+when the lobby list (lb_received, lb_count), the ladder (sty_lrecv, sty_nlv[L]) or L changes, through a table of the
+ladder's maps; Sty_LivePlayers sums the flagged live lobbies (on one map when `map` is set). m_main.qc: ui_map_index
+reads a table (strtolower name -> first row, built backwards with HASH_REPLACE), rebuilt on the first lookup after
+ui_load_maps (the only writer of ms_name/ms_count; it clears ms_ixok) or a count change. strcasecmp (ASCII fold) equal
+implies strtolower equal, so a miss is a miss; a hit is checked with strcasecmp and a failed check falls back to the
+scan. Both answer exactly what the old loops did.
 
 **Verified.** Nested headless labwc at 1600x900, cl_maxfps 0, menu commands driving each screen (artifacts
-menu_audit.py), r_frametime/r_budget per screen, steady average ms: home 0.8-1.8, Maps 1.4, Story 1.6 (was 6.5-7.4),
-Event 1.6 (was 6.5-8.3), Settings 1.0 (sections 1.0-1.5), Tournament 0.9, Stats 1.3, Updates 0.4, Chat 1.0, Terms 0.9.
-profile_menuqc: the largest QC self cost on every screen is sui's rounded box (_sui_round_draw, ~7 drawsubpic calls a
-box), but skipping it on Story gained little real time, so it stays in QC.
+menu_audit.py), r_frametime/r_budget per screen, steady average ms on the clean build: home 0.8-1.6, Maps 1.3-1.5,
+Story 1.5-1.9 (was 6.5-7.4), Event 1.5-1.9 (was 6.5-8.3), Settings 0.9-1.2 (sections 0.9-1.6), Tournament 0.8-1.0,
+Stats 1.2-1.6, Updates 0.4, Chat 0.8-1.0, Terms 0.8-1.0 (three runs, the last with Patch 1661's binaries; spread
+about 0.3). First visit, profiled: ui_map_index
+11.3 -> 0.05 ms on Story, 2.2 -> 0.02 ms on home; the ladder index rebuild 4.1 -> 0.4 ms. Story screenshots before and
+after match (rows, thumbnails, medals). profile_menuqc: the largest QC self cost on every screen is sui's rounded box
+(_sui_round_draw, ~7 drawsubpic calls a box), but skipping it on Story gained little real time, so it stays in QC.
 
-**Boundary.** The first visit to Story, Stats, Settings or Maps has one 23-32 ms frame (second visits 3-6 ms), from
-first-use loading; not changed here.
+**Review.** Two independent rounds: no defect in the caching or the table (every writer of the lobby rows, the ladder
+and ms_name traced; strcasecmp vs strtolower folding; hash handles across menu_restart). Notes acted on: a hit failing
+the strcasecmp check no longer drops the table (a non-ASCII case pair rebuilt it on every lookup); strtolower's overrun
+became Patch 1661.
+
+**Boundary.** The first visit to Story still has one ~20 ms frame: its per-map thumbnails decode on the main thread at
+first draw (drawsubpic); Stats does the same when profile pictures arrive (MP_Upload). The first frame after a switch
+can also wait 10-18 ms in swap/present on this rig. BACKLOG.
 
 ## Patch 1647 - Console window: padding and a quieter look
 
