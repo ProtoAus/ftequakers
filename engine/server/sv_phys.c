@@ -60,9 +60,9 @@ cvar_t	sv_airaccelerate	 = CVAR( "sv_airaccelerate", "0.7");
 cvar_t	sv_wateraccelerate	 = CVAR( "sv_wateraccelerate", "10");
 static int sv_agprofile; //map-spawn authority, never derived from raw pm_physicsmode
 static int sv_profilekind; //Patch 1589: PMPROFILE_* applied at map spawn
-static cvar_t sv_movementprofile = CVARFD("sv_movementprofile", "", CVAR_NOTFROMSERVER|CVAR_MAPLATCH, "Experimental unranked movement, applied only on map spawn: default (or empty); ag-100, ag-250, ag-1000 and cs16 (GoldSrc-style, CS 1.6 with its jump stamina and bhop cap); hl2-pre and hl2-post (Source mover with HL2 settings and its jump boost before/after the limiter; +speed sprints). Every profile autohops under pm_autobunny. Ladder intent uses analog signs; no longjump equipment.");
+static cvar_t sv_movementprofile = CVARFD("sv_movementprofile", "", CVAR_NOTFROMSERVER|CVAR_MAPLATCH, "Experimental unranked movement, applied only on map spawn: default (or empty); ag-100, ag-250, ag-1000 and cs16 (GoldSrc-style, CS 1.6 with its jump stamina and bhop cap); hl2-pre and hl2-post (Source mover with HL2 settings and its jump boost before/after the limiter; +speed sprints). Every profile but cs16 autohops under pm_autobunny (Patch 1687). Ladder intent uses analog signs; no longjump equipment.");
 static cvar_t sv_goldsrcprofile = CVARFD("sv_goldsrcprofile", "ag-250", CVAR_NOTFROMSERVER|CVAR_MAPLATCH, "Patch 1659: the movement a GoldSrc (BSP 30) map runs while sv_movementprofile is default: ag-100, ag-250, ag-1000 or cs16 (anything else: ag-250). Never applied on a tournament server.");
-static cvar_t sv_goldsrcview = CVARFD("sv_goldsrcview", "auto", CVAR_NOTFROMSERVER|CVAR_MAPLATCH, "Patch 1665: the eye height on a GoldSrc (BSP 30) map. auto: Counter-Strike's (17 above the body's centre) on a CS 1.6 map or under cs16, Half-Life's (28) otherwise; hl: always 28; cs: always 17. The camera and what aims from the eye (+use) move; movement and the water test keep the profile's eye.");
+static cvar_t sv_goldsrcview = CVARFD("sv_goldsrcview", "auto", CVAR_NOTFROMSERVER|CVAR_MAPLATCH, "Patch 1665/1687: the eye height on a GoldSrc (BSP 30) map. auto: the mode's own, Counter-Strike's (17 above the body's centre) under cs16 and Half-Life's (28) under ag-*; hl: always 28; cs: always 17. The camera and what aims from the eye (+use) move; movement and the water test keep the profile's eye.");
 
 static cvar_t pm_sourceversion = CVARFD("pm_sourceversion", STRINGIFY(PMSRC_VERSION), CVAR_SERVERINFO|CVAR_NOSET, "Source mover version used by this server (read-only). 3 adds swimming; 4 linked portals; 5 keeps a linked portal landing exact; 6 keeps moving as the hull clears a linked door; 7 traces a static prop's collision hull as its convex pieces; 8 recovers a surfer pinned to the face it is sliding along; 9 traces a prop hull whose indices overflowed as it really is; 10 honours Momentum's limitmovement and slide triggers; 11 adds Source's ceiling eye clearance and water-lip assist; 12 meets a prop hull's pieces where they really are, so a crease between two pieces no longer snags a surfer; 13 collides the displacements Patch 256 re-wound on their visible side, not four units in front of it. Old clients need updating to predict them correctly.");
 cvar_t	sv_friction			 = CVAR( "sv_friction", "4");
@@ -4310,83 +4310,6 @@ static qboolean SV_MapIsGoldSrc(const char *name)
 	VFS_CLOSE(f);
 	return LittleLong(ver) == 30;	//bspfile.h BSPVERSIONHL
 }
-/*
-Patch 1665: was this BSP-30 map made for Counter-Strike? CS's eye is 17 above the body's centre and Half-Life's 28, and a
-CS map's ledges, windows and crates are built around the lower one (Lex on bkz_goldbhop_gs: "my view height was to high").
-Any one signal: its catalogue row needs Counter-Strike or Condition Zero files; a CS-only entity; its worldspawn lists a
-Counter-Strike wad (cstrike.wad, cs_*, de_*). On the 923 published maps that is 816 CS and 107 Half-Life (ag_bhop_master...).
-Only the eye follows it; the movement stays sv_goldsrcprofile's.
-*/
-static qboolean SV_GoldSrcWadIsCS(const char *wads)
-{
-	char one[MAX_OSPATH];
-	const char *base, *s;
-	while (wads && *wads)
-	{
-		wads = COM_ParseStringSetSep(wads, ';', one, sizeof(one));
-		for (base = s = one; *s; s++)
-			if (*s == '\\' || *s == '/') base = s + 1;
-		if (!Q_strcasecmp(base, "cstrike.wad") ||
-			((!Q_strncasecmp(base, "cs_", 3) || !Q_strncasecmp(base, "de_", 3)) && strlen(base) > 7 &&
-			 !Q_strcasecmp(base + strlen(base) - 4, ".wad")))
-			return true;
-	}
-	return false;
-}
-static qboolean SV_GoldSrcMapIsCS(const char *name)
-{
-	static const char *csonly[] = {"armoury_entity", "func_buyzone", "info_map_parameters", "hostage_entity",
-		"func_bomb_target", "info_bomb_target", "func_hostage_rescue", "info_hostage_rescue", "func_vip_safetyzone",
-		"info_vip_start", "func_escapezone", "weapon_usp", "weapon_glock18", "weapon_deagle",	//not weapon_knife: Opposing Force has one
-		"weapon_ak47", "weapon_m4a1", "weapon_awp", "weapon_scout", NULL};
-	extern char sv_mappreferhint[];
-	char key[256], value[2048];
-	int header[1 + 2 * 15], i, ents = 0;
-	qboolean cs = false, inent = false;
-	goldsrcrow_t row;
-	vfsfile_t *f;
-	char *lump;
-	const char *data;
-	qofs_t len;
-
-	if (FS_GoldSrc_Row(name, &row) && (row.needs & (2|4)))
-		return true;
-	FS_SetPreferHint(sv_mappreferhint);
-	f = FS_OpenVFS(va("maps/%s.bsp", name), "rb", FS_GAME);
-	FS_ClearPreferHint();
-	if (!f)
-		return false;
-	len = VFS_GETLEN(f);
-	if (VFS_READ(f, header, sizeof(header)) != sizeof(header) || LittleLong(header[0]) != 30 ||
-		LittleLong(header[1]) < (int)sizeof(header) || LittleLong(header[2]) <= 0 || LittleLong(header[2]) > 8*1024*1024 ||
-		(qofs_t)LittleLong(header[1]) + LittleLong(header[2]) > len || !VFS_SEEK(f, LittleLong(header[1])))
-	{
-		VFS_CLOSE(f);
-		return false;
-	}
-	len = LittleLong(header[2]);
-	lump = BZ_Malloc(len + 2);	//two NULs: COM_ParseType steps past the NUL ending an unterminated quote
-	if (VFS_READ(f, lump, len) != (int)len)
-		len = 0;
-	VFS_CLOSE(f);
-	lump[len] = lump[len+1] = 0;
-	for (data = lump; !cs && (data = COM_ParseOut(data, key, sizeof(key))); )
-	{
-		if (!strcmp(key, "{")) { inent = true; ents++; continue; }
-		if (!strcmp(key, "}")) { inent = false; continue; }
-		if (!inent || !(data = COM_ParseOut(data, value, sizeof(value))))
-			break;
-		if (!strcmp(key, "classname"))
-		{
-			for (i = 0; csonly[i]; i++)
-				if (!Q_strcasecmp(value, csonly[i])) cs = true;
-		}
-		else if (ents == 1 && !Q_strcasecmp(key, "wad"))
-			cs = SV_GoldSrcWadIsCS(value);
-	}
-	BZ_Free(lump);
-	return cs;
-}
 static void SV_ApplyMovementProfile(const char *mapname)
 {
 	const pmprofile_t *p;
@@ -4441,17 +4364,12 @@ static void SV_ApplyMovementProfile(const char *mapname)
 	}
 	else
 	{
-		qboolean cs = p->kind == PMPROFILE_CS16, cseye = cs;	//Patch 1665: a GoldSrc map's eye follows the map (sv_goldsrcview)
-		if (SV_MapIsGoldSrc(mapname))
-		{
-			if (!strcmp(sv_goldsrcview.string, "cs") || !strcmp(sv_goldsrcview.string, "hl"))
-				cseye = !strcmp(sv_goldsrcview.string, "cs");
-			else if (!cs && SV_GoldSrcMapIsCS(mapname))
-			{
-				cseye = true;
-				Con_Printf("%s is a Counter-Strike map: eye 17 above the body's centre (sv_goldsrcview hl for 28)\n", mapname);
-			}
-		}
+		//Patch 1687: the eye follows the mode (CS 1.6 17, Half-Life/AG 28), not the map as P1665 had it
+		qboolean cs = p->kind == PMPROFILE_CS16, cseye = cs;
+		if (SV_MapIsGoldSrc(mapname) && (!strcmp(sv_goldsrcview.string, "cs") || !strcmp(sv_goldsrcview.string, "hl")))
+			cseye = !strcmp(sv_goldsrcview.string, "cs");
+		if (cs)
+			SV_AGOverride("pm_autobunny", "0");	//Patch 1687: CS 1.6 has no autohop (Lex)
 		SV_AGOverride("pm_physicsmode", "2"); SV_AGOverride("sv_gravity", "800");
 		SV_AGOverride("sv_stopspeed", cs ? "75" : "100"); SV_AGOverride("sv_accelerate", cs ? "5" : "10");
 		SV_AGOverride("pm_edgefriction", "2"); SV_AGOverride("sv_maxspeed", cs ? "250" : "320");

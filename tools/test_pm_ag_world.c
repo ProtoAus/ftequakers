@@ -329,4 +329,27 @@ static void ServerEye(void)
 	Reset(); movevars.viewheight=64; movevars.profilekind=PMPROFILE_CS16; PMAg_PlayerMove(1); NEAR(pmove.viewheight,17,0.0001f);
 	Reset(); movevars.viewheight=28; movevars.profilekind=PMPROFILE_CS16; PMAg_PlayerMove(1); NEAR(pmove.viewheight,28,0.0001f);
 }
-int main(void) {Dry();Clock();CollisionAndNoEquipment();CS16();Autohop();Duck();ServerEye();WaterLadder();ReviewedControls();puts("PASS AG world solver fixtures (not BSP/socket/oracle acceptance)");return 0;}
+/* Patch 1687: noclip (PM_SPECTATOR) flies like Source's. No input holds still (the swim wish sank 60 u/s), the speed is
+   pm_noclipspeed x sv_maxspeed (the swim wish capped it at sv_maxspeed: 250 under cs16), +speed doubles it, and a held
+   jump does not climb while +moveup does. */
+static void Noclip(void)
+{
+	int i;
+	Reset(); pmove.pm_type=PM_SPECTATOR; pmove.origin[2]=500; movevars.noclipspeed=4;
+	for(i=0;i<100;i++) PMAg_PlayerMove(1);
+	NEAR(pmove.origin[2],500,0.0001f); NEAR(pmove.origin[0],0,0.0001f);
+	Reset(); pmove.pm_type=PM_SPECTATOR; pmove.origin[2]=500; movevars.noclipspeed=4; movevars.maxspeed=250;
+	movevars.profilekind=PMPROFILE_CS16; pmove.cmd.forwardmove=400; pmove.cmd.buttons=BUTTON_DUCK;
+	for(i=0;i<100;i++) PMAg_PlayerMove(1);
+	NEAR(pmove.origin[0],1000,0.01f); NEAR(pmove.origin[2],500,0.0001f);
+	Reset(); pmove.pm_type=PM_SPECTATOR; pmove.origin[2]=500; movevars.noclipspeed=4; pmove.cmd.forwardmove=400;
+	pmove.cmd.buttons=BUTTON_SPEED; for(i=0;i<50;i++) PMAg_PlayerMove(1);
+	NEAR(pmove.origin[0],1280,0.01f); NEAR(pmove.velocity[0],2560,0.01f);	/* not the 2000 maxvelocity clamp */
+	Reset(); pmove.pm_type=PM_SPECTATOR; pmove.origin[2]=500; movevars.noclipspeed=4; pmove.cmd.upmove=200;
+	pmove.cmd.buttons=BUTTON_JUMP; for(i=0;i<50;i++) PMAg_PlayerMove(1);
+	NEAR(pmove.origin[2],500,0.0001f);
+	pmove.cmd.buttons=0; for(i=0;i<50;i++) PMAg_PlayerMove(1);
+	NEAR(pmove.origin[2],1140,0.01f);
+	printf("PASS noclip: still holds z, cs16 1000 u/s (ducked too), +speed 2560, held jump stays, +moveup climbs\n");
+}
+int main(void) {Dry();Clock();CollisionAndNoEquipment();CS16();Autohop();Duck();ServerEye();Noclip();WaterLadder();ReviewedControls();puts("PASS AG world solver fixtures (not BSP/socket/oracle acceptance)");return 0;}

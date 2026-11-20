@@ -14,8 +14,8 @@ static void PMAg_Hull(void)
 }
 
 // CS 1.6 eyes sit 17 above the centre (VEC_VIEW), HL/AG's 28; both duck to 12.
-// Patch 1665: the server publishes the map's eye as pm_viewheight (17 on a Counter-Strike map under the AG profiles,
-// sv_phys.c); anything outside 12..28 (a bare harness's 0, Source's 64) is not an AG eye and the profile's own applies.
+// Patch 1665/1687: the server publishes the eye as pm_viewheight (the mode's, or sv_goldsrcview's, sv_phys.c); anything
+// outside 12..28 (a bare harness's 0, Source's 64) is not an AG eye and the profile's own applies.
 static float PMAg_OwnStandView(void) { return movevars.profilekind == PMPROFILE_CS16 ? 17 : 28; }
 static float PMAg_StandView(void)
 {
@@ -382,9 +382,21 @@ static void PMAg_Tick(void)
 	VectorMA(pmove.basevelocity, 50 * pmove.waterlevel, current, pmove.basevelocity);
 	pmove.waterjumptime = pmove.waterjumpremaining;
 	if (pmove.pm_type == PM_SPECTATOR || pmove.pm_type == PM_OLD_SPECTATOR)
-	{
-		wishspeed = PMAg_Wish(direction, true, forwardmove, sidemove, upmove) / 0.8f;
-		VectorScale(direction, wishspeed, pmove.velocity); VectorMA(pmove.origin, PMAg_Duration(), pmove.velocity, pmove.origin);
+	{	// Patch 1687: Source's noclip (PMSrc_NoClipMove), not the swim wish's 60 u/s sink and sv_maxspeed cap (250 under cs16)
+		vec3_t forward, right, up;
+		AngleVectors(pmove.angles, forward, right, up);
+		for (axis = 0; axis < 3; axis++)
+			direction[axis] = forward[axis] * command.forwardmove + right[axis] * command.sidemove;
+		if (!((command.buttons & BUTTON_JUMP) && command.upmove > 0))	// P154: a held jump does not climb
+			direction[2] += command.upmove;
+		wishspeed = (movevars.maxspeed > 0 ? movevars.maxspeed : 250) * (movevars.noclipspeed > 0 ? movevars.noclipspeed : 4);
+		if (command.buttons & BUTTON_SPEED)
+			wishspeed *= 2;
+		if (VectorNormalize(direction) > 0)
+			VectorScale(direction, wishspeed, pmove.velocity);
+		else
+			VectorClear(pmove.velocity);
+		VectorMA(pmove.origin, PMAg_Duration(), pmove.velocity, pmove.origin);
 	}
 	else if (pmove.pm_type != PM_NONE && pmove.pm_type != PM_FREEZE && !PMAg_Ladder())
 	{
@@ -421,7 +433,8 @@ static void PMAg_Tick(void)
 	for (axis = 0; axis < 3; axis++)
 	{
 		if (!isfinite(pmove.velocity[axis])) pmove.velocity[axis] = 0;
-		if (movevars.maxvelocity > 0) pmove.velocity[axis] = bound(-movevars.maxvelocity, pmove.velocity[axis], movevars.maxvelocity);
+		if (movevars.maxvelocity > 0 && pmove.pm_type != PM_SPECTATOR && pmove.pm_type != PM_OLD_SPECTATOR)	// noclip: as Source's
+			pmove.velocity[axis] = bound(-movevars.maxvelocity, pmove.velocity[axis], movevars.maxvelocity);
 	}
 	pmove.waterjumptime = pmove.waterjumpremaining;
 	pmove.oldbuttons = command.buttons;
