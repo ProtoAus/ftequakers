@@ -2418,7 +2418,7 @@ void CL_RequestNextDownload (void)
 	if (cl.sendprespawn || cls.state == ca_active)
 	{
 		if (cl.downloadlist && aside)
-			return;	//P1670: anything queued (another menu map: a local game queues no signon file) waits for it
+			return;	//P1670: anything queued (only another menu map in a local game) holds this signon until it ends
 		if (cl.downloadlist)
 		{
 			downloadlist_t *dl;

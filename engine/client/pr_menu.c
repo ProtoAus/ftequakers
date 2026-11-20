@@ -3924,8 +3924,9 @@ static void MP_Profile_f(void)
 			Con_Printf("Enabled menuqc Profiling.\n");
 }
 
-//FTESurf Patch 1670: read-only; tells the menu a Download may start during a local game (older engines refuse it there)
+#ifdef WEBCLIENT	//FTESurf Patch 1670: read-only; tells the menu a Download may start during a local game (cl_parse.c)
 static cvar_t cl_download_localgame = CVARFD("cl_download_localgame", "1", CVAR_NOSET|CVAR_NOSAVE, "Read-only: the menu's map downloads start during a local game too (from the web mirror).");
+#endif
 void MP_RegisterCvarsAndCmds(void)
 {
 	Cmd_AddCommand("coredump_menuqc", MP_CoreDump_f);
@@ -3943,7 +3944,9 @@ void MP_RegisterCvarsAndCmds(void)
 	Cvar_Register(&forceqmenu, MENUPROGSGROUP);
 	Cvar_Register(&pr_menu_coreonerror, MENUPROGSGROUP);
 	Cvar_Register(&pr_menu_memsize, MENUPROGSGROUP);
+#ifdef WEBCLIENT
 	Cvar_Register(&cl_download_localgame, MENUPROGSGROUP);
+#endif
 }
 
 qboolean MP_UsingGamecodeLoadingScreen(void)
