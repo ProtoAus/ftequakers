@@ -2091,7 +2091,8 @@ static qboolean QKU_FSFlush(const char *sys)
 //a newer glibc than the engine). --ui-preview prints a sample screen and exits 0 before any lock, network or
 //install access in every launcher since 8de1339; a launcher that drops it stops being installable here.
 //1 runs, 0 does not (its hash is then skipped until the feed names another), 2 timed out, -1 could not test
-//(retry later). Main thread: a hung launcher costs one ~5-6 s pause, a second one marks it (QKU_LauncherFinish).
+//(retry later). Main thread: a hung launcher costs one ~5-6 s pause and a second marks it (QKU_LauncherFinish),
+//unless those bytes already started here (.ran): then each later start may pause again until the feed changes.
 static int QKU_LauncherRuns(const char *sys)
 {
 #ifdef _WIN32
