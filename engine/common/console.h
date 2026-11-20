@@ -136,6 +136,9 @@ enum
 	CB_SELECTED		= 7,	//selection ended (deferred until drawing to ensure selections happen properly)
 	CB_TAPPED		= 8,	//quick-tap ended (deferred until drawing to ensure selections happen properly)
 	CB_SCROLLBAR	= 9,	//nettest: dragging the window scrollbar thumb (absolute positioning)
+	CB_INPUTSEL		= 10,	//FTESurf Patch 1642: mouse1 held on the input line: the caret follows the mouse, selecting from inputanchor
+	CB_INPUTUP		= 11,	//FTESurf Patch 1642: ...released (finished at the next draw, so a quick click still lands)
+	CB_INPUTWORD	= 12,	//FTESurf Patch 1642: double-click on the input line: select the word (finished at the next draw)
 
 	//the flags part
 	CB_STALE		= (1u<<28),	//WAS held last frame - to make sure we still do stuff when released on the same frame.
@@ -216,6 +219,9 @@ typedef struct console_s
 	unsigned int buttonsdown;
 	float mousecursor[2];	//x,y
 	float mousedowntime;	//time mouse1 last went down, to detect double-clicks
+	qboolean mouseoninput;	//FTESurf Patch 1642: the last draw put the input line under the mouse
+	int inputorigin;		//FTESurf Patch 1642: ...and drew its first character at this pixel x
+	int inputanchor;		//FTESurf Patch 1642: where a CB_INPUTSEL drag selects from; -1 = the press point
 
 	struct console_s *next;
 } console_t;
@@ -234,6 +240,8 @@ extern	console_t	*con_chat;
 extern	unsigned char	*key_lines[CON_EDIT_LINES_MASK+1];
 extern	int		edit_line;
 extern	int		key_linepos;
+extern	int		key_selanchor;	//FTESurf Patch 1642: the input line's selection runs from here to key_linepos; -1 = none
+extern	double	key_caretmoved;	//FTESurf Patch 1642: realtime of the last edit or caret move
 extern	int		history_line;
 
 //extern int con_totallines;

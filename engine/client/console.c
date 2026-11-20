@@ -2096,7 +2096,63 @@ y is the bottom of the input
 return value is the top of the region
 ================
 */
-int Con_DrawInput (console_t *con, qboolean focused, int left, int right, int y, int top, qboolean selactive, int selsx, int selex, int selsy, int seley)
+/*
+FTESurf Patch 1642: where the input line's characters are, for the caret bar, the
+selection highlight and the mouse.
+
+The width from the prompt's first character to byte `b` of the line, measured the
+way Con_DrawInput measures the caret: the prompt and text[0..b] parsed with the
+draw's own flags, then summed. A prefix parse rather than one walk of the drawn
+buffer, because markup ("^[", colour codes) means drawn characters and bytes are
+not one to one -- this is the same trick the draw uses to find its cursor.
+*/
+static int Con_InputWidthTo(console_t *con, unsigned char *text, int b)
+{
+	conchar_t buf[2048], *start, *end, *c;
+	unsigned int codeflags, codepoint;
+	unsigned char saved = text[b];
+	int w = 0;
+	start = COM_ParseFunString(CON_WHITEMASK, con->prompt, buf, sizeof(buf) - sizeof(buf[0]), PFS_FORCEUTF8);
+	text[b] = 0;
+	end = COM_ParseFunString(CON_WHITEMASK, text, start, (countof(buf) - (start-buf) - 1) * sizeof(buf[0]), PFS_KEEPMARKUP | PFS_FORCEUTF8);
+	text[b] = saved;
+	for (c = buf; c < end; )
+	{
+		c = Font_Decode(c, &codeflags, &codepoint);
+		w += Font_CharWidth(codeflags, codepoint);
+	}
+	return w;
+}
+
+//the byte boundary of the line nearest pixel x, against the layout of the last draw
+static int Con_InputHit(console_t *con, unsigned char *text, int mx)
+{
+	int len = strlen((char*)text), b, best = 0, bestd = 0x7fffffff, d;
+	if (len > 4000)
+		return key_linepos;	//not walked per frame; nobody clicks inside a line that long
+	for (b = 0; b <= len; b++)
+	{
+		if ((text[b] & 0xc0) == 0x80)
+			continue;	//inside a UTF-8 sequence: not a boundary
+		d = abs(con->inputorigin + Con_InputWidthTo(con, text, b) - mx);
+		if (d < bestd)
+		{
+			bestd = d;
+			best = b;
+		}
+	}
+	return best;
+}
+
+//a solid block in pixel coordinates, inside a font string (the console's own idiom)
+static void Con_InputBlock(int px, int py, int pw, int ph)
+{
+	R2D_FillBlock((px*(float)vid.width)/(float)vid.rotpixelwidth, (py*vid.height)/(float)vid.rotpixelheight,
+				  (pw*vid.width)/(float)vid.rotpixelwidth, (ph*vid.height)/(float)vid.rotpixelheight);
+	R2D_Flush();
+}
+
+int Con_DrawInput (console_t *con, qboolean focused, int left, int right, int y, int top, qboolean selactive, int selsx, int selex, int selsy, int seley, int mx, int my)
 {
 	int		i;
 	int		drewdown = 0;	//FTESurf Patch 215: rows the drop-DOWN already drew below the input line
@@ -2116,6 +2172,9 @@ int Con_DrawInput (console_t *con, qboolean focused, int left, int right, int y,
 	qboolean hidecomplete;
 
 	int x;
+	int selb = -1;	//FTESurf Patch 1642: the selection's far end (the caret is the near one), or -1
+
+	con->mouseoninput = false;	//FTESurf Patch 1642: until a draw puts the input line under the mouse
 
 	if (focused)
 	{
@@ -2237,7 +2296,43 @@ int Con_DrawInput (console_t *con, qboolean focused, int left, int right, int y,
 	if (focused)
 		vid.ime_position[1] = ((float)y/vid.pixelheight)*vid.height;
 
+	/*FTESurf Patch 1642: the mouse on the input line, finished here because this is where
+	  the characters' positions are known -- mapped against the LAST frame's layout, which
+	  is what was on screen when the button went down. Keys.c only records the press.*/
+	if (con->buttonsdown == CB_INPUTSEL && !keydown[K_MOUSE1])
+		con->buttonsdown = CB_INPUTUP;	//the release went somewhere else (the console closed mid-drag): end it here
+	if (con->buttonsdown == CB_INPUTSEL || con->buttonsdown == CB_INPUTUP || con->buttonsdown == CB_INPUTWORD)
+	{
+		int b = Con_InputHit(con, text, mx);
+		if (con->buttonsdown == CB_INPUTWORD)
+		{	//the run of non-space characters around the click (a ';' separates commands too)
+			int ws = b, we = b, len = strlen((char*)text);
+			while (ws > 0 && text[ws-1] != ' ' && text[ws-1] != ';')
+				ws--;
+			while (we < len && text[we] != ' ' && text[we] != ';')
+				we++;
+			key_selanchor = ws;
+			key_linepos = we;
+			con->buttonsdown = CB_NONE;
+		}
+		else
+		{
+			if (con->inputanchor < 0)
+				con->inputanchor = b;	//the press point, unless Shift+click kept the old anchor
+			key_selanchor = con->inputanchor;
+			key_linepos = b;
+			if (con->buttonsdown == CB_INPUTUP)
+				con->buttonsdown = CB_NONE;
+		}
+		if (key_selanchor == key_linepos && con->buttonsdown == CB_NONE)
+			key_selanchor = -1;
+		key_caretmoved = realtime;
+	}
+	con->mouseoninput = (my >= y && my < y + Font_CharHeight() && mx >= left && mx < right);
+
 	cursorpos = key_linepos;
+	if (key_selanchor >= 0 && key_selanchor <= (int)strlen((char*)text) && key_selanchor != cursorpos)
+		selb = key_selanchor;
 
 	//copy it to an alternate buffer and fill in text colouration escape codes.
 	//if it's recognised as a command, colour it yellow.
@@ -2341,10 +2436,14 @@ int Con_DrawInput (console_t *con, qboolean focused, int left, int right, int y,
 		}
 	}
 
+	/*FTESurf Patch 1642: a text box's caret -- solid while you type, then blinking about
+	  once a second. The old one flashed four times a second and was a glyph (0xe00b)
+	  drawn OVER the character under it; this game's fonts have no such glyph, so there
+	  was no caret at all, and the character under it vanished in time with the blink.*/
 	if (!vid.activeapp)
 		cursorframe = 0;
 	else
-		cursorframe = ((int)(realtime*con_cursorspeed)&1);
+		cursorframe = !(((int)((realtime - key_caretmoved) / 0.53)) & 1);
 
 	//FIXME: support tab somehow
 	for (lhs = 0, cchar = maskedtext; cchar < cursor; )
@@ -2368,6 +2467,29 @@ int Con_DrawInput (console_t *con, qboolean focused, int left, int right, int y,
 		x = lhs + left;
 
 	lhs = x - lhs;
+	con->inputorigin = lhs;	//FTESurf Patch 1642: where the next click is measured from
+
+	if (selb >= 0)
+	{	//FTESurf Patch 1642: the selection, behind the text, in the accent colour
+		vec3_t accent;
+		int sx0 = x, sx1 = lhs + Con_InputWidthTo(con, text, selb);
+		if (sx1 < sx0)
+		{
+			int t = sx0;
+			sx0 = sx1;
+			sx1 = t;
+		}
+		sx0 = max(sx0, left);
+		sx1 = min(sx1, right);
+		if (sx1 > sx0)
+		{
+			Con_ParseColour(&con_colour_accent, accent, 0.55f, 0.7f, 0.95f);
+			R2D_ImageColours(SRGBA(accent[0]*0.6f, accent[1]*0.6f, accent[2]*0.6f, 0.55f));
+			Con_InputBlock(sx0, y, sx1 - sx0, Font_CharHeight());
+			R2D_ImageColours(1, 1, 1, 1);
+		}
+	}
+
 	for (cchar = maskedtext; cchar < cursor; )
 	{
 		cchar = Font_Decode(cchar, &codeflags, &codepoint);
@@ -2375,26 +2497,23 @@ int Con_DrawInput (console_t *con, qboolean focused, int left, int right, int y,
 	}
 	rhs = x;
 	cchar = Font_Decode(cursor, &codeflags, &codepoint);
-	if (cursorframe)
-	{
-//		extern cvar_t com_parseutf8;
-//		if (com_parseutf8.ival)
-//			Font_DrawChar(rhs, y, (*cursor&~(CON_BGMASK|CON_FGMASK)) | (COLOR_BLUE<<CON_BGSHIFT) | CON_NONCLEARBG | CON_WHITEMASK);
-//		else
-			Font_DrawChar(rhs, y, CON_WHITEMASK, 0xe000|11);
-	}
-	else if (codepoint)
-	{
-		Font_DrawChar(rhs, y, codeflags, codepoint);
-	}
 	if (codepoint)
 	{
-		rhs += Font_CharWidth(codeflags, codepoint);
+		rhs = Font_DrawChar(rhs, y, codeflags, codepoint);
 		while (*cchar)
 		{
 			cchar = Font_Decode(cchar, &codeflags, &codepoint);
 			rhs = Font_DrawChar(rhs, y, codeflags, codepoint);
 		}
+	}
+	if (cursorframe)
+	{	//FTESurf Patch 1642: the caret bar BETWEEN characters, over the glyphs (flush them first)
+		int ch = Font_CharHeight();
+		int cw = max(2, (ch + 5) / 10);
+		Font_EndString(font_console);
+		R2D_ImageColours(0.92f, 0.94f, 1.0f, 0.95f);
+		Con_InputBlock(x - cw/2, y + ch/10, cw, ch - 2*(ch/10));
+		R2D_ImageColours(1, 1, 1, 1);
 	}
 
 	/*if its getting completed to something, show some help about the command that is going to be used*/
@@ -3571,7 +3690,11 @@ static int Con_DrawConsoleLines(console_t *con, conline_t *l, float displayscrol
 						if (selactive != 2)
 						{
 							if (selactive == 1)
-								R2D_ImageColours(SRGBA(0.1,0.1,0.3, alphaval));	//selected
+							{	//FTESurf Patch 1642: selected, in the same accent blue as the input line's selection
+								vec3_t accent;
+								Con_ParseColour(&con_colour_accent, accent, 0.55f, 0.7f, 0.95f);
+								R2D_ImageColours(SRGBA(accent[0]*0.6f, accent[1]*0.6f, accent[2]*0.6f, 0.55f*alphaval));
+							}
 							else
 								R2D_ImageColours(SRGBA(0.3,0.3,0.3, alphaval));	//mouseover.
 
@@ -4635,7 +4758,11 @@ void Con_DrawConsole (int lines, qboolean noback)
 
 		y -= Font_CharHeight();
 		haveprogress = Con_DrawProgress(x, ex - x, y) != y;
-		y = Con_DrawInput (con_current, Key_Dest_Has(kdm_console), x, ex - x, y, top, selactive, selsx, selex, selsy, seley);	//FTESurf Patch 215: `top` bounds the dropdown
+		{	//FTESurf Patch 1642: the mouse in the same pixels as the input line
+			int mx, my;
+			Font_BeginString(font_console, mousecursor_x, mousecursor_y, &mx, &my);
+			y = Con_DrawInput (con_current, Key_Dest_Has(kdm_console), x, ex - x, y, top, selactive, selsx, selex, selsy, seley, mx, my);	//FTESurf Patch 215: `top` bounds the dropdown
+		}
 
 		l = con_current->display;
 
@@ -4703,12 +4830,7 @@ void Con_DrawConsole (int lines, qboolean noback)
 				}
 				else
 				{
-					buffer = Con_CopyConsole(con, true, false, true);	//don't keep markup if we're copying to the clipboard
-					if (buffer)
-					{
-						Sys_SaveClipboard(CBT_SELECTION,  buffer);
-						Z_Free(buffer);
-					}
+					//FTESurf Patch 1642: the selection stays highlighted for Ctrl+C; nothing is copied on release
 				}
 			}
 		}
@@ -4775,7 +4897,16 @@ void Con_DrawOneConsole(console_t *con, qboolean focused, struct font_s *font, f
 	}
 
 	R2D_ImageColours(1, 1, 1, 1);
-	sy = Con_DrawInput (con, focused, x, sx, sy, y, selactive, selsx, selex, selsy, seley);	//FTESurf Patch 215: `y` is this window's top, and bounds the dropdown
+	{	/*FTESurf Patch 1642: the mouse in the input line's pixels, by the transform the
+		  selection box above uses (mousecursor is measured from wnd_y for a window).*/
+		int mx = con->mousecursor[0], my = con->mousecursor[1];
+		if (con->flags & CONF_ISWINDOW)
+			my -= (int)(fy - con->wnd_y);
+		Font_BeginString(font, mx, my, &mx, &my);
+		mx += x;
+		my += y;
+		sy = Con_DrawInput (con, focused, x, sx, sy, y, selactive, selsx, selex, selsy, seley, mx, my);	//FTESurf Patch 215: `y` is this window's top, and bounds the dropdown
+	}
 
 	sx -= con->displayoffset;
 	selsx -= con->displayoffset;
@@ -4830,12 +4961,7 @@ void Con_DrawOneConsole(console_t *con, qboolean focused, struct font_s *font, f
 			}
 			else
 			{
-				buffer = Con_CopyConsole(con, true, false, true);	//don't keep markup if we're copying to the clipboard
-				if (buffer)
-				{
-					Sys_SaveClipboard(CBT_SELECTION,  buffer);
-					Z_Free(buffer);
-				}
+				//FTESurf Patch 1642: the selection stays highlighted for Ctrl+C; nothing is copied on release
 			}
 		}
 	}

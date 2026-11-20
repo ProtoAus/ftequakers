@@ -1435,6 +1435,12 @@ qboolean Key_GetConsoleSelectionBox(console_t *con, int *sx, int *sy, int *ex, i
 		*sx = *sy = *ex = *ey = 0;
 		return true;
 	}
+	else if (con->buttonsdown == CB_INPUTSEL || con->buttonsdown == CB_INPUTUP || con->buttonsdown == CB_INPUTWORD)
+	{	//FTESurf Patch 1642: the input line's own drag (console.c finishes it); no log selection
+		*sx = *ex = con->mousecursor[0];
+		*sy = *ey = con->mousecursor[1];
+		return false;
+	}
 	else if (con->buttonsdown == CB_SELECT || con->buttonsdown == CB_SELECTED || con->buttonsdown == CB_TAPPED)
 	{
 		//right-mouse
@@ -1893,6 +1899,11 @@ void Key_ConsoleRelease(console_t *con, int key, unsigned int unicode)
 	if (key < 0)
 		key = 0;
 
+	if (key == K_MOUSE1 && con->buttonsdown == CB_INPUTSEL)
+	{	//FTESurf Patch 1642: finished by the next draw, so a click shorter than a frame still lands
+		con->buttonsdown = CB_INPUTUP;
+		return;
+	}
 	if ((key == K_TOUCHTAP || key == K_MOUSE1) && con->buttonsdown == CB_SELECT)
 	{
 		if (fabs(con->mousedown[0] - con->mousecursor[0]) < 5 && fabs(con->mousedown[1] - con->mousecursor[1]) < 5 && realtime < con->mousedowntime + 0.4)
@@ -1968,7 +1979,8 @@ void Key_ConsoleRelease(console_t *con, int key, unsigned int unicode)
 			return;
 		}
 	}
-	if (con->buttonsdown == CB_SELECTED || con->buttonsdown == CB_TAPPED)
+	if (con->buttonsdown == CB_SELECTED || con->buttonsdown == CB_TAPPED ||
+		con->buttonsdown == CB_INPUTUP || con->buttonsdown == CB_INPUTWORD)	//FTESurf Patch 1642
 		;	//will time out in the drawing code.
 	else
 //	if (con->buttonsdown == CB_MOVE)	//window title(move)
@@ -2293,12 +2305,109 @@ void Key_EntryInsert(unsigned char **line, int *linepos, const char *instext)
 	*linepos += len;
 }
 
+/*
+FTESurf Patch 1642: the console's input line edits like a text box.
+
+	"it behaves like a terminal type, however I prefer regular text typing and
+	 selection ... I think i'm even missing the | that you know where your typing,
+	 and it does the copy on select and weird stuff I don't like."
+
+The line now has a selection: key_selanchor to key_linepos, in bytes. Shift with
+the arrows/Home/End extends it (Ctrl for words), Ctrl+A selects the line, the mouse
+drags it (console.c). Typing, Backspace, Delete and paste replace it; Ctrl+C and
+Ctrl+X copy and cut it. Nothing is copied unless you ask: no copy on select, and
+Ctrl+C or Ctrl+X with nothing selected does nothing. Ctrl+<letter> is a shortcut or
+nothing, never one of the Quake glyphs it used to type, and Alt no longer types red
+text. Only the console line keeps a selection; the engine's chat line (no
+highlight is drawn for it) keeps the old whole-line copy and cut.
+*/
+int		key_selanchor = -1;
+double	key_caretmoved;
+
+static int *Key_LineAnchor(int *linepos)
+{
+	return (linepos == &key_linepos) ? &key_selanchor : NULL;
+}
+
+//the selected byte range, or false when there is none (a stale anchor is dropped)
+static qboolean Key_LineGetSelection(unsigned char *line, int lineoffset, int *linepos, int *s, int *e)
+{
+	int *anchor = Key_LineAnchor(linepos);
+	int len = strlen((char*)line);
+	if (!anchor || *anchor < 0)
+		return false;
+	if (*anchor < lineoffset || *anchor > len || *linepos > len)
+	{
+		*anchor = -1;
+		return false;
+	}
+	if (*anchor == *linepos)
+		return false;
+	*s = min(*anchor, *linepos);
+	*e = max(*anchor, *linepos);
+	return true;
+}
+
+static qboolean Key_LineDeleteSelection(unsigned char **line, int lineoffset, int *linepos)
+{
+	int *anchor = Key_LineAnchor(linepos);
+	int s, e;
+	if (!Key_LineGetSelection(*line, lineoffset, linepos, &s, &e))
+	{
+		if (anchor)
+			*anchor = -1;
+		return false;
+	}
+	memmove((*line)+s, (*line)+e, strlen((char*)(*line)+e)+1);
+	*linepos = s;
+	*anchor = -1;
+	Key_ConsoleLineEdited(line);
+	return true;
+}
+
+static void Key_LineCopySelection(unsigned char *line, int s, int e)
+{
+	char *t = Z_Malloc(e-s+1);
+	memcpy(t, line+s, e-s);
+	t[e-s] = 0;
+	Sys_SaveClipboard(CBT_CLIPBOARD, t);
+	Z_Free(t);
+}
+
+//a click or Ctrl+A on the input line ends any scrollback selection: one selection at a time
+static void Key_LineDropConsoleSelection(console_t *con)
+{
+	if (!con)
+		return;
+	con->flags &= ~CONF_KEEPSELECTION;
+	con->selstartline = con->selendline = NULL;
+}
+
+//Ctrl+Backspace / Ctrl+W: the word left of the caret, and the spaces between it and the caret
+static void Key_LineDeleteWordLeft(unsigned char **line, int lineoffset, int *linepos, qboolean alt)
+{
+	int end = *linepos;
+	while (*linepos > lineoffset && (*line)[*linepos-1] == ' ')
+		*linepos = utf_left((*line)+lineoffset, (*line) + *linepos, !alt) - (*line);
+	while (*linepos > lineoffset && (*line)[*linepos-1] != ' ')
+		*linepos = utf_left((*line)+lineoffset, (*line) + *linepos, !alt) - (*line);
+	if (end > *linepos)
+	{
+		memmove((*line)+*linepos, (*line)+end, strlen((char*)(*line)+end)+1);
+		Key_ConsoleLineEdited(line);
+	}
+}
+
 static void Key_ConsolePaste(void *ctx, const char *utf8)
 {
 	unsigned char **line = ctx;
 	int *linepos = ((line == &chat_buffer)?&chat_bufferpos:&key_linepos);
-	if (utf8)
+	if (utf8 && *utf8)
+	{	//FTESurf Patch 1642: a paste replaces the selection
+		Key_LineDeleteSelection(line, 0, linepos);
 		Key_EntryInsert(line, linepos, utf8);
+		key_caretmoved = realtime;
+	}
 }
 qboolean Key_EntryLine(console_t *con, unsigned char **line, int lineoffset, int *linepos, int key, unsigned int unicode)
 {
@@ -2306,58 +2415,109 @@ qboolean Key_EntryLine(console_t *con, unsigned char **line, int lineoffset, int
 	qboolean ctrl = keydown[K_LCTRL] || keydown[K_RCTRL];
 	qboolean shift = keydown[K_LSHIFT] || keydown[K_RSHIFT];
 	char utf8[8];
+	int *anchor = Key_LineAnchor(linepos);	//FTESurf Patch 1642: NULL for a line without a selection
+	int ss = 0, se = 0;
+	qboolean hassel = Key_LineGetSelection(*line, lineoffset, linepos, &ss, &se);
 
-	if (key == K_LEFTARROW || key == K_KP_LEFTARROW || key == K_GP_DPAD_LEFT)
+	key_caretmoved = realtime;	//the caret shows solid while you type, and blinks once you stop
+
+	if (key == K_LEFTARROW || key == K_KP_LEFTARROW || key == K_GP_DPAD_LEFT ||
+		key == K_RIGHTARROW || key == K_KP_RIGHTARROW || key == K_GP_DPAD_RIGHT ||
+		key == K_HOME || key == K_KP_HOME || key == K_END || key == K_KP_END)
 	{
-		if (ctrl)
+		qboolean left = (key == K_LEFTARROW || key == K_KP_LEFTARROW || key == K_GP_DPAD_LEFT);
+		qboolean right = (key == K_RIGHTARROW || key == K_KP_RIGHTARROW || key == K_GP_DPAD_RIGHT);
+		if (anchor)
 		{
-			//ignore whitespace if we're at the end of the word
-			while (*linepos > 0 && (*line)[*linepos-1] == ' ')
-				*linepos = utf_left((*line)+lineoffset, (*line) + *linepos, !alt) - (*line);
-			//keep skipping until we find the start of that word
-			while (ctrl && *linepos > lineoffset && (*line)[*linepos-1] != ' ')
-				*linepos = utf_left((*line)+lineoffset, (*line) + *linepos, !alt) - (*line);
+			if (shift)
+			{	//extend from where the caret is now, or keep extending the selection there is
+				if (!hassel)
+					*anchor = *linepos;
+				Key_LineDropConsoleSelection(con);
+			}
+			else
+			{
+				*anchor = -1;
+				if (hassel && !ctrl && (left || right))
+				{	//an arrow collapses a selection to that end, as every text box does
+					*linepos = left ? ss : se;
+					return true;
+				}
+			}
 		}
-		else
-			*linepos = utf_left((*line)+lineoffset, (*line) + *linepos, !alt) - (*line);
-		return true;
-	}
-	if (key == K_RIGHTARROW || key == K_KP_RIGHTARROW || key == K_GP_DPAD_RIGHT)
-	{
-		if ((*line)[*linepos])
+
+		if (left)
 		{
-			*linepos = utf_right((*line)+lineoffset, (*line) + *linepos, !alt) - (*line);
 			if (ctrl)
 			{
-				//skip over the word
-				while ((*line)[*linepos] && (*line)[*linepos] != ' ')
-					*linepos = utf_right((*line)+lineoffset, (*line) + *linepos, !alt) - (*line);
-				//as well as any trailing whitespace
-				while ((*line)[*linepos] == ' ')
-					*linepos = utf_right((*line)+lineoffset, (*line) + *linepos, !alt) - (*line);
+				//ignore whitespace if we're at the end of the word
+				while (*linepos > 0 && (*line)[*linepos-1] == ' ')
+					*linepos = utf_left((*line)+lineoffset, (*line) + *linepos, !alt) - (*line);
+				//keep skipping until we find the start of that word
+				while (ctrl && *linepos > lineoffset && (*line)[*linepos-1] != ' ')
+					*linepos = utf_left((*line)+lineoffset, (*line) + *linepos, !alt) - (*line);
 			}
-			return true;
+			else
+				*linepos = utf_left((*line)+lineoffset, (*line) + *linepos, !alt) - (*line);
 		}
+		else if (right)
+		{
+			if ((*line)[*linepos])
+			{
+				*linepos = utf_right((*line)+lineoffset, (*line) + *linepos, !alt) - (*line);
+				if (ctrl)
+				{
+					//skip over the word
+					while ((*line)[*linepos] && (*line)[*linepos] != ' ')
+						*linepos = utf_right((*line)+lineoffset, (*line) + *linepos, !alt) - (*line);
+					//as well as any trailing whitespace
+					while ((*line)[*linepos] == ' ')
+						*linepos = utf_right((*line)+lineoffset, (*line) + *linepos, !alt) - (*line);
+				}
+			}
+			//nettest: Right arrow at end-of-line is a no-op (was inserting a space)
+		}
+		else if (key == K_HOME || key == K_KP_HOME)
+			*linepos = lineoffset;
 		else
-			return true;	//nettest: Right arrow at end-of-line is a no-op (was inserting a space)
+			*linepos = strlen(*line);
+		return true;
 	}
 
 	if (key == K_DEL || key == K_KP_DEL)
 	{
-		if ((*line)[*linepos])
+		if (Key_LineDeleteSelection(line, lineoffset, linepos))
+			return true;
+		if (ctrl)
+		{	//FTESurf Patch 1642: Ctrl+Delete, the word right of the caret
+			int end = *linepos;
+			while ((*line)[end] && (*line)[end] != ' ')
+				end = utf_right((*line)+lineoffset, (*line) + end, !alt) - (*line);
+			while ((*line)[end] == ' ')
+				end = utf_right((*line)+lineoffset, (*line) + end, !alt) - (*line);
+			if (end > *linepos)
+			{
+				memmove((*line)+*linepos, (*line)+end, strlen((*line)+end)+1);
+				Key_ConsoleLineEdited(line);
+			}
+		}
+		else if ((*line)[*linepos])
 		{
 			int charlen = utf_right((*line)+lineoffset, (*line) + *linepos, !alt) - ((*line) + *linepos);
 			memmove((*line)+*linepos, (*line)+*linepos+charlen, strlen((*line)+*linepos+charlen)+1);
 			Key_ConsoleLineEdited(line);
-			return true;
 		}
-		else
-			key = K_BACKSPACE;
+		//FTESurf Patch 1642: Delete at the end of the line does nothing; it used to backspace
+		return true;
 	}
 
 	if (key == K_BACKSPACE)
 	{
-		if (*linepos > lineoffset)
+		if (Key_LineDeleteSelection(line, lineoffset, linepos))
+			;
+		else if (ctrl)	//FTESurf Patch 1642: Ctrl+Backspace, the word left of the caret
+			Key_LineDeleteWordLeft(line, lineoffset, linepos, alt);
+		else if (*linepos > lineoffset)
 		{
 			int charlen = ((*line)+*linepos) - utf_left((*line)+lineoffset, (*line) + *linepos, !alt);
 			memmove((*line)+*linepos-charlen, (*line)+*linepos, strlen((*line)+*linepos)+1);
@@ -2373,23 +2533,23 @@ qboolean Key_EntryLine(console_t *con, unsigned char **line, int lineoffset, int
 		return true;
 	}
 
-
-
-	if (key == K_HOME || key == K_KP_HOME)
+	//FTESurf Patch 1642: Ctrl+A selects the line (it typed a Quake glyph)
+	if (anchor && ctrl && !keydown[K_RALT] && (unicode=='a' || unicode=='A' || unicode==1))
 	{
-		*linepos = lineoffset;
-		return true;
-	}
-
-	if (key == K_END || key == K_KP_END)
-	{
+		*anchor = lineoffset;
 		*linepos = strlen(*line);
+		Key_LineDropConsoleSelection(con);
 		return true;
 	}
 
 	//beware that windows translates ctrl+c and ctrl+v to a control char
 	if (((unicode=='C' || unicode=='c' || unicode==3) && ctrl) || (ctrl && key == K_INS))
 	{
+		if (hassel)
+		{	//FTESurf Patch 1642: the input line's selection
+			Key_LineCopySelection(*line, ss, se);
+			return true;
+		}
 		if (con && (con->flags & CONF_KEEPSELECTION))
 		{	//copy selected text to the system clipboard
 			char *buffer = Con_CopyConsole(con, true, false, true);
@@ -2400,17 +2560,15 @@ qboolean Key_EntryLine(console_t *con, unsigned char **line, int lineoffset, int
 			}
 			return true;
 		}
-		//copy the entire input line if there's nothing selected.
-		Sys_SaveClipboard(CBT_CLIPBOARD, *line);
+		//FTESurf Patch 1642: nothing selected copies nothing -- except on a line with no
+		//selection to make (the engine chat line), which keeps the whole-line copy.
+		if (!anchor)
+			Sys_SaveClipboard(CBT_CLIPBOARD, *line);
 		return true;
 	}
 
-	if (key == K_MOUSE3)
-	{	//middle-click to paste from the unixy primary buffer.
-		if (!key_fromqc)	//FTESurf Patch 667: not for a key QC handed over
-			Sys_Clipboard_PasteText(CBT_SELECTION, Key_ConsolePaste, line);
+	if (key == K_MOUSE3)	//FTESurf Patch 1642: no middle-click paste; selecting no longer fills that buffer
 		return true;
-	}
 	if (((unicode=='V' || unicode=='v' || unicode==22/*sync*/) && ctrl) || (shift && key == K_INS))
 	{	//ctrl+v to paste from the windows-style clipboard.
 		if (!key_fromqc)
@@ -2420,6 +2578,14 @@ qboolean Key_EntryLine(console_t *con, unsigned char **line, int lineoffset, int
 
 	if ((unicode=='X' || unicode=='x' || unicode==24/*cancel*/) && ctrl)
 	{	//cut - copy-to-clipboard-and-delete
+		if (hassel)
+		{	//FTESurf Patch 1642: the selection, not the whole line
+			Key_LineCopySelection(*line, ss, se);
+			Key_LineDeleteSelection(line, lineoffset, linepos);
+			return true;
+		}
+		if (anchor)
+			return true;	//nothing selected: nothing to cut
 		Sys_SaveClipboard(CBT_CLIPBOARD, *line);
 		if ((*line)[lineoffset])
 			Key_ConsoleLineEdited(line);
@@ -2433,97 +2599,43 @@ qboolean Key_EntryLine(console_t *con, unsigned char **line, int lineoffset, int
 			Key_ConsoleLineEdited(line);
 		(*line)[lineoffset] = 0;
 		*linepos = strlen(*line);
+		if (anchor)
+			*anchor = -1;
 		return true;
 	}
 	if ((unicode=='W' || unicode=='w' || unicode==23/*etb*/) && ctrl)
 	{	//nettest: Ctrl+W - delete the word before the caret (readline-style)
-		int end = *linepos;
-		while (*linepos > lineoffset && (*line)[*linepos-1] == ' ')	//eat whitespace left of caret
-			*linepos = utf_left((*line)+lineoffset, (*line) + *linepos, !alt) - (*line);
-		while (*linepos > lineoffset && (*line)[*linepos-1] != ' ')	//then the word itself
-			*linepos = utf_left((*line)+lineoffset, (*line) + *linepos, !alt) - (*line);
-		if (end > *linepos)
-		{
-			memmove((*line)+*linepos, (*line)+end, strlen((*line)+end)+1);	//close the gap
-			Key_ConsoleLineEdited(line);
-		}
+		if (!Key_LineDeleteSelection(line, lineoffset, linepos))
+			Key_LineDeleteWordLeft(line, lineoffset, linepos, alt);
 		return true;
 	}
 
+	/*
+	FTESurf Patch 1642: no glyph substitutes. A control code (what Ctrl+<letter>
+	arrives as on some platforms) used to type one of the Quake charset's coloured
+	brackets, numbers and dots; Ctrl+<letter> as a letter did the same through a
+	second table and typed the plain letter for any letter not in it; Alt+<letter>
+	typed it in red. None of that is text, and with this game's fonts those glyphs
+	draw as boxes or nothing. Ctrl+<key> is now a shortcut or nothing. AltGr (which
+	Windows reports as Ctrl+right Alt) still types its characters.
+	*/
 	if (unicode < ' ')
 	{
-		//if the user is entering control codes, then the ctrl+foo mechanism is probably unsupported by the unicode input stuff, so give best-effort replacements.
-		switch(unicode)
-		{
-		case 27/*'['*/: unicode = 0xe010; break;
-		case 29/*']'*/: unicode = 0xe011; break;
-		case 7/*'g'*/: unicode = 0xe086; break;
-		case 18/*'r'*/: unicode = 0xe087; break;
-		case 25/*'y'*/: unicode = 0xe088; break;
-		case 2/*'b'*/: unicode = 0xe089; break;
-		case 19/*'s'*/: unicode = 0xe080; break;
-		case 4/*'d'*/: unicode = 0xe081; break;
-		case 6/*'f'*/: unicode = 0xe082; break;
-		case 1/*'a'*/: unicode = 0xe083; break;
-		case 21/*'u'*/: unicode = 0xe01d; break;
-		case 9/*'i'*/: unicode = 0xe01e; break;
-		case 15/*'o'*/: unicode = 0xe01f; break;
-		case 10/*'j'*/: unicode = 0xe01c; break;
-		case 16/*'p'*/: unicode = 0xe09c; break;
-		case 13/*'m'*/: unicode = 0xe08b; break;
-		case 11/*'k'*/: unicode = 0xe08d; break;
-		case 14/*'n'*/: unicode = '\r'; break;
-		default:
-//			if (unicode)
-//				Con_Printf("escape code %i\n", unicode);
-
-			//even if we don't print these, we still need to cancel them in the caller.
-			if (key == K_LALT || key == K_RALT ||
-				key == K_LCTRL || key == K_RCTRL ||
-				key == K_LSHIFT || key == K_RSHIFT)
-				return true;
-			return false;
-		}
+		//even if we don't print these, we still need to cancel them in the caller.
+		if (key == K_LALT || key == K_RALT ||
+			key == K_LCTRL || key == K_RCTRL ||
+			key == K_LSHIFT || key == K_RSHIFT)
+			return true;
+		return false;
 	}
-#ifndef FTE_TARGET_WEB	//browser port gets keys stuck down when task switching, especially alt+tab. don't confuse users.
-	else if (com_parseutf8.ival >= 0)	//don't do this for iso8859-1. the major user of that is hexen2 which doesn't have these chars.
-	{
-		if (ctrl && !keydown[K_RALT])
-		{
-			if (unicode >= '0' && unicode <= '9')
-				unicode = unicode - '0' + 0xe012;	// yellow number
-			else switch (unicode)
-			{
-				case '[': unicode = 0xe010; break;
-				case ']': unicode = 0xe011; break;
-				case 'g': unicode = 0xe086; break;
-				case 'r': unicode = 0xe087; break;
-				case 'y': unicode = 0xe088; break;
-				case 'b': unicode = 0xe089; break;
-				case '(': unicode = 0xe080; break;
-				case '=': unicode = 0xe081; break;
-				case ')': unicode = 0xe082; break;
-				case 'a': unicode = 0xe083; break;
-				case '<': unicode = 0xe01d; break;
-				case '-': unicode = 0xe01e; break;
-				case '>': unicode = 0xe01f; break;
-				case ',': unicode = 0xe01c; break;
-				case '.': unicode = 0xe09c; break;
-				case 'B': unicode = 0xe08b; break;
-				case 'C': unicode = 0xe08d; break;
-				case 'n': unicode = '\r'; break;
-			}
-		}
-
-		if (keydown[K_LALT] && unicode > 32 && unicode < 128)
-			unicode |= 0xe080;		// red char
-	}
-#endif
+	if (ctrl && !keydown[K_RALT])
+		return true;
 
 	unicode = utf8_encode(utf8, unicode, sizeof(utf8)-1);
 	if (unicode)
 	{
 		utf8[unicode] = 0;
+		Key_LineDeleteSelection(line, lineoffset, linepos);	//FTESurf Patch 1642: typing replaces the selection
 		Key_EntryInsert(line, linepos, utf8);
 		return true;
 	}
@@ -2583,7 +2695,15 @@ qboolean Key_Console (console_t *con, int key, unsigned int unicode)
 	qboolean ctrl = keydown[K_LCTRL] || keydown[K_RCTRL];
 	qboolean shift = keydown[K_LSHIFT] || keydown[K_RSHIFT];
 	int rkey = key;
-	char *buffer;
+	/*FTESurf Patch 1642: only the line editor keeps the input line's selection. Every
+	  other key that is handled here (Enter, Tab, history, a click in the log, the find
+	  bar) drops it, so a selection can never outlive the text it was made on. The
+	  editor gets it back just before Key_EntryLine. Modifiers and scrolling keep it.*/
+	int selanchor = key_selanchor;
+	if (!(key == K_LSHIFT || key == K_RSHIFT || key == K_LCTRL || key == K_RCTRL || key == K_LALT || key == K_RALT ||
+		  key == K_PGUP || key == K_KP_PGUP || key == K_PGDN || key == K_KP_PGDN ||
+		  key == K_MWHEELUP || key == K_MWHEELDOWN || key == K_MOUSE2))
+		key_selanchor = -1;
 
 	//weirdness for the keypad.
 	if ((unicode >= '0' && unicode <= '9') || unicode == '.' || key < 0)
@@ -2791,6 +2911,28 @@ qboolean Key_Console (console_t *con, int key, unsigned int unicode)
 					else
 						con->buttonsdown = CB_SCROLL;		//touch / non-window = relative content drag
 				}
+				else if (key == K_MOUSE1 && con->mouseoninput && con->linebuffered)
+				{	/*FTESurf Patch 1642: a click on the input line puts the caret there; a drag
+					  selects, Shift+click extends, a double-click takes the word. The draw maps
+					  the mouse to a character (console.c, Con_DrawInput), because it is the
+					  draw that knows where each character is.*/
+					qboolean dbl = realtime < con->mousedowntime + 0.4
+						&& con->mousecursor[0] >= olddown[0]-3 && con->mousecursor[0] <= olddown[0]+3
+						&& con->mousecursor[1] >= olddown[1]-3 && con->mousecursor[1] <= olddown[1]+3;
+					Key_LineDropConsoleSelection(con);
+					con->inputanchor = shift ? ((selanchor >= 0) ? selanchor : key_linepos) : -1;
+					if (dbl)
+					{
+						con->buttonsdown = CB_INPUTWORD;
+						con->mousedowntime = 0;
+					}
+					else
+					{
+						con->buttonsdown = CB_INPUTSEL;
+						con->mousedowntime = realtime;
+					}
+					return true;
+				}
 				else
 				{	//selecting text. woo.
 					if (realtime < con->mousedowntime + 0.4
@@ -2801,13 +2943,7 @@ qboolean Key_Console (console_t *con, int key, unsigned int unicode)
 						//FIXME: detect tripple-clicks to select the entire line
 						Con_ExpandConsoleSelection(con);
 						con->flags |= CONF_KEEPSELECTION;
-
-						buffer = Con_CopyConsole(con, true, false, true);	//don't keep markup if we're copying to the clipboard
-						if (buffer)
-						{
-							Sys_SaveClipboard(CBT_SELECTION,  buffer);
-							Z_Free(buffer);
-						}
+						//FTESurf Patch 1642: kept selected for Ctrl+C; nothing is copied until then
 						return true;
 					}
 					con->mousedowntime = realtime;
@@ -2929,14 +3065,20 @@ qboolean Key_Console (console_t *con, int key, unsigned int unicode)
 		}
 	}
 
-	if (key == K_HOME || key == K_KP_HOME)	//nettest: plain Home (not only Ctrl+Home) jumps to the TOP of the console scrollback
+	/*FTESurf Patch 1642: Home/End move the caret on a line with text in it (Shift selects),
+	  as in any text box. Ctrl+Home/End -- and plain Home/End on an empty line, where
+	  there is no caret to move -- still jump to the top/bottom of the log.*/
+	if ((key == K_HOME || key == K_KP_HOME || key == K_END || key == K_KP_END) &&
+		con->linebuffered && !ctrl && (shift || key_lines[edit_line][0]))
+		;
+	else if (key == K_HOME || key == K_KP_HOME)	//nettest: plain Home (not only Ctrl+Home) jumps to the TOP of the console scrollback
 	{
 		con->displayscroll = 0;
 		con->display = con->oldest;
 		return true;
 	}
 
-	if (key == K_END || key == K_KP_END)	//nettest: plain End jumps to the BOTTOM (live)
+	else if (key == K_END || key == K_KP_END)	//nettest: plain End jumps to the BOTTOM (live)
 	{
 		con->displayscroll = 0;
 		con->display = con->current;
@@ -3248,6 +3390,8 @@ qboolean Key_Console (console_t *con, int key, unsigned int unicode)
 			return false;
 	}
 
+	key_selanchor = selanchor;	//FTESurf Patch 1642: the editor's own key; it decides
+
 	if (con_commandmatch)
 	{	//if they're typing, try to retain the current completion guess.
 		cmd_completion_t *c;
@@ -3280,6 +3424,157 @@ qboolean Key_Console (console_t *con, int key, unsigned int unicode)
 	}
 
 	return true;
+}
+
+/*
+FTESurf Patch 1642: con_edittest -- the text-box keys, pressed through Key_Console.
+
+Same instrument as con_selftest: a config cannot press Shift+Left, but the editor is
+a function of the line, the caret, the anchor and the modifier state, and all of
+those can be set here. Each step presses the key through Key_Console -- the path a
+real key takes -- and checks the line, the caret and the selection. What it cannot
+show is the mouse (the draw maps it) or how the caret looks; those are screenshots.
+`con_edittest clip` adds Ctrl+C/Ctrl+X, which write the system clipboard.
+*/
+static void Key_ConEditPress(console_t *con, int key, unsigned int unicode, int mods)
+{
+	qboolean os = keydown[K_LSHIFT], oc = keydown[K_LCTRL], ors = keydown[K_RSHIFT], orc = keydown[K_RCTRL];
+	keydown[K_LSHIFT] = (mods & 1) != 0;
+	keydown[K_LCTRL] = (mods & 2) != 0;
+	keydown[K_RSHIFT] = keydown[K_RCTRL] = false;
+	Key_Console(con, key, unicode);
+	keydown[K_LSHIFT] = os;
+	keydown[K_LCTRL] = oc;
+	keydown[K_RSHIFT] = ors;
+	keydown[K_RCTRL] = orc;
+}
+static void Key_ConEditLine(const char *what, const char *expect, int pos)
+{
+	const char *got = (const char*)key_lines[edit_line];
+	if (!strcmp(got, expect) && key_linepos == pos)
+		Con_Printf ("  ^2ok^7   %-40s \"%s\" @%i\n", what, got, key_linepos);
+	else
+	{
+		Con_Printf ("  ^1FAIL^7 %-40s \"%s\" @%i  (expected \"%s\" @%i)\n", what, got, key_linepos, expect, pos);
+		con_test_fails++;
+	}
+}
+static void Key_ConEditSel(const char *what, const char *expect)
+{
+	char got[256] = "";
+	int s, e;
+	if (Key_LineGetSelection(key_lines[edit_line], 0, &key_linepos, &s, &e) && e-s < (int)sizeof(got))
+	{
+		memcpy(got, key_lines[edit_line]+s, e-s);
+		got[e-s] = 0;
+	}
+	if (!strcmp(got, expect))
+		Con_Printf ("  ^2ok^7   %-40s [%s]\n", what, got);
+	else
+	{
+		Con_Printf ("  ^1FAIL^7 %-40s [%s]  (expected [%s])\n", what, got, expect);
+		con_test_fails++;
+	}
+}
+static void Key_ConEditTest_f (void)
+{
+	console_t *con = con_current;
+	char saveline[MAXCMDLINE];
+	int savepos = key_linepos, savehist = history_line, savematch = con_commandmatch;
+	qboolean clip = !strcmp(Cmd_Argv(1), "clip");
+	conline_t *savedisplay = con ? con->display : NULL;	//PgUp below scrolls the log
+	float savescroll = con ? con->displayscroll : 0;
+
+	con_test_fails = 0;
+	Q_strncpyz(saveline, key_lines[edit_line] ? (char*)key_lines[edit_line] : "", sizeof(saveline));
+	Con_Printf ("^5con_edittest^7  the console line as a text box (Patch 1642)\n");
+	if (!con || !con->linebuffered)
+	{
+		Con_Printf ("  ^3skip^7 no console with an input line\n");
+		return;
+	}
+	history_line = edit_line;
+	con_commandmatch = 0;
+
+	Key_ConSetLine("echo hello world"); key_selanchor = -1;
+	Key_ConEditPress(con, K_LEFTARROW, 0, 1); Key_ConEditPress(con, K_LEFTARROW, 0, 1);
+	Key_ConEditPress(con, K_LEFTARROW, 0, 1); Key_ConEditPress(con, K_LEFTARROW, 0, 1);
+	Key_ConEditPress(con, K_LEFTARROW, 0, 1);
+	Key_ConEditSel("Shift+Left x5 selects", "world");
+	Key_ConEditPress(con, 'x', 'X', 0);
+	Key_ConEditLine("typing replaces the selection", "echo hello X", 12);
+	Key_ConEditSel("...and leaves none", "");
+
+	Key_ConEditPress(con, 'a', 'a', 2);
+	Key_ConEditSel("Ctrl+A selects the line", "echo hello X");
+	Key_ConEditPress(con, K_BACKSPACE, 0, 0);
+	Key_ConEditLine("Backspace deletes the selection", "", 0);
+
+	Key_ConSetLine("abc def"); key_selanchor = -1;
+	Key_ConEditPress(con, K_HOME, 0, 0);
+	Key_ConEditLine("Home moves the caret", "abc def", 0);
+	Key_ConEditPress(con, K_END, 0, 0);
+	Key_ConEditLine("End moves the caret", "abc def", 7);
+	Key_ConEditPress(con, K_LEFTARROW, 0, 3);
+	Key_ConEditSel("Ctrl+Shift+Left selects a word", "def");
+	Key_ConEditPress(con, K_RIGHTARROW, 0, 0);
+	Key_ConEditLine("Right collapses to the selection's end", "abc def", 7);
+	Key_ConEditPress(con, K_HOME, 0, 1);
+	Key_ConEditSel("Shift+Home selects to the start", "abc def");
+	Key_ConEditPress(con, K_LEFTARROW, 0, 0);
+	Key_ConEditLine("Left collapses to the selection's start", "abc def", 0);
+
+	Key_ConSetLine("abc def"); key_selanchor = -1;
+	Key_ConEditPress(con, K_LEFTARROW, 0, 2);
+	Key_ConEditPress(con, K_BACKSPACE, 0, 2);
+	Key_ConEditLine("Ctrl+Backspace deletes the word left", "def", 0);
+	Key_ConSetLine("abc def"); key_selanchor = -1;
+	Key_ConEditPress(con, K_HOME, 0, 0);
+	Key_ConEditPress(con, K_DEL, 0, 2);
+	Key_ConEditLine("Ctrl+Delete deletes the word right", "def", 0);
+	Key_ConSetLine("abc"); key_selanchor = -1;
+	Key_ConEditPress(con, K_DEL, 0, 0);
+	Key_ConEditLine("Delete at the end does nothing", "abc", 3);
+
+	Key_ConEditPress(con, 'b', 2, 2);
+	Key_ConEditPress(con, 'b', 'b', 2);
+	Key_ConEditPress(con, 0, '1', 2);
+	Key_ConEditPress(con, 'q', 'q', 2);
+	Key_ConEditLine("Ctrl+<key> types nothing", "abc", 3);
+	Key_ConEditPress(con, 'x', 'x', 2);
+	Key_ConEditLine("Ctrl+X with nothing selected keeps it", "abc", 3);
+
+	Key_ConEditPress(con, 'a', 'a', 2);
+	Key_ConEditPress(con, K_TAB, 0, 0);
+	Key_ConEditSel("a key outside the editor drops it", "");
+	Key_ConSetLine("abc"); key_selanchor = -1;
+	Key_ConEditPress(con, 'a', 'a', 2);
+	Key_ConEditPress(con, K_LSHIFT, 0, 1);
+	Key_ConEditPress(con, K_PGUP, 0, 0);
+	Key_ConEditSel("Shift and PgUp keep it", "abc");
+
+	if (clip)
+	{
+		Key_ConSetLine("copy me"); key_selanchor = -1;
+		Key_ConEditPress(con, K_LEFTARROW, 0, 3);
+		Key_ConEditPress(con, 'c', 'c', 2);
+		Key_ConEditLine("Ctrl+C leaves the line", "copy me", 5);
+		Key_ConEditPress(con, 'x', 'x', 2);
+		Key_ConEditLine("Ctrl+X cuts the selection", "copy ", 5);
+		Con_Printf ("  (the clipboard now holds \"me\")\n");
+	}
+
+	Key_ConSetLine(saveline);
+	key_linepos = min(savepos, (int)strlen(saveline));
+	key_selanchor = -1;
+	history_line = savehist;
+	con_commandmatch = savematch;
+	con->display = savedisplay;
+	con->displayscroll = savescroll;
+	if (con_test_fails)
+		Con_Printf ("^1con_edittest: %i FAILED^7\n", con_test_fails);
+	else
+		Con_Printf ("^2con_edittest: all passed^7\n");
 }
 
 //============================================================================
@@ -4083,6 +4378,7 @@ void Key_Init (void)
 	Cmd_AddCommandAD ("unbind",Key_Unbind_f, Key_Bind_c, NULL);
 	Cmd_AddCommandD ("unbindall",Key_Unbindall_f, "A dangerous command that forgets ALL your key settings. For use only in default.cfg.");
 	//FTESurf Patch 213: the arrow-key completion gate, measured rather than asserted.
+	Cmd_AddCommandD ("con_edittest", Key_ConEditTest_f, "FTESurf Patch 1642: presses the console's text-box keys (selection, Ctrl+A, word deletes, Home/End) through Key_Console and checks the line. `con_edittest clip` also tests Ctrl+C/Ctrl+X, which write the clipboard. Restores the input line.");
 	Cmd_AddCommandD ("con_selftest", Key_ConSelfTest_f, "Verifies the console completion dropdown's Up/Down gate, highlighted argument acceptance, the window grip clamps and lenient map completion. Restores every value it touches.");
 	//FTESurf Patch 215: the only way a config can make the dropdown appear, so that the one thing left to check -- how it LOOKS -- can be screenshotted.
 	Cmd_AddCommandD ("con_settext", Key_ConSetText_f, "Replaces the console's input line with the given text, as if you had typed it. Nothing is highlighted and ENTER still runs the line; this exists so a config can put the completion dropdown on screen.");
