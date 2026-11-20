@@ -1,5 +1,30 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1639 - Tournaments on bhop maps: the default profile keeps each map kind's tick
+
+**Cause.** The live map qualification pilot (20 Nov) refused every bhop map: the lobbies run bhop at 100 Hz
+(cfg/lobby/mode_bhop.cfg, pm_ticrate 0.01) but the tournament "default" movement profile demanded 15000 us (66.7 Hz)
+in the backend rules, the server QC and the menu. No bhop map could qualify and a bhop round would fail the arrival
+tick check. Node selection also required an idle node's CURRENT tick to equal the match's, so a lobby idling on a
+surf map could never be picked for a bhop match.
+
+**Change.** surfd tournament_rules: KIND_TICK {surf 15000, bhop 10000}, tick_for(profile, kind) (default -> the kind's
+tick; every other profile keeps its fixed tick) sets the frozen settings tick; observe() checks arrival against that
+frozen tick. node_ticks(profile): a default-profile node may sit at either kind's tick (tick == clock) between matches;
+tournaments.compatible, the public slot list and party_lobbies' Start SELECT (bound IN list) use it. QuakeC:
+Tour_ProfileTick(profile, kind) (server) and MT_ProfileTick/MT_ProfileLabel(id, kind) (menu: "Default, 100 tick" for
+bhop). tools/tournament_qualify(_live).py expect tick_for.
+
+**Verified.** surfd: test_tournaments 31 (new: settings ticks per kind, node compatibility, bhop arrival refuses 15000),
+test_party_lobbies 27 (new: a default node at 10000/10000 is selected, 10000/15000 is not); both new tests fail on the
+previous backend. Qualifier tests 10/10 (bhop at 100 Hz valid, at 66 refused; surf at 100 refused). All three VMs 0
+warnings. Native playtest (surf) --round-end at 1920x1200 passes.
+
+**Boundary.** Live only when all three move: a surfd generation with this rules change, the lobby QC and the client
+menu. Version skew fails closed: an older backend still demands 15000 at arrival (a bhop round aborts), an older menu
+rejects a 100-tick bhop room snapshot, an older lobby QC refuses the new frozen tick and aborts. No native bhop match
+was played end to end.
+
 ## Patch 1637 - zone and map-settings files accept Ahop (Momentum gamemode 9)
 
 **Cause.** Lex: ahop_coast's published zone says bhop at 100 Hz, "if that's wrong then fix it". It is: Momentum ranks the
