@@ -385,8 +385,8 @@ static void DC_Build(char *out, size_t outsize)
 					Q_snprintfz(state, sizeof(state), "Stage %i/%i", bound(1, seg + 1, segs), segs);
 				else
 					Q_strncpyz(state, "Linear", sizeof(state));
-				if (ticks != dc_lastticks)
-				{
+				if (!dc_runstart || ticks != dc_lastticks)
+				{	// a new run starts unpaused (review 2)
 					dc_lastticks = ticks;
 					dc_tickmoved = realtime;
 				}
@@ -421,7 +421,8 @@ static void DC_Build(char *out, size_t outsize)
 
 void CL_Discord_Frame(void)
 {
-	qboolean want = cl_discord.ival && *cl_discord_appid.string && strspn(cl_discord_appid.string, "0123456789") == strlen(cl_discord_appid.string);
+	size_t idlen = strlen(cl_discord_appid.string);
+	qboolean want = cl_discord.ival && idlen && idlen < 21 && strspn(cl_discord_appid.string, "0123456789") == idlen;
 	char frame[sizeof(dc_sent) + 160];
 
 	if (!want || (DC_OPEN && strcmp(dc_appid, cl_discord_appid.string)))
@@ -432,6 +433,12 @@ void CL_Discord_Frame(void)
 	}
 	if (!DC_OPEN)
 	{
+		if (strcmp(dc_appid, cl_discord_appid.string))
+		{	// a corrected id tries at once, not after a wrong one's backoff (review 2)
+			Q_strncpyz(dc_appid, cl_discord_appid.string, sizeof(dc_appid));
+			dc_nexttry = 0;
+			dc_closes = 0;
+		}
 		if (realtime < dc_nexttry)
 			return;
 		if (!DC_Connect())
