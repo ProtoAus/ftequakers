@@ -2288,7 +2288,7 @@ int Con_DrawInput (console_t *con, qboolean focused, int left, int right, int y,
 				con_popupb    = y + Font_CharHeight();	//the bottom the caller passed in
 				con_popupib   = con_popupb;
 				if (con_popupwndb > con_popupb)
-					con_popupb = con_popupwndb + 3;		//FTESurf Patch 1647: hang below the window, clear of its padding and edge
+					con_popupb = con_popupwndb;		//FTESurf Patch 1647: hang from the window's bottom edge (Patch 1663: on it, was 3 px below)
 			}
 			/*Set even when there is nothing to show, so the drop-UP arm below
 			  cannot rebuild the chain and draw it inside the console instead.*/
@@ -4218,7 +4218,7 @@ static void Con_DrawCompletionPopup(console_t *con)
 		w = ch*4;
 
 	/*FTESurf Patch 1662: top/bot stay the ROWS; the box is padx/pady bigger round them and
-	  `gap` away from the typing line (or a clean window's edge, which already had 3).*/
+	  `gap` away from the typing line; under a clean window it hangs from the window's edge (Patch 1663).*/
 	pad  = bound(0, con_completion_padding.ival, 32);
 	padx = (int)((pad * vid.pixelwidth) / vid.width);
 	pady = (int)(((pad/2) * vid.pixelheight) / vid.height);
@@ -4226,7 +4226,7 @@ static void Con_DrawCompletionPopup(console_t *con)
 	if (padx > con_popupl)
 		padx = max(0, con_popupl);	//not off the left of the screen; none when the row already starts there (a window dragged left)
 	if (con_popupb != con_popupib)
-		top = con_popupb - 3 + max(3, gap);	//below a clean window (Patch 1647)
+		top = con_popupb - max(1, (int)(vid.rotpixelheight / vid.height));	//FTESurf Patch 1663: the box's top line on a clean window's bottom hairline (one virtual px), closer to the typed text (was max(3, gap) below it)
 	else
 		top = con_popupb + gap;			//the bottom of the input row: the popup starts here
 	top += pady;
