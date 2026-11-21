@@ -7,7 +7,10 @@ press anything". The in-game upload (P1696) signs kind -6 and only under a real 
 statement to send. Kind -7 is that statement: CL_Receipt_AcctSign takes it with `keyed` forced false (the text says
 "key 0"), the server field fixed to play.proto.bar:443 as -6's, and PF_cl_acct_sign never spends the press's one
 signature on it. And only on a loopback connection -- a game this client hosts, CL_FriendsSign's test -- so a VM a
-remote server sent gets no -7 at all (review 1, defence in depth: tasupd would refuse its code anyway). Every other
+remote server sent gets no -7 at all (review 1, defence in depth: tasupd would refuse its code anyway) -- and only
+while the window is in front (vid.activeapp). `float() cl_windowactive` (new, by name) tells CSQC the same, so the
+offer's countdown waits while the player is tabbed out (review 2: CSQC never gets IE_FOCUS, so the game's own focus
+flag never changed). Every other
 check stands: connected to the server whose VM this is, one named main file of code, a 32-hex nonce.
 
 What a -7 signature is good for: only surfd/tasupd.py's game route verifies one (header FTESURF-TASUP 2,

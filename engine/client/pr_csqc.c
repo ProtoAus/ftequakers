@@ -7112,6 +7112,11 @@ static void QCBUILTIN PF_resourcestatus(pubprogfuncs_t *prinst, struct globalvar
 
 void QCBUILTIN PF_CL_DrawTextField (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals);
 
+/*P1712: float() cl_windowactive: the window has focus (vid.activeapp); the TAS upload offer's countdown waits for it*/
+static void QCBUILTIN PF_cl_windowactive(pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
+{
+	G_FLOAT(OFS_RETURN) = vid.activeapp ? 1 : 0;
+}
 static void QCBUILTIN PF_ui_native_gamefocus(pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
 {
 	//The engine owns console/menu/prompt precedence; QC cannot infer it from cursor mode.
@@ -7555,6 +7560,7 @@ static struct {
 	{"drawsetcliparea",			PF_CL_drawsetcliparea,			324},	// #324 void(float x, float y, float width, float height) drawsetcliparea (EXT_CSQC_???)
 	{"drawresetcliparea",		PF_CL_drawresetcliparea,		325},		// #325 void(void) drawresetcliparea (EXT_CSQC_???)
 	{"ui_native_gamefocus",	PF_ui_native_gamefocus,	0},
+	{"cl_windowactive",		PF_cl_windowactive,		0},	//FTESurf P1712
 	{"ui_native_status",		PF_ui_native_status,		0},
 	{"ui_native_open",		PF_ui_native_open,		0},
 	{"ui_native_draw",		PF_ui_native_draw,		0},
