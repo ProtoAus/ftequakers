@@ -1313,11 +1313,11 @@ extern unsigned int cl_maxstris;
 
 //nettest: persistent lit decals (cl_ents.c) — clip once + cache, re-emit cheaply each frame.
 #define PDC_SOURCE	1	//FTESurf Patch 772: also displacements and brush entities, as a Source decal
-void CL_PersistentDecals_PortalView(void);	//FTESurf Patch 772: a recursive view drew scene tris (r_surf.c)
+void CL_PersistentDecals_PortalView(qboolean otherplace);	//FTESurf Patch 772: a recursive view drew scene tris (r_surf.c); P1698: a portal, not a water capture
 int CL_AddPersistentDecal(const char *shadername, const vec3_t origin, const vec3_t up, const vec3_t side, const vec3_t rgb, float alpha, float aspect, float lifetime, const float *texrange, unsigned int clipflags);
 void CL_RemovePersistentDecal(int handle);
 void CL_UpdatePersistentDecal(int handle, const vec3_t rgb, float alpha);
-void CL_EmitPersistentDecals(void);	//called from the world draw (r_surf.c) before BE_DrawWorld
+void CL_EmitPersistentDecals(const qbyte *vis, const int *areas);	//FTESurf Patch 1698: vis/areas cull on Source maps (NULL: none)	//called from the world draw (r_surf.c) before BE_DrawWorld
 void CL_WipePersistentDecals(void);	//called from CL_ClearState
 void CL_PersistentDecals_Restarted(void);	//called on renderer restart (renderer.c) -> re-clip all next emit
 

@@ -822,6 +822,28 @@ static qboolean CopyCSQCEdictToEntity(csqcedict_t *fte_restrict in, entity_t *ft
 	memset(out, 0, sizeof(*out));
 	out->model = model;
 	out->pvscache = in->pvsinfo;
+	{	//FTESurf Patch 1698: the record where it is drawn this frame, for any rotation and scale: CSQC moves
+		//entities by field writes (no relink) and links ignore .scale, so pvsinfo can be stale or too small
+		extern qboolean R_EntPVSSource(void);
+		if (R_EntPVSSource())
+		{
+			float sc = in->xv->scale ? fabs(in->xv->scale) : 1;
+			float r = (model->radius > 0 ? model->radius : RadiusFromBounds(model->mins, model->maxs)) * sc;
+			vec3_t amin, amax;
+			int i;
+			for (i = 0; i < 3; i++)
+			{
+				amin[i] = in->v->origin[i] - r;
+				amax[i] = in->v->origin[i] + r;
+				if (in->v->absmin[i] <= in->v->absmax[i])
+				{	//its link may be bigger (a RF_USEAXIS portal door sized by setsize); stale links only widen it
+					amin[i] = min(amin[i], in->v->absmin[i]);
+					amax[i] = max(amax[i], in->v->absmax[i]);
+				}
+			}
+			cl.worldmodel->funcs.FindTouchedLeafs(cl.worldmodel, &out->pvscache, amin, amax);
+		}
+	}
 
 	rflags = in->xv->renderflags;
 	if (csqc_isdarkplaces)
@@ -2906,6 +2928,76 @@ void QCBUILTIN PF_R_SetViewFlag(pubprogfuncs_t *prinst, struct globalvars_s *pr_
 
 void R2D_PolyBlend (void);
 void R_DrawNameTags(void);
+//FTESurf Patch 1698: checkpvs for CSQC, on a Source map under r_entpvs_source, with the entity cull's rules
+//(gl_alias.c BE_GenModelBatches): no record is visible, an eye in solid judges from the last good cluster (Patch
+//138) with no area unless the void overview draws everything, area 0 tests no area, r_novis nothing, an unvised map
+//areas only. Rows are kept for the last few clusters asked (portal eyes take turns with the main one).
+#define CS_PVSROWS 8
+static void QCBUILTIN PF_cs_checkpvs(pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
+{
+	extern qboolean R_EntPVSSource(void);
+	extern int Surf_LastGoodCluster(model_t *w);
+	extern qbyte *Surf_AllVis(model_t *w);
+	static struct { pvsbuffer_t buf; model_t *w; void *vis; int cluster; unsigned int used; } rows[CS_PVSROWS];
+	static unsigned int rowclock;
+	model_t *w = cl.worldmodel;
+	wedict_t *ent;
+	int cluster, area, areas[2], i, pick;
+	qbyte *pvs;
+	if (!R_EntPVSSource())
+	{
+		PF_checkpvs(prinst, pr_globals);
+		return;
+	}
+	ent = G_WEDICT(prinst, OFS_PARM1);
+	if (!ent->pvsinfo.num_leafs)
+	{
+		G_FLOAT(OFS_RETURN) = true;
+		return;
+	}
+	cluster = w->funcs.ClusterForPoint(w, G_VECTOR(OFS_PARM0), &area);
+	if (cluster < 0)
+	{
+		extern qboolean Surf_MainVoidView(void);
+		cluster = Surf_MainVoidView() ? -1 : Surf_LastGoodCluster(w);
+		area = 0;
+	}
+	if (r_novis.ival)
+		pvs = NULL;
+	else if (!w->vis)
+		pvs = Surf_AllVis(w);
+	else if (cluster < 0)
+		pvs = NULL;
+	else
+	{
+		for (i = 0, pick = 0; i < CS_PVSROWS; i++)
+		{
+			if (rows[i].w == w && rows[i].vis == w->vis && rows[i].cluster == cluster && rows[i].buf.buffersize >= w->pvsbytes)
+				break;
+			if (rows[i].used < rows[pick].used)
+				pick = i;
+		}
+		if (i == CS_PVSROWS)
+		{
+			i = pick;
+			w->funcs.ClusterPVS(w, cluster, &rows[i].buf, PVM_REPLACE);
+			rows[i].w = w;
+			rows[i].vis = w->vis;
+			rows[i].cluster = cluster;
+		}
+		rows[i].used = ++rowclock;
+		pvs = rows[i].buf.buffer;
+	}
+	if (!pvs)
+	{
+		G_FLOAT(OFS_RETURN) = true;	//nothing to judge from
+		return;
+	}
+	areas[0] = 1;
+	areas[1] = area;
+	G_FLOAT(OFS_RETURN) = w->funcs.EdictInFatPVS(w, &ent->pvsinfo, pvs, area > 0 ? areas : NULL);
+}
+
 static void QCBUILTIN PF_R_RenderScene(pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
 {
 	qboolean scissored;
@@ -7309,7 +7401,7 @@ static struct {
 	{"remapshader",				PF_remapshader,		0},
 	{"te_bloodqw",				PF_cl_te_bloodqw,	239},	// #239 void te_bloodqw(vector org[, float count]) (FTE_TE_STANDARDEFFECTBUILTINS)
 
-	{"checkpvs",				PF_checkpvs,		240},
+	{"checkpvs",				PF_cs_checkpvs,		240},	//FTESurf Patch 1698
 //	{"matchclientname",			PF_matchclient,		241},
 	{"sendpacket",				PF_cl_SendPacket,	242},	//void(string dest, string content) sendpacket = #242; (FTE_QC_SENDPACKET)
 

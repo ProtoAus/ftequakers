@@ -103,8 +103,16 @@ chosen originally -- masking can slice a prop that intersects a sky brush, and
 under RDF_SKIPSKY it can depth-reject the world behind one.  Both are real; both
 were weighed against a fault the reporter can see from spawn on a map he plays,
 and 1 remains one word away.
+
+FTESurf Patch 1698: DEFAULT 2 -> 1.  Source draws a sky face as a hole (Patch 990), so
+anything in the PVS behind it draws, and the mask had become a distance cut: Patch 990's
+scale writes it at 2x the face's distance, so it hid more the nearer the face (Lex:
+"stuff in the skybox will get culled out the closer I get to it").  What Patch 296 hid
+is culled by the PVS now: displacement records (1626), static props (1235), unvised
+maps by area (1271).  Quake/Half-Life keep the mask; the 3D sky room keeps its own.
+2 no longer masks a Source map (Lex: "a broken implementation of what I wanted").
 */
-cvar_t r_sky_forcedepth						= CVARFD ("r_sky_forcedepth", "2", CVAR_ARCHIVE, "Write correct depth for sky surfaces even when the sky is drawn by a GLSL program. Stops entities in other parts of the map showing through the skybox.\n0: never mask (the pre-Patch-126 behaviour).\n1: auto -- mask on Quake/Quake2/Half-Life, do not mask on Source/Doom3/CoD, whose renderers do not.\n2: always mask, on every game (default since Patch 296; on a Source map this is the only setting that stops the rest of the level drawing through the sky).");
+cvar_t r_sky_forcedepth						= CVARFD ("r_sky_forcedepth", "1", CVAR_ARCHIVE, "Write correct depth for sky surfaces even when the sky is drawn by a GLSL program. Stops entities in other parts of the map showing through the skybox.\n0: never mask (the pre-Patch-126 behaviour).\n1: auto (default) -- mask on Quake/Quake2/Half-Life; on Source/Doom3/CoD the sky is a hole, as their renderers draw it, so whatever the PVS admits behind it is drawn.\n2 masked a Source map's sky at r_sky_forcedepth_scale times the face's distance, hiding more the nearer you were (the default from Patch 296 to 1697); removed by Patch 1698, it now means 1.");
 //FTESurf Patch 768: monolith B4's WindowImposter slab sits a few units in front of its sky brush,
 //and at some angles that is under one depth step, so the mask won and the real sky showed through.
 cvar_t r_sky_forcedepth_push				= CVARFD ("r_sky_forcedepth_push", "4", CVAR_ARCHIVE,"Pushes r_sky_forcedepth's sky mask this many depth steps away from the eye, so a surface just in front of a sky brush still beats it; the level far behind the sky stays masked. GL only, and only where the sky itself writes no depth (e.g. Source/Half-Life maps with a skyname). 0: the mask is written at the brush, as before Patch 768.");
@@ -112,7 +120,7 @@ cvar_t r_sky_forcedepth_push				= CVARFD ("r_sky_forcedepth_push", "4", CVAR_ARC
 //Patch 990: Source draws a sky face as a hole, so a prop poking through one is still drawn
 //(bhop_ceaseless's spawn roof rises 100 units past its sky ceiling). The mask keeps hiding what is
 //far behind the sky (Patch 296) but is written this many times farther from the eye than the face.
-cvar_t r_sky_forcedepth_scale				= CVARFD ("r_sky_forcedepth_scale", "2", CVAR_ARCHIVE, "Writes r_sky_forcedepth's sky mask this many times farther from the eye than the sky surface, on the same pixels, so a model poking through a sky brush (as Source draws it) is not cut off while the level far behind the sky stays hidden. Source maps only. 1: the mask is written at the sky surface, as before Patch 990.");
+cvar_t r_sky_forcedepth_scale				= CVARFD ("r_sky_forcedepth_scale", "2", CVAR_ARCHIVE, "Writes r_sky_forcedepth's sky mask this many times farther from the eye than the sky surface, on the same pixels, so a model poking through a sky brush (as Source draws it) is not cut off while the level far behind the sky stays hidden. Source maps only: since Patch 1698 the one mask written there is the 3D sky room's own sky. 1: the mask is written at the sky surface, as before Patch 990.");
 
 static shader_t *forcedsky;
 static shader_t *skyboxface;
@@ -757,8 +765,8 @@ static qboolean R_SkyMaskWantedForGame(void)
 		return true;
 	if (r_worldentity.model->fromgame == fg_quake3)
 		return false;	//q3map2's invisible skyportals, as before
-	if (r_worldentity.model->fromgame == fg_new && r_sky_forcedepth.ival < 2)
-		return false;	//Source et al: masking here clips props at the sky brush
+	if (r_worldentity.model->fromgame == fg_new)
+		return false;	//Source et al: the sky is a hole (Patch 1698 removed 2's mask here)
 	return true;
 }
 

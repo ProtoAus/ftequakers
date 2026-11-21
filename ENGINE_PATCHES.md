@@ -1,5 +1,71 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1698 - A Source sky is a hole: the PVS behind it draws, and only the PVS (engine client + hl2 plugin + game QC/cfg)
+
+**Cause.** Lex, 21 Nov: the sky "culling" asked for earlier (other stages' ramps in the sky) "does some sort of
+distance culling ... stuff in the skybox will get culled out the closer I get to it"; they want the PVS drawn, the
+sky no hard cutoff, and of 2: "a broken implementation of what I wanted". It was r_sky_forcedepth 2 (Patch 296) with
+Patch 990's r_sky_forcedepth_scale 2: on a Source map the sky faces wrote a depth mask at twice their distance, so
+whatever lay D behind a face vanished once you were nearer than D. Source draws a sky face as a hole and culls every
+renderable through its client leaf system. World geometry here is PVS-culled (displacement records 1626, static
+props 1235, unvised maps by area 1271), but entities were not: r_ignoreentpvs 1 (HAVE_LEGACY) left network entities
+without leaf records and BE_GenModelBatches without a PVS test; decals and CSQC polygons had distance or frustum
+tests only. The mask had been hiding them.
+
+**Change.** gl_warp.c: r_sky_forcedepth defaults to 1 and a Source map's sky never writes the mask (2 means 1 there;
+Quake/HL keep it; the 3D sky room's own sky stays masked). r_entpvs_source 1 (renderer.c): on a Source map,
+BE_GenModelBatches (BEM_STANDARD) culls each entity with a leaf record by the view's unclipped cluster PVS --
+refdef.sceneentvis, PrepareFrame's entvis, set by Surf_DrawWorld only with a real eye cluster (none under r_novis or a
+sky camera in solid; an unvised map gets an all-visible row, so its entities are culled by area as Patch 1271 culls
+its world) -- and its areas, the area test dropped when the eye is in solid (area 0 is connected to nothing: the
+noclip margin, the void, maps whose leaves are all area 0). Weapon models are never culled; an entity with no record draws.
+Records: network entities on Source maps; CSQC entities re-take theirs each frame from where they are drawn (origin
++- model radius x |scale|, joined with the link's box: CSQC moves things by field writes, links ignore .scale, a
+RF_USEAXIS portal door is sized by setsize); a rotated brush uses its radius.
+Persistent decals keep a record and are culled by the same PVS unless a portal into another place drew last frame (a
+water capture no longer turns it off). r_entpvs_active (read-only, refreshed before Surf_DrawWorld's scene-cache
+return) tells CSQC, and CSQC's checkpvs takes the same rules there (no record is visible, an eye in solid judges from
+the last good cluster unless the void overview draws everything, area 0 tests no area, r_novis nothing, an unvised map
+areas only; rows kept for the last 8 clusters asked). Zones on maps whose leaves are all area 0 (bhop_anomalous)
+draw again: the old checkpvs refused every probe from an area-0 eye.
+r_voidscene_info counts both.
+mod_vbsp.c: VBSP_BoxLeafnums_r stops once its list is full (a map-sized box walked every node for nothing).
+Game: render_default.cfg restores 1 each map load (a saved `seta r_sky_forcedepth 2` is overridden), the
+surf_kvas/surf_boreas layers are gone; cl_scene.qc Scene_InPVS (r_entpvs_active, no TAS viz camera; checkpvs,
+else a portal eye; cached per 0.1 s or 64 units for static things) gates move_rope spans (linked over span and sag),
+particle-system ropes, CSQC emitters (a linked probe each; persistent glows are placed only in view, timed bursts out
+of view dropped as out of range), orbit systems (drawn per instance), and bodies: a trail is fed only while its body is
+in view (what was drawn fades by age), and a body's hat, crown and glow draw only while it is.
+
+**Verified.** Hidden rig, off the GPU (pixman labwc, llvmpipe client). Sky: ahop_coast 430 units past the west sky
+wall looking back (Lex's save 3, their screenshot ahop_coast_003): the mask cut the sea plane on a jagged diagonal and
+hid the zone outlines; without it both draw whole. 35 of Lex's saves on 9 maps and 9 sky-facing poses: no other pixel
+change. Entities, r_entpvs_source 0 against 1 at fixed poses: ahop_coast 38 of 175 culled inside the map and in the
+margin window (last cluster's PVS), entity setup 0.03 -> 0.07 ms; surf_insomnia 2-8 culled per pose; the unvised
+surf_leidenfrost, bhop_anomalous and ab_baume (area 0 everywhere) 0 culled; no visible change at 20 poses, including
+ahop_coast's power cables near and far. Reviews: the first cut (default flip) -- one reader found what the mask had
+hidden (sky-room entities at their real position, lobby avatars with trails and cosmetics, decals, particle ropes,
+trains, fish, func_lod). The second (entity cull) -- two readers found false culls, all fixed here: surfvis is
+frustum-clipped and all zero without vis (every entity and the weapon gone on unvised maps), the area test with the
+eye in solid, stale CSQC records (a Santa hat linked at 0 0 0), a trail hidden whole and judged from the wrong eye
+(portals, TAS camera); and leaks: emitters, crowns, decals beside water. The third (round two's fixes) -- two readers:
+fteqcc stores before && and ||, so the gate's solid-eye and TAS terms and its portal rescue were dropped; checkpvs
+with an area-0 eye failed everything (every gated thing gone on bhop_anomalous and ab_baume); the trail kept growing
+for its life after the body left view; a portal door's record shrank to its centre; unvised maps with areas were not
+culled; r_entpvs_active stuck on after the scene-cache path; bursts and orbits ungated -- all fixed above. The fourth
+(round three's fixes): no false cull in normal play; r_novis order, the far-void overview, the orbit probe's relink and
+a single-row cache thrashed by portal eyes, fixed. A fifth (that delta): the overview test read r_voidview, which any
+later no-world scene clears (the glow pass, the avatar preview) -- it reads the primary view's latched answer now. In the margin window (eye in solid, last cluster kept) ahop_coast's
+cables draw with r_entpvs_source on.
+
+**Boundary.** Render only. Not measured here: a lobby with other players, a sky-room entity seen through a sky face.
+A persistent particle glow, once placed in view, stays in the engine's particle list and shows through the sky after.
+Still ungated: engine trails and effects from packet entities, tesla arcs, explosions, world text, spotlight shafts
+and lasers (sky-traced, Patch 1218), the local player's own trail under a detached camera. An entity spanning three
+or more areas keeps two (Patch 257, as the server's send test) and can be culled from the third; more records reach
+that test now. A CSQC solid eye borrows the last good cluster for every checkpvs caller outside the noclip void overview
+(portal doors are offered in the margin window, as the world draws). CSQC answers lag up to 0.1 s or 64 units.
+
 ## Patch 1702 - Keep the newest two: backup rotation on the Pi (game tools + ops; no engine change)
 
 **Cause.** Lex, 21 Nov 2026, on our procedures: "I like backups and I like safety, but sensible, I don't need every

@@ -3870,11 +3870,24 @@ void BE_GenModelBatches(batch_t **batches, const dlight_t *dl, unsigned int bemo
 //	unsigned int orig_numstrisidx = cl_numstrisidx;
 //	unsigned int orig_numstrisvert = cl_numstrisvert;
 	extern cvar_t r_ignoreentpvs; //legacy value is 1...
+	extern qboolean R_EntPVSSource(void);
+	extern int r_entpvs_culled, r_entpvs_norecord;
+	qboolean recordsonly = false;
 
 	if (r_ignoreentpvs.ival)
-	{
+	{	//FTESurf Patch 1698: a Source map still culls each entity that has a leaf record (renderer.c r_entpvs_source),
+		//by the view's unclipped PVS (surfvis is frustum-clipped, and all zero on an unvised map). An eye in solid
+		//(area 0: the noclip margin, the void) is connected to no area, so it keeps the PVS test only.
 		worldpvs = NULL;
-		worldareas = NULL;
+		if (bemode == BEM_STANDARD && r_refdef.sceneentvis && !(r_refdef.flags & RDF_NOWORLDMODEL) && R_EntPVSSource())
+		{
+			recordsonly = true;
+			worldpvs = r_refdef.sceneentvis;
+			if (!worldareas || worldareas[0] < 1 || worldareas[1] <= 0)
+				worldareas = NULL;
+		}
+		else
+			worldareas = NULL;
 	}
 
 	/*clear the batch list*/
@@ -3931,6 +3944,7 @@ void BE_GenModelBatches(batch_t **batches, const dlight_t *dl, unsigned int bemo
 		r_voidvis_edicts = cl_numvisedicts - r_refdef.firstvisedict;
 		r_voidvis_brush = 0;
 		r_voidvis_dropped = 0;
+		r_entpvs_culled = r_entpvs_norecord = 0;
 		for (i=r_refdef.firstvisedict ; i<cl_numvisedicts ; i++)
 		{
 			ent = &cl_visedicts[i];
@@ -3998,8 +4012,15 @@ void BE_GenModelBatches(batch_t **batches, const dlight_t *dl, unsigned int bemo
 		}
 #endif
 
-		if (worldpvs && !cl.worldmodel->funcs.EdictInFatPVS(cl.worldmodel, &ent->pvscache, worldpvs, worldareas))
+		if (worldpvs && !(recordsonly && (!ent->pvscache.num_leafs || (ent->flags & (RF_WEAPONMODEL|RF_DEPTHHACK)))) &&
+			!cl.worldmodel->funcs.EdictInFatPVS(cl.worldmodel, &ent->pvscache, worldpvs, worldareas))
+		{
+			if (countcensus && recordsonly)
+				r_entpvs_culled++;
 			continue;
+		}
+		if (countcensus && recordsonly && (!ent->pvscache.num_leafs || (ent->flags & (RF_WEAPONMODEL|RF_DEPTHHACK))))
+			r_entpvs_norecord++;
 
 		switch(ent->rtype)
 		{

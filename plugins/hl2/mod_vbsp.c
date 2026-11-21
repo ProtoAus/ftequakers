@@ -6876,10 +6876,10 @@ static void VBSP_BoxLeafnums_r (model_t *mod, int nodenum)
 
 	while (1)
 	{
+		if (leaf_count >= leaf_maxcount)
+			return;	//FTESurf Patch 1698: full; the rest of a map-sized box's walk changed nothing (leaf_topnode is set by now)
 		if (nodenum < 0)
 		{
-			if (leaf_count >= leaf_maxcount)
-				return;
 			leaf_list[leaf_count++] = -1 - nodenum;
 			return;
 		}

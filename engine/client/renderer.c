@@ -142,6 +142,15 @@ cvar_t r_ignoreentpvs						= CVARD ("r_ignoreentpvs", "1", "Disables pvs culling
 #else
 cvar_t r_ignoreentpvs						= CVARD ("r_ignoreentpvs", "0", "Disables pvs culling of entities that have been submitted to the renderer.");
 #endif
+//FTESurf Patch 1698: with the sky a hole (gl_warp.c), what is drawn must be what the PVS holds, as Source's client leaf system culls.
+cvar_t r_entpvs_source = CVARD("r_entpvs_source", "1", "FTESurf Patch 1698: on a Source map, entities and persistent decals with a leaf record are culled by each view's PVS and areas even under r_ignoreentpvs 1, as Source culls every renderable; one without a record is still drawn. 0: frustum only (before Patch 1698).");
+cvar_t r_entpvs_active = CVARFD("r_entpvs_active", "0", CVAR_NOSET|CVAR_NOSAVE|CVAR_NORESET, "Set by the engine: 1 while r_entpvs_source applies to the loaded map (a Source map). CSQC culls its own polygons by the PVS when it reads 1.");
+qboolean R_EntPVSSource(void)
+{
+	model_t *w = cl.worldmodel;
+	return r_entpvs_source.ival && w && w->loadstate == MLS_LOADED && (w->engineflags & MDLF_SOURCEBSP) &&
+		w->funcs.EdictInFatPVS && w->funcs.FindTouchedLeafs;
+}
 
 cvar_t mod_md3flags							= CVARD  ("mod_md3flags", "1", "The flags field of md3s was never officially defined. If this is set to 1, the flags will be treated identically to mdl files. Otherwise they will be ignored. Naturally, this is required to provide rotating pickups in quake.");
 
@@ -1704,6 +1713,8 @@ void Renderer_Init(void)
 
 //renderer
 	Cvar_Register (&r_ignoreentpvs, "Hacky bug workarounds");
+	Cvar_Register (&r_entpvs_source, GRAPHICALNICETIES);	//FTESurf Patch 1698
+	Cvar_Register (&r_entpvs_active, GRAPHICALNICETIES);
 	Cvar_Register (&r_fullbright, SCREENOPTIONS);
 	Cvar_Register (&r_drawentities, GRAPHICALNICETIES);
 	Cvar_Register (&r_drawviewmodel, GRAPHICALNICETIES);
