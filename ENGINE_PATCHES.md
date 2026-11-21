@@ -1,5 +1,28 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1700 - TAS uploads in the site menu; a map picker with thumbnails (game web only; no engine change)
+
+**Cause.** Lex, 21 Nov 2026, a screenshot of tasupd's "Find a course" (a map name and a bare number box): "you need to
+link it to the main website, put the TAS upload menu option to all of the worldofsurf webpages ... a number 0 to
+whatever with no info what that number is?? maybe like pick a map from a endless drop down, which loads the thumbnail
+and the main/stages/bonues you can select". The TAS pages had no site menu and no link from the site, and their
+"Link your Steam account" pointed at play.proto.bar/board/link, a 404 (the board lives at proto.bar/ftesurf/board/).
+
+**Change.** Game surfd/tasupd.py: every page carries the site's menu (SITE_NAV: Overview, Leaderboard, Players, Zoning,
+Anti-Cheat, TAS uploads current, Download). The course finder is a map name with the browser's own list of every map in
+the site's media/mapmeta.txt (`<datalist>`, no script; TASUPD_MAPMETA, re-read when the file changes). A map's page
+(`/tasup/board?map=`, Main by default) shows its thumbnail (/ftesurf/media/thumbs/<uuid>.jpg on the same origin; CSP
+gains img-src 'self'), tier, stage and bonus counts, and chips for Main, each bonus and any course with runs; a staged
+map says its main course is taken whole. The link page is proto.bar/ftesurf/board/link. The site's own pages link to
+play.proto.bar/tasup/: src/release/page.template.html, site/zoning.html, site/anticheat.html (menu and footer), and
+surfd/web/board.html (with the next surfd generation; tools/backend-pending.md). tools/install_tasupd.py passes
+TASUPD_MAPMETA and accepts each earlier installer's unit (ENV_ADDED groups: a8efd378's, then 73229378's).
+
+**Verified.** test_tasupd 283 (6 new: menu, finder list, map card and chips, staged map, unknown map, no mapmeta),
+test_install_tasupd 53; the live unit read from the Pi is the 73229378 form the upgrade accepts; the pages rendered
+with the site's real mapmeta.txt (2846 maps) and a live thumbnail in headless Chromium. Not independently reviewed:
+markup over validated names (MAPNAME, the thumbnail UUID pattern), all escaped.
+
 ## Patch 1699 - The "no evidence" mark on top-10 runs, switched off until uploads are reliable (backend + QC)
 
 **Cause.** Lex, 21 Nov 2026, choosing among options for a top-10 run whose evidence never arrives: "Show it with a
