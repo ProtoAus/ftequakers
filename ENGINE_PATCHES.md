@@ -1,5 +1,67 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1694 - The controller tag: a run that used a controller is marked light fire red (engine + QC + backend)
+
+**Cause.** Lex, 20 Nov 2026, after the anti-cheat audit: gamepads are "100% allowed, it's a legit way to play", but
+controller runs should be TAGGED like Linux ones, in a "lite fire red". Nothing recorded controller use, and controller
+look frames are skipped by the mouse identity check (in_generic.c in_jrn_vjoyturn), so a run turned by a stick was
+indistinguishable from a mouse run.
+
+**Change.** Engine client: the read-only in_pad_frames (NOSET|NOSAVE|NOTFROMSERVER|NORESET, wraps at 2^24) counts frames
+in which IN_MoveJoystick changed the view or the movement (after the dead zones and the menu/console clear),
+controller key presses (K_JOY*, K_AUX*, K_GP_*) whose bind plays, and every input frame while such a key's release
+command is still pending (padheld, per key and device, cleared by that device's key-up first thing in Key_Event).
+Key_PadBindPlays splits the bind exactly as Cbuf_ExecuteLevel does (Key_CmdLineEnd; a + bind judged with its key number
+appended, as it runs) and plays unless every command's first word is empty or UI (menu, console, chat, voice, scores,
+weapon wheel, screenshot). CL_SendCounts carries the count in every move's cursor block beside Patch 376's mouse
+counts: cursor_screen x = count mod 32767 (+0.5 for the wire's x32767 truncation), y = 1 (Patch 376 left both 0,
+which an older client still sends). in_journal_synth gains `pad <v>` and `padkey [down|up] [dpad]` (local console;
+a script lapse every input frame while set; the journal is marked). Game: SV_PadCmd, first in PlayerPreThink, reads
+the count of each client command (kinds 1/2); a change in a command of the run marks run_t_pad, and run_st_pad for
+the open stage (restarted at its box exit), unless the body is not driven (spectate, replay/rewind watch, save-lock
+hold, frozen, ghost camera). Saves carry `pad 1` (raise-only), a load re-seeds the count, rewind and first-attempt
+keeps carry it, a load or resume reopening a stage gives it the run's mark; the finish writes `pad 1` after `plat`
+(not under held metadata); finish posts send `pad=1`, stage posts their stage's; `cmd timer` prints `pad` and
+`padin`. sv_rank_padcount (unset = 0) unranks a connection whose engine never sent a count (rec_padok; PW_PADCOUNT,
+"padcount"): 1 once a release with 1694 is out (0.1.54 has 1646 but not 1694). tools/reccheck.py reads the record
+(notes only) and the word; surfd: runs.pad and replays.pad (runs_pad, idempotent), the post and the finish tail raise
+it like `plat`, board and maps JSON `pad: 1`; board.js/css and the in-game board colour the name #FF6A4D over
+Linux's #3FC1FF with "Controller" in the tooltip; the admin run page shows it. The Linux build has no controller
+input at all (gl_vidlinuxglx.c), so a Linux run is never tagged.
+
+**Verified.** Rig (one dedicated server, one headless client; since the owner's compositor crash on 21 Nov the nested
+labwc renders with pixman and the client with Mesa llvmpipe), surf_ace with an end box 300 u east of the start
+(arms/p1694.py, private). Controller input injected with in_journal_synth: the same IN_JoystickAxisEvent/IN_KeyEvent
+calls XInput makes.
+- right stick 0.1 (inside the 0.19 dead zone): in_pad_frames +0.
+- stick in the start box, then walk out and finish: run pad 0, the .rec has no `pad`.
+- stick mid-run: pad 1 before the finish; the .rec ends `prof`, `plat 1`, `pad 1`; reccheck pad_end 1, 0 faults.
+- A button mid-run (default bind impulse 10): +1, pad 1. D-pad up held from inside the start box: pad 1.
+- sl_save in a marked run: state.txt `pad 1`; !r, then sl_goto: pad 1 again. A 0.15 s burst and an instant save: the
+  same (the first cut's out-of-band report missed it -- review 1).
+- control: the same engine with the deployed 0.1.53-era progs (P1692): the count moves, no mark; the released client
+  with these progs: padin 0, pad 0.
+- Not measured: the stage mark (no stage post in the rig), the not-driven predicate, focus loss while holding,
+  sv_rank_padcount (the headless client's `rawmice` verdict comes first; `padin` staying 1 across loads is the proxy),
+  a real XInput pad (the win64 client cross-compiles; the injected calls are the backend's).
+Key_CmdLineEnd against cmd.c's loop: a reviewer's differential fuzz, 20M random strings, no mismatch. reccheck
+1087/1087; surfd test_pad, test_plat, test_board, test_recplot, test_admin pass (scratch venv Flask; test_board's
+two-thread migration flake, test_ranked and test_replays fail identically on origin/main).
+
+**Review.** Round 1 (three lenses): the first cut reported the count by a throttled csprogs event; a save/load inside
+its 0.5 s window hid controller bursts on segmented boards (blocker), input before the start or a load was credited
+late, stage rows took the run's mark, UI binds counted, the header `pad` was never written. Redesigned in-band.
+Round 2 (three lenses): old engines ranked untagged (gate added), only a bind's first command was judged, a held button
+counted only at its press, holds and pad-button loads mis-marked, the stage mark ran from the boundary, not the box exit.
+Round 3 (two): the gate read the per-command baseline, so a load's or resume's latch would have unranked a current
+engine (blocker once enabled: now per connection, rec_padok); focus loss hid a held button; the test hook could be left
+on into a run; quoted first words; engine-made commands zeroed the baseline. Round 4 (two): a csqc-swallowed key-up
+could leave a stale count; the bind splitter differed from Cbuf's; a replay watch was "driven"; a pad-sent stringcmd
+load tagged the loaded run. Round 5 (two): a + bind runs with its key number appended; held counting stopped with the
+console open; run_t_frzon lagged a packet. Round 6 (one): a + bind's appended key number is judged only where an
+alias names it (`+showscores;` was a false tag); one command at an in-move save-lock release stays unmarked (such runs
+are practice). Round 7 (one): nothing. Engine commit 4661169a0; game: see ENGINE.txt's P1694 note.
+
 ## Patch 1696 - Upload a TAS run from the game; your TAS runs as Jargon guides (game QC + tasupd; no engine change)
 
 **Cause.** Lex, 21 Nov 2026, after P1640's web uploads went live: "maybe a in game upload works? ... is it possible to
