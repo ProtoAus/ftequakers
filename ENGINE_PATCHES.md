@@ -2,7 +2,7 @@
 
 ## Patch 1703 - The input journal is part of online play (menu + backend)
 
-**Cause.** Lex, 21 Nov 2026, after P1699's count showed 188 of 189 recent Windows top-10 runs with no input journal:
+**Cause.** Lex, 21 Nov 2026, after P1699's count found 188 recent Windows top-10 runs (of 239 WOS rows) with no input journal:
 "can you make that more mainstream? like when you play online, also accept input journal, and just make all runs
 before this point dated, and accepted since this wan't required yet. But it should be on if you're playing on a
 lobby." The journal was an opt-in box on the online terms (tier 9), pre-ticked only for players accepting for the
