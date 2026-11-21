@@ -696,7 +696,7 @@ static int PMSrc_ClipVelocity (vec3_t in, vec3_t normal, vec3_t out, float overb
    skips RNGFix's collision and step halves, adds the HL2 jump boost).  Mover 14; below it, 1. */
 static int PMSrc_RNGFix (void)
 {
-	if (movevars.sourceversion < 14 || movevars.fixslopes < 2)
+	if (movevars.sourceversion < 14 || !(movevars.fixslopes >= 2))	/* a NaN reads as SV_PMSrcVer reads it */
 		return 0;
 	return movevars.fixslopes >= 3 ? 3 : 2;
 }
@@ -2690,7 +2690,11 @@ static qboolean PMSrc_CanUnduck (void)
 static void PMSrc_FinishDuck (void)
 {
 	if (pmove.ducked)
+	{
+		if (PMSrc_RNGFix () == 3)
+			pmove.ducking = false;	/* P1709: Momentum's FinishDuck always ends the transition (cpp:1109) */
 		return;
+	}
 
 	pmove.ducked = true;
 	pmove.ducking = false;

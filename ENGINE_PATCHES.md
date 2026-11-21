@@ -43,7 +43,11 @@ duck; ladders; un-grounding as an interaction; ahop pinned the takeoff when jump
 old-buttons column as engine bits and wrote anywhere (now momstep/*.txt); an old verifier refused every mover-14 pin
 (fixslopes < 2 now pins 13). Deploy order (review): the configs, the lobby engine, surfd's verifier and the client
 release go together -- an older client predicts fixslopes 2/3 as 1 and an older engine with the new configs runs a
-third ruleset; TAS projects refuse an identity load across the change (the pin moved).
+third ruleset; TAS projects refuse an identity load across the change (the pin moved). Delta round (one reviewer):
+no blocking; PMSrc_RNGFix reads a NaN fixslopes as SV_PMSrcVer does, and ahop's FinishDuck ends the transition when
+already ducked. Left (BACKLOG): with pm_fixedges on, the top-of-tick landing re-decides an edge-fix refusal with the
+next tick's buttons (Source re-grounds only a game-moved body); a teleport left rising at 134-140 u/s is not
+re-grounded at the top.
 
 **Not changed.** +walk (Momentum ahop's 150 u/s: its boost limit and air accel use it; a walked jump here is ~60 u/s
 slower, air ticks 6.0 u/s), HL2's duck timings and duck-jump. Three ahop_coast spots where Momentum stays airborne at
