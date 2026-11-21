@@ -195,6 +195,12 @@ void R_SetSky(const char *sky)
 		sky = r_skybox_default.string;
 
 	R_LoadSky(sky);
+	//FTESurf Patch 1695: a GoldSrc map's missing custom sky (333 of P1669's 1,308) draws Half-Life's stock sky first.
+	if (R_ForcedSkyEmpty() && mapsky && cl.worldmodel && cl.worldmodel->fromgame == fg_halflife && Q_strcasecmp(sky, "desert"))
+	{
+		Con_DPrintf("sky %s: no face found; drawing desert\n", sky);
+		R_LoadSky("desert");
+	}
 	//FTESurf Patch 1191: a declared sky with not one face found (surf_utopia's TF2 sky
 	//without TF2) gets the same fill as a map that declares none.
 	if (R_ForcedSkyEmpty() && mapsky && *r_skybox_default.string && Q_strcasecmp(sky, r_skybox_default.string))
@@ -208,6 +214,12 @@ void R_SetSky(const char *sky)
 	{
 		Con_DPrintf("sky %s: no face found; drawing sky_day01_01\n", sky);
 		R_LoadSky("sky_day01_01");
+	}
+	//P1695: the game's own sky (gfx/env/wos_day*.jpg), for an install with none of the above.
+	if (R_ForcedSkyEmpty() && *sky && Q_strcasecmp(sky, "wos_day") && !*r_skyboxname.string)
+	{
+		Con_DPrintf("sky %s: no face found; drawing wos_day\n", sky);
+		R_LoadSky("wos_day");
 	}
 }
 static void R_LoadSky(const char *sky)
@@ -388,7 +400,7 @@ static void R_ForceSky_f(void)
 			Con_Printf("Current user skybox is %s\n", r_skyboxname.string);
 		else if (*cl.skyname)
 			Con_Printf("Current per-map skybox is %s%s\n", cl.skyname,
-				(forcedsky && Q_strcasecmp(forcedsky->name+7, cl.skyname)) ? " (not found; drawing r_skybox_default)" : "");	//+7: "skybox_"
+				(forcedsky && Q_strcasecmp(forcedsky->name+7, cl.skyname)) ? va(" (not found; drawing %s)", forcedsky->name+7) : "");	//+7: "skybox_"
 		else if (*r_skybox_default.string)
 			Con_Printf("Map declares no sky; using r_skybox_default %s (loaded: %s)\n", r_skybox_default.string,
 				!forcedsky ? "no" : Q_strcasecmp(forcedsky->name+7, r_skybox_default.string) ? va("no; drawing %s", forcedsky->name+7) :	//P1627

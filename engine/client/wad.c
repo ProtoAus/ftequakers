@@ -1088,6 +1088,8 @@ void Mod_ParseInfoFromEntityLump(model_t *wmodel)	//actually, this should be in 
 	// this hack is necessary to ensure Quake 2 maps get their default skybox, without breaking q1 etc
 	if (wmodel && wmodel->fromgame == fg_quake2)
 		strcpy(skyname, "unit1_");
+	else if (wmodel && wmodel->fromgame == fg_halflife)
+		strcpy(skyname, "desert");	//FTESurf Patch 1695: sv_skyname's default in Half-Life
 	else
 		skyname[0] = '\0';
 
