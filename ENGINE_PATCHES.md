@@ -1,5 +1,30 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1699 - The "no evidence" mark on top-10 runs, switched off until uploads are reliable (backend + QC)
+
+**Cause.** Lex, 21 Nov 2026, choosing among options for a top-10 run whose evidence never arrives: "Show it with a
+'no evidence' mark." Evidence (the receipt, the .view sidecar, the Windows .hid journal) was collected and checked
+but never shown on a board.
+
+**Change.** game surfd/surfd.py: noev_reasons(db, cands) names what is missing for WOS top-10 candidates -- "receipt"
+(none read, or no run id), "view" (angles empty after the receipt was read) or "journal" (plat 0 and journal ABSENT;
+Linux has none) -- and judges a run only once sweepmeta's receipts_through is NOEV_MARGIN (120 s) past its submission
+and only if it was submitted from NOEV_SINCE (21 Nov 2026 00:00 UTC). board_rows adds `noev` to WOS main-course and
+bonus rows ranked 10 or better (on the combined board a WOS row's place bounds its WOS rank; past 10 it is counted on
+the board's index); stage and TAS boards are not judged. web/board.js + board.css: a grey "no evidence" chip after the
+name, the reason in its tooltip. QC cl_online.qc / cl_scores.qc: ob_noev, a grey "no evidence" after the name and a
+tooltip line. NOEV_ON reads SURFD_NOEV: unset (the default) marks nothing.
+
+**Verified.** surfd/test_noev.py (10 checks): nothing without a watermark, before the reader passed the run, or with
+the switch off; with it on, the missing receipt/view/journal named on the ranked board and on the combined board (a
+WOS #10 at combined place 11 included), a Linux run without a journal unmarked, ranks 11-12 and older runs and stage
+rows not judged. test_admin (its key-decision board snapshot ignores `noev`, which follows the watermark by design),
+test_board, test_web, test_plat, test_pad pass; all three progs build with 0 warnings. Live db, read-only, 21 Nov: of
+239 WOS main/bonus rows from 14 days, 33 had no receipt, 167 no view, 188 Windows rows no journal, 13 complete --
+hence the switch.
+
+**Review.** None (display only, off by default). Before SURFD_NOEV=1: make top-10 uploads reliable (BACKLOG).
+
 ## Patch 1697 - One review page for new top-10 runs (backend only)
 
 **Cause.** Lex's anti-cheat finish list (20 Nov 2026), item 7: "one review page for new top-10 runs". The admin
