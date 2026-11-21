@@ -1,5 +1,79 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1674 - One build per map in tournament pools; tournament standings with an Elo rating (backend only)
+
+**Cause.** Lex, 21 Nov 2026, after testing tournaments: "In tournament, only show 1 map of each, showing the momentum
+mod version of the fix/ksf/css version" and "Keep stats on how many tournaments people win, tournament statitics. Maybe
+even a tournament leaderboard, elo style?". The qualified pool listed every build of a map (surf_x and surf_x_css drew
+side by side) and surfd kept no standings.
+
+**Change.** game surfd/tournament_pool.py: `catalogue(..., fold=True)` folds the filtered, qualified rows by map family
+(surfd.variant_base, lowercase): the Momentum build (the family root) stays, else the smallest variant name; nothing is
+folded when the catalogue has no family. Only the automatic pool folds (`selected` folds when the host gave no pool);
+a host's own pool and `revalidate` of a frozen draft use exact names (fold=False), so a draft that holds a variant still
+revalidates. surfd.py passes variant_base to the tournaments and party_lobbies namespaces. surfd/tournament_rules.py
+`standings(matches, banned)`: finished matches that reached GO only; pairwise Elo from final places (K 32 / (n-1),
+applied simultaneously, everyone starts at 1000; shared places score 0.5), wins, shared wins, played, best; banned
+SteamIDs dropped; names trimmed to NAME_BYTES. party_lobbies.py serves them on the existing route as
+`GET /api/tournament-lobbies?stats=1&limit=` (1-200, default 50; play.proto.bar's nginx forwards exact paths only),
+replayed from all match states at most every 30 s per worker; opening a tournament room posts one lobby chat line
+(social.announce, always=True, so a personal-best line cannot silence it).
+
+**Review.** Two rounds. Found and fixed: folding broke revalidate of drafted variants; mixed-case families; a stale
+stats cache (now a 30 s TTL); banned players and matches without GO counted; the announce silenced by personal-best
+lines.
+
+**Verified.** surfd tests at main 9ccec5dc: test_tournaments 54 (Standings), test_party_lobbies 44 (stats route, one
+announce), test_tournament_pool 7 (fold, case, exact names), test_social 88. Reaches surfd with guarded generation
+gen1674 (game tools/p1672-delivery.md).
+
+## Patch 1673 - Tournament tab: equal cards, player pictures, variant thumbnails and a leaderboard (game menu QC only)
+
+**Cause.** Lex's 21 Nov tournament test list: the four how-it-works bubbles under the room list, the fourth smaller;
+"names in a tournament lobby have no display picture"; "allow the CSS/fix/ksf versions to use the Momentum Mod
+thumbnail"; a tournament leaderboard.
+
+**Change.** game src/menu/m_tournament.qc: the four cards share `floor((scr_x - 36) / 4)`; MT_SeatRow and MT_SpecRow draw
+the Steam picture (MP_Draw) when the row has room, else the dot-only row; a Leaderboard / Open rooms toggle beside
+Refresh shows MT_DrawStats (fetched from `/api/tournament-lobbies?stats=1&limit=100` every 30 s: rank, picture, name,
+rating, wins, shared, played; your own row pinned; tournaments-off, loading, old-server and empty states).
+src/menu/m_main.qc ui_meta_load: a variant row (ms_varof) with no picture of its own takes the base row's page and cell,
+and its uuid unless it has one.
+
+**Review.** Two rounds: the seat-row tag overlapped the picture; the tournaments-off message; the footer counted unrated
+matches; a variant's own uuid was replaced. All fixed.
+
+**Verified.** fteqcc m_progs 0 warnings on main 9ccec5dc; tools/tournament_playtest.py screenshots (cards, seat
+pictures). Reaches players with a release.
+
+## Patch 1672 - Tournament matches: competitors visible, a real hold lock, no vote spam, readable centre text (game QC only)
+
+**Cause.** Lex's 21 Nov tournament test list: competitors invisible in a match; holding space while held "bounces"
+("I want proper lock if you're going to do one"); the round winner's name and the knocked-out names overlap; the map's
+own centre text drawn over the tournament start text; "vote: vote cancelled" console spam after a tournament. Causes:
+a player re-entering a round map as a held spectator came through SpectatorConnect, so Lobby_AvatarSpawn never ran and
+no lobbyavatar drew them; the hold was run_pmhold on the server only, so MOVETYPE_WALK kept client prediction running;
+Tour_Clear ran on every idle poll, cancelling any vote and pushing lobby_cyc_next (the idle server never rotated); the
+centre sub line was placed with the UI font's height under a display-font title; MapMsg_Draw and Gfx_DrawMissing drew
+regardless.
+
+**Change.** game src/server/sv_tournament.qc: Tour_Avatar spawns the lobby avatar after every release respawn and frees
+it at the three forced-spectator sites; Tour_Hold releases spectate, save-location and replay-watch pins, voids the
+timer, saves the movetype and sets MOVETYPE_NONE (SV_PMTypeForClient -> PM_NONE: prediction stops), Tour_PreThink keeps
+it, Tour_Unhold restores it; sv_player.qc poses a held avatar (Pose_Capture). Tour_Clear acts only for a player who was
+held: tourney_clear, the cycle push, and Vote_Cancel only for a lobby vote. src/client/cl_tournament.qc
+Tour_CentreBusy (the same exits as Tour_Hud) hides MapMsg_Draw (cl_main.qc) and the missing-content banner (cl_gfx.qc)
+while the tournament text shows; the centre block sits on a dark plate with the sub line under the display-font title;
+the banner measures its title in the display font, width min(scr_x - 32, max(380, 68 * size)).
+
+**Review.** Two rounds: save-lock and replay pins clobbered by the hold; an orphan spectate; held avatars frozen in one
+pose; Tour_CentreBusy disagreeing with Tour_Hud (an empty plate); the wider banner over the run timer. All fixed.
+
+**Verified.** fteqcc sv/cl 0 warnings on main 9ccec5dc. tools/tournament_playtest.py (local server and two clients):
+run5 passed every check -- both competitors have avatars after release, no client-side bounce while held, no "vote
+cancelled" line, screenshots of the centre plate and banner. Lobbies on qwprogs 12412938 / csprogs 7efb318d 20 Nov
+17:55Z (game tools/p1672-delivery.md); later lobby deploys carry it.
+
 ## Patch 1640 - TAS uploads: a physics-checked upload service for .rec files from any tool (backend only)
 
 **Cause.** Lex, 20 Nov 2026: TAS records from any tool, bot or fork are fine "as long as the run makes sense physics
