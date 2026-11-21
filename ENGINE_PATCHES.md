@@ -1,5 +1,184 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1704 - Run views go to the HTTPS collector, so top-10 evidence arrives (engine client + server + fs + cmd, surfd, nginx)
+
+**Cause.** P1699's count (21 Nov) found 167 of 239 recent WOS top-10 rows with no view sidecar. The lobby logs of
+18-21 Nov: 67 receipts signed a view; the server asked for 51 (16 were never asked -- `not asking again`, the one
+netchan upload slot still held by an earlier run), 47 clients started sending, 23 views landed (34%). The netchan
+upload goes one chunk per round trip behind every reliable message (a sample run: 85 `archive get2/ack2` downloads in
+the same connection, then a drop), and a disconnect or the next run's arming ends it. Journals already went to the
+HTTPS collector (P774); views did not. A signed view digest does not prove a staged copy: without online consent the
+client signs its local sidecar and drops the upload copy (`replay: sidecar dropped`).
+
+**Change.** engine server/sv_user.c SV_UploadAsk: on a server with `sv_recupload_https 1` (new, default 0; lobby.cfg
+ships 0; the live lobbies get 1 from the Pi-only lobby_local.cfg at deploy -- the collector keeps only runs whose
+receipts it can read), a view asked of a client advertising `fsviewhttp 1`, for a map named as the collector names
+maps (no leading + - ., no ..), is stuffed as `rec_ul_http <nonce> view <map> <runid>` and the journal after it is
+asked at once; nothing stays armed on the server, so `not asking again` cannot happen for these clients. Logged with
+Con_Printf (`sv_recupload: asked <name> for <path> over HTTPS`). client/cl_receipt.c: `fsviewhttp 1` (userinfo,
+NOSET); rec_ul_http takes `view`. rec_sign PINS the view and journal digests it signs, by nonce and server (16
+latest); a request is accepted only for a run signed on the server asking, copies that digest, and its bytes must hash
+to it when sent, so a file another server's csprogs armed or rewrote is not signed or sent (`not the file this game
+signed for that run`). Every accepted HTTPS request (journals too) has its armed file taken from data/staged/ (the
+gamecode keeps two runs there and clears it at every csprogs load) to httpq/<nonce>.<kind> under FS_ROOT (the install
+root -- default.fmf disables the home dir -- outside every game searchpath; FS_GamedirIsOkay refuses an httpq* gamedir
+or package in any case or trailing dot, so neither a server's gamedir nor a package search can mount it) -- a journal
+MOVED (no raw journal left for the next server's csprogs; an arming that ends unsent, by a disconnect or the ring
+dropping it, removes its journal too), a view COPIED (cl_watch.qc rebuilds the player's own replay from the staged
+view) -- and joins one queue (40; 20 per host -- an IP address, all its ports and schemes (a v4-mapped or NAT64
+64:ff9b::/96 address counts as its IPv4), and for the quota and fair share an IPv6 /64 as one -- whose oldest journal
+then oldest view goes first; a full queue keeps room for the running request's retry; a host group at its quota
+replaces its oldest unproven or own entry (never another proven host's; refused if none), and a host with fewer than
+the fullest takes the oldest slot of the fullest host that has never had an upload stored this session -- only once
+its own file is taken -- so a proven lobby's waiting evidence is never pushed out and no junk host keeps more than a
+fair share; a proven host may always take an unproven host's slot; proven hosts' requests go first; a request whose
+file already exists is refused; a file another program holds (Windows will not move it: antivirus, the indexer) is
+copied instead, checked to the last byte; a host whose requests of one kind the collector called junk -- 400
+malformed, 410 no such run -- 3 times without a stored upload between is not served that kind again this session, and
+its queued ones of that kind go); any refused request's armed journal is removed (a raw journal left in data/staged/
+is readable by the next server's csprogs); a request needs the online terms (rec_terms 9 or more: a server's own
+csprogs checks nothing for the engine); a request keeps its file's system path, so a server switching the gamedir
+cannot strand it;  the first rec_sign of a nonce on a server wins, as its first receipt does; one runs at a time,
+views first; no answer or a broken connection (0, 900+), 404 (a rolled-back collector), 408, 429 or 500-504 is tried
+again after 30, 90, 270, 600 and 1200 s (6 tries, ~36 min; a backend restart takes ~5); anything else is given up; a
+POST has the larger of 300 s and 120 s plus 1 s per 32 KB before it counts as unanswered; the file is removed once
+stored or given up, never from the CL_Receipt_HTTPStart work item (file calls take the worker lock, which runs queued
+main-thread work: its verdict is acted on in CL_Receipt_Think); httpq/ is emptied at the first frame (a previous
+launch's requests died with it) and whenever rec_upload goes to 0; rec_hid_upload 0 removes waiting journals at once.
+A view is signed as `FTESURF-VIEW 1 / server / map / runid / nonce / view <sha256> <len>` (the server its run was
+signed on) and posted to https://play.proto.bar/api/view (rec_hid_testurl's /api/hid -> /api/view for a local test);
+cap RCPT_ULMAX (4 MiB), as over the netchan. A view needs rec_upload only (a journal also rec_hid_upload). A
+disconnect no longer cancels: CL_Receipt_Disarm still clears the armed slots (Patch 418: an arming is an offer to one
+server) but accepted requests go only to the fixed collector. common/cmd.c: cfg_reset/resetcfg refuse an insecure
+caller (a server's stufftext or csprogs): they reset every cvar at local level, past "a server may not reset what it
+may not set", which would put rec_upload back on after an opt-out and rec_hid_upload off. rec_upload's description
+names the collector and says an upload asked for finishes after the player leaves. surfd/hidupload.py: POST /api/view
+takes only `FTESURF-VIEW 1`, /api/hid only `FTESURF-HID 1`; the rate count is per route before anything is read (views
+30/min, journals 12); a view's statement must name the receipt's signed server (schemes such as dtls:// included) and
+carry exactly its signed view digest (a mismatch is refused, as a journal's is: stored it would read as a FAULT, and a
+server's csprogs can arm a file under a visitor's public nonce; since an honest client cannot send one, the first
+refused offer is kept as <runid>.viewrefused, which surfd/sweep.py reads as the digest FAULT the netchan route gave,
+on its first read or when the marker appears later), needs a finished run (signed ticks a positive integer) and fits
+min(4 MiB, 256 KiB + 4 KiB per tick -- a view line per rendered frame, ~6800 fps); a missing receipt, or a view
+statement naming another server than its receipt, answers 410 on both routes (final, and P1704 clients count it as
+junk), a missing map directory 503 only while the evidence root is empty or unreadable (a wrong deployment) and 410
+otherwise, an oversized receipt and an unfinished run's journal budget 403, not 503 -- clients now retry a 503; every
+stored or refused upload is logged, with its map and runid once the receipt's own key signed it. surfd/surfd.nginx:
+`location = /api/view` with its own zones (surfdview 30r/m burst 10, 2 connections per address, 64 in all, 4 MiB body,
+5 s between reads); the exposure manifest lists it. setup_public.sh: `--view-only` adds that location and zones to a
+live site the way `--hid-only` adds the journal's (the same checked, rolled-back installer, parameterised by route);
+its full install and install_board_endpoint.sh write the view zones too. game menu m_main.qc: the online terms say
+where the view goes.
+
+Old clients keep the netchan route; a new client on an old lobby engine gets `rec_ul_send` for views and answers it as
+before, while the journals that engine already asks over HTTPS (P774) take the new queue (pin, terms, retries). Deploy
+order: the surfd generation and `setup_public.sh --view-only`, then the lobby engine, then `set sv_recupload_https 1`
+in the Pi-only lobby_local.cfg plus rcon; the client release goes AFTER the surfd generation (it retries a 503, and
+the old collector answers 503 to every community server's journal: up to six full re-sends each). Before rolling surfd
+or nginx back past this patch, rcon it to 0 and remove it from lobby_local.cfg (rcon alone does not survive a lobby
+restart; a 404 is retried ~36 minutes).
+
+**Verified.** Rig arms (arms/p1704.py, private; a local collector = the patched hidupload.py, 3 s before each request
+is read): patched client + server -- V1 view and journal both `over HTTPS`, stored, digests equal the receipt's; V2
+`disconnect` once asked: both stored, `view HTTP stored` after the disconnect (the first cut printed `view HTTP
+cancelled` there); V3 two runs back to back: four files through the queue; V4 `reconnect` once asked: a witness file
+in data/staged/ is gone (the new csprogs cleared it) and both files are still stored from the queue. `retry`: the
+collector answers the first request 429 -- `trying again in 30 s`, the journal goes meanwhile, the view is stored 30 s
+later. `tamper`: as retry, and the queued view is overwritten during its wait -- the client refuses it (`not the file
+this game signed`), the collector sees no second view request, the journal is stored. `noterms`: `rec_terms 1` after
+the menu published 10 (csprogs still arms from consent.txt) -- the engine refuses both (`the online terms are not
+accepted`), the collector sees no request. `nomove`: an LD_PRELOAD shim fails rename() of a staged file into httpq/
+(as Windows does when another program holds it) -- the client prints `could not be moved; copied` for the journal
+(none in the control) and both files are stored. After a patched or nomove run the staged view is still there for the
+own replay and the staged journal is not. (The arm overwrites the queued copy from outside the game.) `gateoff`
+(sv_recupload_https 0): the view over the netchan, the journal over HTTPS. Released client + new server: view over the
+netchan, journal over HTTPS. New client + released server: the netchan route. Every case: httpq/ empty at the end, and
+(P1704 clients) a planted leftover removed by the first frame; `gamedir httpq` and `gamedir HTTPQ.` refused; with
+rec_upload 0, a server's `stuffcmd Player cfg_reset` is refused and rec_upload stays 0. surfd/test_hidupload.py 29 (12
+for views: stored against the receipt, routes take only their kind, no view without a commitment, a mismatch refused,
+logged and marked once, a statement naming another server refused, a dtls:// server name accepted, no receipt final,
+unfinished runs refused, the run-clock budget, an existing view kept, the 4 MiB cap, per-route rate counts including
+malformed requests; and the journal route's missing receipt now 410, missing map directory 503 for an empty evidence
+root and 410 otherwise, an unknown budget clock 403); surfd/test_sweep.py: a .viewrefused marker reads as the digest
+FAULT, its control as VALID, and a marker that arrives after the first read wakes the run into the FAULT and ends its
+wait for a view; test_hid_proxy_install.py 10 (the view route added after the journal's, idempotent; an unknown route
+refused). Menu, csprogs and server progs build with 0 warnings. Local Linux build note: GCC 16 makes fs_zip.c's
+crc-table pointer type an error; the test build passed -Wno-error=incompatible-pointer-types (unrelated; release
+builds use the bullseye chroot).
+
+**Review.** Round 1 (control flow, evidence, adversary): queued requests held only a path and the gamecode deleted the
+staged file first (all three) -- moved to data/httpq/; nginx's one journal budget (12/min, 4 connections in all,
+shared with reports) and no retry -- own route and zones, retries; views skipped the run budget -- finished runs only,
+clock-sized; self-hosted servers would have sent views to a collector without their receipts -- sv_recupload_https; a
+server's csprogs could fill the queue; views 4-16 MiB would newly have reached the angle checker -- 4 MiB cap; the
+terms text; the HTTPS ask was a dprint; malformed requests were not rate-counted. Round 2: BLOCKER -- round 1's "store
+a mismatched view for the sweep" let any server plant a FAULT on a visitor's official run (its csprogs arms a file
+under the run's public nonce and asks for it) -- mismatches refused again, and rec_sign's pin; a later server's
+csprogs could rewrite a queued file -- the pin; network failures arrive as 900+ codes and were not retried; a 300 s
+whole-POST limit retried a slow 64 MiB journal four times; the view budget assumed a line per tick (it is per frame);
+install_board_endpoint.sh would have failed nginx -t without the view zones; retries ended at 390 s and the queue held
+4 runs (a backend restart is ~5 min); a hostile server could evict another's requests -- per-server quota; leftovers
+swept only at an accept; the terms claimed a client-side "official lobbies" rule there is not; the manifest. Round 3:
+the pin was a 16-nonce ring checked at send, so an active player's retries after a backend restart (and any later
+server's csprogs calling rec_sign) deleted honest queued files -- copied into the request at accept and bound to the
+server; data/httpq/ was still gamecode-writable and a second arming could rename onto a queued file -- httpq/ at the
+root, read-sandboxed, existing destinations refused; drop-oldest on a full queue let a server evict others -- refused
+instead, and junk loops cut after 3 final refusals; HTTPStart removed files from a work item under the worker lock --
+deferred to Think; the forget message was printed after FS_Remove clobbered va buffers; rec_hid_upload 0 left queued
+journals; the view statement did not name its server (a server's csprogs could put misleading mismatch lines under a
+visitor's run); lobby.cfg shipped 1 beside the generation and a rollback by rcon does not survive a restart -- ships
+0; a refused mismatch left only a log line -- marker; 503 retries re-sent community servers' journals. Round 4: the
+server pattern refused dtls://, tls:// and ws:// names (honest views on those transports refused, and the strikes then
+cut the lobby's journals too) and the pin and request held 64 of rec_sign's 128 characters; any final refusal was a
+strike shared by views and journals and never checked against what was already queued -- now 400/410 per kind, queued
+entries dropped; permanent 503s (no map directory, an oversized receipt, an unfinished run's budget) were retried six
+times and held queue slots, so a server could block the next lobby with junk naming an unknown map -- 410/403, and
+quotas per host; a server switching the gamedir made every queued file "missing"; search_begin listed httpq/; a
+re-sign overwrote the pin; the journal text did not say journals finish after leaving; the rollback note missed rcon;
+queue removals could be undone by an HTTP completion run inside a worker-lock drain -- out of the queue first, then
+the file. Round 5 (no blocker): views went over HTTPS without the engine checking the online terms (a hostile server
+could make an offline player post to play.proto.bar) -- rec_terms; junk naming real runs on another server drew no
+strike -- 410; a refused mismatch left the run looking clean -- the sweep reads the marker as the FAULT; a 410 for a
+missing map directory would have cut every lobby off on a wrong evidence root -- 503; maps starting with - + . passed
+the server and client but not the collector (a 400 strike) -- the server keeps them on the netchan; the queue's
+capacity ignored the running request, so its retry could be dropped; 8 per host was 4 runs in a backend restart;
+strikes never reset; the host key kept a URL's port; unsigned junk was logged under a real run; the flip belongs in
+the Pi-only lobby_local.cfg (test cfgs exec lobby.cfg); the journal text said rec_hid 0 stops queued journals. Round 6
+(no blocker): a server on two addresses could still fill the queue with retryable junk (an unknown map answers 503) --
+fair-share eviction; a refusal marker that arrived after the sweep's first read was never read; a file Windows would
+not move was lost; a map with .. went to HTTPS and was refused; a throwaway key could put a real run in the warning
+log. Round 7: every IPv6 address was its own host, so many addresses could evict a lobby's queued requests or crowd it
+out -- /24 and /64 keys, proven hosts never evicted and served first; eviction ran before the new file was taken; junk
+naming unknown maps drew retried 503s -- 410 when the evidence root has maps; the copy did not check its write; a
+strike landing during the file calls was not re-checked; a marker on the first read still left the run waiting for a
+view; two records still put the flip in lobby.cfg. Round 8: NAT64 put every IPv4 server in one /64 host; an eviction
+decided before the file calls was not re-checked after them; a proven host could not enter a full queue held by
+unproven hosts at quota; empty proven-table slots matched an empty host key; keying hosts by /24 or /64 let a
+neighbour there strike, share and prove the lobby's key (back to the IP address: since round 7 cheap addresses gain
+nothing against a proven lobby); refusals left the armed raw journal in data/staged/. Round 9: moving and removing
+views broke the player's own replay (cl_watch.qc reads the staged view) -- views copied, only journals moved or
+removed; exact-IP keys let one IPv6 /64 act as 40 hosts against a lobby not yet proven -- the quota and fair share
+count a /64 once; journals stayed staged after a disconnect or an arming dropped from the ring; an eviction re-check
+ignored a retry that brought the host to its quota. Round 10: a prefix check could not hide httpq/ from Windows'
+trailing-dot spelling (`httpq./`), so a later server's csprogs could list and read queued journals -- the queue moved
+under FS_ROOT and the read/list sandbox entries reverted; a group at quota could drop another proven host's entries;
+an arming drop could remove any data/**.hid -- only staged journals; texts claimed every upload finishes after leaving
+(only the HTTPS route does). Round 11 (all three, blocker): httpq/ was still a valid gamedir and package name -- a
+server could name it as its gamedir, or a package search could list and open it -- FS_GamedirIsOkay now refuses
+httpq*; Accept refuses before taking the file when the quota rule would; the existence check and the copy use the one
+system path (FS_ROOT may fall back to the base); only staged journals are moved or removed on the request path. Round
+12: control flow and evidence found nothing in the code above nit; csprogs could write data/consent.txt, from which
+the menu sets rec_terms (the upload gate) -- consent.txt joined QC_MenuTable (CSQC may not change it; any VM reads it
+only as the gamedir's loose file); the client must ship after the surfd generation; the POST deadline keeps the old
+300 s floor. Round 13: control flow and evidence found nothing above nit, and nothing can raise rec_terms; a server
+could still reset the client's settings with a stuffed cfg_reset (upstream, at local level) -- refused from insecure
+callers. Not changed: `fsviewhttp` is advertised without testing TLS (no cheap check; Windows uses SChannel, the Linux
+build loads GnuTLS, which desktops ship); nginx keys IPv6 by address, not /64, and its global connection caps can be
+held with slow bodies (no total body deadline; no Expect: 100-continue, so a refused attempt uploads its whole body);
+a second game instance on one install sweeps the first's httpq/; on Windows a file being read when uploads are turned
+off stays until the next launch; journals from community servers on maps the collector never hosted now answer 410
+(P774 sends journals from any server), counting toward that server's host -- BACKLOG.
+
 ## Patch 1698 - A Source sky is a hole: the PVS behind it draws, and only the PVS (engine client + hl2 plugin + game QC/cfg)
 
 **Cause.** Lex, 21 Nov: the sky "culling" asked for earlier (other stages' ramps in the sky) "does some sort of
