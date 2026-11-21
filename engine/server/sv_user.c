@@ -159,6 +159,8 @@ int SV_PMSrcVer(const float *pin)
 	if (pin[1] == PHYSMODE_AG) return pin[0] == 1 ? 1 : 0;
 	if (strcmp(sv_pmpin_names[SV_PMPIN_FIXRAMPBUGS], "fixrampbugs"))
 		Sys_Error("SV_PMSrcVer: SV_PMPIN_FIXRAMPBUGS is \"%s\"", sv_pmpin_names[SV_PMPIN_FIXRAMPBUGS]);
+	if (strcmp(sv_pmpin_names[SV_PMPIN_FIXSLOPES], "fixslopes"))
+		Sys_Error("SV_PMSrcVer: SV_PMPIN_FIXSLOPES is \"%s\"", sv_pmpin_names[SV_PMPIN_FIXSLOPES]);
 	//Reject non-finite pins before the shortcut, even with fast-math enabled.
 	if (IS_NAN(f))
 		return 0;
@@ -170,6 +172,9 @@ int SV_PMSrcVer(const float *pin)
 	//Patch 882: v10 honours momlimit/momcool/momslide.
 	//Patch 1630: v13 collides Patch 256's re-wound displacements as rendered (review: a mover-13 server pinned 2 without it).
 	//Patch 1709: v14 reads fixslopes 2/3 (Momentum 0.10's RNGFix, ahop).
+	//  Below fixslopes 2 it moves as 13, and pins 13 so an older verifier still replays it.
+	if (pin[0] == 14 && !(pin[SV_PMPIN_FIXSLOPES] >= 2))
+		return 13;
 	if (pin[0] == 3 || pin[0] == 4 || pin[0] == 5 || pin[0] == 6 || pin[0] == 7 || pin[0] == 8 || pin[0] == 9 || pin[0] == 10 || pin[0] == 11 || pin[0] == 12 || pin[0] == 13 || pin[0] == 14)
 		return pin[0];
 	return f >= 2 ? 2 : f < 2 ? 1 : 0;

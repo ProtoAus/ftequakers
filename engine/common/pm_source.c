@@ -707,7 +707,7 @@ static int PMSrc_RNGFix (void)
 static qboolean PMSrc_RNGFixUphill (const trace_t *pm)
 {
 	vec3_t out, n;
-	if (PMSrc_RNGFix () != 2 || pmove.onground || pmove.waterlevel >= 2 || pms_slidetick)
+	if (PMSrc_RNGFix () != 2 || pmove.onground || pmove.waterlevel >= 2 || pms_slidetick || pmove.srcladder || pmove.onladder)
 		return false;
 	if (pm->allsolid || !(pm->fraction < 1.0f) || pm->plane.normal[2] < PMSrc_Standable () ||
 		pmove.velocity[2] > PMSRC_NON_JUMP_VELOCITY)
@@ -2384,6 +2384,7 @@ static void PMSrc_CategorizePosition (void)
 	trace_t		pm;
 	float		standable = PMSrc_Standable();
 	int			cont;
+	qboolean	entryground = pmove.onground;
 
 	/* Reset each time we recategorize, otherwise we carry bogus friction. */
 	pmove.surfacefriction = 1.0f;
@@ -2524,10 +2525,14 @@ static void PMSrc_CategorizePosition (void)
 			qboolean wasonground = pmove.onground;
 			qboolean grounded = true;
 
-			/* P1709: Source with sv_optimizedmovement never categorizes at the top of a tick
-			   (gamemovement.cpp PlayerMove), so an airborne player lands at the END of one: ours
-			   landing here jumped a tick early from up to pm_groundtracedist above an upslope. */
-			if (!wasonground && pms_topcat && PMSrc_RNGFix ())
+			/* P1709: Source with sv_optimizedmovement does not categorize at the top of a tick
+			   (gamemovement.cpp PlayerMove), so a body still rising past 140 u/s when the last tick
+			   ended (before its FinishGravity) lands at the END of this one; ours landed here and
+			   jumped a tick early from up to pm_groundtracedist above an upslope.  Any other airborne
+			   body is grounded here as before: QC clears FL_ONGROUND on a teleport or load and this is
+			   what re-grounds it, as m_bGameCodeMovedPlayer does in Source. */
+			if (!wasonground && pms_topcat && PMSrc_RNGFix () &&
+				pmove.velocity[2] + (movevars.entgravity ? movevars.entgravity : 1) * movevars.gravity * 0.5f * pms_frametime > PMSRC_NON_JUMP_VELOCITY)
 				grounded = false;
 			else if (!wasonground && PMSrc_RNGFix ())
 			{
@@ -2617,6 +2622,9 @@ static void PMSrc_CategorizePosition (void)
 			}
 		}
 	}
+
+	if (entryground && !pmove.onground)
+		pms_interacted = true;	/* P1709: leaving the ground (cpp:3054-3060) */
 
 	/* Water level, same scheme as PM_CategorizePosition. */
 	pmove.waterlevel = 0;
@@ -2987,7 +2995,7 @@ static qboolean PMSrc_CheckJumpButton (void)
 		return false;
 
 	/* P1709: Momentum's ahop cannot jump in the unduck transition (cpp:1390-1394). */
-	if (PMSrc_RNGFix () == 3 && pmove.ducking && pmove.ducked)
+	if (PMSrc_RNGFix () == 3 && pmove.ducking && pmove.ducked && !(pmove.cmd.buttons & BUTTON_DUCK))
 		return false;
 
 	pmove.onground = false;
@@ -3196,7 +3204,7 @@ static qboolean PMSrc_CheckJumpButton (void)
 		*/
 		/* P1709: Momentum 0.10 runs the pin at any offset; its 2026 demos take off from the floor itself
 		   (sv_jump_z_offset 0), its 2025 ones 1.5 above it. */
-		if (movevars.jumpzoffset > 0 || PMSrc_RNGFix () == 2)
+		if ((movevars.jumpzoffset > 0 && PMSrc_RNGFix () != 3) || PMSrc_RNGFix () == 2)
 		{
 			vec3_t down, up;
 			trace_t tr;

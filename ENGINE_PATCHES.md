@@ -20,8 +20,11 @@ into, whose clip would not gain 2D speed, is not taken (pm.fraction = 1 at the c
 wedged: a fraction-0 hit after a ground or air interaction this tick); StepMove keeps one attempt whole and returns
 after a rising flat attempt (cpp:404-483); the top-of-tick CategorizePosition does not land an airborne player
 (Source's sv_optimizedmovement never categorizes there; ours jumped a tick early from up to 2 units above an
-upslope); the jump-z pin runs at any offset. pm_fixslopes 3 (Momentum ahop): the RNGFix landing only, the clamped HL2
-boost (PMSrc_HL2JumpBoost's post formula, cpp:1463-1486), no jump in the unduck transition (cpp:1390). Both read as 1
+upslope; only a body still rising past 140 u/s at the last tick's end, so a QC teleport or load is still re-grounded
+there); the jump-z pin runs at any offset. Both 2 and 3 count leaving the ground as an interaction; a mover-14 pin
+below fixslopes 2 is stamped 13 (it moves as 13, so an older verifier replays it). pm_fixslopes 3 (Momentum ahop): the RNGFix landing only, the clamped HL2
+boost (PMSrc_HL2JumpBoost's post formula, cpp:1463-1486), no jump in the unduck transition with duck released (cpp:1390;
+our FinishDuck keeps `ducking` on a re-press, Momentum's clears it), no takeoff pin. The uphill rule skips ladders. Both read as 1
 below mover 14. `pm_stepsim <in> <out> [chain]`: one tick a line from the stated state under this server's movevars
 (chain: open loop), output with contact and floor probes.
 
@@ -33,6 +36,14 @@ displacement climbs (Akatosh, ticks 7985-8460 and 12910-13290, Momentum's inputs
 hop, register 5 of 11 and 2 of 13 landings and leave the route; mover 14 stays within 0.2 / 0.8 units of Momentum's
 path for 4.75 s with every landing. Ahop WR with pm_fixslopes 3 + pm_normalizejump 0: jump ticks without +walk exact
 (0.0-0.2 u/s); ground disagreements 28 -> 2-4. pm_selftest: all checks passed.
+
+**Review.** Two lenses (control flow; evidence, verification, prediction), no blocking findings. Fixed: the top-of-tick
+block also stopped QC teleports re-grounding (now the rising band only); the ahop unduck gate stuck on a re-pressed
+duck; ladders; un-grounding as an interaction; ahop pinned the takeoff when jumpzoffset > 0; pm_stepsim read its
+old-buttons column as engine bits and wrote anywhere (now momstep/*.txt); an old verifier refused every mover-14 pin
+(fixslopes < 2 now pins 13). Deploy order (review): the configs, the lobby engine, surfd's verifier and the client
+release go together -- an older client predicts fixslopes 2/3 as 1 and an older engine with the new configs runs a
+third ruleset; TAS projects refuse an identity load across the change (the pin moved).
 
 **Not changed.** +walk (Momentum ahop's 150 u/s: its boost limit and air accel use it; a walked jump here is ~60 u/s
 slower, air ticks 6.0 u/s), HL2's duck timings and duck-jump. Three ahop_coast spots where Momentum stays airborne at

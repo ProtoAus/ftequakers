@@ -7620,7 +7620,7 @@ static void SV_RecSim_f (void)
    only the command, and the state carries.
    in, one tick per line (# comments):
      tick ox oy oz vx vy vz onground ducked ducking ducktime surffric oldbuttons
-     fwd side up buttons pitch yaw          (buttons 1 jump 2 duck 4 speed)
+     fwd side up buttons pitch yaw          (oldbuttons, buttons: 1 jump 2 duck; buttons 4 speed)
    out: tick ox oy oz vx vy vz onground ducked ticksrun contactkind cnx cny cnz gnx gny gnz
         floor-distance floor-nz under the seed, then under the result (-1 = started solid) */
 extern cvar_t sv_stopspeed, sv_accelerate, sv_airaccelerate, sv_wateraccelerate, sv_friction, sv_waterfriction;
@@ -7640,7 +7640,10 @@ static void SV_StepSim_f (void)
 	if (sv.state != ss_active || !sv.world.worldmodel)
 		{ Con_Printf("pm_stepsim: needs a running map\n"); return; }
 	if (Cmd_Argc() < 3)
-		{ Con_Printf("pm_stepsim <in> <out>\n"); return; }
+		{ Con_Printf("pm_stepsim <in> <out> [chain]\n"); return; }
+	len = strlen(Cmd_Argv(2));
+	if (strncmp(Cmd_Argv(2), "momstep/", 8) || len < 13 || strcmp(Cmd_Argv(2) + len - 4, ".txt"))
+		{ Con_Printf("pm_stepsim: the output is momstep/<name>.txt\n"); return; }
 	buf = FS_LoadMallocFile(Cmd_Argv(1), &fsz);
 	if (!buf)
 		{ Con_Printf("pm_stepsim: cannot read %s\n", Cmd_Argv(1)); return; }
@@ -7720,7 +7723,8 @@ static void SV_StepSim_f (void)
 			pmove.ducking = f[9] != 0;
 			pmove.ducktime = f[10];
 			pmove.surfacefriction = f[11];
-			pmove.oldbuttons = (int)f[12];
+			k = (int)f[12];
+		pmove.oldbuttons = ((k & 1) ? BUTTON_JUMP : 0) | ((k & 2) ? BUTTON_DUCK : 0);
 			pmove.landticks = 7;
 		}
 		pmove.jump_held = (pmove.oldbuttons & BUTTON_JUMP) != 0;

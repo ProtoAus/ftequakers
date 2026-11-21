@@ -459,6 +459,7 @@ enum serverprotocols_e
 #define SV_PMPIN_COUNT 73	//FTESurf Patch 346: entries in sv_pmpin_names (sv_user.c)
 #define SV_PMPIN_COUNT_PRE882 70	//Patch 882: the names a pin below mover 10 publishes (SV_PMPinNeed)
 #define SV_PMPIN_FIXRAMPBUGS 63	//Patch 492: "fixrampbugs" in that table; SV_PMPinFill checks the name
+#define SV_PMPIN_FIXSLOPES 61	//Patch 1709: "fixslopes"; SV_PMSrcVer checks the name
 
 #include "sv_held_coverage.h"
 
