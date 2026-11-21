@@ -169,7 +169,8 @@ int SV_PMSrcVer(const float *pin)
 	//Patch 888: v9 traces .phy hulls whose old 16-bit indices wrapped as they are.
 	//Patch 882: v10 honours momlimit/momcool/momslide.
 	//Patch 1630: v13 collides Patch 256's re-wound displacements as rendered (review: a mover-13 server pinned 2 without it).
-	if (pin[0] == 3 || pin[0] == 4 || pin[0] == 5 || pin[0] == 6 || pin[0] == 7 || pin[0] == 8 || pin[0] == 9 || pin[0] == 10 || pin[0] == 11 || pin[0] == 12 || pin[0] == 13)
+	//Patch 1709: v14 reads fixslopes 2/3 (Momentum 0.10's RNGFix, ahop).
+	if (pin[0] == 3 || pin[0] == 4 || pin[0] == 5 || pin[0] == 6 || pin[0] == 7 || pin[0] == 8 || pin[0] == 9 || pin[0] == 10 || pin[0] == 11 || pin[0] == 12 || pin[0] == 13 || pin[0] == 14)
 		return pin[0];
 	return f >= 2 ? 2 : f < 2 ? 1 : 0;
 }

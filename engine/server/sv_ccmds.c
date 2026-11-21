@@ -7610,6 +7610,191 @@ static void SV_RecSim_f (void)
 	SV_RecSim_Run(Cmd_Argv(1), atoi(Cmd_Argv(2)), false, NULL);
 }
 
+/* FTESurf Patch 1709: pm_stepsim <in> <out>.  ONE mover tick per input line, each seeded
+   from the state the line states, under this server's movevars -- so another game's
+   recorded ticks (a Momentum .mtv through tools/momstep.py) can be held against this mover
+   tick by tick, with nothing carried from one line into the next: a difference on one tick
+   is that tick's physics, never an earlier tick's drift.  Measures only.
+
+   `pm_stepsim <in> <out> chain` runs open loop instead: the first line seeds, later lines give
+   only the command, and the state carries.
+   in, one tick per line (# comments):
+     tick ox oy oz vx vy vz onground ducked ducking ducktime surffric oldbuttons
+     fwd side up buttons pitch yaw          (buttons 1 jump 2 duck 4 speed)
+   out: tick ox oy oz vx vy vz onground ducked ticksrun contactkind cnx cny cnz gnx gny gnz
+        floor-distance floor-nz under the seed, then under the result (-1 = started solid) */
+extern cvar_t sv_stopspeed, sv_accelerate, sv_airaccelerate, sv_wateraccelerate, sv_friction, sv_waterfriction;
+extern cvar_t sv_gravity, sv_maxspeed, pm_autobunny, pm_walkspeed;
+static void SV_StepSim_f (void)
+{
+	char *buf, *p, *end, line[1024];
+	size_t fsz, len;
+	vfsfile_t *out;
+	int rows = 0, skipped = 0, k;
+	wedict_t *proxy;
+	pmsourcestate_t zero, carried;
+	qboolean chain = !strcmp(Cmd_Argv(3), "chain"), seeded = false;
+	movevars_t savemv = movevars;
+	playermove_t *savepm;
+
+	if (sv.state != ss_active || !sv.world.worldmodel)
+		{ Con_Printf("pm_stepsim: needs a running map\n"); return; }
+	if (Cmd_Argc() < 3)
+		{ Con_Printf("pm_stepsim <in> <out>\n"); return; }
+	buf = FS_LoadMallocFile(Cmd_Argv(1), &fsz);
+	if (!buf)
+		{ Con_Printf("pm_stepsim: cannot read %s\n", Cmd_Argv(1)); return; }
+	out = FS_OpenVFS(Cmd_Argv(2), "wb", FS_GAMEONLY);
+	if (!out)
+		{ FS_FreeFile(buf); Con_Printf("pm_stepsim: cannot write %s\n", Cmd_Argv(2)); return; }
+	proxy = (wedict_t*)ED_Alloc(svprogfuncs, false, 0);
+	if (proxy)
+	{
+		proxy->v->solid = SOLID_NOT;
+		proxy->xv->dimension_hit = proxy->xv->dimension_solid = pr_global_struct->dimension_default;
+	}
+	savepm = Z_Malloc(sizeof(*savepm));
+	*savepm = pmove;
+	memset(&zero, 0, sizeof(zero));
+
+	/* SV_SetQWClientMoveVars for a client at this server's defaults. */
+	movevars.stopspeed = sv_stopspeed.value;
+	movevars.accelerate = sv_accelerate.value;
+	movevars.airaccelerate = sv_airaccelerate.value;
+	movevars.wateraccelerate = sv_wateraccelerate.value;
+	movevars.friction = sv_friction.value;
+	movevars.waterfriction = sv_waterfriction.value;
+	movevars.gravity = sv_gravity.value;
+	movevars.entgravity = 1;
+	movevars.maxspeed = sv_maxspeed.value;
+	movevars.autobunny = (pm_autobunny.value != 0);
+	SV_SetSourceMoveVars();
+	VFS_PRINTF(out, "# pm_stepsim map %s mode %i src %i profile %i grav %g acc %g airacc %g maxair %g fric %g stop %g"
+	           " maxspd %g walk %g jump %g tic %g maxvel %g hull %g/%g autobunny %i\n",
+	           svs.name, movevars.physicsmode, movevars.sourceversion, movevars.profilekind, movevars.gravity,
+	           movevars.accelerate, movevars.airaccelerate, movevars.maxairspeed, movevars.friction,
+	           movevars.stopspeed, movevars.maxspeed, pm_walkspeed.value, movevars.jumpvelocity, movevars.ticrate,
+	           movevars.maxvelocity, movevars.standheight, movevars.duckheight, movevars.autobunny);
+
+	for (p = buf, end = buf + fsz; p < end; )
+	{
+		float f[19];
+		char *nl = memchr(p, '\n', end - p);
+		len = (nl ? nl : end) - p;
+		if (len >= sizeof(line))
+			len = sizeof(line) - 1;
+		memcpy(line, p, len);
+		line[len] = 0;
+		p = nl ? nl + 1 : end;
+		if (*line == '#' || !*line)
+			continue;
+		if (sscanf(line, "%f %f %f %f %f %f %f %f %f %f %f %f %f %f %f %f %f %f %f",
+		           &f[0], &f[1], &f[2], &f[3], &f[4], &f[5], &f[6], &f[7], &f[8], &f[9], &f[10],
+		           &f[11], &f[12], &f[13], &f[14], &f[15], &f[16], &f[17], &f[18]) != 19)
+			{ skipped++; continue; }
+
+		if (chain && seeded)
+		{	// open loop: only the command is read from the line; state is what the last tick left
+			PMSrc_LoadState(&carried);
+			VectorCopy(pmove.origin, f + 1);
+			VectorCopy(pmove.velocity, f + 4);
+			f[7] = pmove.onground;
+			f[8] = pmove.ducked;
+		}
+		PMSrc_LoadState(chain && seeded ? &carried : &zero);
+		pmove.pm_type = PM_NORMAL;
+		pmove.skipent = -1;
+		pmove.waterjumptime = 0;
+		VectorClear(pmove.basevelocity);
+		VectorCopy(sv.world.g.defaultgravitydir, pmove.gravitydir);
+		VectorSet(pmove.player_mins, -16, -16, 0);
+		VectorSet(pmove.player_maxs, 16, 16, movevars.standheight);
+		VectorSet(pmove.origin, f[1], f[2], f[3]);
+		VectorCopy(pmove.origin, pmove.safeorigin);
+		pmove.safeorigin_known = true;
+		VectorSet(pmove.velocity, f[4], f[5], f[6]);
+		pmove.onground = f[7] != 0;
+		if (!(chain && seeded))
+		{
+			pmove.ducked = f[8] != 0;
+			pmove.ducking = f[9] != 0;
+			pmove.ducktime = f[10];
+			pmove.surfacefriction = f[11];
+			pmove.oldbuttons = (int)f[12];
+			pmove.landticks = 7;
+		}
+		pmove.jump_held = (pmove.oldbuttons & BUTTON_JUMP) != 0;
+
+		memset(&pmove.cmd, 0, sizeof(pmove.cmd));
+		pmove.cmd.msec = movevars.ticrate * 1000.0f;
+		pmove.cmd.forwardmove = (int)f[13];
+		pmove.cmd.sidemove = (int)f[14];
+		pmove.cmd.upmove = (int)f[15];
+		k = (int)f[16];
+		pmove.cmd.buttons = ((k & 1) ? BUTTON_JUMP : 0) | ((k & 2) ? BUTTON_DUCK : 0) | ((k & 4) ? BUTTON_SPEED : 0);
+		pmove.cmd.angles[0] = ANGLE2SHORT(f[17]);
+		pmove.cmd.angles[1] = ANGLE2SHORT(f[18]);
+		pmove.cmd.angles[2] = 0;
+		VectorSet(pmove.angles, f[17], f[18], 0);
+
+		pmove.numphysent = 1;
+		pmove.physents[0].model = sv.world.worldmodel;
+		for (k = 0; k < 3; k++)
+		{
+			pmove_mins[k] = pmove.origin[k] - 256;
+			pmove_maxs[k] = pmove.origin[k] + 256;
+		}
+		if (proxy)
+			AddAllLinksToPmove(&sv.world, proxy);
+		pmove.onladder = false;
+		pmove.world = &sv.world;
+
+		{
+			vec3_t cn, cp, down;
+			float cd, fd[2], fnz[2];
+			int kind, pass;
+			trace_t tr;
+			for (pass = 0; pass < 2; pass++)
+			{	// floor under the seed (pass 0) and the result (pass 1): 64 units down, this hull
+				vec3_t smins, smaxs;
+				VectorCopy(pmove.player_mins, smins);
+				VectorCopy(pmove.player_maxs, smaxs);
+				pmove.player_maxs[2] = pmove.ducked ? movevars.duckheight : movevars.standheight;
+				VectorCopy(pmove.origin, down);
+				down[2] -= 64;
+				tr = PM_PlayerTrace(pmove.origin, down, MASK_PLAYERSOLID);
+				fd[pass] = tr.startsolid ? -1 : tr.fraction * 64;
+				fnz[pass] = tr.fraction < 1 ? tr.plane.normal[2] : 0;
+				VectorCopy(smins, pmove.player_mins);
+				VectorCopy(smaxs, pmove.player_maxs);
+				if (pass)
+					break;
+				PMSrc_TASContactBegin(true);
+				PM_PlayerMove(1.0f);
+				kind = PMSrc_TASContactEnd(cn, &cd, cp);
+			}
+			VFS_PRINTF(out, "%i %.4f %.4f %.4f %.4f %.4f %.4f %i %i %u %i %.5f %.5f %.5f %.5f %.5f %.5f"
+			           " %.4f %.5f %.4f %.5f\n",
+			           (int)f[0], pmove.origin[0], pmove.origin[1], pmove.origin[2],
+			           pmove.velocity[0], pmove.velocity[1], pmove.velocity[2],
+			           pmove.onground ? 1 : 0, pmove.ducked ? 1 : 0, pmove.ticksrun, kind,
+			           cn[0], cn[1], cn[2], pmove.groundnormal[0], pmove.groundnormal[1], pmove.groundnormal[2],
+			           fd[0], fnz[0], fd[1], fnz[1]);
+		}
+		PMSrc_SaveState(&carried);
+		seeded = true;
+		rows++;
+	}
+	VFS_CLOSE(out);
+	FS_FreeFile(buf);
+	if (proxy)
+		ED_Free(svprogfuncs, (edict_t*)proxy);
+	pmove = *savepm;
+	Z_Free(savepm);
+	movevars = savemv;
+	Con_Printf("pm_stepsim: %i ticks written to %s, %i lines skipped\n", rows, Cmd_Argv(2), skipped);
+}
+
 //FTESurf Patch 349: the verifier -- pm_recsim's exact open loop plus the live
 //timer's zone scan, ending in one VERIFY line.
 static void SV_RecVerify_f (void)
@@ -7797,6 +7982,10 @@ void SV_InitOperatorCommands (void)
 	                "produced them, applying its warp/ride/inend records, and "
 	                "measures whether the trajectory comes back. "
 	                "Measures only -- it tests no zone and refuses no run.");
+	Cmd_AddCommandD("pm_stepsim", SV_StepSim_f,
+	                "FTESurf: pm_stepsim <in> <out>.  One mover tick per line, each from "
+	                "the state the line gives, under this server's movevars: holds another "
+	                "game's recorded ticks against this mover (tools/momstep.py).  Measures only.");
 
 	//FTESurf Patch 349
 	Cmd_AddCommandD("pm_verify", SV_RecVerify_f,

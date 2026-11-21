@@ -104,6 +104,8 @@ typedef struct
 	int slidecontact, slidetick;
 	int momslide;				//Patch 882: pmove.momslide at mover 10, else 0
 	qboolean physslide;			//Patch 882: pms_anyslide before the trigger slide joined it
+	qboolean interacted;		//P1709: ground or an airborne hit this tick (Momentum's GetInteraction(0).tick)
+	qboolean topcat;			//P1709: the top-of-tick CategorizePosition is running
 } pms_state_t;
 static pms_state_t pms_main;
 static FTE_TLS pms_state_t *pms_ctx = &pms_main;
@@ -132,6 +134,8 @@ void PMSrc_ThreadState(void *state) { pms_ctx = state ? state : &pms_main; }
 #define pms_anyslide				(pms_ctx->anyslide)
 #define pms_slidecontact			(pms_ctx->slidecontact)
 #define pms_slidetick				(pms_ctx->slidetick)
+#define pms_interacted				(pms_ctx->interacted)
+#define pms_topcat					(pms_ctx->topcat)
 #define pms_momslide				(pms_ctx->momslide)
 #define pms_physslide				(pms_ctx->physslide)
 
@@ -686,6 +690,35 @@ static int PMSrc_ClipVelocity (vec3_t in, vec3_t normal, vec3_t out, float overb
 		VectorMA (out, -adjust, normal, out);
 
 	return blocked;
+}
+
+/* P1709: pm_fixslopes 2 is Momentum 0.10's surf/bhop (sv_rngfix_enable on), 3 its ahop (GAMEMODE_AHOP
+   skips RNGFix's collision and step halves, adds the HL2 jump boost).  Mover 14; below it, 1. */
+static int PMSrc_RNGFix (void)
+{
+	if (movevars.sourceversion < 14 || movevars.fixslopes < 2)
+		return 0;
+	return movevars.fixslopes >= 3 ? 3 : 2;
+}
+
+/* P1709: RNGFix's uphill rule (mom_gamemovement.cpp:2578-2614).  An airborne hit on a standable face
+   we move into, whose clip would not gain 2D speed, is not taken: the move ends at the contact with the
+   velocity whole, and CategorizePosition lands it.  Without it an uphill displacement taxes every hop. */
+static qboolean PMSrc_RNGFixUphill (const trace_t *pm)
+{
+	vec3_t out, n;
+	if (PMSrc_RNGFix () != 2 || pmove.onground || pmove.waterlevel >= 2 || pms_slidetick)
+		return false;
+	if (pm->allsolid || !(pm->fraction < 1.0f) || pm->plane.normal[2] < PMSrc_Standable () ||
+		pmove.velocity[2] > PMSRC_NON_JUMP_VELOCITY)
+		return false;
+	if (pm->plane.normal[0] * pmove.velocity[0] + pm->plane.normal[1] * pmove.velocity[1] >= 0)
+		return false;
+	if (pms_interacted && pm->fraction == 0)	/* wedged under a ceiling: the clip is the way out */
+		return false;
+	VectorCopy (pm->plane.normal, n);
+	PMSrc_ClipVelocity (pmove.velocity, n, out, 1.0f);
+	return out[0]*out[0] + out[1]*out[1] <= pmove.velocity[0]*pmove.velocity[0] + pmove.velocity[1]*pmove.velocity[1];
 }
 
 /*
@@ -1292,7 +1325,11 @@ static int PMSrc_TryPlayerMoveCore (vec3_t firstdest, trace_t *firsttrace, qbool
 			PMSrc_TASContactRecovery (&pm, valid_plane);
 		}
 		else
+		{
 			pm = PM_PlayerTracePortals (pmove.origin, end, MASK_PLAYERSOLID, &tookportal);
+			if (!tookportal && PMSrc_RNGFixUphill (&pm))
+				pm.fraction = 1.0f;	/* P1709: endpos is the contact; the loop stops there */
+		}
 
 		if (tookportal)
 		{
@@ -1503,6 +1540,8 @@ static int PMSrc_TryPlayerMoveCore (vec3_t firstdest, trace_t *firsttrace, qbool
 
 		if (pm.entnum > 0)
 			PM_AddTouchedEnt (pm.entnum);
+		if (!pmove.onground)
+			pms_interacted = true;	/* P1709 */
 
 		if (pm.plane.normal[2] > standable)
 			blocked |= 1;		/* floor */
@@ -1839,6 +1878,10 @@ static void PMSrc_StepMove (vec3_t vecDestination, trace_t *trace)
 	if (pms_portalcrossed)
 		return;
 
+	/* P1709: RNGFix keeps a flat attempt that leaves the ground rising (cpp:409). */
+	if (PMSrc_RNGFix () == 2 && pmove.velocity[2] > PMSRC_NON_JUMP_VELOCITY)
+		return;
+
 	VectorCopy (pmove.origin, vecDownPos);
 	VectorCopy (pmove.velocity, vecDownVel);
 	contactDown = pms_tas_contact;
@@ -1916,8 +1959,8 @@ static void PMSrc_StepMove (vec3_t vecDestination, trace_t *trace)
 		pms_tas_contact = contactDown;
 		pms_tas_wall = wallDown;
 	}
-	else
-	{	/* keep the stepped position, but the flat move's Z velocity */
+	else if (PMSrc_RNGFix () != 2)
+	{	/* keep the stepped position, but the flat move's Z velocity (RNGFix keeps the stepped one whole) */
 		pmove.velocity[2] = vecDownVel[2];
 	}
 }
@@ -2213,6 +2256,7 @@ static void PMSrc_NextTickVelocity (vec3_t vel, float dt, float gravity,
 	out[2] -= entgravity * gravity * 0.5f * dt;
 }
 
+
 /*
 ==================
 PMSrc_SlopeLandingGains   (cpp:1857)
@@ -2480,7 +2524,28 @@ static void PMSrc_CategorizePosition (void)
 			qboolean wasonground = pmove.onground;
 			qboolean grounded = true;
 
-			if (!wasonground && (movevars.fixslopes || movevars.fixedges))
+			/* P1709: Source with sv_optimizedmovement never categorizes at the top of a tick
+			   (gamemovement.cpp PlayerMove), so an airborne player lands at the END of one: ours
+			   landing here jumped a tick early from up to pm_groundtracedist above an upslope. */
+			if (!wasonground && pms_topcat && PMSrc_RNGFix ())
+				grounded = false;
+			else if (!wasonground && PMSrc_RNGFix ())
+			{
+				/* P1709: the sv_rngfix_enable arm (cpp:1806-1838).  Every mode we run can bhop, so a
+				   standable plane always lands; the next tick's clip is adopted only if it gains 2D
+				   speed.  An uphill landing keeps what it came in with, at any vertical speed. */
+				vec3_t	nextvel, clipped;
+
+				PMSrc_NextTickVelocity (pmove.velocity, pms_frametime,
+					movevars.gravity, movevars.entgravity, nextvel);
+				if (movevars.fixedges &&
+					!(movevars.autobunny && (pmove.cmd.buttons & BUTTON_JUMP)) &&
+					PMSrc_WouldEdgebug (&pm, nextvel))
+					grounded = false;
+				else if (PMSrc_SlopeLandingGains (nextvel, pmove.velocity, pm.plane.normal, clipped))
+					VectorCopy (clipped, pmove.velocity);
+			}
+			else if (!wasonground && (movevars.fixslopes || movevars.fixedges))
 			{
 				vec3_t	nextvel, clipped;
 				qboolean gains;
@@ -2539,6 +2604,8 @@ static void PMSrc_CategorizePosition (void)
 			else
 			{
 				pmove.onground = !pm.startsolid;
+				if (pmove.onground)
+					pms_interacted = true;	/* P1709: SetGroundEntity's interaction */
 				if (!wasonground && pmove.onground)
 					pmove.landticks = 0;	/* Patch 882: Momentum's OnLand, m_iLandTick */
 				pmove.groundent = pm.entnum;
@@ -2861,7 +2928,7 @@ static void PMSrc_HL2JumpBoost (void)
 
 	VectorSet (axis, pms_forward[0], pms_forward[1], 0);
 	VectorNormalize (axis);
-	if (movevars.profilekind == PMPROFILE_HL2POST)
+	if (movevars.profilekind == PMPROFILE_HL2POST || PMSrc_RNGFix () == 3)
 	{
 		float limit = pms_maxspeed * (1 + frac);
 		float speed = sqrt (pmove.velocity[0]*pmove.velocity[0] + pmove.velocity[1]*pmove.velocity[1]);
@@ -2919,8 +2986,13 @@ static qboolean PMSrc_CheckJumpButton (void)
 	if (!movevars.autobunny && (pmove.oldbuttons & BUTTON_JUMP))
 		return false;
 
+	/* P1709: Momentum's ahop cannot jump in the unduck transition (cpp:1390-1394). */
+	if (PMSrc_RNGFix () == 3 && pmove.ducking && pmove.ducked)
+		return false;
+
 	pmove.onground = false;
 	pmove.jump_held = true;
+	pms_interacted = true;	/* P1709: leaving the ground is an interaction (cpp:3054-3060) */
 
 	flMul = movevars.jumpvelocity;
 	if (flMul <= 0)
@@ -3092,7 +3164,7 @@ static qboolean PMSrc_CheckJumpButton (void)
 			movevars.staminajumpcost : PMSRC_STAMINA_JUMP_COST);
 	}
 
-	if (PM_ProfileHL2 (movevars.profilekind))
+	if (PM_ProfileHL2 (movevars.profilekind) || PMSrc_RNGFix () == 3)
 		PMSrc_HL2JumpBoost ();
 
 	if (movevars.normalizejump)
@@ -3122,7 +3194,9 @@ static qboolean PMSrc_CheckJumpButton (void)
 		  says no: this runs at the top of a jump, and refusing to move is
 		  always safe, while an unchecked move under a low ceiling is not.
 		*/
-		if (movevars.jumpzoffset > 0)
+		/* P1709: Momentum 0.10 runs the pin at any offset; its 2026 demos take off from the floor itself
+		   (sv_jump_z_offset 0), its 2025 ones 1.5 above it. */
+		if (movevars.jumpzoffset > 0 || PMSrc_RNGFix () == 2)
 		{
 			vec3_t down, up;
 			trace_t tr;
@@ -4332,6 +4406,7 @@ static void PMSrc_Tick (void)
 	/* Patch 280: cleared here so a noclip or frozen tick, which never reaches
 	   the latch below, cannot inherit the previous tick's slide. */
 	pms_slidetick = 0;
+	pms_interacted = false;	/* P1709 */
 
 	if (pmove.pm_type == PM_SPECTATOR || pmove.pm_type == PM_OLD_SPECTATOR ||
 		pmove.pm_type == PM_FLY || pmove.pm_type == PM_6DOF)
@@ -4347,7 +4422,9 @@ static void PMSrc_Tick (void)
 	}
 
 	PMSrc_CheckStuck ();
+	pms_topcat = true;
 	PMSrc_CategorizePosition ();
+	pms_topcat = false;
 
 	/* FTESurf Patch 280: latch the slide state for this tick.  Everything
 	   downstream (gravity, the jump gate, the duck hull rules, StuckGround)

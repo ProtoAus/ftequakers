@@ -1,5 +1,43 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1709 - Mover 14: Momentum 0.10's RNGFix landings and ahop rules; pm_stepsim holds a Momentum demo against the mover (engine common/pm_source.c, server)
+
+**Cause.** 22 Nov 2026 Lex: ahop_coast's movement "hasn't felt right bhopping on the displacements especially riding
+up them". ahop_coast plays as bhop here (its published zone says gamemode 2). New dev command `pm_stepsim` seeds the
+mover from each recorded tick of a Momentum demo (game tools/momstep.py) and grades the next tick, so a difference is
+that tick's physics. Ten Momentum bhop demos of ahop_coast (top 10, 0.10, 2025-10 .. 2026-11) and 15 2026 surf demos:
+air, ramp and ground ticks matched (|dv| p95 0.2), landings and jumps did not. Three causes, each measured:
+(1) Momentum grounds within 2 units in every demo, never past it (airborne ticks' floor distance >= 1.97, landings'
+<= 2.0); our default.cfg had 1 from the public source. (2) Momentum lands a fast uphill landing whose next-tick clip
+would still rise past 140 u/s -- only its sv_rngfix_enable arm (mom_gamemovement.cpp:1806-1838) does; Patch 176
+ported the RNGFix-off arm. (3) 2026 demos take off from the floor itself (the jump-z pin at 0), 2025's 1.5 above it;
+2026 jumps are normalized (standing 293.99 = ducked), 2025's stock (289.99). Momentum's ahop (gamemode 9): the HL2
+jump boost (ABH) on every jump, which our ahop mode lacked (WR jump ticks: +1500 u/s there, 0 here).
+
+**Change.** PMSRC_VERSION 14 (SV_PMSrcVer knows it). pm_fixslopes 2 (RNGFix, PMSrc_RNGFix): every standable landing
+lands, adopting the next tick's clip only if it gains 2D speed; an airborne trace hitting a standable face we move
+into, whose clip would not gain 2D speed, is not taken (pm.fraction = 1 at the contact, cpp:2578-2614; not while
+wedged: a fraction-0 hit after a ground or air interaction this tick); StepMove keeps one attempt whole and returns
+after a rising flat attempt (cpp:404-483); the top-of-tick CategorizePosition does not land an airborne player
+(Source's sv_optimizedmovement never categorizes there; ours jumped a tick early from up to 2 units above an
+upslope); the jump-z pin runs at any offset. pm_fixslopes 3 (Momentum ahop): the RNGFix landing only, the clamped HL2
+boost (PMSrc_HL2JumpBoost's post formula, cpp:1463-1486), no jump in the unduck transition (cpp:1390). Both read as 1
+below mover 14. `pm_stepsim <in> <out> [chain]`: one tick a line from the stated state under this server's movevars
+(chain: open loop), output with contact and floor probes.
+
+**Evidence.** game tools/momstep.py over pm_stepsim, task root FTESurf-worktrees/ahopcoast-20261122-5a. Five 2026 bhop
+demos, current settings -> mover 14 with pm_groundtracedist 2, pm_fixslopes 2, pm_jumpzoffset 0: ground-flag
+disagreements 627 -> 25; jump |dv| p95 302 -> 0.25 u/s, landing 298 -> 0.26, origin p95 0.003; air/ramp unchanged.
+15 surf demos: disagreements 3 -> 0, jumps/landings p95 302 -> 0.09, ramps unchanged. Open loop up ahop_coast's
+displacement climbs (Akatosh, ticks 7985-8460 and 12910-13290, Momentum's inputs): current settings lose 30-40 u/s a
+hop, register 5 of 11 and 2 of 13 landings and leave the route; mover 14 stays within 0.2 / 0.8 units of Momentum's
+path for 4.75 s with every landing. Ahop WR with pm_fixslopes 3 + pm_normalizejump 0: jump ticks without +walk exact
+(0.0-0.2 u/s); ground disagreements 28 -> 2-4. pm_selftest: all checks passed.
+
+**Not changed.** +walk (Momentum ahop's 150 u/s: its boost limit and air accel use it; a walked jump here is ~60 u/s
+slower, air ticks 6.0 u/s), HL2's duck timings and duck-jump. Three ahop_coast spots where Momentum stays airborne at
+1.75 units (geometry, unexplained). Lobbies, verifier and clients: mover 14 needs the next surfd generation's verifier
+and a client release (an older client predicts fixslopes 2/3 as 1).
 ## Patch 1706 - Noclip, ghost, the rewind's resume and a plain load ride a command: predicted at 350 ms (game QC only; no engine change)
 
 **Problem.** A player at ~350 ms (muri, 22 Nov local) reported: after a rewind's resume "a crazy .3s stutter until I can
