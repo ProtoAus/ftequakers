@@ -1,5 +1,63 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1706 - Noclip, ghost, the rewind's resume and a plain load ride a command: predicted at 350 ms (game QC only; no engine change)
+
+**Problem.** A player at ~350 ms (muri, 22 Nov local) reported: after a rewind's resume "a crazy .3s stutter until I can
+resume", noclip toggles "skip a few ticks until it synchronizes", and loading saves the same. Read and measured:
+- Rewind: the countdown's end called SaveLoc_Release with rw_on still set; WarpOp_Able refuses under rw_on, so the release
+  went as the stringcmd sl_holdoff. The client held the body a round trip, then re-predicted every command since at speed:
+  the forward jump in the player's clip. The go itself (`sl_saveat ... go`) also waited a round trip before the countdown.
+- Noclip: the engine client forwards `noclip` (cl_main.c registers it with no function) as a stringcmd, and the lobbies'
+  SV_ParseClientCommand branch (the engine hands QC the command first, noqchandling 0) flips the movetype between packets:
+  the client predicted the old mode a round trip, then snapped. muri's use is flying in noclip to 1-2k and turning it off.
+- Loads: a plain `sl_load` bind (Momentum's mom_saveloc_current) never rode a command (only the +sl_hold key and 3-6 did).
+  After any load the run line dropped a round trip of the predicted path (tr_kfrom = now at the answer; TF_FROZEN read a
+  round trip late after the release; the 128 u settle filter for 0.5 s).
+- Ghost: `cmd rec_ghost` and a client that detaches only on STAT_FS_GHOST: a round trip before the camera leaves.
+
+**Change (game QC; ops below WOP_SAVE, each behind its serverinfo published with fs_wop).**
+- WOP_NOCLIPON/OFF 199/198 (fs_wopnoclip): CSQC_ConsoleCommand takes a bare `noclip` (the engine offers it before
+  forwarding) and queues on/off from the newest replayed command's movetype; WarpOp_Apply sets PM_SPECTATOR/PM_NORMAL at
+  that command. SV_NoclipSet is shared with the stringcmd; under a save-lock hold it sets rec_sl_holdmove ("noclip ON when
+  you let go") and the client mirrors wop_heldmode. Turning it on calls SV_NoclipWatch at the op, and SV_SaveLocRelease
+  does for every release into noclip: an op pair inside one packet would otherwise fly a command unmarked (the watch in
+  the thinks runs per packet). Expiry sends the toggle only when STAT_FS_MOVETYPE differs; refused under TAS states.
+- Rewind: Rewind_Finish (the countdown's end and Esc in it) takes the mode down first, so the release is WOP_RELEASE,
+  predicted from the held row; every other way out (Rewind_Abandon: a load key or replay over the countdown, a lost
+  answer) keeps sl_holdoff ahead of the caller's reliables, as before. Browsing arms the cursor: `rw_arm <serial> <ticks>
+  x y z` (reliable, 10/s, a 30/s server bucket); SV_RewindArm answers STAT_FS_RWARM 212 with P682's read-only
+  SV_MovePrepRewind body (mp_rw_bodyonly: a previous go or a full list but that row does not change the body). ENTER on
+  the newest answered request is WOP_RWGO 197 (fs_woprwgo): SV_RewindOpGo does `sl_saveat ... go` with the armed request
+  (two rate tokens, the ticket FS_SaveOpTag kept through SV_SaveLocGo so its LOADED event trims the line and saves the
+  picture); the client lands and holds at the press, the countdown runs from it, the release follows in order. An
+  unanswered cursor sends the stringcmd go. Refusal (ticket-matched answer absent 0.15 s after the ack): browse again;
+  after the countdown has ended, rec_watch 0 void as Rewind_Close's refused resume. No reopen while it is unanswered.
+- WOP_LOADNOW 196 (fs_woploadnow): a plain `sl_load` predicted like 3-6's rows (same gates, walk and charge).
+- Run line: a predicted load's answer keeps the frames after its own command (WarpOp_PredLoad: the newest load op,
+  matched by landing origin, consumed once), re-emitting ones drawn into the old line; the settle filter is skipped for
+  it; TF_FROZEN does not drop frames after a predicted release while the stats are older than it.
+- WOP_GHOSTON/OFF 195/194 (fs_wopghost): `ghost` rides a command; rec_gh_on follows the press until the server has run
+  it (STAT_FS_GHOST then; a refusal shows there after 0.25 s); the ghost input branch carries the op.
+- Rewind S stays the save key when S is bound to a strafe (it became a scrub key on an ESDF layout).
+
+**Verified.** Linux rig (FTESurf-worktrees/ping350-20261122-88/arm/p1706arm.py): lobby.cfg dedicated server, sv_minping
+350, surf_shady, client in a headless nested labwc; control = main 146f961f's progs, subject = this branch, same fteqcc.
+`prederr:` lines undercount a mode switch (one acknowledged command), so an ARM-ONLY probe csprogs printed the predicted
+origin per rendered frame and snaps are |moved - v dt|:
+| gesture (350 ms) | control | subject |
+|---|---|---|
+| noclip on, flying to 2080 u/s | 648 u view snap (prederr 27.5) | max 2.1 u |
+| noclip off at 2080 u/s | 48 u (one round trip of gravity) | max 1.3 u |
+| plain sl_load x2 while moving | teleport at +0.48/+0.57 s, prederr 352/592 | teleport at the press, prederr <= 1.6 |
+| rewind resume, countdown 0 | lands +0.70 s, 1211 u then a 162 u catch-up at +1.40 s | lands at the press, nothing after, prederr 0 |
+| rewind resume via the stringcmd go, countdown 1 | 1228 u then a 141 u catch-up | 1237 u (the teleport), no catch-up |
+| ghost on, status right after | off (asked for on) | on |
+Rewind S through Rewind_InputEvent saved on both builds (`rewind: save N ... 260 u/s`). Zero new compiler warnings.
+Independent review (one round, eight findings: release-into-noclip under every hold end, the go's ticket, the abandon
+order, a refused go after the countdown, noclip under a stringcmd hold, the toggle fallback, TAS, the line's event match)
+-- all fixed, the last batch re-run on the fixed build. Limits and leftovers: game BACKLOG "P1706"; human checks lextest.
+Not verified: muri's "S does nothing" (not reproduced); real packet loss (net_fakeloss) was not armed.
+
 ## Patch 1705 - FS_Rename refuses a path it could not clean instead of segfaulting (engine fs.c; lobbies)
 
 **Cause.** 21 Nov 2026 a player reported the game freezing at the end zone on segmented surf_the_gloaming and
