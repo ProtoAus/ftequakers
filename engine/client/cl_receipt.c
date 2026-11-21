@@ -551,6 +551,13 @@ qboolean CL_Receipt_AcctSign(const char *nonce, int kind, qboolean keyed, char *
 	*/
 	if (cls.state < ca_connected || cls.demoplayback)
 		return false;
+	/*P1712: -7 has no press behind it, so only in a game this client hosts (CL_FriendsSign's test): a server's
+	  VM elsewhere gets none (security review)*/
+	if (kind == -7 && cls.netchan.remote_address.type != NA_LOOPBACK)
+	{
+		Con_Printf("acct_sign: kind -7 is signed only in a game you host. Refused.\n");
+		return false;
+	}
 	if (!acct_vm_live || !NET_CompareAdr(&acct_vm_adr, &cls.netchan.remote_address))
 	{
 		Con_Printf("acct_sign: this game code is not the connected server's. Refused.\n");

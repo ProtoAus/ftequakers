@@ -6,8 +6,9 @@ Lex (22 Nov): a new TAS best should pop up "like the f6 to report an error, or .
 press anything". The in-game upload (P1696) signs kind -6 and only under a real press; with nobody pressing there is no
 statement to send. Kind -7 is that statement: CL_Receipt_AcctSign takes it with `keyed` forced false (the text says
 "key 0"), the server field fixed to play.proto.bar:443 as -6's, and PF_cl_acct_sign never spends the press's one
-signature on it. Every other check stands: connected to the server whose VM this is, one named main file of code, a
-32-hex nonce.
+signature on it. And only on a loopback connection -- a game this client hosts, CL_FriendsSign's test -- so a VM a
+remote server sent gets no -7 at all (review 1, defence in depth: tasupd would refuse its code anyway). Every other
+check stands: connected to the server whose VM this is, one named main file of code, a 32-hex nonce.
 
 What a -7 signature is good for: only surfd/tasupd.py's game route verifies one (header FTESURF-TASUP 2,
 GAME_AUTO_KIND), and only for game code it knows (the lobbies' csprogs, releases, owner allow-codes) -- so code from a
