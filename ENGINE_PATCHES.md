@@ -4,7 +4,7 @@
 
 **Cause.** 21 Nov 2026 a player reported the game freezing at the end zone on segmented surf_the_gloaming and
 surf_2pacisalive finishes, then the lobby on another map. The lobbies had segfaulted (lobby 4 11:43Z, 12 11:46Z,
-1 12:16Z, 8 11:5xZ and 12:21Z; the old patch-1683 engine did the same on an akatosh bonus run earlier). Symbolized:
+1 12:16Z, 8 twice, the second 12:21Z; the old patch-1683 engine did the same on an akatosh bonus run earlier). Symbolized:
 FS_NativePath <- FS_Rename2 <- FS_Rename <- PF_frename <- SSQC (SV_PostRunCmd). SSQC's Archive_Seal /
 Archive_SealFile (sv_archive.qc) write `<run>.rec.owner-p<port>-<edict>.part` beside the recording and frename it
 to `<run>.rec.owner`; on long map names plus `_segmented` that part path is 129 characters. fopen(FILE_WRITE) only
