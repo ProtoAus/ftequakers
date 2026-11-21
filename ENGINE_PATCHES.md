@@ -22,6 +22,18 @@ removing, re-checks each root, and caps its memory. tools/install_tasupd.py keep
 The surfd drop-in still names ~50 old roots and ~230 copies: they go once a generation installs a drop-in that names
 only the live generation and its predecessor (P1702 kit work, next generation).
 
+**Guard (game bb2c86ca).** Lex: "The 91-file list is rigid -- also fix". tools/surfd_transition_guard.py profile
+`members-v1`: the manifest's own member list (schema 26, the three-converter closure, every non-test tour91-v1 module),
+hash-verified at every launch as before, so an added file (P1697's templates/admin_top10.html) needs no new profile.
+`members_ok` reads only the member list and fixed names: at most 512 members, plain relative paths (<= 3 deep, known
+suffixes), every import name -- X.py or X/ in runtime/ and in runtime/tools/ (both on sys.path) -- owned by exactly
+one member, no added name in SHADOW (stdlib, surfd's third-party stack, the game tools modules, tools, static), no added
+__init__/__main__ at the top or directly in templates/web/tools. Three independent review rounds: a package X/ beating
+a sealed X.py (also one level down in tools/), a find_spec check that made close/status depend on later installs and
+missed SURFD_TOOLS, static/ served by Flask. test_surfd_guard_members_profile 9 tests (15 mutants fail across rounds);
+the transition, candidate and tour/mapnew/fetch suites pass unchanged. Reaches the Pi only with a generation: the next
+one changes the guard (tools/backend-pending.md).
+
 **Verified.** test_pi_retention 34, test_install_tasupd 56; 23 mutants each fail a suite. Independent review, four
 rounds (what it can delete; an unattended deleter's failure modes): fail-open config reads, mtime-only idleness,
 chmod outside the tree, ctime ordering, links, a loader-blind exemption, same-disk bind mounts -- all fixed, round 4
