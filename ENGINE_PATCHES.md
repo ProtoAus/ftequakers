@@ -1,5 +1,30 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1701 - Flying into the void no longer stalls: the overview edge keeps the particle shaders (engine client)
+
+**Cause.** Lex, 21 Nov: "ahop_coast has a fps spike when you transition from playable area, to void" (save 3,
+noclip backward). Patch 1345 clears particles at either edge of the noclip void overview (PF_R_RenderScene,
+P_ClearParticles), and PScript_ClearParticles also re-runs P_LoadTexture for every particle type: a shader
+registration each and the models dropped, which a map change needs and an overview edge does not.
+
+**Change.** p_script.c: pscript_clearkeeplooks, set by pr_csqc.c around the edge clear, skips that loop; live
+particles, decals and beams are still discarded. Map changes and the pointfile clear are unchanged.
+
+**Verified.** Hidden rig off the GPU (pixman labwc, llvmpipe client), ahop_coast, noclip from inside the map
+(-14600 7290 9286) backward through the west sky wall into the overview, with temporary timers inside
+PF_R_RenderScene (artifacts/spktrace2.diff, not shipped). Before: the first overview frame took 476.8 ms, 375.2 of
+it between R2D_Flush and R_PushDlights -- the edge clear (r_spikes 2: csqc 381.8, qc self CSQC_UpdateView 372.0);
+the same frame read csqc 253.9 and 581.8 ms in two earlier runs. After: that step 6.3 ms, no csqc spike in
+r_frametime_dump. The way back in takes the same branch (not driven). Ruled out on the way: late shader compiles
+and image uploads (0 at the edge), and the overview's own cost (964 batches against 317 in the map, cheaper per frame
+here than the in-map view). One independent review (state lifecycle): no defect -- every live type got its looks
+when parsed (FinishParticleType), vid_restart and r_particlesystem re-parse, the flag cannot stay set; it noted that
+the edge no longer repairs older faults by accident (a sprite model dropped by a mid-map Mod_Purge, a particle shader
+script from a pak mounted at load) -- they now last to the next map.
+
+**Boundary.** Client render only. The 6 ms left is the free-list rebuild over r_numparticles; frames just past the
+wall but inside r_voidvis_margin keep the last cluster (Patch 1627).
+
 ## Patch 1700 - TAS uploads in the site menu; a map picker with thumbnails (game web only; no engine change)
 
 **Cause.** Lex, 21 Nov 2026, a screenshot of tasupd's "Find a course" (a map name and a bare number box): "you need to

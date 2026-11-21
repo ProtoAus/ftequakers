@@ -3806,6 +3806,9 @@ static void PScript_Shutdown (void)
 P_ClearParticles
 ===============
 */
+//FTESurf Patch 1701: set by the void overview's edge clear (pr_csqc.c, P1345): drop live particles, keep each type's
+//shader and models. Reloading them all cost ~375 ms on ahop_coast's first overview frame; only a map change needs it.
+qboolean pscript_clearkeeplooks;
 static void PScript_ClearParticles (void)
 {
 	int		i;
@@ -3834,7 +3837,7 @@ static void PScript_ClearParticles (void)
 
 	particletime = cl.time;
 
-	for (i = 0; i < numparticletypes; i++)
+	for (i = 0; i < numparticletypes && !pscript_clearkeeplooks; i++)
 	{
 		P_LoadTexture(&part_type[i], false);
 	}

@@ -2942,7 +2942,16 @@ static void QCBUILTIN PF_R_RenderScene(pubprogfuncs_t *prinst, struct globalvars
 	{
 		//P1345: discard hidden transient state at either edge, never replay it on reentry.
 		if (worldonly != lastworldonly && cl.splitclients <= 1 && pe)
+		{	//FTESurf Patch 1701: particles only, not every type's shader (p_script.c)
+#ifdef PSET_SCRIPT
+			extern qboolean pscript_clearkeeplooks;
+			pscript_clearkeeplooks = true;
 			P_ClearParticles();
+			pscript_clearkeeplooks = false;
+#else
+			P_ClearParticles();
+#endif
+		}
 		lastworldonly = worldonly;
 	}
 	//P1348: suppressed scenes must still retire the previous light epoch.
