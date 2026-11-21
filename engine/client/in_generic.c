@@ -873,7 +873,7 @@ void IN_Init(void)
 	Cmd_AddCommandD ("in_journal_begin", IN_JournalBegin_f, "Start an in-memory journal of raw input events.  Discards any journal already open.");
 	Cmd_AddCommandD ("in_journal_end", IN_JournalEnd_f, "in_journal_end [path] -- write the journal to data/...*.hid and close it.  With no path, discard it.");
 	Cmd_AddCommandD ("in_journal_note", IN_JournalNote_f, "Append a comment line to the open input journal.");
-	Cmd_AddCommandD ("in_journal_synth", IN_JournalSynth_f, "in_journal_synth <n> -- inject n synthetic input events, for testing.  Marks the journal as synthetic, which makes it inadmissible.");
+	Cmd_AddCommandD ("in_journal_synth", IN_JournalSynth_f, "in_journal_synth <n> [pad <v> | padkey [down|up] [dpad]] -- inject n synthetic input events (or set the right stick to v, or press the A button / D-pad up n times), for testing.  Marks the journal as synthetic, which makes it inadmissible.");
 
 	INS_Init();
 }
@@ -2974,6 +2974,13 @@ void IN_Journal_MarkSynth(const char *source)
 	IN_Journal_GuardRelease(&guard);
 }
 
+/*FTESurf Patch 1694 review 3: in_journal_synth's stick (1) or held keys (2 A, 4 D-pad up) still set*/
+static int in_synthpad;
+qboolean IN_SynthPadActive(void)
+{
+	return in_synthpad != 0;
+}
+
 static void IN_JournalSynth_f(void)
 {
 	int n = (Cmd_Argc() > 1) ? atoi(Cmd_Argv(1)) : 1;
@@ -2993,6 +3000,43 @@ static void IN_JournalSynth_f(void)
 
 	IN_Journal_MarkSynth("in_journal_synth");
 	IN_SynthOrigin(true);	/*Patch 625: these are nobody's key presses*/
+
+	/*FTESurf Patch 1694: controller events for the in_pad_frames arm.  `pad <v>` sets device 0's right stick
+	  (turn) to v until the next one; `padkey` presses and releases the A button n times.*/
+	if (Cmd_Argc() > 2 && !strcmp(Cmd_Argv(2), "pad"))
+	{	/*review 1: a bind of this is a turn macro, so it is a script lapse like plugin input; finite and in range.
+		  Review 3: and every input frame it stays set (IN_SynthPadActive), so it cannot be left on into a run*/
+		float v = atof(Cmd_Argv(3));
+		if (!(v >= -1 && v <= 1))
+			v = 0;
+		in_synthpad = (in_synthpad & ~1) | (v ? 1 : 0);
+		CL_ScriptLapse();
+		IN_JoystickAxisEvent(0, GPAXIS_RT_RIGHT, v);
+		IN_SynthOrigin(false);
+		Con_Printf("in_journal_synth: right stick %g\n", v);
+		return;
+	}
+	if (Cmd_Argc() > 2 && !strcmp(Cmd_Argv(2), "padkey"))
+	{	/*review 2: [down|up] holds or lets go instead of a tap; [dpad] is D-pad up (default +forward), else A*/
+		const char *how = Cmd_Argv(3);
+		int k = strcmp(Cmd_Argv(4), "dpad") ? K_GP_DIAMOND_DOWN : K_GP_DPAD_UP;
+		int bit = (k == K_GP_DPAD_UP) ? 4 : 2;
+		if (!strcmp(how, "down"))
+			in_synthpad |= bit;
+		else
+			in_synthpad &= ~bit;
+		CL_ScriptLapse();
+		for (i = 0; i < n; i++)
+		{
+			if (strcmp(how, "up"))
+				IN_KeyEvent(0, true, k, 0);
+			if (strcmp(how, "down"))
+				IN_KeyEvent(0, false, k, 0);
+		}
+		IN_SynthOrigin(false);
+		Con_Printf("in_journal_synth: injected %i controller presses\n", n);
+		return;
+	}
 
 	for (i = 0; i < n; i++)
 	{
@@ -3707,7 +3751,7 @@ static float joydeadzone(float mag, float deadzone)
 void IN_MoveJoystick(struct joy_s *joy, float *movements, int pnum, float frametime)
 {
 	float mag;
-	vec3_t jlook, jstrafe, before;
+	vec3_t jlook, jstrafe, before, mbefore;
 
 	int wpnum, i;
 	for (i = 0; i < MAXJOYAXIS; i++)
@@ -3845,9 +3889,14 @@ void IN_MoveJoystick(struct joy_s *joy, float *movements, int pnum, float framet
 	mag = 1;
 	if ((in_speed.state[pnum] & 1) ^ cl_run.ival)
 		mag *= cl_movespeedkey.value;
+	VectorCopy(movements, mbefore);
 	movements[0] += joy_movesens[0].value * mag*cl_forwardspeed.value * jstrafe[0];
 	movements[1] += joy_movesens[1].value * mag*cl_sidespeed.value * jstrafe[1];
 	movements[2] += joy_movesens[2].value * mag*cl_upspeed.value * jstrafe[2];
+
+	/*FTESurf Patch 1694: past the dead zones and the menu clear above, so only input that moved you counts*/
+	if (!VectorCompare(before, cl.playerview[pnum].viewanglechange) || !VectorCompare(mbefore, movements))
+		CL_PadInput();
 }
 
 void IN_Move (float *nudgemovements, float *absmovements, int pnum, float frametime)

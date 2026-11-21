@@ -228,6 +228,28 @@ void CL_ScriptLapse(void)
 	if (Sys_IsMainThread())
 		CL_ScriptLapseSync();
 }
+/*FTESurf Patch 1694: gamepads are allowed and their runs tagged (Lex, 20 Nov 2026).  Frames a controller moved
+  the view or the player (IN_MoveJoystick) and controller-button presses that ran a bind in game (Key_Event).
+  Every usercmd carries the count in-band (CL_SendCounts), so the server credits the command it came in; the
+  read-only cvar is for people.  Any thread counts, Host_Frame publishes.*/
+static cvar_t in_pad_frames = CVARFD("in_pad_frames", "0", CVAR_NOSET|CVAR_NOSAVE|CVAR_NOTFROMSERVER|CVAR_NORESET, "Set by the engine: counts (modulo 2^24) frames in which a controller moved the view or the player, and controller-button presses that ran a bind. Sent with every move; a run that used a controller is tagged.");
+static volatile unsigned int in_padinputs;
+static unsigned int in_padinputs_shown;
+void CL_PadInputSync(void)
+{
+	char s[16];
+	unsigned int n = in_padinputs;
+	if (n == in_padinputs_shown || !in_pad_frames.string)
+		return;
+	in_padinputs_shown = n;
+	Q_snprintfz(s, sizeof(s), "%u", n & 0xffffff);	//review 1: wraps where a QC float stops being exact
+	Cvar_ForceSet(&in_pad_frames, s);
+}
+void CL_PadInput(void)
+{
+	in_padinputs++;
+}
+
 //bind is the key's whole bind string, level its bind level: only a single bare +command is noted.
 void CL_DirectPress(const char *bind, int key, int level)
 {
@@ -2034,6 +2056,14 @@ static void CL_AccumlateInput(int plnum, float frametime/*extra contribution*/, 
 	CL_BaseMove (newmoves, plnum);
 	if (plnum == 0)
 		IN_Journal_AngleBegin(cl.playerview[plnum].viewangles);
+	{	/*FTESurf Patch 1694 review 2: a held controller button keeps counting -- review 5: with the console or menu
+		  open too, as its action still moves the player*/
+		qboolean Key_PadHeld(void), IN_SynthPadActive(void);
+		if (plnum == 0 && Key_PadHeld())
+			CL_PadInput();
+		if (plnum == 0 && IN_SynthPadActive())
+			CL_ScriptLapse();	/*review 3: the test hook's input stays a script while it is held*/
+	}
 
 	/*FTESurf Patch 305: capture what CL_AdjustAngles adds to the angle, by
 	  DIFFING the accumulator across the call rather than by re-deriving it.
@@ -2251,7 +2281,11 @@ static void CL_SendCounts(usercmd_t *cmd, int pnum)
 	double ring[2], read[2];
 	int rejected;
 	IN_CountsGet(pnum, ring, read, &rejected);
-	Vector2Clear(cmd->cursor_screen);
+	/*FTESurf Patch 1694: cursor_screen (two shorts, x32767 truncated on the wire) carries in_pad_frames:
+	  [0] the count mod 32767 (+0.5 so the truncation lands on it), [1] 1 = this engine counts.  Patch 376 left
+	  both 0, which an older client still sends.*/
+	cmd->cursor_screen[0] = ((in_padinputs % 32767u) + 0.5f) / 32767.0f;
+	cmd->cursor_screen[1] = 1;
 	cmd->cursor_start[0] = CL_CountWrap(ring[0]);
 	cmd->cursor_start[1] = CL_CountWrap(ring[1]);
 	cmd->cursor_start[2] = 1;
@@ -3809,6 +3843,8 @@ void CL_InitInput (void)
 	Cvar_Register (&cl_iDrive, inputnetworkcvargroup);
 	Cvar_Register (&in_script_lapses, inputnetworkcvargroup);	/*FTESurf Patch 1646*/
 	Cvar_ForceSet (&in_script_lapses, "0");	//a launch +set of the name leaves its string behind
+	Cvar_Register (&in_pad_frames, inputnetworkcvargroup);	/*FTESurf Patch 1694*/
+	Cvar_ForceSet (&in_pad_frames, "0");
 
 #ifdef NQPROT
 	Cvar_Register (&cl_movement, inputnetworkcvargroup);

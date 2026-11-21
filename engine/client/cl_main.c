@@ -7656,6 +7656,7 @@ double Host_Frame (double time)
 	if (!cls.timedemo)
 		CL_ReadPackets ();
 	CL_ScriptLapseSync ();	/*FTESurf Patch 1646: publish script lapses counted off the main thread*/
+	CL_PadInputSync ();		/*FTESurf Patch 1694: likewise controller input*/
 
 	if (idle && cl_idlefps.value > 0 && !(vrflags&VRF_OVERRIDEFRAMETIME))
 	{

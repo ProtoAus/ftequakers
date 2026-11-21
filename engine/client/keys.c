@@ -4616,6 +4616,98 @@ On some systems, keys and (uni)char codes will be entirely separate events.
   still held came to game code as presses: a held Enter sent the chat draft it
   had just pasted into (the review).  A press of it by a device ends this too.*/
 int key_pasteanswer;
+/*FTESurf Patch 1694: does a controller button's bind play?  Every command is judged, and the bind plays unless all
+  of them are empty or UI -- the menu, console, chat, voice, scores, the weapon wheel and a screenshot -- so a keyboard
+  player who bumps Back or talks on a pad is not tagged.  Review 4: commands are split exactly as Cbuf_ExecuteLevel
+  splits them (cmd.c: a newline always ends one; `"`, `\"`-escaped strings and `//` comments hide `;`).*/
+static size_t Key_CmdLineEnd(const char *text)
+{
+	size_t i;
+	int quotes = 0;
+	qboolean comment = false;
+	for (i = 0; text[i]; i++)
+	{
+		if (text[i] == '\n')
+			break;
+		if (quotes)
+		{
+			if (text[i] == '"')
+				quotes = 0;
+			if (text[i] == '\\' && quotes == 2 && (text[i+1] == '"' || text[i+1] == '\\'))
+				i++;
+			continue;
+		}
+		else if (text[i] == '"')
+		{
+			quotes = 1;
+			continue;
+		}
+		else if (text[i] == '\\' && text[i+1] == '"')
+		{
+			quotes = 2;
+			i++;
+			continue;
+		}
+		if (comment)
+			continue;
+		if (text[i] == '/' && text[i+1] == '/')
+			comment = true;
+		else if (text[i] == ';')
+			break;
+	}
+	return i;
+}
+static qboolean Key_PadBindPlays(const char *dc)
+{
+	static const char *ui[] = {"togglemenu", "toggleconsole", "+showscores", "messagemode", "messagemode2",
+		"screenshot", "+weaponwheel", "+voip", "say", "say_team", NULL};
+	char first[32];
+	size_t end, n, m;
+	int i;
+	while (*dc)
+	{
+		end = Key_CmdLineEnd(dc);
+		for (n = 0; n < end && (dc[n] == ' ' || dc[n] == '\t' || dc[n] == '\r'); n++)
+			;
+		m = 0;
+		if (n < end && dc[n] == '"')	//review 3: `bind JOY1 "impulse" "10"` keeps its quotes
+			for (n++; n < end && dc[n] != '"'; n++)
+				first[m < sizeof(first)-1 ? m++ : m] = dc[n];
+		else if (!(n+1 < end && dc[n] == '/' && dc[n+1] == '/'))
+			for (; n < end && dc[n] != ' ' && dc[n] != '\t' && dc[n] != '\r'; n++)
+				first[m < sizeof(first)-1 ? m++ : m] = dc[n];
+		first[m] = 0;
+		if (*first)
+		{
+			for (i = 0; ui[i]; i++)
+				if (!Q_strcasecmp(first, ui[i]))
+					break;
+			if (!ui[i])
+				return true;
+		}
+		dc += end;
+		if (*dc)
+			dc++;
+	}
+	return false;
+}
+
+/*FTESurf Patch 1694 review 2: a controller key whose press counted keeps counting every input frame
+  (CL_AccumlateInput) while its release command is pending on any device -- review 3: not a separate held flag, as
+  the focus-loss release-all reaches device 0 only and the action stays held in game.*/
+static qbyte padheld[K_MAX][MAX_INDEVS];	//review 4: per device, cleared by that device's key-up at the top of
+qboolean Key_PadHeld(void)				//Key_Event, so a key-up csqc swallows cannot leave a stale count
+{
+	static const int ranges[3][2] = {{K_JOY1, K_JOY32}, {K_AUX1, K_AUX16}, {K_GP_DIAMOND_DOWN, K_GP_UNKNOWN}};
+	int r, k, d;
+	for (r = 0; r < 3; r++)
+		for (k = ranges[r][0]; k <= ranges[r][1]; k++)
+			for (d = 0; d < MAX_INDEVS; d++)
+				if (padheld[k][d] && releasecommand[k][d])
+					return true;
+	return false;
+}
+
 void Key_Event (unsigned int devid, int key, unsigned int unicode, qboolean down)
 {
 	unsigned int devbit = 1u<<devid;
@@ -4627,6 +4719,8 @@ void Key_Event (unsigned int devid, int key, unsigned int unicode, qboolean down
 	int conkey = consolekeys[key] || ((unicode || key == '`') && (key != '`' || key_linepos>0));	//if the input line is empty, allow ` to toggle the console, otherwise enter it as actual text.
 	qboolean wasdown = !!(keydown[key]&devbit);
 
+	if (!down && key > 0 && key < K_MAX)
+		padheld[key][devid%MAX_INDEVS] = 0;	/*FTESurf Patch 1694 review 4: before anything can swallow the key-up*/
 	key_fromqc = false;	/*a QC error can leave Key_Console by longjmp (pr_menu.c PF_SubConInput)*/
 	if (key_pasteanswer && key == key_pasteanswer)
 	{
@@ -5052,6 +5146,16 @@ defaultedbind:
 
 	if (dc)
 	{
+		/*FTESurf Patch 1694: a controller button that ran a bind in game*/
+		if ((key >= K_JOY1 && key <= K_JOY32) || (key >= K_AUX1 && key <= K_AUX16) ||
+		    (key >= K_GP_DIAMOND_DOWN && key <= K_GP_UNKNOWN))
+		{	//review 5: a + bind runs with " <key>" appended (below), so an empty last command runs the key number --
+			//judged so only where an alias of that name exists (review 6: else `+showscores;` is no play)
+			const char *num = va("%i", bkey);
+			padheld[key][devid%MAX_INDEVS] = Key_PadBindPlays((dc[0] == '+' && Cmd_AliasExist(num, bl)) ? va("%s %s", dc, num) : dc);
+			if (padheld[key][devid%MAX_INDEVS])
+				CL_PadInput();
+		}
 		if (dc[0] == '+')
 		{
 			/*FTESurf Patch 1646: this key's own fresh press (not its repeat, not a plugin's event);

@@ -1384,6 +1384,8 @@ qboolean IN_WeaponWheelIsShown(void);	//to decide when the game should be auto-p
 void CL_InitInput (void);
 void CL_ScriptLapse(void);
 void CL_ScriptLapseSync(void);	/*FTESurf Patch 1646 (cl_input.c)*/
+void CL_PadInput(void);			/*FTESurf Patch 1694 (cl_input.c)*/
+void CL_PadInputSync(void);
 void CL_DirectPress(const char *bind, int key, int level);
 void CL_SendCmd (double frametime, qboolean mainloop);
 void CL_SendMove (usercmd_t *cmd);
