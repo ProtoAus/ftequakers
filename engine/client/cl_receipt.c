@@ -232,6 +232,46 @@ static void CL_Receipt_Hex(char *out, size_t outsize, const qbyte *b, size_t n, 
 	out[n*2] = 0;
 }
 
+//FTESurf Patch 1704: the digests rec_sign committed to for the latest runs, by nonce and server. An HTTPS request
+//is accepted only for a run signed on the server asking, and carries that digest; its bytes must match it to go.
+#define RCPT_PINS 16
+static struct
+{
+	char nonce[33], server[128];
+	qbyte view[32], hid[32];
+	qboolean haveview, havehid;
+} rcpt_pin[RCPT_PINS];
+static int rcpt_pinnext;
+static void CL_Receipt_Pin(const char *nonce, const char *server, const qbyte *view, qboolean haveview, const qbyte *hid, qboolean havehid)
+{
+	int i;
+	for (i = 0; i < RCPT_PINS; i++)
+		if (!strcmp(rcpt_pin[i].nonce, nonce) && !strcmp(rcpt_pin[i].server, server))
+			return;		//the first signature of a run wins, as its first receipt does (sv_timer.qc)
+	i = rcpt_pinnext++ % RCPT_PINS;
+	Q_strncpyz(rcpt_pin[i].nonce, nonce, sizeof(rcpt_pin[i].nonce));
+	Q_strncpyz(rcpt_pin[i].server, server, sizeof(rcpt_pin[i].server));
+	memcpy(rcpt_pin[i].view, view, 32);
+	memcpy(rcpt_pin[i].hid, hid, 32);
+	rcpt_pin[i].haveview = haveview;
+	rcpt_pin[i].havehid = havehid;
+}
+#ifdef WEBCLIENT
+static qboolean CL_Receipt_Pinned(const char *nonce, const char *server, qboolean view, qbyte *digest)
+{
+	int i;
+	for (i = 0; i < RCPT_PINS; i++)
+		if (*rcpt_pin[i].nonce && !strcmp(rcpt_pin[i].nonce, nonce) && !strcmp(rcpt_pin[i].server, server))
+		{
+			if (!(view ? rcpt_pin[i].haveview : rcpt_pin[i].havehid))
+				return false;
+			memcpy(digest, view ? rcpt_pin[i].view : rcpt_pin[i].hid, 32);
+			return true;
+		}
+	return false;
+}
+#endif
+
 /*
   rec_sign <nonce> <ticks> <viewpath|-> <journalled 0|1>
 
@@ -376,6 +416,7 @@ static void CL_Receipt_Sign_f(void)
 				svname, nonce, ticks, hidhex, (unsigned)hidlen, kept ? 1 : 0, viewhex);
 
 	Ed25519_Sign(sig, (const qbyte*)msg, strlen(msg), rcpt_sk);
+	CL_Receipt_Pin(nonce, svname, view, haveview, hid, havehid);
 
 	Base16_EncodeBlock((const char*)rcpt_pk, sizeof(rcpt_pk), (qbyte*)pubhex, sizeof(pubhex));
 	pubhex[64] = 0;
@@ -897,10 +938,11 @@ static void CL_Receipt_SelfTest_f(void)
 #define RCPT_ULSLOTS 4
 static char rcpt_ularm[RCPT_ULSLOTS][MAX_QPATH];
 static cvar_t rcpt_upload = CVARFD("rec_upload", "1", CVAR_ARCHIVE|CVAR_NOTFROMSERVER,
-	"Allow consented, per-run armed angle sidecars to be uploaded when the server requests them.");
+	"Allow consented, per-run armed angle sidecars to be uploaded when a server asks for them: to that server, or to the World of Surf collector (play.proto.bar) when the server asks for that, as the official lobbies do. An upload to the collector already asked for finishes after you leave the server; 0 stops it and deletes it.");
 static cvar_t rcpt_hid_upload = CVARFD("rec_hid_upload", "0", CVAR_ARCHIVE|CVAR_NOTFROMSERVER,
 	"New online acceptance includes raw mouse/keyboard run journal uploads to the official HTTPS collector unless you opt out. "
 	"Older saved answers do not grant the new scope. Stop cancels active uploads and blocks new ones; rec_hid 0 also stops local recording. "
+	"A journal already asked for finishes after you leave the server. "
 	"Native confirmed permission is still required; evidence already received is not deleted.");
 //ftesurf (P1101): the menu's mirror of data/consent.txt, read by every online gate in menu and
 //csprogs. A plain QC cvar until now: a server's `seta rec_terms 8` set an override cvar() read.
@@ -911,6 +953,7 @@ static cvar_t rcpt_terms = CVARFD("rec_terms", "-1", CVAR_NOTFROMSERVER|CVAR_NOS
 #ifdef WEBCLIENT
 #define HID_HTTP_HEAD 1024
 #define HID_HTTP_MAX (64u * 1024u * 1024u)
+#define VIEW_HTTP_MAX RCPT_ULMAX	//as over the netchan; surfd/hidupload.py MAX_VIEW
 static struct dl_download *rcpt_http;
 static double rcpt_http_until;
 static char rcpt_http_reply[128];
@@ -919,6 +962,7 @@ static char rcpt_http_reply[128];
 struct rcpt_job_s
 {
 	unsigned int gen;
+	int kind;		//FTESurf Patch 1704: RCPT_HTTP_HID or RCPT_HTTP_VIEW
 	char path[MAX_OSPATH], nonce[33], map[65], runid[97], url[128];
 	char *body;
 	qofs_t size;
@@ -926,19 +970,175 @@ struct rcpt_job_s
 	double readms, hashms;
 	qboolean ok;
 };
+#define RCPT_HTTP_HID	0
+#define RCPT_HTTP_VIEW	1
+/*FTESurf Patch 1704: every HTTPS request waits in rcpt_httpq and runs one at a time. Accepting one takes its file out
+  of data/staged/ into RCPT_HTTPQ_DIR (a journal moved, a view copied -- see Accept); the queued file is removed once
+  stored or given up, and the directory is emptied at the first frame and whenever rec_upload goes to 0. It is under
+  FS_ROOT, outside every game searchpath, and FS_GamedirIsOkay refuses it as a gamedir or package (any case or
+  trailing dot), so no gamecode file call reaches it (reviews 10, 11). No answer or a broken connection (0, 900+),
+  404 (a collector rolled back), 408, 429 or 500-504 is tried again, RCPT_HTTP_TRIES in all over about 36 minutes (a
+  backend restart takes ~5). Views go before journals, proven hosts first. A host (an IP address; an IPv6 /64 for
+  the quota) may hold RCPT_HTTP_PERHOST waiting requests; a full queue makes room only from hosts with no stored
+  upload (see Accept and CL_Receipt_HTTPQuotaVictim). A host whose requests of one kind the collector called junk
+  (400 malformed, 410 no such run) RCPT_HTTP_STRIKES times is not served that kind again this session. A request
+  keeps its file's system path.*/
+#define RCPT_HTTPQ			40
+#define RCPT_HTTP_PERHOST	20	//10 runs: a ~5 minute backend restart at a run every 30 s
+#define RCPT_HTTP_TRIES		6
+#define RCPT_HTTP_STRIKES	3
+#define RCPT_HTTPQ_DIR		"httpq/"
+typedef struct
+{
+	char path[MAX_OSPATH];	//a system path (FS_SYSTEM)
+	char nonce[33], map[65], runid[97], server[128], host[128];
+	char group[128];	//quota and fair share: host, but an IPv6 /64 as one (one network; its addresses are free)
+	qbyte digest[32];	//rec_sign's, for this run on this server
+	int kind, tries;
+	double after;
+} rcpt_httpreq_t;
+static struct
+{
+	char server[128];	//a host key (CL_Receipt_HostKey)
+	int kind, strikes;
+} rcpt_httpbad[8];
+static char rcpt_httpproven[16][128];	//hosts with an upload stored this session: their waiting requests are not evicted
+static int rcpt_httpprovennext;
+static qboolean CL_Receipt_HTTPProven(const char *host)
+{
+	int i;
+	for (i = 0; i < countof(rcpt_httpproven); i++)
+		if (*rcpt_httpproven[i] && !strcmp(rcpt_httpproven[i], host))
+			return true;
+	return false;
+}
+static void CL_Receipt_HTTPProve(const char *host)
+{
+	if (!CL_Receipt_HTTPProven(host))
+		Q_strncpyz(rcpt_httpproven[rcpt_httpprovennext++ % countof(rcpt_httpproven)], host, sizeof(rcpt_httpproven[0]));
+}
+static rcpt_httpreq_t rcpt_httpq[RCPT_HTTPQ];
+static int rcpt_httpqn;
+static rcpt_httpreq_t rcpt_http_cur;		//the running request
+static qboolean rcpt_http_curlive;
+static int rcpt_http_fail;				//set by CL_Receipt_HTTPStart (a work item), acted on by CL_Receipt_Think
+static char rcpt_http_failwhy[96];
+#define RCPT_HTTP_FAIL_FORGET	1
+#define RCPT_HTTP_FAIL_RETRY	2
 static unsigned int rcpt_http_gen;
 static qboolean rcpt_http_pending;
 static int rcpt_http_jobs;		//queued or reading, cancelled or not: one at a time (review 1: a cancel does not stop a read)
 static cvar_t rcpt_http_test = CVARFD("rec_hid_testurl", "", CVAR_NOTFROMSERVER,
-	"Local diagnostic only: a http://127.0.0.1:PORT/api/hid journal receiver. Empty uses the official HTTPS collector. Never accepts a remote URL.");
+	"Local diagnostic only: a http://127.0.0.1:PORT/api/hid journal receiver (views go to /api/view beside it). Empty uses the official HTTPS collector. Never accepts a remote URL.");
 
-static void CL_Receipt_HTTPCancel(void)
+static const char *CL_Receipt_KindName(int kind)
+{
+	return kind == RCPT_HTTP_VIEW ? "view" : "journal";
+}
+
+//the request's file goes; `why` says out loud that its evidence was not sent. Printed before the remove, and never
+//from a work item: file calls that rebuild the gamedir's hash take the worker lock, which restarts the loader threads
+//(their names are va() strings; va has two buffers, Patch 490) and runs queued main-thread work. An FS_SYSTEM remove
+//does not, but Accept's FS_GAMEONLY calls do.
+static void CL_Receipt_HTTPForget(const rcpt_httpreq_t *r, const char *why)
+{
+	if (why)
+		Con_Printf(CON_WARNING "rec_ul_send: %s for %s not sent: %s\n", CL_Receipt_KindName(r->kind), r->runid, why);
+	FS_Remove(r->path, FS_SYSTEM);
+}
+
+//out of the queue first, then its file: FS_Remove's worker lock can run an HTTP completion that changes the queue
+static void CL_Receipt_HTTPUnqueue(int i, const char *why)
+{
+	int k;
+	rcpt_httpreq_t gone = rcpt_httpq[i];
+	for (k = i + 1; k < rcpt_httpqn; k++)
+		rcpt_httpq[k-1] = rcpt_httpq[k];
+	rcpt_httpqn--;
+	CL_Receipt_HTTPForget(&gone, why);
+}
+
+//the entry a request at its group's quota would replace (-1: none may go), and how many the group holds
+static int CL_Receipt_HTTPQuotaVictim(const rcpt_httpreq_t *r, int *count)
+{
+	int i, best = -1, bestrank = 99, mine = 0;
+	for (i = 0; i < rcpt_httpqn; i++)
+		if (!strcmp(rcpt_httpq[i].group, r->group))
+		{	//the group's oldest that may go: an unproven host's journal, then its view, then this host's own journal, then
+			//its view -- never another proven host's (a lobby sharing the /64 or a NAT64 prefix)
+			qboolean own = !strcmp(rcpt_httpq[i].host, r->host);
+			int rank;
+			mine++;
+			if (!own && CL_Receipt_HTTPProven(rcpt_httpq[i].host))
+				continue;
+			rank = (own ? 2 : 0) + (rcpt_httpq[i].kind == RCPT_HTTP_HID ? 0 : 1);
+			if (rank < bestrank)
+			{
+				bestrank = rank;
+				best = i;
+			}
+		}
+	*count = mine;
+	return best;
+}
+
+//false: refused (the caller still owns the file)
+static qboolean CL_Receipt_HTTPEnqueue(const rcpt_httpreq_t *r)
+{
+	int mine, best = CL_Receipt_HTTPQuotaVictim(r, &mine);
+	if (mine >= RCPT_HTTP_PERHOST)
+	{
+		if (best < 0)
+			return false;	//the group is full of other proven hosts' evidence
+		CL_Receipt_HTTPUnqueue(best, "too many waiting from one server (its oldest dropped)");
+	}
+	else if (rcpt_httpqn >= RCPT_HTTPQ)
+		return false;
+	rcpt_httpq[rcpt_httpqn++] = *r;
+	return true;
+}
+
+//a host's requests of one kind that the collector called junk (400 malformed, 410 no such run)
+static int CL_Receipt_HTTPStrikes(const char *server, int kind, qboolean add)
+{
+	int i, free = -1;
+	for (i = 0; i < countof(rcpt_httpbad); i++)
+	{
+		if (!strcmp(rcpt_httpbad[i].server, server) && rcpt_httpbad[i].kind == kind)
+			return add ? ++rcpt_httpbad[i].strikes : rcpt_httpbad[i].strikes;
+		if (!*rcpt_httpbad[i].server && free < 0)
+			free = i;
+	}
+	if (!add)
+		return 0;
+	if (free < 0)
+		free = rand() % countof(rcpt_httpbad);
+	Q_strncpyz(rcpt_httpbad[free].server, server, sizeof(rcpt_httpbad[free].server));
+	rcpt_httpbad[free].kind = kind;
+	rcpt_httpbad[free].strikes = 1;
+	return 1;
+}
+
+static int QDECL CL_Receipt_HTTPStale(const char *name, qofs_t size, time_t mtime, void *parm, searchpathfuncs_t *spath)
+{
+	FS_Remove(va(RCPT_HTTPQ_DIR "%s", COM_SkipPath(name)), FS_ROOT);
+	return true;
+}
+
+static void CL_Receipt_HTTPSweep(void)
+{
+	char base[MAX_OSPATH];
+	if (FS_SystemPath(RCPT_HTTPQ_DIR, FS_ROOT, base, sizeof(base)))
+		Sys_EnumerateFiles(base, "*", CL_Receipt_HTTPStale, NULL, NULL);
+}
+
+//stops the running request's read or POST; the caller decides about its file
+static void CL_Receipt_HTTPStop(void)
 {
 	if (rcpt_http_pending)
 	{
 		rcpt_http_pending = false;
 		rcpt_http_gen++;
-		Con_Printf("rec_ul_send: journal HTTP cancelled\n");
 	}
 	if (rcpt_http)
 	{
@@ -946,16 +1146,36 @@ static void CL_Receipt_HTTPCancel(void)
 		rcpt_http = NULL;
 		dl->notifycomplete = NULL;
 		DL_Close(dl);
-		Con_Printf("rec_ul_send: journal HTTP cancelled\n");
 	}
+}
+
+//the running request failed in a way worth another try (no answer, 404, 408, 429, 500-504, 900+)
+static void CL_Receipt_HTTPRetry(const char *reason)
+{
+	static const double wait[RCPT_HTTP_TRIES] = {30, 90, 270, 600, 1200, 1200};
+	char why[128];
+	Q_strncpyz(why, reason, sizeof(why));
+	rcpt_http_curlive = false;
+	if (rcpt_http_cur.tries >= RCPT_HTTP_TRIES)
+	{
+		Q_strncatz(why, va(", %i tries", rcpt_http_cur.tries), sizeof(why));
+		CL_Receipt_HTTPForget(&rcpt_http_cur, why);
+		return;
+	}
+	Con_Printf(CON_WARNING "rec_ul_send: %s HTTP %s; trying again in %g s\n", CL_Receipt_KindName(rcpt_http_cur.kind),
+		why, wait[rcpt_http_cur.tries - 1]);
+	rcpt_http_cur.after = Sys_DoubleTime() + wait[rcpt_http_cur.tries - 1];
+	if (!CL_Receipt_HTTPEnqueue(&rcpt_http_cur))
+		CL_Receipt_HTTPForget(&rcpt_http_cur, "the upload queue was full");
 }
 
 static void CL_Receipt_HTTPDone(struct dl_download *dl)
 {
 	char reply[128];
 	size_t len = dl->file ? VFS_GETLEN(dl->file) : 0;
+	unsigned int code = dl->replycode;
 	qboolean ok = false;
-	if (dl->status == DL_FINISHED && dl->replycode == 200 && len < sizeof(reply))
+	if (dl->status == DL_FINISHED && code == 200 && len < sizeof(reply))
 	{
 		if (dl->file && VFS_READ(dl->file, reply, len) == len)
 		{
@@ -965,14 +1185,41 @@ static void CL_Receipt_HTTPDone(struct dl_download *dl)
 	}
 	if (rcpt_http == dl)
 		rcpt_http = NULL;
-	Con_Printf(ok ? "rec_ul_send: journal HTTP stored and digest acknowledged\n" :
-		CON_WARNING "rec_ul_send: journal HTTP not acknowledged (status %u); no evidence verdict\n", dl->replycode);
+	if (!rcpt_http_curlive)
+		return;
+	if (ok)
+	{
+		int i;
+		Con_Printf("rec_ul_send: %s HTTP stored and digest acknowledged\n", CL_Receipt_KindName(rcpt_http_cur.kind));
+		for (i = 0; i < countof(rcpt_httpbad); i++)	//a stored upload clears that host's strikes of its kind
+			if (rcpt_httpbad[i].kind == rcpt_http_cur.kind && !strcmp(rcpt_httpbad[i].server, rcpt_http_cur.host))
+				rcpt_httpbad[i].strikes = 0;
+		CL_Receipt_HTTPProve(rcpt_http_cur.host);
+		rcpt_http_curlive = false;
+		CL_Receipt_HTTPForget(&rcpt_http_cur, NULL);
+	}
+	else if (code == 0 || code == 404 || code == 408 || code == 429 || (code >= 500 && code <= 504) || code >= 900)
+		CL_Receipt_HTTPRetry(va("not acknowledged (status %u)", code));
+	else
+	{
+		rcpt_http_curlive = false;
+		CL_Receipt_HTTPForget(&rcpt_http_cur, va("refused (status %u); no evidence verdict", code));
+		if ((code == 400 || code == 410)	//not 403/409/413: those are about one real run
+			&& CL_Receipt_HTTPStrikes(rcpt_http_cur.host, rcpt_http_cur.kind, true) >= RCPT_HTTP_STRIKES)
+		{	//and what that host already queued of that kind goes too
+			int i;
+			for (i = rcpt_httpqn - 1; i >= 0; i--)
+				if (i < rcpt_httpqn && rcpt_httpq[i].kind == rcpt_http_cur.kind && !strcmp(rcpt_httpq[i].host, rcpt_http_cur.host))
+					CL_Receipt_HTTPUnqueue(i, "the collector refused this server's evidence before");
+		}
+	}
 }
 
 static qboolean CL_Receipt_HTTPName(const char *s, size_t maxlen, qboolean map)
 {
 	size_t n = 0;
-	if (map && (*s == '.' || strstr(s, "..")))
+	//a map starts as surfd/hidupload.py's MAP does: [A-Za-z0-9_]
+	if (map && (*s == '.' || *s == '+' || *s == '-' || strstr(s, "..")))
 		return false;
 	for (; *s; s++, n++)
 		if (!((*s >= 'a' && *s <= 'z') || (*s >= 'A' && *s <= 'Z') ||
@@ -991,22 +1238,38 @@ static void CL_Receipt_HTTPStart(void *ctx, void *data, size_t a, size_t b)
 
 	rcpt_http_jobs--;
 	if (job->gen != rcpt_http_gen)
-	{	//cancelled while it was being read: the cancel has already said so
+	{	//cancelled while it was being read: the canceller has decided about the file
 		BZ_Free(job->body);
 		BZ_Free(job);
 		return;
 	}
 	rcpt_http_pending = false;
-	if (!job->ok || !rcpt_upload.ival || !rcpt_hid_upload.ival || cls.state < ca_onserver || !CL_Receipt_Key())
 	{
-		Con_Printf(CON_WARNING "rec_ul_send: journal HTTP not started (busy, unavailable, invalid, or over 64 MiB)\n");
-		BZ_Free(job->body);
-		BZ_Free(job);
-		return;
+		const char *why = NULL;
+		if (!job->ok)
+			why = "missing, empty or over its cap";
+		else if (!rcpt_upload.ival || (job->kind == RCPT_HTTP_HID && !rcpt_hid_upload.ival))
+			why = "uploads were turned off";
+		else if (!CL_Receipt_Key())
+			why = "there is no run key";
+		else if (memcmp(rcpt_http_cur.digest, job->digest, sizeof(job->digest)))
+			why = "it is not the file this game signed for that run";
+		if (why)
+		{	//CL_Receipt_Think removes the file: no file system calls from a work item
+			rcpt_http_fail = RCPT_HTTP_FAIL_FORGET;
+			Q_strncpyz(rcpt_http_failwhy, why, sizeof(rcpt_http_failwhy));
+			BZ_Free(job->body);
+			BZ_Free(job);
+			return;
+		}
 	}
 	CL_Receipt_Hex(hex, sizeof(hex), job->digest, sizeof(job->digest), true);
-	Q_snprintfz(statement, sizeof(statement), "FTESURF-HID 1\nmap %s\nrunid %s\nnonce %s\nhid %s %u\n",
-		job->map, job->runid, job->nonce, hex, (unsigned)job->size);
+	if (job->kind == RCPT_HTTP_VIEW)	//the server the run was signed on, which its receipt names (P1704)
+		Q_snprintfz(statement, sizeof(statement), "FTESURF-VIEW 1\nserver %s\nmap %s\nrunid %s\nnonce %s\nview %s %u\n",
+			rcpt_http_cur.server, job->map, job->runid, job->nonce, hex, (unsigned)job->size);
+	else
+		Q_snprintfz(statement, sizeof(statement), "FTESURF-HID 1\nmap %s\nrunid %s\nnonce %s\nhid %s %u\n",
+			job->map, job->runid, job->nonce, hex, (unsigned)job->size);
 	Ed25519_Sign(signature, (const qbyte*)statement, strlen(statement), rcpt_sk);
 	CL_Receipt_Hex(pubhex, sizeof(pubhex), rcpt_pk, sizeof(rcpt_pk), true);
 	CL_Receipt_Hex(sighex, sizeof(sighex), signature, sizeof(signature), true);
@@ -1017,9 +1280,10 @@ static void CL_Receipt_HTTPStart(void *ctx, void *data, size_t a, size_t b)
 	rcpt_http = HTTP_CL_Get(job->url, NULL, CL_Receipt_HTTPDone);
 	if (!rcpt_http)
 	{
-		Con_Printf(CON_WARNING "rec_ul_send: journal HTTP not started (busy, unavailable, invalid, or over 64 MiB)\n");
 		BZ_Free(job->body);
 		BZ_Free(job);
+		rcpt_http_fail = RCPT_HTTP_FAIL_RETRY;
+		Q_strncpyz(rcpt_http_failwhy, "could not start", sizeof(rcpt_http_failwhy));
 		return;
 	}
 	rcpt_http->isquery = true;
@@ -1033,9 +1297,9 @@ static void CL_Receipt_HTTPStart(void *ctx, void *data, size_t a, size_t b)
 	rcpt_http->postdata = job->body;
 	rcpt_http->postlen = HID_HTTP_HEAD + job->size;
 	rcpt_http->file = VFSPIPE_Open(1, false);	//the reply, so it can be threaded (HTTPDone reads it)
-	rcpt_http_until = Sys_DoubleTime() + 300;
+	rcpt_http_until = Sys_DoubleTime() + max(300, 120 + job->size / 32768);	//P1704: 300 s, or 32 KB/s for a big one
 	Q_snprintfz(rcpt_http_reply, sizeof(rcpt_http_reply), "stored %s %u\n", hex, (unsigned)job->size);
-	Con_Printf("rec_ul_send: journal HTTP started (%u bytes)\n", (unsigned)job->size);
+	Con_Printf("rec_ul_send: %s HTTP started (%u bytes, try %i)\n", CL_Receipt_KindName(job->kind), (unsigned)job->size, rcpt_http_cur.tries);
 	Con_DPrintf("rec_ul_send: read %.1f ms, hash %.1f ms on a loader thread, sign %.1f ms\n",
 		job->readms, job->hashms, (Sys_DoubleTime() - t0) * 1000);
 	BZ_Free(job);
@@ -1046,7 +1310,7 @@ static void CL_Receipt_HTTPRead(void *ctx, void *data, size_t a, size_t b)
 {
 	struct rcpt_job_s *job = ctx;
 	double t0 = Sys_DoubleTime(), t1;
-	vfsfile_t *file = FS_OpenVFS(job->path, "rb", FS_GAME);
+	vfsfile_t *file = FS_OpenVFS(job->path, "rb", FS_SYSTEM);
 
 	if (file)
 	{
@@ -1054,7 +1318,7 @@ static void CL_Receipt_HTTPRead(void *ctx, void *data, size_t a, size_t b)
 		/*One bounded owned buffer, transferred to HTTP (not copied by Put).
 		  The HTTP transport has its own bounded send buffer; no journal-sized
 		  allocation or traffic touches the game netchan.*/
-		if (job->size > 0 && job->size <= HID_HTTP_MAX)
+		if (job->size > 0 && job->size <= (job->kind == RCPT_HTTP_VIEW ? VIEW_HTTP_MAX : HID_HTTP_MAX))
 		{
 			job->body = BZ_Malloc(HID_HTTP_HEAD + job->size);
 			if (VFS_READ(file, job->body + HID_HTTP_HEAD, job->size) == job->size)
@@ -1071,52 +1335,335 @@ static void CL_Receipt_HTTPRead(void *ctx, void *data, size_t a, size_t b)
 	COM_AddWork(WG_MAIN, CL_Receipt_HTTPStart, job, NULL, 0, 0);
 }
 
-static qboolean CL_Receipt_HTTPSend(const char *path, const char *nonce, const char *map, const char *runid)
+//starts rcpt_http_cur
+static qboolean CL_Receipt_HTTPBegin(void)
 {
 	struct rcpt_job_s *job;
-	const char *url = "https://play.proto.bar/api/hid";
-	size_t n;
+	const char *url = rcpt_http_cur.kind == RCPT_HTTP_VIEW ? "https://play.proto.bar/api/view" : "https://play.proto.bar/api/hid";
+	char testurl[128];
 
-	if (rcpt_http || rcpt_http_pending || rcpt_http_jobs || !CL_Receipt_HTTPName(map, 64, true) || !CL_Receipt_HTTPName(runid, 96, false) || strlen(nonce) != 32)
-		return false;
-	for (n = 0; n < 32; n++)
-		if (!((nonce[n] >= '0' && nonce[n] <= '9') || (nonce[n] >= 'a' && nonce[n] <= 'f')))
-			return false;
 	if (*rcpt_http_test.string)
 	{
 		char *end;
 		unsigned long port;
+		size_t at;
 		if (strncmp(rcpt_http_test.string, "http://127.0.0.1:", 17))
 			return false;
 		port = strtoul(rcpt_http_test.string + 17, &end, 10);
-		if (!port || port > 65535 || strcmp(end, "/api/hid") || strlen(rcpt_http_test.string) >= sizeof(job->url))
+		if (!port || port > 65535 || strcmp(end, "/api/hid") || strlen(rcpt_http_test.string) + 2 > sizeof(testurl))
 			return false;
-		url = rcpt_http_test.string;
+		at = end - rcpt_http_test.string;
+		Q_strncpyz(testurl, rcpt_http_test.string, sizeof(testurl));
+		if (rcpt_http_cur.kind == RCPT_HTTP_VIEW)
+			Q_strncpyz(testurl + at, "/api/view", sizeof(testurl) - at);
+		url = testurl;
 	}
 	if (!CL_Receipt_Key())
 		return false;
 	job = BZ_Malloc(sizeof(*job));
 	memset(job, 0, sizeof(*job));
 	job->gen = rcpt_http_gen;
-	Q_strncpyz(job->path, path, sizeof(job->path));
-	Q_strncpyz(job->nonce, nonce, sizeof(job->nonce));
-	Q_strncpyz(job->map, map, sizeof(job->map));
-	Q_strncpyz(job->runid, runid, sizeof(job->runid));
+	job->kind = rcpt_http_cur.kind;
+	Q_strncpyz(job->path, rcpt_http_cur.path, sizeof(job->path));
+	Q_strncpyz(job->nonce, rcpt_http_cur.nonce, sizeof(job->nonce));
+	Q_strncpyz(job->map, rcpt_http_cur.map, sizeof(job->map));
+	Q_strncpyz(job->runid, rcpt_http_cur.runid, sizeof(job->runid));
 	Q_strncpyz(job->url, url, sizeof(job->url));
+	rcpt_http_cur.tries++;
+	rcpt_http_curlive = true;
+	rcpt_http_fail = 0;
 	rcpt_http_pending = true;	//before the queue: with no loader thread it runs inline
 	rcpt_http_jobs++;
 	rcpt_http_until = Sys_DoubleTime() + 300;
 	COM_AddWork(WG_LOADER, CL_Receipt_HTTPRead, job, NULL, 0, 0);
 	return true;
 }
+
+//the host a server counts as for quotas, strikes and proof: its IP address (all its ports; a v4-mapped or NAT64 address
+//as its IPv4), else the address without scheme or port. Not a /24 or /64: a neighbour there could strike or share the
+//lobby's key (review 8), and cheap addresses gain nothing against a proven lobby.
+static void CL_Receipt_HostKey(const netadr_t *a, const char *server, char *out, size_t outlen)
+{
+	static const qbyte v4mapped[12] = {0,0,0,0,0,0,0,0,0,0,0xff,0xff};
+	static const qbyte nat64[12] = {0,0x64,0xff,0x9b,0,0,0,0,0,0,0,0};	//64:ff9b::/96 (DNS64)
+	const char *s = strstr(server, "://");
+	char *colon;
+	if (a->type == NA_IP)
+	{
+		Q_snprintfz(out, outlen, "v4 %u.%u.%u.%u", a->address.ip[0], a->address.ip[1], a->address.ip[2], a->address.ip[3]);
+		return;
+	}
+	if (a->type == NA_IPV6)
+	{
+		const qbyte *b = a->address.ip6;
+		if (!memcmp(b, v4mapped, sizeof(v4mapped)) || !memcmp(b, nat64, sizeof(nat64)))
+			Q_snprintfz(out, outlen, "v4 %u.%u.%u.%u", b[12], b[13], b[14], b[15]);
+		else
+			Q_snprintfz(out, outlen, "v6 %02x%02x:%02x%02x:%02x%02x:%02x%02x:%02x%02x:%02x%02x:%02x%02x:%02x%02x",
+				b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7], b[8], b[9], b[10], b[11], b[12], b[13], b[14], b[15]);
+		return;
+	}
+	Q_strncpyz(out, s ? s + 3 : server, outlen);
+	if ((colon = strchr(out, '/')))	//a URL's path first: it may hold colons
+		*colon = 0;
+	if (*out == '[')
+	{
+		char *end = strchr(out, ']');
+		if (end)
+			end[1] = 0;
+	}
+	else if ((colon = strchr(out, ':')) && !strchr(colon + 1, ':'))
+		*colon = 0;		//one colon: host:port (several: a bare IPv6 address, kept whole)
+}
+
+//accepts a server's request for an armed file: from here it is ours (outside the gamecode's reach) until sent.
+//1 taken; 0 refused and said; -1 refused, unsaid. The caller removes a refused journal's armed file: a raw journal left
+//in data/staged/ is readable by the next server's csprogs (a view stays for the player's own replay).
+static int CL_Receipt_HTTPAccept(const char *armed, const char *nonce, const char *map, const char *runid, const char *kind)
+{
+	rcpt_httpreq_t r;
+	size_t n;
+	char evict[128] = "";	//the group whose oldest unproven request makes room, once this one's file is ours
+
+	if (!CL_Receipt_HTTPName(map, 64, true) || !CL_Receipt_HTTPName(runid, 96, false) || strlen(nonce) != 32)
+		return -1;
+	for (n = 0; n < 32; n++)
+		if (!((nonce[n] >= '0' && nonce[n] <= '9') || (nonce[n] >= 'a' && nonce[n] <= 'f')))
+			return -1;
+	memset(&r, 0, sizeof(r));
+	NET_AdrToString(r.server, sizeof(r.server), &cls.netchan.remote_address);
+	CL_Receipt_HostKey(&cls.netchan.remote_address, r.server, r.host, sizeof(r.host));
+	Q_strncpyz(r.group, r.host, sizeof(r.group));
+	if (!strncmp(r.group, "v6 ", 3) && strlen(r.group) > 3 + 19)
+		r.group[3 + 19] = 0;	//"v6 " and the first four groups: the /64
+	r.kind = !strcmp(kind, "view") ? RCPT_HTTP_VIEW : RCPT_HTTP_HID;
+	if (rcpt_terms.ival < 9)
+	{	//FS_TERMS_ONLINE: the menu's record of the online terms. A server's own csprogs checks nothing for us.
+		Con_Printf(CON_WARNING "rec_ul_send: %s for %s not sent: the online terms are not accepted\n", kind, runid);
+		return 0;
+	}
+	if (CL_Receipt_HTTPStrikes(r.host, r.kind, false) >= RCPT_HTTP_STRIKES)
+	{
+		Con_Printf(CON_WARNING "rec_ul_send: %s for %s not sent: the collector refused this server's evidence before\n", kind, runid);
+		return 0;
+	}
+	if (!CL_Receipt_Pinned(nonce, r.server, r.kind == RCPT_HTTP_VIEW, r.digest))
+	{
+		Con_Printf(CON_WARNING "rec_ul_send: %s for %s not sent: this game signed no such run on this server\n", kind, runid);
+		return 0;
+	}
+	{
+		char rel[MAX_QPATH];
+		vfsfile_t *f;
+		Q_snprintfz(rel, sizeof(rel), RCPT_HTTPQ_DIR "%s.%s", nonce, kind);
+		if (!FS_SystemPath(rel, FS_ROOT, r.path, sizeof(r.path)))
+			return -1;
+		f = FS_OpenVFS(r.path, "rb", FS_SYSTEM);	//the one path used throughout (FS_ROOT may fall back to the base)
+		if (f)
+		{	//one request per run and kind: a second would share the file
+			VFS_CLOSE(f);
+			Con_Printf(CON_WARNING "rec_ul_send: %s for %s not sent: one is already waiting\n", kind, runid);
+			return 0;
+		}
+		{	//room for the running request's retry too; a host at its quota only replaces its own oldest; when full, a
+			//host with fewer takes the oldest slot of the fullest host that has never had an upload stored this session,
+			//so a proven lobby's waiting evidence is never pushed out and no junk host keeps more than a fair share
+			int i, j, mine = 0, most = 0;
+			for (i = 0; i < rcpt_httpqn; i++)
+			{
+				int n = 0;
+				mine += !strcmp(rcpt_httpq[i].group, r.group);
+				if (CL_Receipt_HTTPProven(rcpt_httpq[i].host))
+					continue;
+				for (j = 0; j < rcpt_httpqn; j++)
+					n += !strcmp(rcpt_httpq[j].group, rcpt_httpq[i].group) && !CL_Receipt_HTTPProven(rcpt_httpq[j].host);
+				if (n > most)
+				{	//the fullest group's unproven entries
+					most = n;
+					Q_strncpyz(evict, rcpt_httpq[i].group, sizeof(evict));
+				}
+			}
+			if (mine >= RCPT_HTTP_PERHOST)
+			{	//decided before the file is taken: Enqueue would refuse it
+				int count;
+				if (CL_Receipt_HTTPQuotaVictim(&r, &count) < 0)
+				{
+					Con_Printf(CON_WARNING "rec_ul_send: %s for %s not sent: the upload queue is full\n", kind, runid);
+					return 0;
+				}
+			}
+			if (mine < RCPT_HTTP_PERHOST && rcpt_httpqn + (rcpt_http_curlive ? 1 : 0) >= RCPT_HTTPQ)
+			{
+				if (!most || (most <= mine + 1 && !CL_Receipt_HTTPProven(r.host)))	//a proven host may take an unproven slot
+				{
+					Con_Printf(CON_WARNING "rec_ul_send: %s for %s not sent: the upload queue is full\n", kind, runid);
+					return 0;
+				}
+			}
+			else
+				*evict = 0;	//no eviction needed
+		}
+		//a view is copied: the player's own replay rebuilds from data/staged/ (cl_watch.qc). A journal is moved, so a
+		//raw journal is not left where the next server's csprogs can read it.
+		if (r.kind == RCPT_HTTP_VIEW || !strstr(armed, "/staged/") || !FS_Rename2(armed, rel, FS_GAMEONLY, FS_ROOT))
+		{	//and Windows will not move a file another program holds without delete sharing (antivirus, the indexer)
+			vfsfile_t *in = FS_OpenVFS(armed, "rb", FS_GAMEONLY);
+			qofs_t len = in ? VFS_GETLEN(in) : 0;
+			qboolean copied = false;
+			if (in && len > 0 && len <= (r.kind == RCPT_HTTP_VIEW ? VIEW_HTTP_MAX : HID_HTTP_MAX))
+			{
+				char *data = BZ_Malloc(len);
+				vfsfile_t *out;
+				FS_CreatePath(rel, FS_ROOT);
+				if (VFS_READ(in, data, len) == len && (out = FS_OpenVFS(r.path, "wb", FS_SYSTEM)))
+				{	//checked to the last byte: a short copy (a full disk) would later read as "not the file signed"
+					copied = VFS_WRITE(out, data, len) == len;
+					copied = VFS_CLOSE(out) && copied;
+					if (!copied)
+						FS_Remove(r.path, FS_SYSTEM);
+				}
+				BZ_Free(data);
+			}
+			if (in)
+				VFS_CLOSE(in);
+			if (!copied)
+				return -1;
+			if (r.kind != RCPT_HTTP_VIEW && strstr(armed, "/staged/"))
+			{
+				FS_Remove(armed, FS_GAMEONLY);	//may fail for the same reason; the gamecode clears data/staged/ later
+				Con_DPrintf("rec_ul_send: %s could not be moved; copied\n", armed);
+			}
+		}
+	}
+	Q_strncpyz(r.nonce, nonce, sizeof(r.nonce));
+	Q_strncpyz(r.map, map, sizeof(r.map));
+	Q_strncpyz(r.runid, runid, sizeof(r.runid));
+	if (CL_Receipt_HTTPStrikes(r.host, r.kind, false) >= RCPT_HTTP_STRIKES)
+	{	//struck out meanwhile (the file calls above can run an HTTP completion)
+		CL_Receipt_HTTPForget(&r, "the collector refused this server's evidence before");
+		return 0;
+	}
+	if (*evict && rcpt_httpqn + (rcpt_http_curlive ? 1 : 0) >= RCPT_HTTPQ)
+	{	//only now, and only if still needed: the file calls above can run an HTTP completion (room, a proof, or a retry
+		//that brought this group to its quota -- then Enqueue replaces its own oldest instead)
+		int i, mine = 0;
+		for (i = 0; i < rcpt_httpqn; i++)
+			mine += !strcmp(rcpt_httpq[i].group, r.group);
+		if (mine < RCPT_HTTP_PERHOST)
+			for (i = 0; i < rcpt_httpqn; i++)
+				if (!strcmp(rcpt_httpq[i].group, evict) && !CL_Receipt_HTTPProven(rcpt_httpq[i].host))
+				{
+					CL_Receipt_HTTPUnqueue(i, "the upload queue was full (an unproven server's oldest dropped)");
+					break;
+				}
+	}
+	if (!CL_Receipt_HTTPEnqueue(&r))
+	{
+		CL_Receipt_HTTPForget(&r, "the upload queue is full");
+		return 0;
+	}
+	Con_DPrintf("rec_ul_send: %s for %s queued (%i waiting)\n", CL_Receipt_KindName(r.kind), runid, rcpt_httpqn);
+	return 1;
+}
 #endif
 
 void CL_Receipt_Think(void)
 {
 #ifdef WEBCLIENT
-	if ((rcpt_http || rcpt_http_pending) && (!rcpt_upload.ival || !rcpt_hid_upload.ival || cls.state < ca_onserver || Sys_DoubleTime() >= rcpt_http_until))
-		CL_Receipt_HTTPCancel();
+	static qboolean started, wason = true;
+	int i, k;
+	double now;
+	//P1704: no disconnect rule (see CL_Receipt_Disarm). Turning uploads off stops everything and removes the files.
+	if (!rcpt_upload.ival)
+	{
+		if (rcpt_http_curlive)
+		{
+			CL_Receipt_HTTPStop();
+			rcpt_http_curlive = false;
+			rcpt_http_fail = 0;
+			CL_Receipt_HTTPForget(&rcpt_http_cur, NULL);
+			Con_Printf("rec_ul_send: %s HTTP cancelled\n", CL_Receipt_KindName(rcpt_http_cur.kind));
+		}
+		while (rcpt_httpqn)
+			CL_Receipt_HTTPUnqueue(rcpt_httpqn - 1, NULL);
+		if (wason)	//and anything a crashed launch left
+			CL_Receipt_HTTPSweep();
+		started = true;
+		wason = false;
+		return;
+	}
+	wason = true;
+	if (!started)
+	{	//the first frame: a previous launch's leftovers (their requests died with it); nothing is queued yet
+		started = true;
+		CL_Receipt_HTTPSweep();
+	}
+	if (!rcpt_hid_upload.ival)
+	{	//journals stop: the running one, and the waiting ones' files go now
+		if (rcpt_http_curlive && rcpt_http_cur.kind == RCPT_HTTP_HID)
+		{
+			CL_Receipt_HTTPStop();
+			rcpt_http_curlive = false;
+			rcpt_http_fail = 0;
+			CL_Receipt_HTTPForget(&rcpt_http_cur, NULL);
+			Con_Printf("rec_ul_send: journal HTTP cancelled\n");
+		}
+		for (i = rcpt_httpqn - 1; i >= 0; i--)
+			if (i < rcpt_httpqn && rcpt_httpq[i].kind == RCPT_HTTP_HID)
+				CL_Receipt_HTTPUnqueue(i, NULL);
+	}
+	if (rcpt_http_curlive && rcpt_http_fail)
+	{	//CL_Receipt_HTTPStart's verdict, acted on here
+		int fail = rcpt_http_fail;
+		rcpt_http_fail = 0;
+		if (fail == RCPT_HTTP_FAIL_RETRY)
+			CL_Receipt_HTTPRetry(rcpt_http_failwhy);
+		else
+		{
+			rcpt_http_curlive = false;
+			CL_Receipt_HTTPForget(&rcpt_http_cur, rcpt_http_failwhy);
+		}
+	}
+	now = Sys_DoubleTime();
+	if (rcpt_http_curlive && now >= rcpt_http_until)
+	{
+		CL_Receipt_HTTPStop();
+		CL_Receipt_HTTPRetry("not finished in time");
+	}
+	if (rcpt_http_curlive || rcpt_http_jobs)
+		return;
+	{	//proven hosts first (junk cannot hold a lobby's evidence back), then a view first: small, and a journal can
+		//take minutes
+		int pass;
+		for (pass = 0; pass < 4; pass++)
+		{
+			for (i = 0; i < rcpt_httpqn; i++)
+				if (rcpt_httpq[i].after <= now && (pass >= 2 || CL_Receipt_HTTPProven(rcpt_httpq[i].host))
+					&& ((pass & 1) || rcpt_httpq[i].kind == RCPT_HTTP_VIEW))
+					break;
+			if (i < rcpt_httpqn)
+				break;
+		}
+		if (pass == 4)
+			return;
+	}
+	rcpt_http_cur = rcpt_httpq[i];
+	for (k = i + 1; k < rcpt_httpqn; k++)
+		rcpt_httpq[k-1] = rcpt_httpq[k];
+	rcpt_httpqn--;
+	if (!CL_Receipt_HTTPBegin())
+		CL_Receipt_HTTPForget(&rcpt_http_cur, "the collector address or the run key is unavailable");
 #endif
+}
+
+//FTESurf Patch 1704: an arming that ends unsent takes a journal file with it -- a lobby run's staged journal exists only
+//to be uploaded, and left in data/staged/ the next server's csprogs could read it. A view stays (own replay, cl_watch.qc).
+static void CL_Receipt_ArmDrop(char *slot)
+{
+	size_t l = strlen(slot);
+	if (l > 4 && !strcmp(slot + l - 4, ".hid") && strstr(slot, "/staged/"))	//only what the gamecode stages for upload
+		FS_Remove(slot, FS_GAMEONLY);
+	*slot = 0;
 }
 
 static void CL_Receipt_ULArm_f(void)
@@ -1164,6 +1711,7 @@ static void CL_Receipt_ULArm_f(void)
 	  the old behaviour and it is the wrong end to drop from -- the run being
 	  armed is the one whose receipt was just signed.*/
 	Con_DPrintf("rec_ul_arm: slots full, dropping %s for %s\n", rcpt_ularm[0], name);
+	CL_Receipt_ArmDrop(rcpt_ularm[0]);
 	for (i = 1; i < RCPT_ULSLOTS; i++)
 		Q_strncpyz(rcpt_ularm[i-1], rcpt_ularm[i], sizeof(rcpt_ularm[i-1]));
 	Q_strncpyz(rcpt_ularm[RCPT_ULSLOTS-1], name, sizeof(rcpt_ularm[RCPT_ULSLOTS-1]));
@@ -1181,11 +1729,10 @@ static void CL_Receipt_ULArm_f(void)
 void CL_Receipt_Disarm(void)
 {
 	int i;
-#ifdef WEBCLIENT
-	CL_Receipt_HTTPCancel();
-#endif
+	//P1704: accepted HTTP requests carry on: they go to the fixed collector, never to the next server.
+	//CL_Receipt_Think still stops them when uploads are turned off. Unasked journals go with their armings.
 	for (i = 0; i < RCPT_ULSLOTS; i++)
-		*rcpt_ularm[i] = 0;
+		CL_Receipt_ArmDrop(rcpt_ularm[i]);
 }
 
 /*
@@ -1235,7 +1782,7 @@ static void CL_Receipt_ULSend_f(void)
 	}
 	nonce = Cmd_Argv(1);
 	kind = Cmd_Argv(2);
-	http = (!strcmp(Cmd_Argv(0), "rec_ul_http") && Cmd_Argc() == 5 && !strcmp(kind, "hid"));
+	http = (!strcmp(Cmd_Argv(0), "rec_ul_http") && Cmd_Argc() == 5 && (!strcmp(kind, "hid") || !strcmp(kind, "view")));
 	if (!rcpt_upload.ival)
 	{
 		CL_Receipt_Disarm();
@@ -1289,10 +1836,14 @@ static void CL_Receipt_ULSend_f(void)
 	  file was not sent; the receipt still commits to its digest either way.*/
 	if (http)
 	{
+		int taken = -1;
 #ifdef WEBCLIENT
-		if (!CL_Receipt_HTTPSend(rcpt_ularm[i], nonce, Cmd_Argv(3), Cmd_Argv(4)))
+		taken = CL_Receipt_HTTPAccept(rcpt_ularm[i], nonce, Cmd_Argv(3), Cmd_Argv(4), kind);
 #endif
-			Con_Printf(CON_WARNING "rec_ul_send: journal HTTP not started (busy, unavailable, invalid, or over 64 MiB)\n");
+		if (taken < 0)
+			Con_Printf(CON_WARNING "rec_ul_send: %s for %s not sent: an invalid request, or its file could not be moved\n", kind, Cmd_Argv(4));
+		if (taken <= 0 && !strcmp(kind, "hid") && strstr(rcpt_ularm[i], "/staged/"))
+			FS_Remove(rcpt_ularm[i], FS_GAMEONLY);	//a journal not sent is not left for the next server's csprogs
 	}
 	else if (!CL_StartUploadFile(rcpt_ularm[i], RCPT_ULMAX))
 	{
@@ -1319,8 +1870,9 @@ void CL_Receipt_Init(void)
 	Cvar_Register(&rcpt_terms, "Anti-cheat evidence");
 #ifdef WEBCLIENT
 	Cvar_Get("fshidhttp", "1", CVAR_USERINFO|CVAR_NOSET, "Anti-cheat evidence");
+	Cvar_Get("fsviewhttp", "1", CVAR_USERINFO|CVAR_NOSET, "Anti-cheat evidence");	/*FTESurf Patch 1704*/
 	Cvar_Register(&rcpt_http_test, "Anti-cheat evidence");
-	Cmd_AddCommandD("rec_ul_http", CL_Receipt_ULSend_f, "rec_ul_http nonce hid map run -- send only an opted-in armed journal to the official HTTPS collector. No legacy HID upload.");
+	Cmd_AddCommandD("rec_ul_http", CL_Receipt_ULSend_f, "rec_ul_http nonce hid|view map run -- send an armed journal (opted in) or view sidecar to the official HTTPS collector. No legacy HID upload.");
 #endif
 	Cmd_AddCommandD("rec_sign", CL_Receipt_Sign_f,
 					"rec_sign <nonce> <ticks> [viewpath] -- sign this run's evidence for the server.  Called by the gamecode at the end of a run.");

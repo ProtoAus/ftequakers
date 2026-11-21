@@ -4742,6 +4742,12 @@ static void Cmd_WriteConfig_f(void)
 
 static void Cmd_Reset_f(void)
 {
+	if (Cmd_IsInsecure())
+	{	//FTESurf Patch 1704: it resets at local level, past "a server may not reset what it may not set" (cvar.c) --
+		//a server's stufftext or csprogs would put rec_upload back on after an opt-out and rec_hid_upload off
+		Con_Printf("%s: a server may not reset this client's settings. Refused.\n", Cmd_Argv(0));
+		return;
+	}
 	//FIXME: this should reset to _engine_ defaults (with fmf overrides)
 	Cbuf_InsertText("cvarreset *\n", RESTRICT_LOCAL, false);
 	//FIXME: wipe aliases

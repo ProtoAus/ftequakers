@@ -2806,7 +2806,8 @@ qboolean QC_MenuTable(const char *name)
 	static const char *const tables[] = {"mapdeps.txt", "mapdeps.net.txt", "mapmeta.txt", "mapmeta.net.txt",
 		"mapmedia.tmp", "mapdl.txt", "mapdl.net.txt", "mapdl.net.tmp", "mapmeta_override.txt",
 		"mapparticles.txt", "mapwr.txt",
-		"goldsrc.net.txt", "goldsrc.net.tmp", "wadcolours.net.txt", "wadcolours.net.tmp"};	//FTESurf Patch 1656, 1660
+		"goldsrc.net.txt", "goldsrc.net.tmp", "wadcolours.net.txt", "wadcolours.net.tmp",	//FTESurf Patch 1656, 1660
+		"consent.txt"};	//FTESurf Patch 1704: the menu's record of the terms, which sets rec_terms (cl_receipt.c's upload gate)
 	const char *s = name, *seg;
 	size_t i;
 	if (!name || !QC_TasprojSeg(&s, "data", false))
@@ -2848,7 +2849,7 @@ static qboolean QC_CfgChangeDenied(pubprogfuncs_t *prinst, const char *fixedname
 	}
 	if (prinst == csqc_world.progs && fixedname && QC_MenuTable(fixedname))
 	{
-		Con_Printf("qcfopen(\"%s\"): csqc may not change the map tables\n", fixedname);
+		Con_Printf("qcfopen(\"%s\"): csqc may not change the menu's files (map tables, consent)\n", fixedname);
 		return true;
 	}
 #endif

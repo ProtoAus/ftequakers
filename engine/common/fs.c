@@ -1112,7 +1112,8 @@ static qboolean FS_GamedirIsOkay(const char *path, qboolean verbose)
 		!Q_strncasecmp(path, "docs", 4) ||		//don't pollute this
 		!Q_strncasecmp(path, "help", 4) ||		//don't pollute this
 		!Q_strncasecmp(path, "bin", 3) ||		//if scripts try executing stuff here then we want to make extra sure that we don't allow writing anything within it.
-		!Q_strncasecmp(path, "lib", 3))			//same deal
+		!Q_strncasecmp(path, "lib", 3) ||		//same deal
+		!Q_strncasecmp(path, "httpq", 5))		//FTESurf Patch 1704: run evidence waiting for upload (cl_receipt.c); never a gamedir or package
 	{
 		if (verbose)
 			Con_Printf ("Gamedir should not be \"%s\"\n", path);

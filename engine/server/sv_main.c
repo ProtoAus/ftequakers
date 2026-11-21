@@ -162,6 +162,7 @@ cvar_t sv_highchars			= CVAR("sv_highchars", "1");
   exceeded 8 bytes -- dropped".  The callback stays, so an operator can still
   write 16m.*/
 cvar_t sv_uploadmax			= CVARCD("sv_uploadmax", "8000000", CvarPostfixKMG, "Maximum size of a single client upload -- run evidence, or a snap. 0 for no limit.");
+cvar_t sv_recupload_https	= CVARD("sv_recupload_https", "0", "1: clients that can send run views to the World of Surf HTTPS collector (play.proto.bar) are asked to send them there instead of to this server. For the official lobbies only: the collector keeps only runs whose receipts it can read.");	//FTESurf Patch 1704
 cvar_t sv_maxrate			= CVARCD("sv_maxrate", "50000", CvarPostfixKMG, "This controls the maximum number of bytes any indivual player may receive (when not downloading). The individual user's rate will also be controlled by the user's rate cvar.");
 cvar_t sv_maxdrate			= CVARAFCD("sv_maxdrate", "500000",
 									"sv_maxdownloadrate", 0, CvarPostfixKMG, "This cvar controls the maximum number of bytes sent to each player per second while that player is downloading.\nIf this cvar is set to 0, there will be NO CAP for download rates (if the user's drate is empty/0 too, then expect really fast+abusive downloads that could potentially be considered denial of service attacks)");
@@ -6229,6 +6230,7 @@ void SV_InitLocal (void)
 	Cvar_Register (&pausable,	cvargroup_servercontrol);
 
 	Cvar_Register (&sv_uploadmax, cvargroup_servercontrol);	//FTESurf Patch 418
+	Cvar_Register (&sv_recupload_https, cvargroup_servercontrol);	//FTESurf Patch 1704
 	Cvar_Register (&sv_maxrate, cvargroup_servercontrol);
 	Cvar_Register (&sv_maxdrate, cvargroup_servercontrol);
 	Cvar_ForceCallback(&sv_maxrate);

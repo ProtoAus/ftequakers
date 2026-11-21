@@ -3485,6 +3485,7 @@ qboolean SV_UploadStale (client_t *cl)
 */
 void SV_UploadAsk (client_t *cl)
 {
+	extern cvar_t sv_recupload_https;	//FTESurf Patch 1704
 	const char *kind = "";
 	size_t l = strlen(cl->uploadfn);
 
@@ -3512,9 +3513,15 @@ void SV_UploadAsk (client_t *cl)
 	}
 	/*P774: capable clients post journals to the fixed HTTPS collector. The
 	  basename still comes from SSQC's destination, not the client's path.
-	  No netchan destination remains armed and no empty .hid is published.*/
-	if (!strcmp(kind, "hid") && !*cl->uploadnext &&
-		!strcmp(InfoBuf_ValueForKey(&cl->userinfo, "fshidhttp"), "1") &&
+	  No netchan destination remains armed and no empty .hid is published.
+	  FTESurf Patch 1704: views too, on a server with sv_recupload_https 1 (the
+	  official lobbies), from clients that say so (fsviewhttp); over the netchan 23
+	  of 51 asked views landed. The client queues its POSTs, so the journal after
+	  the view is asked for at once.*/
+	if (((!strcmp(kind, "hid") && !*cl->uploadnext &&
+		  !strcmp(InfoBuf_ValueForKey(&cl->userinfo, "fshidhttp"), "1")) ||
+		 (!strcmp(kind, "view") && sv_recupload_https.ival &&
+		  !strcmp(InfoBuf_ValueForKey(&cl->userinfo, "fsviewhttp"), "1"))) &&
 		!strncmp(cl->uploadfn, "data/evidence/", 14))
 	{
 		const char *map = cl->uploadfn + 14;
@@ -3522,21 +3529,30 @@ void SV_UploadAsk (client_t *cl)
 		const char *p;
 		qboolean valid = true;
 		char mapname[65], runid[97], command[320];
+		size_t ext = strlen(kind) + 1;		/*".hid" or ".view"*/
 		size_t ml = slash ? (size_t)(slash - map) : 0;
-		size_t rl = slash ? strlen(slash + 1) - 4 : 0;
+		size_t rl = (slash && strlen(slash + 1) > ext) ? strlen(slash + 1) - ext : 0;
 		for (p = map; slash && *p; p++)
 			if (!( (*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z') ||
 				(*p >= '0' && *p <= '9') || *p == '_' || *p == '-' || (*p == '+' && p < slash) || p == slash ||
-				(*p == '.' && (p < slash || p == cl->uploadfn + l - 4)) ))
+				(*p == '.' && (p < slash || p == cl->uploadfn + l - ext)) ))
 				valid = false;
-		if (valid && ml && ml < sizeof(mapname) && rl && rl < sizeof(runid))
+		if (valid && ml && ml < sizeof(mapname) && rl && rl < sizeof(runid) && *map != '+' && *map != '-' && *map != '.' && !strstr(map, ".."))	//surfd's MAP
 		{
 			Q_strncpyz(mapname, map, ml + 1);
 			Q_strncpyz(runid, slash + 1, rl + 1);
-			Q_snprintfz(command, sizeof(command), "rec_ul_http %s hid %s %s\n", cl->uploadnonce, mapname, runid);
+			Q_snprintfz(command, sizeof(command), "rec_ul_http %s %s %s %s\n", cl->uploadnonce, kind, mapname, runid);
 			ClientReliableWrite_Begin(cl, svc_stufftext, strlen(command) + 2);
 			ClientReliableWrite_String(cl, command);
-			SV_UploadCancel(cl);
+			Con_Printf("sv_recupload: asked %s for %s over HTTPS\n", cl->name, cl->uploadfn);	//the route, in production logs
+			if (*cl->uploadnext)
+			{	//the journal after the view (SV_RecUpload_f's order)
+				Q_strncpyz(cl->uploadfn, cl->uploadnext, sizeof(cl->uploadfn));
+				*cl->uploadnext = 0;
+				SV_UploadAsk(cl);
+			}
+			else
+				SV_UploadCancel(cl);
 			return;
 		}
 	}
