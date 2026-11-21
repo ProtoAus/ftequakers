@@ -1,5 +1,46 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1695 - Stand-in skies: Half-Life's desert for GoldSrc maps, the game's own sky last (engine + data + menu)
+
+**Cause.** Lex, after P1669: "do we use a default replacement?", then yes to Half-Life's desert for GoldSrc maps, the
+tooltip wording and a free sky of our own. 333 of the 1,308 GoldSrc catalogue maps name a custom sky nobody has (P1669
+flag 8). R_SetSky drew r_skybox_default for them (Momentum's sky_cape_hill, loose files in Momentum's folder), else HL2's
+sky_day01_01 (P1627), else six black faces; a GoldSrc map naming no sky drew r_skybox_default where Half-Life draws
+desert. P1669's tooltip said the sky "draws plain", and `sky` said "drawing r_skybox_default" whatever it drew.
+
+**Change.** engine gl/gl_warp.c R_SetSky: a fg_halflife world whose declared sky has no face tries "desert" first
+(valve/gfx/env, mounted with Half-Life for every GoldSrc map), then r_skybox_default and sky_day01_01 as before; after
+those, the game's own "wos_day" while every face is still missing (P1627's gate: a sky was asked for, r_skybox empty).
+client/wad.c Mod_ParseInfoFromEntityLump: a GoldSrc map without skyname gets "desert" (Half-Life's sv_skyname default),
+as Quake 2 maps get unit1_. R_ForceSky_f names the sky drawn. Game: gfx/env/wos_day{rt,bk,lf,ft,up,dn}.jpg (1024 square,
+386 KB, CC0) from tools/wosdaysky.py: gradient, domain-warped fbm cloud layer, sun; faces in the Quake 2 / Half-Life
+layout, checked on desert's shared edges (matching pairs differ 1-7 of 255, wrong pairings 21-37; the generated faces'
+shared edges under 1). Ship set glob wos_day*.jpg (after loadwire). Menu m_goldsrc.qc tooltip and P1669's note: "a
+stand-in sky replaces the missing one".
+
+**Verified.** tools/p1695sky.py (lane launcherupd-20261120-75) on copies of the production 0.1.53 install under headless
+labwc; new engine against the P1670 engine (git-8947 bd7b4a119) as control, both copies holding the wos_day files.
+- A bhop_hellokapink_gs (declares nebo2, absent): "nebo2 (not found; drawing desert)", desert in the screenshot;
+  control sky_cape_hill.
+- B the same with HOME an empty folder (no Steam library: no Half-Life, Momentum, CS:S or HL2): wos_day drawn; control
+  black.
+- C kz_bhop_gs (no skyname): "Current per-map skybox is desert", desert drawn; control "Map declares no sky; using
+  r_skybox_default sky_cape_hill".
+- D surf_prelude (sky_day01_01, present): both engines report sky_day01_01.
+- E surf_prelude with HOME empty: "(not found; drawing wos_day)". This map's fog covers its sky in the screenshots (also
+  with r_skyfog 0), so the pixels of that fallback are B's.
+- F as B with the wos_day files moved aside: "nebo2 (not found, nor any stand-in)" (the report names a stand-in
+  only when it has a face).
+- G (HOME empty, `sky ""` so the map declares none): "r_skybox_default sky_cape_hill (loaded: no; drawing wos_day)";
+  with the wos_day files aside, "(loaded: no, nor any stand-in)".
+All three progs 0 warnings; linux64 client builds with no warning in either file.
+
+**Review.** Round 1 (one reader): nothing significant. Fixed: the `sky` report named a stand-in that had no face
+either; r_skybox_default's help still said it serves only maps declaring no sky; tooltip and note wording; the
+generator's cloud plane divided by zero at exactly dz = -0.12 (never sampled; it regenerates the committed faces byte
+for byte). Left: a worldspawn with an explicit empty "skyname" takes r_skybox_default, not desert.
+Round 2 (one reader): nothing significant; the no-sky report checked names before faces too (fixed, arm G).
+
 ## Patch 1674 - One build per map in tournament pools; tournament standings with an Elo rating (backend only)
 
 **Cause.** Lex, 21 Nov 2026, after testing tournaments: "In tournament, only show 1 map of each, showing the momentum
