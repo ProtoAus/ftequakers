@@ -1,5 +1,31 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1697 - One review page for new top-10 runs (backend only)
+
+**Cause.** Lex's anti-cheat finish list (20 Nov 2026), item 7: "one review page for new top-10 runs". The admin
+listed runs by verdict only: no rank, no evidence columns, no start lag (P1675's `startlag` was counted by recplot and
+shown nowhere), so a new top-10 run could not be reviewed in one place.
+
+**Change.** game surfd/admin.py: list_top10 ranks every ranked board (ROW_NUMBER over map, track, leg, style in
+BOARD_ORDER; TAS boards excluded), keeps rows ranked 10 or better submitted in a window (default 14 days, ?days=
+1-3650), newest first, with the latest current non-ERROR verdict and current review (as _runs_base), the receipt
+(verdict, signature, view angles, journal; NULL until sweep.py's tables exist), plat and pad; a stage row with no
+recording of its own shows its run's replay as surfd._PARENT_SQL finds it (marked "(run)"). rec_startlag reads the
+first 256 KiB of the run's .rec through replay_file for `startlag <k> <s> <max>` (main and stage 1 only: a later stage
+starts with an unmeasured handover); 3+ ticks are flagged. Routes /admin/top10 and /admin/api/top10 (login as the
+other admin APIs; no paths in the JSON); templates/admin_top10.html (textContent only); "Top 10" beside Runs in the
+admin nav; recplot puts `startlag` into the admin cert and admin_run.html shows it. Read-only: no write anywhere.
+
+**Verified.** surfd/test_admin.py section 9t (29 checks): twelve runs on a board list ten (ranks 1-10, the fastest
+first by submission time), the receipt joins by runid, startlag read from the .rec ([4, 0.04, 0.06]) and None without
+it, stage rows open their run's replay with stage 1's start lag and stage 2's none, a ranked TAS-style row left out,
+the days window, bad parameters 400, login required, the page script parses. test_admin, test_recplot pass.
+
+**Review.** One reader (SQL against the board's rules, security, recplot, side effects): no blocker. Fixed: the stage
+fallback now uses _PARENT_SQL's conditions (it could open another player's replay of the same runid), start lag only
+where measured, a unique paging order, TAS boards left out, "(run)" on borrowed verdicts. Left: every request ranks all
+ranked rows (0.4-0.7 s on a 200k-row test db; rank inside the window via runs_board if it grows slow).
+
 ## Patch 1694 - The controller tag: a run that used a controller is marked light fire red (engine + QC + backend)
 
 **Cause.** Lex, 20 Nov 2026, after the anti-cheat audit: gamepads are "100% allowed, it's a legit way to play", but
