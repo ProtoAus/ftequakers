@@ -1,5 +1,35 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1703 - The input journal is part of online play (menu + backend)
+
+**Cause.** Lex, 21 Nov 2026, after P1699's count showed 188 of 189 recent Windows top-10 runs with no input journal:
+"can you make that more mainstream? like when you play online, also accept input journal, and just make all runs
+before this point dated, and accepted since this wan't required yet. But it should be on if you're playing on a
+lobby." The journal was an opt-in box on the online terms (tier 9), pre-ticked only for players accepting for the
+first time, so nearly nobody sent one.
+
+**Change.** game src/shared/sh_defs.qc: FS_TERMS_JOURNAL 10, the online answer that includes the journal on lobby
+runs; every online gate stays FS_TERMS_ONLINE (9), and the client still reports 9 to servers, so 0.1.54's menu loses
+nothing. src/menu/m_main.qc: m_init asks a player whose stored answer is 9 once per launch (not under ui_bootcheck),
+with a lead saying what changed and a "Not now" that writes nothing; Play online writes 10 and sets rec_hid 1 and
+rec_hid_upload 1 (the Steam offer and the updates opt-in are left alone for a 9); the summary has no journal box; the
+full text, the F2 journal and Terms pages say the journal is part of online play and how to keep it local; at 10 the
+F2 journal page has no Stop switch but a "Resume journal uploads" button when rec_hid or rec_hid_upload is 0.
+m_settings.qc: Privacy opens F2's Terms page. No client forcing: the engine sends a journal only with rec_hid_upload 1
+(cl_receipt.c), and the first cut's csprogs forcing was reverted (review 1). surfd: SURFD_NOEV_JOURNAL_SINCE (epoch
+seconds) -- a missing Windows journal counts toward P1699's mark only for runs from then; unset, never.
+
+**Verified.** All three progs build with 0 warnings; surfd/test_noev.py (12 checks) adds the journal date (unset: not
+required; a run before it: accepted). The screens were not driven in a rig (a terms screen takes real clicks only);
+the paths were traced by four review rounds instead.
+
+**Review.** Round 1: the re-ask covered only hand-picked lobbies, the text pointed at a missing button, csprogs
+forcing could not beat the engine's own gate and made wrong HUD and local-server states -- redesigned (startup ask, no
+forcing). Round 2 (blocker): "Stay offline" for a 9 kept them online while promising offline -- now "Not now" with a
+lead; Settings opened the bare boot screen; per-tier F2 texts; a Resume button. Round 3: Not now wrote a fresh
+acceptance stamp, accepting re-enabled updates, a tier-1 page warned to update the engine. Round 4: nothing blocking.
+Numbered P1700 at first; renumbered (P1700 is worldofsurf-d9's TAS upload work).
+
 ## Patch 1701 - Flying into the void no longer stalls: the overview edge keeps the particle shaders (engine client)
 
 **Cause.** Lex, 21 Nov: "ahop_coast has a fps spike when you transition from playable area, to void" (save 3,
