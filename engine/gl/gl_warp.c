@@ -404,8 +404,8 @@ static void R_ForceSky_f(void)
 				Q_strcasecmp(forcedsky->name+7, cl.skyname) ? va(" (not found; drawing %s)", forcedsky->name+7) : "");	//+7: "skybox_"
 		else if (*r_skybox_default.string)
 			Con_Printf("Map declares no sky; using r_skybox_default %s (loaded: %s)\n", r_skybox_default.string,
-				!forcedsky ? "no" : Q_strcasecmp(forcedsky->name+7, r_skybox_default.string) ? va("no; drawing %s", forcedsky->name+7) :	//P1627
-				R_ForcedSkyEmpty() ? "no faces found" : "yes");
+				R_ForcedSkyEmpty() ? "no, nor any stand-in" :	//P1695
+				Q_strcasecmp(forcedsky->name+7, r_skybox_default.string) ? va("no; drawing %s", forcedsky->name+7) : "yes");	//P1627
 		else
 			Con_Printf("no skybox forced.\n");
 	}
