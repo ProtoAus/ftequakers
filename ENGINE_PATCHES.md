@@ -1,5 +1,63 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1696 - Upload a TAS run from the game; your TAS runs as Jargon guides (game QC + tasupd; no engine change)
+
+**Cause.** Lex, 21 Nov 2026, after P1640's web uploads went live: "maybe a in game upload works? ... is it possible to
+make a in game upload?" then "Do we allow custom Jargons? ... please keep building until finished". A run made in the
+game had to be found on disk and sent through a browser; Jargon never offered the player's own TAS runs (every TAS
+finish carries TF_CHEAT, and its guide filter took clean PBs only).
+
+**Change.** Game src/client/cl_tasupload.qc: the TAS menu's third tab, Upload (cl_tasui.qc TAS_TAB_UPLOAD; Send is
+pressed inside the CSQC input event, TASUI_Input -> TASUp_Press). In a game the player hosts (`isserver()`) it lists
+the TAS runs that game finished: sv_timer.qc SV_TASUpNote, at each TAS finish of the host's own client (infokey ip
+exactly QLoopBack), hashes the run (only the player's own loose file: whichpack) and rewrites
+data/tasproj/<map>/uploads.txt through a .part -- the newest 50 whole-course runs still on disk -- a directory client
+code cannot write (pr_bgcmd.c QC_TasprojDenied) and that is read only as an own loose file (a server can make the client
+mount a package with a data/tasproj/ file); `cmd tas uploads` (sv_tasautosurf.qc SV_TASUpList) answers the host's
+client with TAS_EV_UPLIST events (61; cl_share.qc). So a file a server's csprogs put in data/runs/ is never offered as
+the player's run, and Upload refuses bytes that differ from the recorded hash. Upload: `POST /tasup/api/game/challenge
+{"sha"}` -> a stateless code (8 hex time, 8 hex salt, 16 hex HMAC over them and the hash). Send, on a real press:
+`acct_sign(sha256("ftesurf-tasup <code> <sha>")[:32], -6)` -- zone publishing's kind with the site fixed, over a digest
+that names this purpose and the file, so neither service's proof is the other's and no older game code can make one --
+then the 396-byte proof header (FTESURF-TASUP 1 / nonce / sha / pub / sig / game) and the raw .rec to /tasup/upload as
+application/x-ftesurf-tasup. The URL is a compile-time constant (a test build only: -DTUP_BASE). `tas upload [N]` from
+the player's own console only (cmdlevel_local). cl_history.qc no longer auto-downloads _tas.rec history files.
+cl_jargon.qc TASJargon_Own offers own _tas.rec runs with TF_TAS in two slots of their own ("my TAS 7.86s").
+surfd/tasupd.py: the game route checks, from the header before reading the file: the code (age, MAC), not spent
+(`nonces`, 'game ' rows pruned apart from Steam's), the game code -- the lobbies' csprogs and the newest two
+csprogs.dat.pre[0-9]*, released csprogs learned from releases/<ver>/update.json by BLAKE2b (one a platform; fetched once
+from the mirror, network failures retried doubling to an hour, a 404/410 or other bytes given up after 3), each carrying
+`ftesurf-tasup ` (the upload flow), or owner allow/deny rows (`allow-code`, `deny-code`, `codes`; deny first) -- the
+key's linked unbanned account, then the signature (the cryptography library when installed: 0.17 ms on the Pi against
+ed25519.py's 5-19 ms; small-order keys refused); spends the code, reads the file, then the web form's accept().
+Refusals answer 200 with ok=0 and the status (the game's HTTP client keeps no other body) and drain an unread body
+(nginx may still be sending it). Budgets: 20 game requests a minute an address, 1200 verified game uploads a minute
+for everyone. The tool reads "sent from the game" (how it came, not what made it). tools/install_tasupd.py ships
+tools/ed25519.py, TASUPD_GAMES / TASUPD_RELEASES; the upgrade accepts the unit the previous installer wrote, restores
+it as read on rollback and keeps it as <release>/unit.prev.
+
+**Review.** Four rounds of three lenses (control flow and honest players; the live host; what an attacker gains) and
+a delta round. Round 1: a stored challenge table 32 addresses from full; an unsigned 8 MB body read before any check;
+the upgrade refused the live unit; own TAS runs never offered; a server could plant a _tas.rec through history and open
+the tab. Round 2: a server's own csprogs could write the run (hence the local game's own list); an ICE host's chosen
+name passed the "local" test (hence isserver); network outages ended in "update your game"; refusals could reach the
+game as 502s; Windows-only releases; a QC bounds fault on an unopenable name; own TAS runs pushed out the PB. Round 3:
+`local_host = !Lobby_Active() && (...)` assigned before the && and the host prints as QLoopBack, not "loopback" (the
+list worked only by that accident); a package could supply data/tasproj/uploads.txt; a guest's finish was the host's;
+an append-only list read in full every 3 s. Round 4: nothing serious (account before signature, the fast verifier,
+exact bonus legs). The first end-to-end run after round 2 caught a missing TAS_EV_UPLIST dispatch: the client dropped
+the connection on the unknown event.
+
+**Verified.** test_tasupd 194, test_install_tasupd 52, test_tasplaus 75; cl/sv/menu progs 0 warnings. End to end in an
+isolated copy of the game in a headless labwc against a local tasupd (the test build's -DTUP_BASE): an unvouched
+_tas.rec in data/runs/ is not listed; a TAS finish (surf_ace bonus 1: TAS pause, a teleport into the end) is noted in
+data/tasproj/surf_ace/uploads.txt, listed once the reply is in, and Upload plus a real pointer press on Send store it
+under the linked account; an unlinked key is told to link. The live unit read from the Pi is the form the new
+installer accepts. **Not verified:** a genuine Jargon finish through tasplaus (Jargon did not finish surf_sandtrap2
+bonus 4 here; the one game-made file was held partly for lost packets); the upgrade itself (needs root on the Pi).
+**Known limits (BACKLOG):** a hostile server's csprogs can read a finished run and upload it first (predates P1696);
+runs finished before this build are not offered.
+
 ## Patch 1695 - Stand-in skies: Half-Life's desert for GoldSrc maps, the game's own sky last (engine + data + menu)
 
 **Cause.** Lex, after P1669: "do we use a default replacement?", then yes to Half-Life's desert for GoldSrc maps, the
