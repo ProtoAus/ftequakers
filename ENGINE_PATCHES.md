@@ -16,7 +16,7 @@ starts with an unmeasured handover); 3+ ticks are flagged. Routes /admin/top10 a
 other admin APIs; no paths in the JSON); templates/admin_top10.html (textContent only); "Top 10" beside Runs in the
 admin nav; recplot puts `startlag` into the admin cert and admin_run.html shows it. Read-only: no write anywhere.
 
-**Verified.** surfd/test_admin.py section 9t (29 checks): twelve runs on a board list ten (ranks 1-10, the fastest
+**Verified.** surfd/test_admin.py section 9t (28 checks): twelve runs on a board list ten (ranks 1-10, the fastest
 first by submission time), the receipt joins by runid, startlag read from the .rec ([4, 0.04, 0.06]) and None without
 it, stage rows open their run's replay with stage 1's start lag and stage 2's none, a ranked TAS-style row left out,
 the days window, bad parameters 400, login required, the page script parses. test_admin, test_recplot pass.
