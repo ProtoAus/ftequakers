@@ -1,5 +1,34 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1702 - Keep the newest two: backup rotation on the Pi (game tools + ops; no engine change)
+
+**Cause.** Lex, 21 Nov 2026, on our procedures: "I like backups and I like safety, but sensible, I don't need every
+backup ever made, maybe like the last 2 at most? can you do that for me", then "delete the old trees and backups,
+ensure proper rotation". The Pi held six 1.5 GB surfd DB backups, 18 namespace-observer owner backups, every tasupd
+release, 681 copies in the surfd home, 142 in the lobby game folders, and 179 agent-work task roots (121 GB; /srv/nvme
+86% full), most kept by "retain everything" notes of sessions long finished.
+
+**Change.** Once, with Lex's go and a fresh reference check each time: DB backups to the newest two (6 GB); observer
+owner backups to two (Lex's root); 112 agent-work roots that nothing live named and nobody had touched for a week
+(61 GB, mostly old DB copies; two keep 28 KB of root-owned leftovers); the disk went from 86% to 71%. Lasting: game
+tools/pi_retention.py, daily as proto (systemd --user ftesurf-retention.timer, 17:17 UTC; tools/pi-retention.md):
+backup copies keep two per file (by the UTC stamp in the name, else mtime -- never ctime) plus the two
+csprogs.dat.pre[0-9]* tasupd trusts; agent-work roots go after 14 days without a change (mtime or ctime) unless a
+unit, drop-in, nginx, cron, the surfd home's files, the live generation's manifest/identity or a running process names
+them, they are one of the newest two gen<N>-*, or they hold RETAIN; tasupd-src checkouts keep two plus released ones.
+It fails closed (configuration it cannot read stops the run; only unreadable copies no loader picks up and TLS keys
+are passed over), keeps roots holding a mount, another user's files or unreadable parts, logs its plan before
+removing, re-checks each root, and caps its memory. tools/install_tasupd.py keeps the serving release and its rollback.
+The surfd drop-in still names ~50 old roots and ~230 copies: they go once a generation installs a drop-in that names
+only the live generation and its predecessor (P1702 kit work, next generation).
+
+**Verified.** test_pi_retention 34, test_install_tasupd 56; 23 mutants each fail a suite. Independent review, four
+rounds (what it can delete; an unattended deleter's failure modes): fail-open config reads, mtime-only idleness,
+chmod outside the tree, ctime ordering, links, a loader-blind exemption, same-disk bind mounts -- all fixed, round 4
+clean. A first draft read the surfd home whole and was OOM-killed at 4.8 GB on the Pi (only it; surfd, tasupd,
+nginx and the lobbies did not restart); the scan now reads one file at a time (12 MB). First run through the unit:
+117 copies removed, 0 problems; services answer.
+
 ## Patch 1703 - The input journal is part of online play (menu + backend)
 
 **Cause.** Lex, 21 Nov 2026, after P1699's count found 188 recent Windows top-10 runs (of 239 WOS rows) with no input journal:
