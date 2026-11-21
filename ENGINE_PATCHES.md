@@ -116,7 +116,10 @@ _tas.rec in data/runs/ is not listed; a TAS finish (surf_ace bonus 1: TAS pause,
 data/tasproj/surf_ace/uploads.txt, listed once the reply is in, and Upload plus a real pointer press on Send store it
 under the linked account; an unlinked key is told to link. The live unit read from the Pi is the form the new
 installer accepts. **Not verified:** a genuine Jargon finish through tasplaus (Jargon did not finish surf_sandtrap2
-bonus 4 here; the one game-made file was held partly for lost packets); the upgrade itself (needs root on the Pi).
+bonus 4 here; the one game-made file was held partly for lost packets).
+**Installed** 21 Nov 03:01Z by Lex's root run (`--upgrade-from a8efd378`; release /opt/ftesurf-tasupd/73229378, the old unit
+kept as its unit.prev): X-Tasupd-Source 73229378, a live game challenge, a proofless game upload refused; releases
+0.1.45-0.1.54 learned (none carries the upload flow); Lex's dev build allowed (`allow-code`). Records: game 46b645ac.
 **Known limits (BACKLOG):** a hostile server's csprogs can read a finished run and upload it first (predates P1696);
 runs finished before this build are not offered.
 
