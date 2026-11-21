@@ -107,6 +107,25 @@ clean. A first draft read the surfd home whole and was OOM-killed at 4.8 GB on t
 nginx and the lobbies did not restart); the scan now reads one file at a time (12 MB). First run through the unit:
 117 copies removed, 0 problems; services answer.
 
+
+**Next-generation kit (offline, FTESurf-private/worktrees/gen1702-20261121-a03).** One maintained tool,
+FTESurf-private/genkit/advance.py, makes each kit from the previous one by its generation.json literals (no hand-written
+derive.py). The gen1702 kit ships the members-v1 guard and the files REF adds only when generation.json lists them
+(admin_top10.html; tasupd*.py excluded), adds P1694's runs/replays.pad by hand at step 2c (as gen1603's plat), writes a
+TRIMMED drop-in (1303 -> 139 lines, 17 -> 2 preflights: the live generation's section, the new one, /srv/nvme/surfd and
+its 104 live entries; 662 backup copies unnamed) and gives the owner installer keep-two rotation (it also removes the 23
+pre-9-Nov drop-in copies that kept every old root "named"). Two reviews + a fix round. Waits for Lex's generation.
+
+**Retention follow-up (game d97a23b9, deployed).** Roots named by the transition code of the newest two STAGED
+generations (backend/operator, retained, root-proposal) are kept: the trimmed drop-in stops naming ac-lexical-..., whose
+activation.lock every owner install takes. Old roots (~50 GB) go once both kept generations run trimmed drop-ins.
+
+**Static web board (game 7e7c9f7a..41ac3d7e).** nginx serves the board's page and seven assets from
+/srv/nvme/ftesurf-site/board/current with surfd's CSP; API/avatar/shot/link paths stay on surfd. tools/publish_board.py
+(Pi side tools/board_publish_pi.py) publishes as proto; proto's ftesurf-board-follow timer republishes the live
+generation's own files within 5 minutes of a swap or rollback; `--commit` ships a UI-only fix ahead of a generation by a
+byte rule (no live member outside web/ differs between the live source_ref and REF). install.sh probes the static copy
+(Last-Modified) and each file's CSP against the live surfd's. Four review rounds; test_site_routes 7/7 on the Pi's nginx.
 ## Patch 1703 - The input journal is part of online play (menu + backend)
 
 **Cause.** Lex, 21 Nov 2026, after P1699's count found 188 recent Windows top-10 runs (of 239 WOS rows) with no input journal:
