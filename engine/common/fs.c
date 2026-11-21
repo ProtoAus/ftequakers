@@ -4541,6 +4541,8 @@ qboolean FS_Rename(const char *oldf, const char *newf, enum fs_relative relative
 	{
 		oldf = FS_GetCleanPath(oldf, false, cleanold, sizeof(cleanold));
 		newf = FS_GetCleanPath(newf, false, cleannew, sizeof(cleannew));
+		if (!oldf || !newf)
+			return false;	//FTESurf Patch 1705: a refused path (over MAX_QPATH) was passed on as NULL and the lobby segfaulted (QC frename of a 129-character .owner part)
 	}
 	return FS_Rename2(oldf, newf, relativeto, relativeto);
 }
