@@ -62,7 +62,7 @@ overriding anything -- r_skybox still wins over both, which is the ordering
 below and is the whole design.  Empty by default so nothing outside FTESurf's
 own cfg changes.
 */
-cvar_t r_skybox_default						= CVARFCD("r_skybox_default", "", CVAR_ARCHIVE | CVAR_RENDERERCALLBACK, R_SkyBox_Changed, "Skybox to use on a map that declares no sky of its own. Empty (the default) leaves such a map drawing whatever its own sky surfaces carry. r_skybox overrides this, and also overrides a map that DOES declare a sky.");
+cvar_t r_skybox_default						= CVARFCD("r_skybox_default", "", CVAR_ARCHIVE | CVAR_RENDERERCALLBACK, R_SkyBox_Changed, "Skybox to use on a map that declares no sky of its own, or whose sky is missing (a Half-Life map tries Half-Life's desert first). Empty (the default) leaves a map that declares none drawing whatever its own sky surfaces carry. r_skybox overrides this, and also overrides a map that DOES declare a sky.");
 cvar_t r_skybox_orientation					= CVARFD ("r_glsl_skybox_orientation", "0 0 0 0", CVAR_SHADERSYSTEM, "Defines the axis around which skyboxes will rotate (the first three values). The fourth value defines the speed the skybox rotates at, in degrees per second.");
 cvar_t r_skybox_autorotate					= CVARFD ("r_glsl_skybox_autorotate", "1", CVAR_SHADERSYSTEM, "Defines the axis around which skyboxes will rotate (the first three values). The fourth value defines the speed the skybox rotates at, in degrees per second.");
 cvar_t r_skyfog								= CVARD  ("r_skyfog", "0.5", "This controls an alpha-blend value for fog on skyboxes, cumulative with regular fog alpha.");
@@ -400,7 +400,8 @@ static void R_ForceSky_f(void)
 			Con_Printf("Current user skybox is %s\n", r_skyboxname.string);
 		else if (*cl.skyname)
 			Con_Printf("Current per-map skybox is %s%s\n", cl.skyname,
-				(forcedsky && Q_strcasecmp(forcedsky->name+7, cl.skyname)) ? va(" (not found; drawing %s)", forcedsky->name+7) : "");	//+7: "skybox_"
+				R_ForcedSkyEmpty() ? " (not found, nor any stand-in)" :	//P1695
+				Q_strcasecmp(forcedsky->name+7, cl.skyname) ? va(" (not found; drawing %s)", forcedsky->name+7) : "");	//+7: "skybox_"
 		else if (*r_skybox_default.string)
 			Con_Printf("Map declares no sky; using r_skybox_default %s (loaded: %s)\n", r_skybox_default.string,
 				!forcedsky ? "no" : Q_strcasecmp(forcedsky->name+7, r_skybox_default.string) ? va("no; drawing %s", forcedsky->name+7) :	//P1627
