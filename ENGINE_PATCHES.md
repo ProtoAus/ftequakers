@@ -6,7 +6,7 @@
 wise", from Steam-linked accounts only. The TAS board took only server re-simulated runs; nothing accepted a file.
 
 **Change.** game surfd/tasupd.py (+ tasupd_wsgi.py), an isolated Flask service beside tasrevd at
-https://play.proto.bar/tasup/ (127.0.0.1:8091, own SQLite store under /srv/nvme/ftesurf-ops/tasupd-state, surfd's
+https://play.proto.bar/tasup/ (127.0.0.1:8093, own SQLite store under /srv/nvme/ftesurf-ops/tasupd-state, surfd's
 accounts read-only; no surfd schema or generation change). Steam OpenID sign-in; the SteamID must have a World of Surf
 account and no ban. An upload is a FTESURF-REC at 0.015 tick, whole courses only (no stage legs), not a KSF/Momentum
 import, header within 64 KB, ASCII samples, 8 MB max. tools/tasplaus.py judges it: PASS shown on a per-course board
@@ -39,8 +39,10 @@ call, one upload in flight per account, two at once, held-cap attempts counted),
 **Verified.** test_tasplaus 75 (+ 117/117 surf_sandtrap2 bonus-4 replays PASS), test_tasupd 81, test_install_tasupd 49
 (Flask 2.3.3 / Werkzeug 2.3.8; the Pi runs 2.2.2 with Python 3.11). Every reviewer exploit of rounds 5-9 rerun: held or
 refused. 276 honest recordings: no verdict changed from round 5 on except the four "never reaches end" fixed to PASS;
-the 117 replays reprinted %g/%e/%.18e at deep coordinates all PASS; no cross-player copy match among them. **Not verified:** the install
-itself (needs root on the Pi). **Known limits (BACKLOG):** no map collision, so a made-up path is held only when it
+the 117 replays reprinted %g/%e/%.18e at deep coordinates all PASS; no cross-player copy match among them.
+**Installed** 21 Nov 00:10Z by Lex's root run (release /opt/ftesurf-tasupd/a8efd378; game a8efd378 moved the port off
+8091, the Pi's twitch bot): health, page, Steam redirect, unsigned upload 401 and board JSON checked live.
+**Known limits (BACKLOG):** no map collision, so a made-up path is held only when it
 reaches the record; a public human replay with its import markers stripped passes; a copy re-timed as a whole by ~0.1%
 is not matched; fabricated steps can spend the fast-step allowance for 3-4 ticks; no in-game upload yet. A determined
 editor below the record remains possible without collision or re-simulation (EXACT in BACKLOG): the owner removes by id.
