@@ -1,5 +1,21 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1712 - acct_sign kind -7: the TAS upload offer sends itself, signed as no key press (engine client cl_receipt.c, pr_csqc.c)
+
+Lex (22 Nov): a new TAS best should pop up "like the f6 to report an error, or ... do it automatically if they don't
+press anything". The in-game upload (P1696) signs kind -6 and only under a real press; with nobody pressing there is no
+statement to send. Kind -7 is that statement: CL_Receipt_AcctSign takes it with `keyed` forced false (the text says
+"key 0"), the server field fixed to play.proto.bar:443 as -6's, and PF_cl_acct_sign never spends the press's one
+signature on it. Every other check stands: connected to the server whose VM this is, one named main file of code, a
+32-hex nonce.
+
+What a -7 signature is good for: only surfd/tasupd.py's game route verifies one (header FTESURF-TASUP 2,
+GAME_AUTO_KIND), and only for game code it knows (the lobbies' csprogs, releases, owner allow-codes) -- so code from a
+third-party server signs nothing useful with it. Every other service formats its own kind into the statement it
+verifies (accounts.py `proven`, zonepub.py KIND -6, key 1), so a -7 statement checks out nowhere else. Our csprogs asks
+for it only when the offer's countdown runs out in a game it hosts (cl_tasupload.qc TASUp_Send). An older engine
+returns "" for -7 (its range check), and the game then says F6 sends it.
+
 ## Patch 1709 - Mover 14: Momentum 0.10's RNGFix landings and ahop rules; pm_stepsim holds a Momentum demo against the mover (engine common/pm_source.c, server)
 
 **Cause.** 22 Nov 2026 Lex: ahop_coast's movement "hasn't felt right bhopping on the displacements especially riding

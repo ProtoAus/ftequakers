@@ -9921,7 +9921,7 @@ static void QCBUILTIN PF_cl_acct_sign (pubprogfuncs_t *prinst, struct globalvars
 {
 	char out[512];
 	float f = G_FLOAT(OFS_PARM1);
-	int kind = (f >= -6 && f <= -2) ? (int)f : 0;	/*a NaN is nobody's kind*/
+	int kind = (f >= -7 && f <= -2) ? (int)f : 0;	/*a NaN is nobody's kind*/
 	qboolean keyed = CSQC_RealKey();
 
 	/*the statement names ONE file of code: a VM holding a second (an addon,
@@ -9929,7 +9929,9 @@ static void QCBUILTIN PF_cl_acct_sign (pubprogfuncs_t *prinst, struct globalvars
 	  guess from what the file hook was asked for.*/
 	if (prinst->numprogs != 1)
 		CL_Receipt_VMCode(NULL, 0);
-	if (kind != -2)
+	if (kind == -7)
+		keyed = false;	/*P1712: never keyed, and spends no press*/
+	else if (kind != -2)
 	{
 		/*a link's kind: this press's one signature, or none*/
 		if (!keyed || csqc_realkey_signs < 1)

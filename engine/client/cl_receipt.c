@@ -533,9 +533,11 @@ qboolean CL_Receipt_AcctSign(const char *nonce, int kind, qboolean keyed, char *
 	qbyte sig[64];
 	int i;
 
-	if (kind < -6 || kind > -2)
+	if (kind < -7 || kind > -2)
 		return false;
-	if (kind != -2 && !keyed)
+	if (kind == -7)
+		keyed = false;	/*P1712: the TAS upload offer sending itself; the statement says "key 0"*/
+	if (kind != -2 && kind != -7 && !keyed)
 	{
 		/*PRINTED: it is the only evidence a harness has that the refusal fired.*/
 		Con_Printf("acct_sign: kind %i is signed only under a key press. Refused.\n", kind);
@@ -572,7 +574,7 @@ qboolean CL_Receipt_AcctSign(const char *nonce, int kind, qboolean keyed, char *
 
 	// Zone drafts use the existing linked-key proof, with a distinct purpose
 	// and fixed HTTPS service instead of the local editor's listen address.
-	if (kind == -6)
+	if (kind == -6 || kind == -7)
 		Q_strncpyz(svname, "play.proto.bar:443", sizeof(svname));
 	else
 		NET_AdrToString(svname, sizeof(svname), &cls.netchan.remote_address);
