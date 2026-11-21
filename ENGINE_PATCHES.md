@@ -58,6 +58,12 @@ order, a refused go after the countdown, noclip under a stringcmd hold, the togg
 -- all fixed, the last batch re-run on the fixed build. Limits and leftovers: game BACKLOG "P1706"; human checks lextest.
 Not verified: muri's "S does nothing" (not reproduced); real packet loss (net_fakeloss) was not armed.
 
+**Deployed.** Lobbies 21 Nov 15:50:49Z-15:51:10Z, all 12 restarted once after a 10 s warning: qwprogs 7079778d /
+csprogs 3a2ae666 (main 0d6e5ea6, the 0.1.55 QC + P1706 + a P1707 comment; byte-identical to the measured subject),
+predecessors 7177ed74 / f93beacb as *.pre1706-20261121T155017Z, codes.txt 170. Live check from this PC on lobby 12
+(agtricks): fs_wop, fs_wopsave, fs_wopnoclip, fs_woprwgo, fs_woploadnow, fs_wopghost published, noclip ON/OFF answered,
+no prederr. Players get it on the lobbies at once (the lobby serves csprogs); local games with the next release.
+
 ## Patch 1705 - FS_Rename refuses a path it could not clean instead of segfaulting (engine fs.c; lobbies)
 
 **Cause.** 21 Nov 2026 a player reported the game freezing at the end zone on segmented surf_the_gloaming and
