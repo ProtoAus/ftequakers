@@ -1,5 +1,37 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1705 - FS_Rename refuses a path it could not clean instead of segfaulting (engine fs.c; lobbies)
+
+**Cause.** 21 Nov 2026 a player reported the game freezing at the end zone on segmented surf_the_gloaming and
+surf_2pacisalive finishes, then the lobby on another map. The lobbies had segfaulted (lobby 4 11:43Z, 12 11:46Z,
+1 12:16Z, 8 11:5xZ and 12:21Z; the old patch-1683 engine did the same on an akatosh bonus run earlier). Symbolized:
+FS_NativePath <- FS_Rename2 <- FS_Rename <- PF_frename <- SSQC (SV_PostRunCmd). SSQC's Archive_Seal /
+Archive_SealFile (sv_archive.qc) write `<run>.rec.owner-p<port>-<edict>.part` beside the recording and frename it
+to `<run>.rec.owner`; on long map names plus `_segmented` that part path is 129 characters. fopen(FILE_WRITE) only
+buffers, so fclose's COM_WriteFile refuses it ("filename too long" x2), then FS_Rename's FS_GetCleanPath refuses
+it (x3) and returns NULL, which FS_Rename passed on; FS_NativePath dereferenced it. 7 of 4632 recordings since
+1 Nov overflow with that suffix; no recording or `.owner` name does (longest 110).
+
+**Fix.** FS_Rename returns false when either cleaned path is NULL (2 lines). PF_frename then returns -5, the QC
+calls fremove(partial), which FS_NativePath refuses without a crash, and the run keeps its recording without an
+owner seal (the seal's own comment: "A failed seal leaves the original stage intact but grants no retrieval").
+
+**Evidence.** Falsifier (agent-work eng1705-20261121-2c/test1705.sh): a test qwprogs whose first StartFrame writes
+and frenames a 129-character path -- live patch-1704 binary: 3 "filename too long", SIGSEGV, exit 1; patch-1705:
+`frename returned -5, server still running`, `fremove returned -5`, exit 0, nothing left. Gate old vs new: 129
+lines identical (105 pm_dettest on 7 maps, 12 pm_verify), pm_sourceversion 13 both. Independent review: no
+blocking findings; every FS_Rename caller handles false (PF_frename -5; sv_user, log.c, cl_parse unreachable with
+a long name; qkupdate uses FS_SYSTEM); also closes frename("file:x", ...) and hidden-segment names from any VM.
+
+**Deployed.** Lobbies 21 Nov 12:49Z (fteqw-svarm64 0ac1d567, plugin a13569dd, stamp
+git-8978-patch-1704-1-g33284da9c; predecessors *.pre1705-20261121T124919Z). Clients get it with the next release.
+
+**Not changed (review notes).** The commit message's "every other FS_GetCleanPath caller already checks" is not
+quite true: FS_EnumerateFilesEachSys (fs.c ~4895) can pass a NULL match to Sys_EnumerateFiles (only via
+search_begin FORCESEARCH|FULLPACKAGE on an inactive gamedir; our QC never asks; a server's CSQC could). Not
+hardened: a NULL guard at the top of FS_NativePath. common.h's "0 on success" comment on FS_Rename/FS_Remove is
+wrong (both return true on success; no caller relies on it). The QC still loses those seals (game BACKLOG).
+
 ## Patch 1704 - Run views go to the HTTPS collector, so top-10 evidence arrives (engine client + server + fs + cmd, surfd, nginx)
 
 **Cause.** P1699's count (21 Nov) found 167 of 239 recent WOS top-10 rows with no view sidecar. The lobby logs of
