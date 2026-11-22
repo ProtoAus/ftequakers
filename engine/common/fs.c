@@ -14119,11 +14119,14 @@ qboolean FS_SteamClientRoot(char *out, size_t outsize)
 		if (RegQueryValueExW(key, keys[i].value, NULL, &type, (LPBYTE)wide, &len) == ERROR_SUCCESS && type == REG_SZ && len)
 		{
 			wide[len / sizeof(wchar_t)] = 0;    //a REG_SZ need not be terminated
-			RegCloseKey(key);
 			narrowen(out, outsize, wide);       //paths are UTF-8 here (Sys_SteamDirsWithFile does the same)
-			return *out != 0;
+			if (*out)
+			{
+				RegCloseKey(key);
+				return true;
+			}
 		}
-		RegCloseKey(key);
+		RegCloseKey(key);                       //an empty SteamPath falls back to InstallPath
 	}
 	return false;
 #elif (defined(__linux__) || defined(__unix__) || defined(__apple__)) && !defined(ANDROID)
