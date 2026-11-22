@@ -13538,6 +13538,7 @@ static void VBSP_LightPointCubeEx(struct model_s *model, const vec3_t point, vec
 
 		if (forceface->ival >= 0)
 		{
+			foldlevels = false;	//Patch 1717: both slots now hold the face itself
 			VectorCopy(rgb[forceface->ival], res_diffuse);
 			VectorCopy(rgb[forceface->ival], res_ambient);
 			VectorClear(res_dir);
@@ -13666,14 +13667,11 @@ static void VBSP_LightPointValues(struct model_s *model, const vec3_t point, vec
 	VBSP_LightPointCubeEx(model, point, res_diffuse, res_ambient, res_dir, NULL, false);
 }
 //FTESurf Patch 1717: model_t.LightPointFold -- a Source MDL entity draws through vertexlit/animated.glsl, whose
-//half-lambert ramp (hl2_lt_fold) wants Patch 304's split as much as a static prop's does.  And the engine then
-//multiplies by 255/200 (gl_alias.c R_CalcModelLighting, Quake's fudge), which HL2_CalcModelLighting's static props
-//never get: taken back out, so 1.0 linear draws the texture at its own brightness, as Source's vertexlit does.
+//half-lambert ramp (hl2_lt_fold) wants Patch 304's split as much as a static prop's does.  The engine skips Quake's
+//255/200 for these (gl_alias.c R_CalcModelLighting), as HL2_CalcModelLighting's static props never had it.
 static void VBSP_LightPointFold(struct model_s *model, const vec3_t point, vec3_t res_diffuse, vec3_t res_ambient, vec3_t res_dir)
 {
 	VBSP_LightPointCubeEx(model, point, res_diffuse, res_ambient, res_dir, NULL, true);
-	VectorScale(res_diffuse, 200.0f/255, res_diffuse);
-	VectorScale(res_ambient, 200.0f/255, res_ambient);
 }
 #else
 static void VBSP_LightPointValues	(struct model_s *model, const vec3_t point, vec3_t res_diffuse, vec3_t res_ambient, vec3_t res_dir)
@@ -14592,7 +14590,10 @@ static qboolean VBSP_LoadMap (model_t *mod, void *filein, size_t filelen)
 
 		Q_snprintfz (name, sizeof(name), "*%i:%s", i, wmod->publicname);
 		mod = modfuncs->BeginSubmodelLoad(name);
-		*mod = *wmod;
+		//FTESurf Patch 1717: only as much of model_t as the exe has (its tails, com_mesh.h); a whole-struct copy
+		//on an older exe ran past this slot into the next model's name
+		memcpy(mod, wmod, vbsp_tail1717 ? sizeof(*mod) : vbsp_tail1713 ? offsetof(model_t, LightPointFold) :
+			hl2_bodyparts ? offsetof(model_t, vphysalt) : offsetof(model_t, geombase));
 		mod->archive = NULL;
 		mod->entities_raw = NULL;
 		mod->submodelof = wmod;

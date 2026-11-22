@@ -1466,12 +1466,13 @@ static struct
 	unsigned int seq;
 	vec3_t origin, shadelight, ambientlight, lightdir;
 	double time;
+	qboolean fold;	//FTESurf Patch 1717: sampled by LightPointFold (R_ModelLightFold); part of the key
 } vmlightcache;
 
 //FTESurf Patch 1717: a Source MDL draws through the hl2 plugin's VMT shaders, whose ramp needs the world's other split
 static qboolean R_ModelLightFold(const model_t *clmodel)
 {
-	return clmodel && (clmodel->engineflags & MDLF_SOURCEPITCH) && cl.worldmodel->LightPointFold;
+	return clmodel && cl.worldmodel && (clmodel->engineflags & MDLF_SOURCEPITCH) && cl.worldmodel->LightPointFold;
 }
 
 /*The world-lightmap sample, factored out so the cache-fill path and the r_modellight_cache 2
@@ -1572,6 +1573,7 @@ qboolean R_CalcModelLighting(entity_t *e, model_t *clmodel)
 			vec3_t moved;
 			VectorSubtract(r_refdef.vieworg, vmlightcache.origin, moved);
 			if (r_modellight_cache.ival && vmlightcache.valid && vmlightcache.seq == r_modellight_seq &&
+				vmlightcache.fold == R_ModelLightFold(clmodel) &&
 				((VectorEquals(vmlightcache.origin, r_refdef.vieworg) && (!R_ModelLightSettles() ||
 				  (realtime >= vmlightcache.time && realtime - vmlightcache.time < 0.25))) ||	//Patch 1283
 				 (rate > 0 && realtime >= vmlightcache.time && realtime - vmlightcache.time < 1.0 / rate &&
@@ -1583,8 +1585,12 @@ qboolean R_CalcModelLighting(entity_t *e, model_t *clmodel)
 			}
 			else
 			{
-				cl.worldmodel->funcs.LightPointValues(cl.worldmodel, r_refdef.vieworg, shadelight, ambientlight, lightdir);
+				if (R_ModelLightFold(clmodel))	//FTESurf Patch 1717: a Source viewmodel draws through the VMT shaders too
+					cl.worldmodel->LightPointFold(cl.worldmodel, r_refdef.vieworg, shadelight, ambientlight, lightdir);
+				else
+					cl.worldmodel->funcs.LightPointValues(cl.worldmodel, r_refdef.vieworg, shadelight, ambientlight, lightdir);
 				vmlightcache.valid = true;
+				vmlightcache.fold = R_ModelLightFold(clmodel);
 				vmlightcache.seq = r_modellight_seq;
 				vmlightcache.time = realtime;
 				VectorCopy(r_refdef.vieworg, vmlightcache.origin);
@@ -1935,7 +1941,8 @@ qboolean R_CalcModelLighting(entity_t *e, model_t *clmodel)
 		}
 		else
 			m = 1;
-		m /= 200.0/255;	//a legacy quake fudge-factor.
+		if (!R_ModelLightFold(clmodel))	//FTESurf Patch 1717: the plugin's cube is at Source's scale, as its static props draw it
+			m /= 200.0/255;	//a legacy quake fudge-factor.
 		VectorScale(shadelight, m, shadelight);
 		VectorScale(ambientlight, m, ambientlight);
 #else
