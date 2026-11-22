@@ -31,6 +31,7 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "!!samps =FAKESHADOWS shadowmap\n"
 "!!cvar3f r_shadows_color=0.5 0.5 0.5\n"
 "!!cvar3f r_shadows_sunfloor=0 0 0\n"
+"!!cvarf gl_overbright\n"
 
 "#ifndef ENVTINT\n"
 "#define ENVTINT 1.0,1.0,1.0\n"
@@ -227,6 +228,7 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "#ifdef FAKESHADOWS\n"
 "uniform vec3 cvar_r_shadows_color;  //FTESurf Patch 1732\n"
 "uniform vec3 cvar_r_shadows_sunfloor;\n"
+"uniform float cvar_gl_overbright;\n"
 "#endif\n"
 "vec3 lightmap_fragment()\n"
 "{\n"
@@ -337,10 +339,13 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 //sun's shadows (r_shadows_sunfloor, Strata maps) a shadow only takes the sun out: down to the sky's share,
 //never below the baked shade.  Elsewhere it is shadow_control's colour (r_shadows_color), as Source's RTT.
 "float shlit = 2.0*ShadowmapFilter(s_shadowmap, vtexprojcoord) - 1.0;\n"
+//the floor is a displayed level; the world's e_lmscale also carries 2^gl_overbright (its texels are stored that much
+//smaller, Surf_LightmapShift -- MDLF_NEEDOVERBRIGHT), which a prop's light does not
+"float shob = exp2(clamp(floor(cvar_gl_overbright), 0.0, 2.0));\n"
 "#ifdef LIGHTSTYLED\n"
-"vec3 shfloor = cvar_r_shadows_sunfloor * e_lmscale[0].rgb;\n"
+"vec3 shfloor = cvar_r_shadows_sunfloor * e_lmscale[0].rgb / shob;\n"
 "#else\n"
-"vec3 shfloor = cvar_r_shadows_sunfloor * e_lmscale.rgb;\n"
+"vec3 shfloor = cvar_r_shadows_sunfloor * e_lmscale.rgb / shob;\n"
 "#endif\n"
 "if (shfloor.r + shfloor.g + shfloor.b > 0.0)\n"
 "lmv = mix(min(lmv, shfloor), lmv, shlit);\n"
@@ -664,6 +669,7 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "!!samps =FAKESHADOWS shadowmap\n"
 "!!cvar3f r_shadows_color=0.5 0.5 0.5\n"
 "!!cvar3f r_shadows_sunfloor=0 0 0\n"
+"!!cvarf gl_overbright\n"
 
 "#include \"sys/defs.h\"\n"
 
@@ -835,6 +841,7 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "#ifdef FAKESHADOWS\n"
 "uniform vec3 cvar_r_shadows_color;  //FTESurf Patch 1732\n"
 "uniform vec3 cvar_r_shadows_sunfloor;\n"
+"uniform float cvar_gl_overbright;\n"
 "#endif\n"
 "vec3 lightmap_fragment()\n"
 "{\n"
@@ -938,10 +945,13 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 //sun's shadows (r_shadows_sunfloor, Strata maps) a shadow only takes the sun out: down to the sky's share,
 //never below the baked shade.  Elsewhere it is shadow_control's colour (r_shadows_color), as Source's RTT.
 "float shlit = 2.0*ShadowmapFilter(s_shadowmap, vtexprojcoord) - 1.0;\n"
+//the floor is a displayed level; the world's e_lmscale also carries 2^gl_overbright (its texels are stored that much
+//smaller, Surf_LightmapShift -- MDLF_NEEDOVERBRIGHT), which a prop's light does not
+"float shob = exp2(clamp(floor(cvar_gl_overbright), 0.0, 2.0));\n"
 "#ifdef LIGHTSTYLED\n"
-"vec3 shfloor = cvar_r_shadows_sunfloor * e_lmscale[0].rgb;\n"
+"vec3 shfloor = cvar_r_shadows_sunfloor * e_lmscale[0].rgb / shob;\n"
 "#else\n"
-"vec3 shfloor = cvar_r_shadows_sunfloor * e_lmscale.rgb;\n"
+"vec3 shfloor = cvar_r_shadows_sunfloor * e_lmscale.rgb / shob;\n"
 "#endif\n"
 "if (shfloor.r + shfloor.g + shfloor.b > 0.0)\n"
 "lmv = mix(min(lmv, shfloor), lmv, shlit);\n"
