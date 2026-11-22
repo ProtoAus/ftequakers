@@ -1,5 +1,23 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1731 - VMT DX-level blocks evaluated as Source on a DX9 GPU: true ones (">=dx90", ">=dx90_20b") merged over the material, false ones (DX8 fallbacks) skipped (plugin hl2/mat_vmt.c)
+
+**Problem.** The ahop_coast/bhop_canals BACKLOG (22 Nov): mat_vmt.c skipped every block whose name starts with > < = as
+"never real material blocks" (VMT_IsKnownIgnoredBlock). Source's material system evaluates them against the dxlevel and
+merges a true one into the material -- HL2's canal water keeps $reflecttexture, $reflectentities 1 and $refractamount .2
+there (Valve: "This *cannot* exist in the root level, because the presence of this is used to determine whether to do the
+reflection"), so bhop_canals' water refracted at the shader default and reflected the world only (P868). Census of HL2,
+EP1, EP2 (Momentum mounts the same): 33 key lines in >=dx90 (3 Water, 2 LightmappedGeneric toxic slime: DX9 bump maps),
+20 in >=dx90_20b (10 Combine soldier VertexLitGeneric sheets), 45 in <dx90 / <dx90_20b (DX8 fallbacks: Refract, Water,
+LMG, WVT); none in ahop_coast's or bhop_canals' pakfiles.
+
+**Change.** VMT_DXBlock parses [op]dx<N>[_20b] (op >=, <=, >, <, =) and evaluates it at dxlevel 98 with ps2.0b. A true
+block's text is parsed with the material's state after its own keys (and before a patch's replace), so its keys win as
+in Source; false and unrecognised names are skipped as before.
+
+**Measured.** bhop_canals, r_shaderpasses water_canals_water_clear: the program gains #STRENGTH_REFR=0.200000 (was the
+shader default), and $reflectentities reaches P868's flag by the same parse (no fte_reflectnoentities: hl2_water 2's
+reflection draws entities, as Source's).
 ## Patch 1732 - r_shadows 2 on Source maps: instanced props stay instanced, a casting prop does not shadow itself, shadow_control's colour, a Strata map's shadow takes out only the sun; r_exposure, a test fixed exposure (engine gl/gl_backend.c, gl/gl_shader.c, gl/shader.h, gl/gl_rlight.c, gl/gl_shadow.c, client/renderer.c; plugin hl2/glsl/vmt/vertexlit.glsl, lightmapped.glsl, transition.glsl)
 
 **Cause.** 22 Nov 2026 Lex, after P1724 left r_shadows 2 short of Source: "is part of the bigger render job being able

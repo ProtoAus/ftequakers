@@ -1629,6 +1629,48 @@ static qboolean VMT_IsKnownIgnoredBlock(const char *key)
 }
 static char *VMT_ParseBlock(const char *fname, vmtstate_t *st, char *line);
 
+/*
+FTESurf Patch 1731: a DX-level conditional block (">=dx90", "<dx90_20b", "<=dx81", ...) as Source's material system
+evaluates it on a current GPU (dxlevel 98, ps2.0b): true blocks merge into the material over its own keys, false ones
+are DX8 fallbacks. Skipped wholesale before, so HL2's canal water lost $refractamount .2 and $reflectentities 1 (Valve:
+"This *cannot* exist in the root level"), the toxic slime its DX9 bump maps, the Combine soldier skins their DX9 sheets.
+Returns false for any other name; *truth says which way it went.
+*/
+static qboolean VMT_DXBlock(const char *key, qboolean *truth)
+{
+	const char *s = key;
+	int op = 0, n = 0, digits = 0;	//op: 0 '=', 1 '>=', 2 '<=', 3 '>', 4 '<'
+	qboolean need20b = false, ok;
+	if (s[0] == '>' && s[1] == '=') op = 1, s += 2;
+	else if (s[0] == '<' && s[1] == '=') op = 2, s += 2;
+	else if (s[0] == '>') op = 3, s++;
+	else if (s[0] == '<') op = 4, s++;
+	else if (s[0] == '=') op = 0, s++;
+	else return false;
+	if ((s[0] != 'd' && s[0] != 'D') || (s[1] != 'x' && s[1] != 'X'))
+		return false;
+	for (s += 2; *s >= '0' && *s <= '9'; s++, digits++)
+		n = n*10 + (*s - '0');
+	if (!digits)
+		return false;
+	if (!Q_strcasecmp(s, "_20b"))
+		need20b = true;
+	else if (*s)
+		return false;
+	switch (op)
+	{
+	case 1: ok = 98 >= n; break;
+	case 2: ok = 98 <= n; break;
+	case 3: ok = 98 > n; break;
+	case 4: ok = 98 < n; break;
+	default: ok = 98 == n; break;
+	}
+	//"_20b" adds "and ps2.0b"; this renderer has it, so the suffix changes nothing
+	(void)need20b;
+	*truth = ok;
+	return true;
+}
+
 //FTESurf Patch 189: does this proxy drive the base texture's transform?  An
 //absent texturescrollvar means the material never said, and every observed one
 //that omits it means $basetextureTransform.
@@ -2303,11 +2345,13 @@ static void VMT_ResolveProxies(vmtstate_t *st)
 static char *VMT_ParseBlock(const char *fname, vmtstate_t *st, char *line)
 {	//assumes the open { was already parsed, but will parse the close.
 	char *replace = NULL;
+	char *dxblock[4];	//FTESurf Patch 1731: true DX-level blocks, merged after the material's own keys
+	int ndx = 0, i;
 	com_tokentype_t ttype;
 	char key[MAX_OSPATH];
 	char value[MAX_OSPATH];
 	char *qmark;
-	qboolean cond, srgbkey;
+	qboolean cond, srgbkey, dxtrue;
 	float fogtmp[3];
 	for(;line;)
 	{
@@ -2330,6 +2374,11 @@ static char *VMT_ParseBlock(const char *fname, vmtstate_t *st, char *line)
 			}
 			else if (st && !Q_strcasecmp(st->type, "Refract") && !Q_strcasecmp(key, "Refract_DX60"))
 				;	//The active DX90 shader must not consume the legacy fallback's keys.
+			else if (st && VMT_DXBlock(key, &dxtrue))
+			{
+				if (dxtrue && ndx < countof(dxblock))
+					dxblock[ndx++] = line;
+			}
 			else if (VMT_IsKnownIgnoredBlock(key))
 				;	//nettest: Source per-DX/HDR shader-variant sub-block (vertexlitgeneric_dx9, Proxies, …) — benign
 			else if (st)	//nettest: only warn about UNKNOWN blocks at the material TOP level. Nested sub-blocks recurse with st==NULL — e.g. every proxy entry inside "Proxies" (GaussianNoise/PlayerProximity/Add/Subtract/Multiply/Equals/Sine/Clamp/…). FTE handles no nested blocks, so they're all benign noise.
@@ -2864,6 +2913,8 @@ static char *VMT_ParseBlock(const char *fname, vmtstate_t *st, char *line)
 		else
 			VMT_RecordKey(vmt_key_alien, &vmt_key_alien_n, &vmt_key_alien_over, key, fname, "Unknown");
 	}
+	for (i = 0; i < ndx; i++)
+		VMT_ParseBlock(fname, st, dxblock[i]);
 	if (replace)
 		VMT_ParseBlock(fname, st, replace);
 	return line;
