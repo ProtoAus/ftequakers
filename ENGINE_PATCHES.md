@@ -1,5 +1,31 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1733 - The prediction memo keys only the physents a move could reach: far-away movers, other players and the server's lagging copy of the player stop forcing moves to rerun (engine client/cl_pred.c, common/pmovetst.c)
+
+**Problem.** The ahop_coast/bhop_canals BACKLOG (22 Nov): Patch 1720's key held every physent's fields, so any physent
+changing anywhere forced a rerun. Measured first (a diagnostic side table): at sv_minping 150, 37% of bhop_canals' and
+27% of ahop_coast's rerun moves had inputs identical to a stored move but for the physents. Keying by reach alone (first
+cut) recovered none on bhop_canals: the changing physent was entity 1, the server's copy of the local player (pmove.skipent,
+a solid box), trailing the prediction by 150 ms -- inside any reach, moved every snapshot. Every lobby player with ping
+has one.
+
+**Change.** pmovetst.c: while pm_memoq is set, the five physent queries (PM_PlayerTrace, PM_TestPlayerPosition,
+PM_PointContents, PM_ExtraBoxContents, PM_LadderEntPlane) grow P1714's own pair -- the union of their origins as a sweep
+and of their player boxes -- and PM_PhysentReachesBox runs P1714's exact PM_PhysentOutOfReach on it (a model-less
+physent: its axial box against the swept union). cl_pred.c: the key drops the physents but the portals (PM_PortalCSG
+scans every one when a trace starts solid; PM_AnyPortals switches the mover) and one bit for any slide (pms_anyslide);
+a stored move keeps its pair and the index and fields of every physent that reaches it, and is reused only if the
+physents reaching that pair now are the same. Not keyed because no query examines them: the solid skipent body and a
+nonsolid physent with no forced contents (never the world). Beside a traced model with no NativeTrace (its trace reads
+the box_planes the last PM_HullForBox left, near, far or a previous move) the move is not remembered (P1720's hole too).
+Review (three rounds, one reviewer, exactness): round 1 found the query box flattened into a point sweep dropped P1714's
+rotated-box allowance and convex-hull refusal (a 45-degree slab could be touched while "unreached") and the stale
+box_planes; round 2 the nonsolid-with-mask no-NativeTrace case; round 3 clean (the world exempted).
+
+**Measured** (rig lobby replica, sv_minping 150, moving, v0.1.59 progs, A/B against engine main 43eddadec built alike):
+cl_predict_memo 2 re-ran ~1 M reused moves across both maps, 0 differed. bhop_canals: reused 32-40% -> 61-63% of moves,
+243 -> 316 and 269 -> 316 fps (+17-30%). ahop_coast: 65% -> 72-73%, fps within noise (+0-5%).
+
 ## Patch 1731 - VMT DX-level blocks evaluated as Source on a DX9 GPU: true ones (">=dx90", ">=dx90_20b") merged over the material, false ones (DX8 fallbacks) skipped (plugin hl2/mat_vmt.c)
 
 **Problem.** The ahop_coast/bhop_canals BACKLOG (22 Nov): mat_vmt.c skipped every block whose name starts with > < = as
