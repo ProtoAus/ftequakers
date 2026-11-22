@@ -23,6 +23,7 @@
 !!cvardf hl2_lt_fold=1
 !!samps =FAKESHADOWS shadowmap
 !!cvar3f r_shadows_color=0.5 0.5 0.5
+!!cvar3f r_shadows_sunfloor=0 0 0
 
 // envmaps only
 !!samps =REFLECTCUBEMASK reflectmask reflectcube
@@ -126,6 +127,7 @@ varying vec4 light;
 #ifdef FAKESHADOWS
 	varying vec4 vtexprojcoord;
 	uniform vec3 cvar_r_shadows_color;	//FTESurf Patch 1730
+	uniform vec3 cvar_r_shadows_sunfloor;
 	#ifdef INSTANCED
 	uniform mat4 l_cubeworld;			//FTESurf Patch 1730: the projection alone; each prop's matrix is per instance
 	#else
@@ -435,12 +437,18 @@ varying vec4 light;
 		          ng2.z * ((ng.z < 0.0) ? e_light_ambientcube[5] : e_light_ambientcube[4]);
 		lightrgb *= clamp(pow((cb + vec3(CUBEEPS)) / (cg + vec3(CUBEEPS)), vec3(1.0/2.2)), 0.0, 4.0);
 	#endif
-		diffuse_f.rgb *= lightrgb * e_colourident.rgb;
-
 	#ifdef FAKESHADOWS
-		if (e_noshadowrecv < 0.5)	//FTESurf Patch 1730: the filter's 0.5..1 onto shadow_control's colour
-			diffuse_f.rgb *= mix(cvar_r_shadows_color, vec3(1.0), 2.0*ShadowmapFilter(s_shadowmap, vtexprojcoord) - 1.0);
+		if (e_noshadowrecv < 0.5)
+		{	//FTESurf Patch 1730: as lightmapped.glsl -- a baked prop on a cascade map loses only the sun
+			float shlit = 2.0*ShadowmapFilter(s_shadowmap, vtexprojcoord) - 1.0;
+			vec3 shfloor = cvar_r_shadows_sunfloor * e_lmscale.rgb;
+			if (shfloor.r + shfloor.g + shfloor.b > 0.0)
+				lightrgb = mix(min(lightrgb, shfloor), lightrgb, shlit);
+			else
+				lightrgb *= mix(cvar_r_shadows_color, vec3(1.0), shlit);
+		}
 	#endif
+		diffuse_f.rgb *= lightrgb * e_colourident.rgb;
 
 	//FTESurf Patch 268 B: Source adds the envmap AFTER lighting and shadowing --
 	//`result = diffuseComponent + specularLighting`, diffuseComponent being
