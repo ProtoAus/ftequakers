@@ -200,6 +200,8 @@ qboolean Mod_PHY_ConvexPieces (model_t *mod, plugfsfuncs_t *phy_filefuncs,
                                plugmodfuncs_t *phy_modfuncs, vecV_t **xyz,
                                index_t **idx, size_t **ledgestart, size_t *numledges,
                                int fixed, qboolean *wrapped);	//FTESurf Patch 764, 888
+qboolean Mod_PHY_SolidPieces (const qbyte *solid, size_t len, vecV_t **xyz, index_t **idx,
+                              size_t **ledgestart, size_t *numledges, int **ledgedata);	//FTESurf Patch 1713
 extern volatile int phy_stat_unwrapped;	//FTESurf Patch 888
 cvar_t *hl2_phywinding;	//FTESurf Patch 317: read by Mod_LoadHL2Model in mod_hl2.c, registered here beside hl2_dispwinding
 /*FTESurf Patch 318 -- see the essay above VBSP_AddBrushBevels.  Up here because
@@ -349,7 +351,7 @@ enum hllumps_e
 	VLUMP_DISP_INFO		= 26,
 //	VLUMP_FOO			= 27,
 //	VLUMP_FOO			= 28,
-//	VLUMP_FOO			= 29,
+	VLUMP_PHYSCOLLIDE	= 29,	//FTESurf Patch 1713: the models' vcollides (VBSP_VPhysSolids)
 	VLUMP_VERTNORMALS	= 30,	//FTESurf Patch 1023: VRAD's smoothed vertex normals...
 	VLUMP_VERTNORMALINDICES = 31,	//...one index per face vertex, faces in lump order
 	VLUMP_DISP_LMALPHA	= 32,
@@ -746,6 +748,8 @@ typedef struct vbspinfo_s
 
 	unsigned int contentsremap[32];
 	qboolean	lightwarm_done;		//FTESurf Patch 1364: this load's prop-lighting warm is over
+	qbyte		**vpsolid;			//FTESurf Patch 1713: per submodel, a copy of the vcollide solid Source sweeps boxes
+	size_t		*vplen;				//against (VBSP_VPhysSolids), for the submodel loop; freed after it
 } vbspinfo_t;
 
 /*
@@ -924,10 +928,12 @@ static void VBSP_PhyRotate(const struct bihtransform_s *trn, const float *m, vec
 }
 
 //False refuses the prop (a ledge not convex or degenerate): it keeps its triangles.
-static qboolean VBSP_PhyBrushes(model_t *mod, struct staticprop_s *sp, const struct vbsp_phypieceset_s *pc,
-                                q2cbrush_t **outbrushes, unsigned int *outnum)
+//FTESurf Patch 1713: also a brush entity's vcollide (VBSP_VPhysAlt): `margin` stands every side that much
+//proud, and `contents` (per ledge, or NULL for FTECONTENTS_BODY) replaces the prop's.  A prop passes
+//0 and NULL, which builds exactly what it always did and counts in the prop statistics.
+static qboolean VBSP_PhyBrushesT(model_t *mod, const struct bihtransform_s *trn, const struct vbsp_phypieceset_s *pc,
+                                 float margin, const unsigned int *contents, q2cbrush_t **outbrushes, unsigned int *outnum)
 {
-	const struct bihtransform_s *trn = &sp->transform;
 	size_t li, t, nb = 0;
 	int k, a, e, n, nw, *map = NULL;
 	vec3_t *w = NULL, cen, u, v, nrm, axis;
@@ -1052,18 +1058,24 @@ static qboolean VBSP_PhyBrushes(model_t *mod, struct staticprop_s *sp, const str
 		for (k = 0; k < n; k++)
 		{
 			VectorCopy(pl[k], planes[k].normal);
-			planes[k].dist = pl[k][3];
+			planes[k].dist = pl[k][3] + margin;
 			planes[k].type = (planes[k].normal[0] == 1) ? 0 : (planes[k].normal[1] == 1) ? 1 : (planes[k].normal[2] == 1) ? 2 : 3;
 			planes[k].signbits = (planes[k].normal[0] < 0 ? 1 : 0) | (planes[k].normal[1] < 0 ? 2 : 0) | (planes[k].normal[2] < 0 ? 4 : 0);
 			b->brushside[k].plane = &planes[k];
 			b->brushside[k].surface = &vbsp_physurface;
 		}
 		b->numsides = n;
-		vbsp_stat_phyplanes += n;
-		b->contents = FTECONTENTS_BODY;	//what mod_hl2 gives the hull's triangles
+		if (!contents)
+			vbsp_stat_phyplanes += n;
+		b->contents = contents ? contents[li] : FTECONTENTS_BODY;	//what mod_hl2 gives the hull's triangles
 		ClearBounds(b->absmins, b->absmaxs);
 		for (k = 0; k < nw; k++)
 			AddPointToBounds(w[k], b->absmins, b->absmaxs);
+		for (k = 0; k < 3; k++)
+		{	//Patch 1713: the margin moves every side out, so the box grows with it
+			b->absmins[k] -= margin;
+			b->absmaxs[k] += margin;
+		}
 		nb++;
 	}
 
@@ -1074,8 +1086,274 @@ static qboolean VBSP_PhyBrushes(model_t *mod, struct staticprop_s *sp, const str
 		return false;
 	*outbrushes = brushes;
 	*outnum = nb;
-	vbsp_stat_phypieces += nb;
+	if (!contents)
+		vbsp_stat_phypieces += nb;
 	return true;
+}
+static qboolean VBSP_PhyBrushes(model_t *mod, struct staticprop_s *sp, const struct vbsp_phypieceset_s *pc,
+                                q2cbrush_t **outbrushes, unsigned int *outnum)
+{
+	return VBSP_PhyBrushesT(mod, &sp->transform, pc, 0, NULL, outbrushes, outnum);
+}
+
+/*
+==================
+FTESurf Patch 1713: brush entities Source collides through their vcollide
+
+Source's CEngineTrace::ClipRayToVPhysics sweeps a BOX against a SOLID_VPHYSICS
+brush entity's vcollide (solid 0) -- "do ray traces with normal code, but use
+vphysics to do box traces" -- and the player is a box.  That vcollide is not the
+brushes: VBSP (utils/vbsp/ivp.cpp BuildConvexForBrush) skips every bevel side and
+pulls each VISIBLE side in VPHYSICS_SHRINK (0.5), leaving nodraw and clip sides
+where they are, and vphysics then keeps its 0.25 separation radius on both
+shapes ("it's symmetric").  So a visible side ends where the brush is and a clip
+or nodraw side stands half a unit proud.  Measured on ahop_coast's func_brush *134
+(16 player-clip wedges up the climb at x 11400-12700): Momentum's ten 2026 bhop
+demos land on it with our floor 2.2-4.3 units down, and take off (sv_jump_z_offset
+0 pins the takeoff to the floor) 0.53-0.57 above its stored hull -- the half unit
+plus the trace's 1/32.  Seven of those wedges also carry a compile bevel that cuts
+22-34 units off their top: harmless to Source, which never reads bevels there, and
+what we were standing on.
+
+So: the stored hull as Patch 764 builds a prop's (faces, axial and edge bevels at
+the hull's own support), every side moved out VBSP_VPHYS_MARGIN, each piece keeping
+its brush's contents (client_data is the brush number, SetConvexGameData).  Which
+entities: Source's Spawn()s (SDK 2013 server/), VBSP_VPhysClass.  The tree is the
+submodel's vphysalt, swept only by Source movers from 15 (bih_vphys).
+
+Tried and measured against the same demos, so nobody re-runs them: a half unit
+kept only ALONG the sweep (look 0.5 past the end, stop 0.5 short) fixes the two
+grazing passes below but loses ten real hits on func_brush *25 that end within
+0.11-0.45 of its hull (48 ticks better, 12 worse); the margin on faces and axial
+planes but not edge bevels loses two landings (40 better, 3 worse).  This one is
+42 better, 3 worse (2 graded): Momentum twice passes within 0.40/0.47 of a *134
+wedge's edge mid-sweep without a hit, where the shapes' edges are rounded
+(vphysics' radius is a sphere; ours is planes).  VPhysics-Jolt, which Strata can
+run instead, rounds both shapes' edges by 0.05 m and adds nothing on faces; the
+demos say faces stand 0.5 proud, so Momentum's sweeps are not that one.
+==================
+*/
+#define VBSP_VPHYS_MARGIN	0.5f	/*vphysics' 0.25 separation radius, on the hull and on the box*/
+static unsigned int vbsp_stat_vphysmodels, vbsp_stat_vphysrefused, vbsp_stat_vphyspieces;
+
+typedef struct
+{
+	char cls[64], name[64], parent[64];
+	int model, solidbsp, spawnflags;
+} vbsp_vpent_t;
+
+//Source's solid type for entity i: 1 SOLID_VPHYSICS, 2 SOLID_BSP, 0 anything else (point entities, props).
+static int VBSP_VPhysClass(const vbsp_vpent_t *e, int n, int i, int depth)
+{
+	const char *c = e[i].cls;
+	int j;
+	if (!Q_strcasecmp(c, "func_brush") || !Q_strcasecmp(c, "func_door_rotating") ||
+		!Q_strcasecmp(c, "func_rotating") || !Q_strcasecmp(c, "momentary_rot_button"))
+		return e[i].solidbsp ? 2 : 1;	//modelentities.cpp:43/63, doors.cpp:1403/1407, bmodels.cpp:694/752, buttons.cpp:1047/1061
+	if (!Q_strcasecmp(c, "func_rot_button") || !Q_strcasecmp(c, "func_movelinear") ||
+		!Q_strcasecmp(c, "momentary_door") || !Q_strcasecmp(c, "func_water_analog") ||
+		!Q_strcasecmp(c, "func_physbox") || !Q_strcasecmp(c, "func_physbox_multiplayer") ||
+		!Q_strcasecmp(c, "simple_physics_brush"))
+		return 1;	//buttons.cpp:870, func_movelinear.cpp:96, physobj.cpp:447/1243
+	if (!Q_strcasecmp(c, "func_pushable"))
+		return (e[i].spawnflags & 128) ? 2 : 1;	//func_break.cpp:1238-1246, SF_PUSH_BREAKABLE -> CBreakable
+	if (!Q_strcasecmp(c, "func_tracktrain"))
+		return (e[i].spawnflags & 0x80) ? 2 : 1;	//trains.cpp:2717, SF_TRACKTRAIN_HL1TRAIN
+	if (!Q_strcasecmp(c, "func_door") || !Q_strcasecmp(c, "func_water"))
+	{	//doors.cpp:249-257: SOLID_BSP under a SOLID_BSP root move parent, else SOLID_VPHYSICS
+		int root = i;
+		for (depth = 0; depth < 16 && *e[root].parent; depth++)
+		{
+			for (j = 0; j < n; j++)
+				if (j != root && *e[j].name && !Q_strcasecmp(e[j].name, e[root].parent))
+					break;
+			if (j == n)
+				break;
+			root = j;
+		}
+		return (root != i && VBSP_VPhysClass(e, n, root, 16) == 2) ? 2 : 1;
+	}
+	if (!Q_strcasecmp(c, "func_wall") || !Q_strcasecmp(c, "func_wall_toggle") || !Q_strcasecmp(c, "func_conveyor") ||
+		!Q_strcasecmp(c, "func_breakable") || !Q_strcasecmp(c, "func_button") || !Q_strcasecmp(c, "func_plat") ||
+		!Q_strcasecmp(c, "func_platrot") || !Q_strcasecmp(c, "func_train") || !Q_strcasecmp(c, "func_lod") ||
+		!Q_strcasecmp(c, "func_vehicleclip") || !Q_strcasecmp(c, "trigger_brush"))
+		return 2;
+	return 0;
+}
+
+//-> per model index (1..nummodels-1), its vcollide's solid 0 when Source sweeps boxes against it, else NULL.
+static const qbyte **VBSP_VPhysSolids(model_t *wmod, qbyte *mod_base, vlump_t *lumps, int nummodels, size_t **outlen)
+{
+	vlump_t *el = &lumps[VLUMP_ENTITIES], *pl = &lumps[VLUMP_PHYSCOLLIDE];
+	const qbyte *d = mod_base + pl->fileofs;
+	const qbyte **solid;
+	size_t *len, o = 0, n = pl->filelen;
+	char *text, *data, key[128], token[1024];
+	vbsp_vpent_t *ents = NULL;
+	int numents = 0, maxents = 0, i;
+	qbyte *want;
+
+	*outlen = NULL;
+	if (nummodels < 2 || n < 16 || !el->filelen)
+		return NULL;
+	want = plugfuncs->Malloc(nummodels);
+	text = plugfuncs->Malloc(el->filelen + 1);
+	if (!want || !text)
+	{
+		plugfuncs->Free(want);
+		plugfuncs->Free(text);
+		return NULL;
+	}
+	memset(want, 0, nummodels);
+	memcpy(text, mod_base + el->fileofs, el->filelen);
+	text[el->filelen] = 0;	//not every map stores the terminator (VBSP_LoadColourCorrection)
+	for (data = text;;)
+	{
+		vbsp_vpent_t e;
+		data = cmdfuncs->ParseToken(data, token, sizeof(token), NULL);
+		if (!data)
+			break;
+		if (*token != '{')
+			continue;
+		memset(&e, 0, sizeof(e));
+		e.model = -1;
+		for (;;)
+		{
+			data = cmdfuncs->ParseToken(data, key, sizeof(key), NULL);
+			if (!data || *key == '}')
+				break;
+			data = cmdfuncs->ParseToken(data, token, sizeof(token), NULL);
+			if (!data)
+				break;
+			if (!Q_strcasecmp(key, "classname"))		Q_strlcpy(e.cls, token, sizeof(e.cls));
+			else if (!Q_strcasecmp(key, "targetname"))	Q_strlcpy(e.name, token, sizeof(e.name));
+			else if (!Q_strcasecmp(key, "parentname"))
+			{
+				char *comma;
+				Q_strlcpy(e.parent, token, sizeof(e.parent));
+				if ((comma = strchr(e.parent, ',')))	//"name,attachment"
+					*comma = 0;
+			}
+			else if (!Q_strcasecmp(key, "model") && *token == '*')	e.model = atoi(token+1);
+			else if (!Q_strcasecmp(key, "solidbsp"))	e.solidbsp = atoi(token);
+			else if (!Q_strcasecmp(key, "spawnflags"))	e.spawnflags = atoi(token);
+		}
+		if (numents == maxents)
+		{
+			vbsp_vpent_t *g = plugfuncs->Realloc(ents, sizeof(*ents)*(maxents = maxents ? maxents*2 : 256));
+			if (!g)
+				break;
+			ents = g;
+		}
+		ents[numents++] = e;
+		if (!data)
+			break;
+	}
+	for (i = 0; i < numents; i++)
+		if (ents[i].model > 0 && ents[i].model < nummodels && VBSP_VPhysClass(ents, numents, i, 0) == 1)
+			want[ents[i].model] = 1;
+	plugfuncs->Free(ents);
+	plugfuncs->Free(text);
+
+	solid = plugfuncs->Malloc(sizeof(*solid)*nummodels);
+	len = plugfuncs->Malloc(sizeof(*len)*nummodels);
+	if (!solid || !len)
+	{
+		plugfuncs->Free(solid);
+		plugfuncs->Free(len);
+		plugfuncs->Free(want);
+		return NULL;
+	}
+	memset(solid, 0, sizeof(*solid)*nummodels);
+	memset(len, 0, sizeof(*len)*nummodels);
+	while (o + 16 <= n)
+	{	//dphysmodel_t {modelIndex, dataSize, keydataSize, solidCount}, then the solids, then the key text
+		int h[4], sz;
+		memcpy(h, d + o, sizeof(h));
+		for (i = 0; i < 4; i++)
+			h[i] = LittleLong(h[i]);
+		o += 16;
+		if (h[0] == -1 || h[1] < 0 || h[2] < 0 || (size_t)h[1] + (size_t)h[2] > n - o)
+			break;
+		if (h[0] > 0 && h[0] < nummodels && want[h[0]] && h[3] >= 1 && h[1] >= 4)
+		{	//solid 0 only: ClipRayToVPhysics' own BUGBUG ("only works when the vcollide in question is the first solid")
+			memcpy(&sz, d + o, 4);
+			sz = LittleLong(sz);
+			if (sz > 0 && (size_t)sz + 4 <= (size_t)h[1])
+			{
+				solid[h[0]] = d + o;
+				len[h[0]] = (size_t)sz + 4;
+			}
+		}
+		o += (size_t)h[1] + (size_t)h[2];
+	}
+	plugfuncs->Free(want);
+	*outlen = len;
+	return solid;
+}
+
+//Builds submodel `sub`'s vphysalt from its vcollide solid.  On a refused hull it keeps none (brushes as before).
+static void VBSP_VPhysAlt(model_t *sub, const qbyte *solid, size_t len)
+{
+	vbspinfo_t *prv = (vbspinfo_t*)sub->meshinfo;
+	struct vbsp_phypieceset_s pc;
+	struct bihtransform_s trn;
+	struct bihleaf_s *leafs;
+	int *data = NULL;
+	unsigned int *cont, nb = 0, i;
+	q2cbrush_t *brushes = NULL;
+	model_t *twin;
+
+	memset(&pc, 0, sizeof(pc));
+	if (!Mod_PHY_SolidPieces(solid, len, &pc.xyz, &pc.idx, &pc.ledgestart, &pc.numledges, &data))
+	{
+		vbsp_stat_vphysrefused++;
+		return;
+	}
+	memset(&trn, 0, sizeof(trn));
+	trn.axis[0][0] = trn.axis[1][1] = trn.axis[2][2] = 1;	//model space, as the submodel's brushes are
+	cont = plugfuncs->Malloc(sizeof(*cont)*(pc.numledges+1));
+	twin = plugfuncs->GMalloc(&sub->memgroup, sizeof(*twin));
+	if (cont && twin)
+	{
+		for (i = 0; i < pc.numledges; i++)
+			cont[i] = (data[i] >= 0 && data[i] < prv->numbrushes) ? prv->brushes[data[i]].contents : FTECONTENTS_SOLID;
+		memset(twin, 0, sizeof(*twin));
+		Q_strlcpy(twin->name, sub->name, sizeof(twin->name));
+		twin->type = sub->type;
+		twin->loadstate = MLS_LOADED;
+		VectorCopy(sub->mins, twin->mins);
+		VectorCopy(sub->maxs, twin->maxs);
+		if (VBSP_PhyBrushesT(twin, &trn, &pc, VBSP_VPHYS_MARGIN, cont, &brushes, &nb) &&
+			(leafs = plugfuncs->Malloc(sizeof(*leafs)*nb)))
+		{
+			for (i = 0; i < nb; i++)
+			{
+				leafs[i].type = BIH_BRUSH;
+				leafs[i].data.brush = &brushes[i];
+				leafs[i].data.contents = brushes[i].contents;
+				VectorCopy(brushes[i].absmins, leafs[i].mins);
+				VectorCopy(brushes[i].absmaxs, leafs[i].maxs);
+				AddPointToBounds(brushes[i].absmins, twin->mins, twin->maxs);
+				AddPointToBounds(brushes[i].absmaxs, twin->mins, twin->maxs);
+			}
+			modfuncs->BIH_Build(twin, leafs, nb);
+			plugfuncs->Free(leafs);
+			sub->vphysalt = twin;	//its bounds took the pieces' margin-grown boxes: PM_TransformedHullCheck reads them
+			vbsp_stat_vphysmodels++;
+			vbsp_stat_vphyspieces += nb;
+		}
+		else
+		{
+			plugfuncs->GFreeAll(&twin->memgroup);
+			vbsp_stat_vphysrefused++;
+		}
+	}
+	plugfuncs->Free(cont);
+	plugfuncs->Free(data);
+	plugfuncs->Free(pc.xyz);
+	plugfuncs->Free(pc.idx);
+	plugfuncs->Free(pc.ledgestart);
 }
 
 /*
@@ -14010,6 +14288,18 @@ static qboolean VBSP_LoadModel(model_t *mod, qbyte *mod_base, size_t filelen, ch
 		VBSP_LoadLeafWater							(mod, mod_base, &header.lumps[VLUMP_LEAFWATERDATA]);	//FTESurf Patch 1013
 	noerrors = noerrors && VBSP_LoadNodes			(mod, mod_base, &header.lumps[VLUMP_NODES]);
 	noerrors = noerrors && VBSP_LoadSubmodels		(mod, mod_base, &header.lumps[VLUMP_MODELS]);
+	if (noerrors)	//FTESurf Patch 1713: copied out, because the decompressed lumps do not outlive this function
+	{
+		size_t *len = NULL;
+		const qbyte **sol = VBSP_VPhysSolids(mod, mod_base, header.lumps, prv->numcmodels, &len);
+		prv->vpsolid = NULL;
+		prv->vplen = len;
+		if (sol && len && (prv->vpsolid = plugfuncs->Malloc(sizeof(*prv->vpsolid)*prv->numcmodels)))
+			for (i = 0; i < (size_t)prv->numcmodels; i++)
+				if ((prv->vpsolid[i] = sol[i] ? plugfuncs->Malloc(len[i]) : NULL))
+					memcpy(prv->vpsolid[i], sol[i], len[i]);
+		plugfuncs->Free((void*)sol);
+	}
 	noerrors = noerrors && VBSP_LoadAreas			(mod, mod_base, &header.lumps[VLUMP_AREAS]);
 	noerrors = noerrors && VBSP_LoadAreaPortals		(mod, mod_base, &header.lumps[VLUMP_AREAPORTALS], &header.lumps[VLUMP_AREAPORTALVERTS]);
 #ifdef HAVE_CLIENT
@@ -14229,6 +14519,9 @@ static qboolean VBSP_LoadMap (model_t *mod, void *filein, size_t filelen)
 	}
 #endif
 
+	//FTESurf Patch 1713: which submodels Source sweeps boxes against through their vcollide, and that solid
+	vbsp_stat_vphysmodels = vbsp_stat_vphysrefused = vbsp_stat_vphyspieces = 0;
+
 	for (i=1 ; i< mod->numsubmodels ; i++)
 	{
 		cmodel_t	*bm;
@@ -14266,6 +14559,10 @@ static qboolean VBSP_LoadMap (model_t *mod, void *filein, size_t filelen)
 		mod->firstmodelsurface = bm->firstsurface;
 
 		VBSP_BuildBIHSubmodel(mod, i);
+		mod->phyfixed = NULL;
+		mod->vphysalt = NULL;	//FTESurf Patch 1713: *mod = *wmod copied the world's
+		if (prv->vpsolid && i < prv->numcmodels && prv->vpsolid[i])
+			VBSP_VPhysAlt(mod, prv->vpsolid[i], prv->vplen[i]);
 
 		memset(&mod->batches, 0, sizeof(mod->batches));
 		mod->vbos = NULL;
@@ -14286,6 +14583,18 @@ static qboolean VBSP_LoadMap (model_t *mod, void *filein, size_t filelen)
 #endif
 		modfuncs->EndSubmodelLoad(mod, MLS_LOADED);
 	}
+	if (prv->vpsolid)	//FTESurf Patch 1713
+	{
+		for (i = 0; i < prv->numcmodels; i++)
+			plugfuncs->Free(prv->vpsolid[i]);
+		plugfuncs->Free(prv->vpsolid);
+	}
+	plugfuncs->Free(prv->vplen);
+	prv->vpsolid = NULL;
+	prv->vplen = NULL;
+	if (vbsp_stat_vphysmodels || vbsp_stat_vphysrefused)
+		Con_DPrintf("%s: %u brush entities collide through their vcollide (%u pieces), %u refused\n",
+			wmod->name, vbsp_stat_vphysmodels, vbsp_stat_vphyspieces, vbsp_stat_vphysrefused);
 
 	//urgh, we need to wait for models to load in order to get their sizes. that requires being on the main thread and the caller will think we're loaded on completion so we can't safely pingpong it back before generating the bih tree
 	threadfuncs->AddWork(WG_MAIN, VBSP_BuildBIHMain, wmod, NULL, 0, 0);

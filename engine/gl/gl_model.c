@@ -787,6 +787,11 @@ qboolean Mod_PurgeModel(model_t	*mod, enum mod_purge_e ptype)
 		ZG_FreeGroup(&mod->phyfixed->memgroup);
 		mod->phyfixed = NULL;
 	}
+	if (mod->vphysalt)
+	{	//FTESurf Patch 1713: likewise
+		ZG_FreeGroup(&mod->vphysalt->memgroup);
+		mod->vphysalt = NULL;
+	}
 	if (mod->archive)
 	{
 		FS_CloseMapPackFile(mod->archive);

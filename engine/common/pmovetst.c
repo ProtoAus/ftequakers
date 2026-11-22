@@ -19,6 +19,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 */
 #include "quakedef.h"
 #include "pm_thread.h"
+#include "com_bih_ts.h"	//FTESurf Patch 1713: bih_vphys
 
 static qboolean PM_TransformedHullCheck (model_t *model, framestate_t *framestate, vec3_t start, vec3_t end, vec3_t mins, vec3_t maxs, trace_t *trace, vec3_t origin, vec3_t angles, float scale);
 extern cvar_t pm_physentcull;	//FTESurf Patch 1714, defined in common.c
@@ -503,11 +504,13 @@ static qboolean PM_TransformedHullCheckFull (model_t *model, framestate_t *frame
 		}
 		else
 		{
+			//FTESurf Patch 1713: a box the Source mover sweeps meets vphysalt, which stands up to its margin proud
+			const model_t *bm = (bih_vphys && model->vphysalt && !VectorEquals(player_mins, player_maxs)) ? model->vphysalt : model;
 			for (i = 0; i < 3; i++)
 			{
-				if (start_l[i]+player_mins[i] > model->maxs[i] && end_l[i] + player_mins[i] > model->maxs[i])
+				if (start_l[i]+player_mins[i] > bm->maxs[i] && end_l[i] + player_mins[i] > bm->maxs[i])
 					return false;
-				if (start_l[i]+player_maxs[i] < model->mins[i] && end_l[i] + player_maxs[i] < model->mins[i])
+				if (start_l[i]+player_maxs[i] < bm->mins[i] && end_l[i] + player_maxs[i] < bm->mins[i])
 					return false;
 			}
 			model->funcs.NativeTrace(model, 0, framestate, NULL, start_l, end_l, player_mins, player_maxs, pmove.capsule, MASK_PLAYERSOLID, trace);

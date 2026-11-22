@@ -259,8 +259,9 @@ typedef struct
    Patch 813: version 8 recovers a surfer whose retrace hits the same face again at fraction 0.
    Patch 888: version 9 traces a .phy hull whose 16-bit indices wrapped as it really is.
    Patch 882: version 10 honours momlimit/momcool/momslide (Momentum's limitmovement and slide triggers).
-   Patch 916: version 11 adds Source water-lip assist and ceiling eye clearance. */
-#define PMSRC_VERSION 14
+   Patch 916: version 11 adds Source water-lip assist and ceiling eye clearance.
+   Patch 1713: version 15 zeroes vertical speed whenever CategorizePosition sets a ground (Source's SetGroundEntity). */
+#define PMSRC_VERSION 15
 
 typedef struct {
 	//standard quakeworld

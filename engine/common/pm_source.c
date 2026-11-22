@@ -2610,7 +2610,18 @@ static void PMSrc_CategorizePosition (void)
 			{
 				pmove.onground = !pm.startsolid;
 				if (pmove.onground)
+				{
 					pms_interacted = true;	/* P1709: SetGroundEntity's interaction */
+					/* P1713: Source's SetGroundEntity zeroes vertical speed whenever it sets a ground
+					   (gamemovement.cpp, `mv->m_vecVelocity.z = 0.0f`; Momentum's override calls it).
+					   At the foot of FullWalkMove that changes nothing, but a landing made BEFORE this
+					   tick's jump -- the top-of-tick categorize after a teleport or a load, an unduck
+					   onto the floor, a ladder's -- otherwise hands CheckJumpButton the fall: ahop_coast's
+					   teleport exits arrive falling at 298 u/s and the jump came out at 0, a tick late.
+					   Frozen states (PM_NONE/PM_FREEZE) are ours, not Source's, and keep their speed. */
+					if (movevars.sourceversion >= 15 && pmove.pm_type != PM_NONE && pmove.pm_type != PM_FREEZE)
+						pmove.velocity[2] = 0;
+				}
 				if (!wasonground && pmove.onground)
 					pmove.landticks = 0;	/* Patch 882: Momentum's OnLand, m_iLandTick */
 				pmove.groundent = pm.entnum;
@@ -3136,6 +3147,9 @@ static qboolean PMSrc_CheckJumpButton (void)
 	  A downward inbound is left alone.  It cannot normally occur -- the
 	  previous tick's `if (onground) velocity[2] = 0` at the foot of
 	  FullWalkMove zeroes it -- and discarding it would be a buff, not a fix.
+	  (P1713: it did occur, on a landing made earlier in the same tick -- the
+	  top-of-tick categorize after a teleport.  From mover 15 CategorizePosition
+	  zeroes it there, as Source's SetGroundEntity does, so it arrives as 0.)
 
 	  pm_jumpaddrise 1 restores build 38 byte for byte, and pm_selftest pins
 	  both sides.  The case that used to read "normalized: adds to inbound rise"
@@ -4554,6 +4568,7 @@ void PMSrc_PlayerMove (float gamespeed)
 	bih_phyfix = (movevars.sourceversion >= 9);	//Patch 888: likewise
 	bih_phypick = (movevars.sourceversion >= 12);	//Patch 1248: likewise
 	bih_oldwind = (movevars.sourceversion < 13);	//Patch 1630: likewise (render winding is everyone else's default)
+	bih_vphys = (movevars.sourceversion >= 15);	//Patch 1713: likewise (VPHYSICS brush entities through their vcollide)
 
 	/* FTESurf Patch 280: once per command -- the physent set does not change
 	   inside a move.  With pm_slide 0, or on a map with no func_slide, this is
@@ -4689,6 +4704,7 @@ void PMSrc_PlayerMove (float gamespeed)
 	bih_phyfix = 0;
 	bih_phypick = 0;
 	bih_oldwind = 0;
+	bih_vphys = 0;
 }
 
 /*
@@ -6873,8 +6889,9 @@ static void PMSrc_SelfTest_f (void)
 			PMSrc_TestJumpHeight (drift), 57.000f, 0.01f);
 
 		/* A downward inbound is deliberately NOT discarded -- see the essay.
-		   FullWalkMove zeroes it on landing so this cannot normally occur, and
-		   the number is here to say which way it falls if it ever does. */
+		   FullWalkMove zeroes it on landing (and from mover 15 CategorizePosition
+		   does, P1713) so this cannot normally occur, and the number is here to
+		   say which way it falls if it ever does. */
 		drift = PMSrc_TestJumpDrift (-100, false);
 		PMSrc_Check ("clamped: a FALL is left alone",
 			PMSrc_TestJumpHeight (drift),

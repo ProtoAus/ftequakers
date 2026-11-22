@@ -1200,6 +1200,11 @@ typedef struct model_s
 	//is its geomid -- Source's packed m_nBody (studio.cpp). APPEND-ONLY like the fields above.
 	unsigned int	geombase[32];	//MAX_GEOMSETS (client/render.h)
 	unsigned short	geomcount[32];
+	//FTESurf Patch 1713: a Source brush submodel whose entity Source makes SOLID_VPHYSICS (func_brush, doors,
+	//rotators...): the tree its vcollide builds, which a Source mover from 15 sweeps BOXES against instead of
+	//this model's brushes (Source's CEngineTrace::ClipRayToVPhysics; rays stay on the brushes).  A twin in
+	//memgroup with its own tree in its own group, like phyfixed; NULL = none.  APPEND-ONLY like the fields above.
+	struct model_s *vphysalt;
 } model_t;
 
 #define MDLF_EMITREPLACE     0x0001 // particle effect engulphs model (don't draw)

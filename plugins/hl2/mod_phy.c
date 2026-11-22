@@ -208,6 +208,9 @@ typedef struct
 	size_t           numarrays;
 	vec3_t           mn, mx;	/* over every point read: the bounds check's input */
 	qboolean         anypoint;
+	/* FTESurf Patch 1713: when set, each accepted ledge's client_data (VBSP stores the brush number there,
+	   SetConvexGameData), parallel to ledgestart; grown with it. */
+	int             *ledgedata;
 } phyctx_t;
 
 struct phyarray_s { size_t points; unsigned int maxidx; size_t base; };
@@ -555,8 +558,17 @@ static qboolean PHY_ReadLedge (phyctx_t *ctx, size_t lo, size_t surf, size_t end
 		if (!grown)
 			return false;
 		ctx->ledgestart = grown;
+		if (ctx->ledgedata)
+		{	/* Patch 1713 */
+			int *gd = plugfuncs->Realloc(ctx->ledgedata, sizeof(*ctx->ledgedata)*want);
+			if (!gd)
+				return false;
+			ctx->ledgedata = gd;
+		}
 		ctx->maxledges = want;
 	}
+	if (ctx->ledgedata)
+		ctx->ledgedata[ctx->numledges] = PHY_ReadI32(ctx->base + lo + 4);	/* Patch 1713: client_data */
 	ctx->ledgestart[ctx->numledges++] = ctx->numidx;
 
 	{
@@ -1013,5 +1025,63 @@ qboolean Mod_PHY_ConvexPieces (model_t *mod, plugfsfuncs_t *phy_filefuncs,
 	*idx = ctx.idx;
 	*ledgestart = ctx.ledgestart;
 	*numledges = ctx.numledges;
+	return true;
+}
+
+/*
+  FTESurf Patch 1713.  One solid of a BSP's physcollide lump -- a brush entity's
+  vcollide, which VBSP builds from the model's brushes without their bevels and
+  with each visible side pulled in 0.5 (utils/vbsp/ivp.cpp) -- as convex pieces
+  in model space, exactly as Mod_PHY_ConvexPieces hands back a .phy's.  `solid`
+  points at the solid's leading size field and `len` covers it.  The parse is a
+  one-solid .phy's (fixed layout), so the lump goes through the same checks.
+*/
+qboolean Mod_PHY_SolidPieces (const qbyte *solid, size_t len, vecV_t **xyz,
+                              index_t **idx, size_t **ledgestart, size_t *numledges, int **ledgedata)
+{
+	qbyte        *file;
+	phyctx_t      ctx;
+	qboolean      ok;
+	int           k;
+	static const int head[4] = {16, 0, 1, 0};	/*phyheader_t: size, id, solidCount, checksum*/
+
+	if (!solid || len < 8)
+		return false;
+	file = plugfuncs->Malloc(16 + len);
+	if (!file)
+		return false;
+	for (k = 0; k < 16; k++)	/*little-endian, as the file is*/
+		file[k] = (qbyte)((unsigned int)head[k>>2] >> ((k&3)*8));
+	memcpy(file + 16, solid, len);
+
+	memset(&ctx, 0, sizeof(ctx));
+	ctx.base    = file;
+	ctx.filelen = 16 + len;
+	ctx.nostats = true;
+	ctx.fixed   = 1;
+	ctx.ledgedata = plugfuncs->Malloc(sizeof(*ctx.ledgedata));	/*grown with ledgestart (maxledges starts at 0)*/
+	ok = ctx.ledgedata && PHY_Parse(&ctx, "physcollide");
+	plugfuncs->Free(file);
+	if (ok && ctx.numledges == ctx.maxledges)
+	{
+		size_t *grown = plugfuncs->Realloc(ctx.ledgestart, sizeof(*ctx.ledgestart)*(ctx.maxledges+1));
+		if (grown)
+			ctx.ledgestart = grown;
+		ok = grown != NULL;
+	}
+	if (!ok)
+	{
+		plugfuncs->Free(ctx.xyz);
+		plugfuncs->Free(ctx.idx);
+		plugfuncs->Free(ctx.ledgestart);
+		plugfuncs->Free(ctx.ledgedata);
+		return false;
+	}
+	ctx.ledgestart[ctx.numledges] = ctx.numidx;
+	*xyz = ctx.xyz;
+	*idx = ctx.idx;
+	*ledgestart = ctx.ledgestart;
+	*numledges = ctx.numledges;
+	*ledgedata = ctx.ledgedata;
 	return true;
 }
