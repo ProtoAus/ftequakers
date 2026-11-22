@@ -1,5 +1,21 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1745 - Fetchers send WOS User-Agents with no URL (game surfd/ksfimport.py, mapwatch.py, mapnew.py, momgrab.py, steam.py, tasupd.py; tools/momfetch.py and the PC fetchers)
+
+**Problem.** Lex, 23 Nov: "rename them WOS"; "remove the URL after the User agent, it's not correct yet". Main sent
+`FTESurf/0.1 <tool> (+https://proto.bar/ftesurf)` from ksfimport, mapwatch, momgrab, steam (surfd), momfetch and
+ksfshots, and `WorldOfSurf-`, `FTESurf-` or `ftesurf-` labels from the other fetchers. The engine's own `FTE QW` stays:
+the R2 gateway hands the .bsp.gz copy only to `FTE*` (Patch 981).
+
+**Change.** 19 literals move to `WOS/0.1 <tool>` or `WOS-<tool>/<ver>`, each keeping its shape and any non-URL note;
+the two "where to complain" docstring bullets go with the URL. mapnew.main now replaces `mapwatch` (it replaced
+` mapwatch `, which only matched while the URL gave the trailing space), so mapnew still sends `WOS/0.1 mapnew`. The Pi
+gets it in guarded generation gen1745; mapwatch.py stays at its held live bytes there except the UA line.
+
+**Verified.** Offline in a network namespace (loopback only): test_mapnew, test_mapwatch, test_ksfimport,
+test_ksfgrab, test_momwatch, test_accounts, test_maptiers, test_mapmedia and the tournament UA test pass; test_tasupd
+passes as a normal user. test_momgrab's park case fails the same way without the change (game BACKLOG). Game c2cbe46f.
+
 ## Patch 1742 - Source's prediction optimisation: a snapshot that agrees with what the client predicted for that command hands the replay the prediction, so the memo reuses every older command and ping stops costing most of its frame time (engine client/cl_pred.c)
 
 **Problem.** Lex, 23 Nov ("ping add zero frame time now correct?" -> "Yes please"). Measured on patch-1733 (rig lobby
