@@ -1518,6 +1518,7 @@ qboolean R_CalcModelLighting(entity_t *e, model_t *clmodel)
 	vec3_t shadelight, ambientlight;
 	vec3_t bakedmean = {0,0,0};	//nettest: this prop's mean baked colour (0-1), if it has an RGBPROPLIGHT record
 	modellightcache_t *cache = NULL;	//Patch 105: non-NULL = this entity is cacheable
+	qboolean foldlit = false;	//FTESurf Patch 1717: the sample is LightPointFold's (Source's scale and split)
 
 	if (e->light_known)
 		return e->light_known-1;
@@ -1567,6 +1568,7 @@ qboolean R_CalcModelLighting(entity_t *e, model_t *clmodel)
 
 	if (!(r_refdef.flags & RDF_NOWORLDMODEL) && cl.worldmodel)
 	{
+		foldlit = R_ModelLightFold(clmodel);	//both caches key on it, so a hit is the same split
 		if (e->flags & RF_WEAPONMODEL)
 		{
 			float rate = r_viewmodel_lightrate.value;
@@ -1600,7 +1602,12 @@ qboolean R_CalcModelLighting(entity_t *e, model_t *clmodel)
 			}
 			for (i = 0; i < 3; i++)
 			{	/*viewmodels may not be pure black*/
-				if (ambientlight[i] < 24)
+				if (foldlit)
+				{	//Patch 1717: the fold's range is lit-unlit, ~0 in even light; floor its base instead
+					if (shadelight[i] < 24)
+						shadelight[i] = 24;
+				}
+				else if (ambientlight[i] < 24)
 					ambientlight[i] = 24;
 				/*r_viewmodel_maxlight: optional ceiling so a bright floor
 				  (lava, white tile, sky-lit area) doesn't blow the gun out.
@@ -1941,7 +1948,7 @@ qboolean R_CalcModelLighting(entity_t *e, model_t *clmodel)
 		}
 		else
 			m = 1;
-		if (!R_ModelLightFold(clmodel))	//FTESurf Patch 1717: the plugin's cube is at Source's scale, as its static props draw it
+		if (!foldlit)	//FTESurf Patch 1717: the plugin's cube is at Source's scale, as its static props draw it
 			m /= 200.0/255;	//a legacy quake fudge-factor.
 		VectorScale(shadelight, m, shadelight);
 		VectorScale(ambientlight, m, ambientlight);
