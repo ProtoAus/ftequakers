@@ -47,6 +47,7 @@ http://prideout.net/archive/bloom/ contains some sample code
 #include "gl_draw.h"
 
 cvar_t		r_bloom = CVARAFD("r_bloom", "0", "gl_bloom", CVAR_ARCHIVE, "Enables bloom (light bleeding from bright objects). Fractional values reduce the amount shown.");
+cvar_t		r_bloom_mapscale = CVARD("r_bloom_mapscale", "1", "FTESurf Patch 1723: the map's own bloom scale (Source env_tonemap_controller SetBloomScale), set by the game at map load; multiplies r_bloom.");
 cvar_t		r_bloom_retain = CVARD("r_bloom_retain", "1", "How much of the regular scene to retain when bloom is active.");
 cvar_t		r_bloom_filter = CVARD("r_bloom_filter", "0.7 0.7 0.7", "Controls how bright the image must get before it will bloom (3 separate values, in RGB order).");
 cvar_t		r_bloom_size = CVARD("r_bloom_size", "4", "Target bloom kernel size (assuming a video width of 320).");
@@ -83,6 +84,7 @@ static void R_InitBloomTextures(void)
 void R_BloomRegister(void)
 {
 	Cvar_Register (&r_bloom, "bloom");
+	Cvar_Register (&r_bloom_mapscale, "bloom");	//FTESurf Patch 1723
 	Cvar_Register (&r_bloom_retain, "bloom");
 	Cvar_Register (&r_bloom_filter, "bloom");
 	Cvar_Register (&r_bloom_size, "bloom");

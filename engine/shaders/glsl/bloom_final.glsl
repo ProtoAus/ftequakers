@@ -1,4 +1,5 @@
 !!cvarf r_bloom
+!!cvarf r_bloom_mapscale=1.0
 !!cvarf r_bloom_retain=1.0
 !!samps 4
 //add them together
@@ -16,12 +17,13 @@ void main ()
 #endif
 #ifdef FRAGMENT_SHADER
 uniform float cvar_r_bloom;
+uniform float cvar_r_bloom_mapscale;	//FTESurf Patch 1723: the map's SetBloomScale
 uniform float cvar_r_bloom_retain;
 void main ()
 {
 	gl_FragColor = 
 		cvar_r_bloom_retain * texture2D(s_t0, tc) +
-		cvar_r_bloom*(
+		cvar_r_bloom*cvar_r_bloom_mapscale*(
 			texture2D(s_t1, tc) +
 			texture2D(s_t2, tc) +
 			texture2D(s_t3, tc)

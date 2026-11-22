@@ -931,7 +931,9 @@ cvar_t r_model_mincoverage					= CVARFD ("r_model_mincoverage", "0", CVAR_ARCHIV
 cvar_t r_batchsort						= CVARD ("r_batchsort", "1", "FTESurf Patch 831: sort opaque model batches by shader, model and surface, so consecutive draws share their state. 0 draws them in entity order (the A/B).");
 cvar_t r_multidraw						= CVARD ("r_multidraw", "1", "FTESurf Patch 831: draw a batch of several meshes straight from its index buffer with one glMultiDrawElements, where the compatibility profile copied every index into a fresh list per draw. 0 = the copy (the A/B).");
 cvar_t r_instancing						= CVARD ("r_instancing", "1", "FTESurf Patch 831: draw a run of identical props (same model, surface and material, after r_batchsort) as one instanced draw. 0 draws each prop alone (the A/B); 2 prints one frame's runs.");
-cvar_t r_shadows							= CVARFD ("r_shadows", "0", CVAR_ARCHIVE, "Draw basic blob shadows underneath entities without using realtime lighting.");
+//FTESurf Patch 1724: CVAR_SHADERSYSTEM -- programs parsed under one value declare (or omit) `!!samps =FAKESHADOWS
+//shadowmap` by it (Com_PermuOrFloatArgument), so a live 0 -> 2 left them compiling FAKESHADOWS with no s_shadowmap
+cvar_t r_shadows							= CVARFD ("r_shadows", "0", CVAR_ARCHIVE|CVAR_SHADERSYSTEM, "Draw basic blob shadows underneath entities without using realtime lighting.");
 //nettest: whether BRUSH entities (the inline "*N" submodels a map's func_ classes are made of)
 //cast shadows at all.  DEFAULT 0 = models only: doors, lifts, crates, buttons and invisible
 //clip/trigger brushwork stop casting, while the world itself and every model entity keep doing
