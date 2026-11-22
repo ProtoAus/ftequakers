@@ -140,6 +140,38 @@ PM_PointContents
 
 ==================
 */
+/*
+FTESurf Patch 1733: the prediction memo's query box (cl_pred.c CL_PredictMemoMove). While pm_memoq is set, every
+physent query of the move grows it: PM_PlayerTrace and PM_TestPlayerPosition by their swept player box,
+PM_ExtraBoxContents and PM_LadderEntPlane by the player box at their point, PM_PointContents by its point (the
+ladder's second trace and PM_PortalCSG only ever meet a physent one of those already reached). A physent out of reach
+of the box (PM_PhysentReachesBox) answered nothing the move asked. A non-finite query makes it everything.
+*/
+FTE_TLS qboolean pm_memoq;
+FTE_TLS vec3_t pm_memoq_mins, pm_memoq_maxs;
+static void PM_MemoQ (const vec3_t a, const vec3_t b, const vec3_t mins, const vec3_t maxs)
+{
+	int i;
+	float lo, hi;
+	if (!pm_memoq)
+		return;
+	for (i = 0; i < 3; i++)
+	{
+		lo = min(a[i], b[i]) + mins[i];
+		hi = max(a[i], b[i]) + maxs[i];
+		if (!isfinite(lo) || !isfinite(hi))
+		{
+			VectorSet(pm_memoq_mins, -INFINITY, -INFINITY, -INFINITY);
+			VectorSet(pm_memoq_maxs, INFINITY, INFINITY, INFINITY);
+			return;
+		}
+		if (lo < pm_memoq_mins[i])
+			pm_memoq_mins[i] = lo;
+		if (hi > pm_memoq_maxs[i])
+			pm_memoq_maxs[i] = hi;
+	}
+}
+
 int PM_PointContents (vec3_t p)
 {
 	int			num;
@@ -148,6 +180,7 @@ int PM_PointContents (vec3_t p)
 	physent_t *pe;
 	model_t *pm;
 
+	PM_MemoQ(p, p, vec3_origin, vec3_origin);	//FTESurf Patch 1733
 	//check world.
 	pm = pmove.physents[0].model;
 	if (!pm || pm->loadstate != MLS_LOADED)
@@ -203,6 +236,8 @@ int PM_ExtraBoxContents (vec3_t p)
 	model_t *pm;
 	trace_t tr;
 
+	PM_MemoQ(p, p, pmove.player_mins, pmove.player_maxs);	//FTESurf Patch 1733
+
 	for (num = 1; num < pmove.numphysent; num++)
 	{
 		pe = &pmove.physents[num];
@@ -242,6 +277,8 @@ int PM_LadderEntPlane (vec3_t origin, vec3_t normal)
 	model_t		*pm;
 	trace_t		tr;
 	vec3_t		centre;
+
+	PM_MemoQ(origin, origin, pmove.player_mins, pmove.player_maxs);	//FTESurf Patch 1733
 
 	for (num = 1; num < pmove.numphysent; num++)
 	{
@@ -626,6 +663,28 @@ static qboolean PM_PhysentOutOfReach (model_t *model, const vec3_t start, const 
 			return true;
 	}
 	return false;
+}
+//FTESurf Patch 1733: may this physent touch anything in the box (P1714's exact reject for a model, with the box as a
+//point's sweep; a model-less physent's own axial box, grown by a unit)? false only when it cannot.
+qboolean PM_PhysentReachesBox (const physent_t *pe, const vec3_t mins, const vec3_t maxs)
+{
+	float s, lo, hi;
+	int i;
+	if (!(mins[0] <= maxs[0] && mins[1] <= maxs[1] && mins[2] <= maxs[2]))
+		return false;	//nothing was asked
+	if (pe->model)
+		return !PM_PhysentOutOfReach(pe->model, mins, maxs, vec3_origin, vec3_origin, pe->origin, pe->scale);
+	s = max(1, pe->scale);
+	for (i = 0; i < 3; i++)
+	{
+		lo = pe->origin[i] + pe->mins[i] * s - 1;
+		hi = pe->origin[i] + pe->maxs[i] * s + 1;
+		if (!isfinite(lo) || !isfinite(hi))
+			return true;
+		if (lo > maxs[i] || hi < mins[i])
+			return false;
+	}
+	return true;
 }
 static qboolean PM_TransformedHullCheck (model_t *model, framestate_t *framestate, vec3_t start, vec3_t end, vec3_t player_mins, vec3_t player_maxs, trace_t *trace, vec3_t origin, vec3_t angles, float scale)
 {
@@ -1161,6 +1220,7 @@ qboolean PM_TestPlayerPosition (vec3_t pos, qboolean ignoreportals)
 	trace_t		trace;
 	int			csged = false;
 
+	PM_MemoQ(pos, pos, pmove.player_mins, pmove.player_maxs);	//FTESurf Patch 1733
 	for (i=0 ; i< pmove.numphysent ; i++)
 	{
 		pe = &pmove.physents[i];
@@ -1330,6 +1390,7 @@ trace_t PM_PlayerTrace (vec3_t start, vec3_t end, unsigned int solidmask)
 	total.entnum = -1;
 	VectorCopy (end, total.endpos);
 
+	PM_MemoQ(start, end, pmove.player_mins, pmove.player_maxs);	//FTESurf Patch 1733
 	for (i=0 ; i< pmove.numphysent ; i++)
 	{
 		pe = &pmove.physents[i];

@@ -649,6 +649,9 @@ typedef struct
 	unsigned int hash;
 	int keylen;
 	qbyte *key;		//PMMEMO_KEYMAX bytes, made on first use
+	int rellen;		//FTESurf Patch 1733: -1 a full key (physents in key); else the reached physents' bytes in rel
+	qbyte *rel;
+	vec3_t qmins, qmaxs;	//the move's query box
 	qbyte *img;		//PMI_SIZE: pmove after the move, but the physents and the touch list
 	vec3_t fwd, rt, upv;	//pmove.c's forward/right/up after it (review 1)
 	int numtouch;
@@ -656,12 +659,15 @@ typedef struct
 	vec3_t touchvel[PMMEMO_TOUCHMAX];
 } pmmemo_t;
 static pmmemo_t pmmemo[PMMEMO_SLOTS];
-static unsigned int pmmemo_hits, pmmemo_runs, pmmemo_unkeyed, pmmemo_checked, pmmemo_bad;
+static unsigned int pmmemo_hits, pmmemo_runs, pmmemo_unkeyed, pmmemo_checked, pmmemo_bad, pmmemo_reach;
 extern int cvar_physepoch;			//cvar.c, FTESurf Patch 1720
 extern int BIH_CollisionEpoch(void);	//com_bih.c
 extern cvar_t pm_dispprobe, pm_ladderprobe;
 extern vec3_t forward, right, up;		//pmove.c: written by the move, read after it (CL_CatagorizePosition)
 extern FTE_TLS int pm_portalqc;			//pmove.c: portal camera_transform QC runs
+extern FTE_TLS qboolean pm_memoq;			//pmovetst.c, FTESurf Patch 1733: the move's query box
+extern FTE_TLS vec3_t pm_memoq_mins, pm_memoq_maxs;
+extern qboolean PM_PhysentReachesBox (const physent_t *pe, const vec3_t mins, const vec3_t maxs);
 static void PMMemo_Image(qbyte *out)
 {
 	const qbyte *p = (const qbyte *)&pmove;
@@ -677,8 +683,36 @@ static void PMMemo_Restore(const qbyte *in)
 	memcpy(p + PMI_C0, in + PMI_A1 + (PMI_B1 - PMI_B0), sizeof(playermove_t) - PMI_C0);
 }
 #define PMMEMO_PUT(x) do { if (n + (int)sizeof(x) > PMMEMO_KEYMAX) return -1; memcpy(key + n, &(x), sizeof(x)); n += sizeof(x); } while (0)
-//the move's inputs, field by field where padding could differ
-static int PMMemo_Key(qbyte *key, float gamespeed)
+//a physent's fields, as the key holds them
+static int PMMemo_Physent(qbyte *key, int n, const physent_t *pe)
+{
+	PMMEMO_PUT(pe->origin); PMMEMO_PUT(pe->angles); PMMEMO_PUT(pe->model); PMMEMO_PUT(pe->mins); PMMEMO_PUT(pe->maxs);
+	PMMEMO_PUT(pe->info); PMMEMO_PUT(pe->nonsolid); PMMEMO_PUT(pe->notouch); PMMEMO_PUT(pe->portalhalf);
+	PMMEMO_PUT(pe->portaltransform); PMMEMO_PUT(pe->isportal); PMMEMO_PUT(pe->slideflags);
+	PMMEMO_PUT(pe->forcecontentsmask); PMMEMO_PUT(pe->scale);
+	return n;
+}
+/*
+FTESurf Patch 1733: the physents the query box reaches, index and fields, in order; -1 past the buffer. A physent
+it cannot reach answered nothing the move asked (pmovetst.c PM_MemoQ), so a move asked the same with the same
+reached physents is the same move however far-away movers or other players moved.
+*/
+static int PMMemo_Reached(qbyte *key, const vec3_t qmins, const vec3_t qmaxs)
+{
+	int n = 0, i;
+	for (i = 0; i < pmove.numphysent; i++)
+	{
+		if (!PM_PhysentReachesBox(&pmove.physents[i], qmins, qmaxs))
+			continue;
+		PMMEMO_PUT(i);
+		if ((n = PMMemo_Physent(key, n, &pmove.physents[i])) < 0)
+			return -1;
+	}
+	return n;
+}
+//the move's inputs, field by field where padding could differ; reach (P1733): without the physents, but with
+//whether any is a slide (pm_source.c's pms_anyslide gates a contact probe and the bank-gravity observer by it)
+static int PMMemo_Key(qbyte *key, float gamespeed, qboolean reach, qboolean anyslide)
 {
 	static cvar_t *propcol;
 	int n = PMI_SIZE, i, epoch = BIH_CollisionEpoch(), cm;
@@ -694,14 +728,12 @@ static int PMMemo_Key(qbyte *key, float gamespeed)
 	PMMEMO_PUT(cm);
 	PMMEMO_PUT(meshpitch);	//review 1: AngleVectorsMesh turns a mesh prop's traces by them
 	PMMEMO_PUT(meshroll);
-	for (i = 0; i < pmove.numphysent; i++)
-	{
-		const physent_t *pe = &pmove.physents[i];
-		PMMEMO_PUT(pe->origin); PMMEMO_PUT(pe->angles); PMMEMO_PUT(pe->model); PMMEMO_PUT(pe->mins); PMMEMO_PUT(pe->maxs);
-		PMMEMO_PUT(pe->info); PMMEMO_PUT(pe->nonsolid); PMMEMO_PUT(pe->notouch); PMMEMO_PUT(pe->portalhalf);
-		PMMEMO_PUT(pe->portaltransform); PMMEMO_PUT(pe->isportal); PMMEMO_PUT(pe->slideflags);
-		PMMEMO_PUT(pe->forcecontentsmask); PMMEMO_PUT(pe->scale);
-	}
+	PMMEMO_PUT(reach);
+	PMMEMO_PUT(anyslide);
+	if (!reach)
+		for (i = 0; i < pmove.numphysent; i++)
+			if ((n = PMMemo_Physent(key, n, &pmove.physents[i])) < 0)
+				return -1;
 	return n;
 }
 #undef PMMEMO_PUT
@@ -716,9 +748,11 @@ static size_t PMMemo_FieldOffset(size_t imgoff)
 static void CL_PredictMemoMove(float gamespeed)
 {
 	static qbyte key[PMMEMO_KEYMAX];
+	static qbyte rel[PMMEMO_KEYMAX];
 	static qbyte img[PMI_SIZE];
 	unsigned int h, w;
-	int len, k, mode = cl_predict_memo.ival, qcruns;
+	int len, k, mode = cl_predict_memo.ival, qcruns, rellen = -1;
+	qboolean reach = true, anyslide = false;
 	pmmemo_t *m;
 
 	//review 1: the Source and AG movers only (QuakeWorld's keeps groundplane across calls); never beside terrain,
@@ -730,7 +764,17 @@ static void CL_PredictMemoMove(float gamespeed)
 		PM_PlayerMove(gamespeed);
 		return;
 	}
-	len = PMMemo_Key(key, gamespeed);
+	//P1733: a portal anywhere (PM_AnyPortals: the trace looks through every one) changes every move, so then the
+	//physents are keyed whole, as Patch 1720 did. A slide anywhere is one bit of the key; the trace reads the flags of
+	//the physent it hit, which the reach keys.
+	for (k = 0; k < pmove.numphysent && reach; k++)
+	{
+		if (pmove.physents[k].isportal)
+			reach = false;
+		if (pmove.physents[k].slideflags)
+			anyslide = true;
+	}
+	len = PMMemo_Key(key, gamespeed, reach, anyslide);
 	if (len < 0)
 	{
 		pmmemo_unkeyed++;
@@ -745,7 +789,9 @@ static void CL_PredictMemoMove(float gamespeed)
 	for (; k < len; k++)
 		h = (h ^ key[k]) * 16777619u;
 	m = &pmmemo[(h ^ (h >> 15)) & (PMMEMO_SLOTS-1)];
-	if (m->key && m->hash == h && m->keylen == len && !memcmp(m->key, key, len))
+	if (m->key && m->hash == h && m->keylen == len && !memcmp(m->key, key, len) &&
+		(!reach || (m->rellen >= 0 && (rellen = PMMemo_Reached(rel, m->qmins, m->qmaxs)) == m->rellen &&
+		 !memcmp(rel, m->rel, rellen))))
 	{
 		if (mode >= 2)
 		{
@@ -776,20 +822,39 @@ static void CL_PredictMemoMove(float gamespeed)
 		memcpy(pmove.touchindex, m->touchindex, sizeof(int)*m->numtouch);
 		memcpy(pmove.touchvel, m->touchvel, sizeof(vec3_t)*m->numtouch);
 		pmmemo_hits++;
+		if (reach)
+			pmmemo_reach++;
 		return;
 	}
 	qcruns = pm_portalqc;
+	if (reach)
+	{	//P1733: record what the move asks
+		VectorSet(pm_memoq_mins, INFINITY, INFINITY, INFINITY);
+		VectorSet(pm_memoq_maxs, -INFINITY, -INFINITY, -INFINITY);
+		pm_memoq = true;
+	}
 	PM_PlayerMove(gamespeed);
+	pm_memoq = false;
 	pmmemo_runs++;
 	if (pm_portalqc != qcruns)
 		return;	//review 1: a portal's camera_transform QC ran inside it (reads and writes beyond the key): not kept.
 				//A kept move ran no QC, and the same inputs reach no portal QC again.
 	if (pmove.numtouch < 0 || pmove.numtouch > PMMEMO_TOUCHMAX)
 		return;	//too many touches to keep: this move is simply not remembered
+	if (reach && (rellen = PMMemo_Reached(rel, pm_memoq_mins, pm_memoq_maxs)) < 0)
+		return;	//P1733: reached too much to keep
 	if (!m->key)
 	{
 		m->key = BZ_Malloc(PMMEMO_KEYMAX);
 		m->img = BZ_Malloc(PMI_SIZE);
+		m->rel = BZ_Malloc(PMMEMO_KEYMAX);
+	}
+	m->rellen = reach ? rellen : -1;
+	if (reach)
+	{
+		memcpy(m->rel, rel, rellen);
+		VectorCopy(pm_memoq_mins, m->qmins);
+		VectorCopy(pm_memoq_maxs, m->qmaxs);
 	}
 	m->hash = h;
 	m->keylen = len;
@@ -804,9 +869,9 @@ static void CL_PredictMemoMove(float gamespeed)
 }
 static void CL_PredictMemoStats_f(void)
 {
-	Con_Printf("cl_predict_memo %i: %u reused, %u run, %u not keyed, %u reused-and-checked, %u of those differed (must be 0)\n",
-		cl_predict_memo.ival, pmmemo_hits, pmmemo_runs, pmmemo_unkeyed, pmmemo_checked, pmmemo_bad);
-	pmmemo_hits = pmmemo_runs = pmmemo_unkeyed = pmmemo_checked = pmmemo_bad = 0;
+	Con_Printf("cl_predict_memo %i: %u reused (%u keyed by reach), %u run, %u not keyed, %u reused-and-checked, %u of those differed (must be 0)\n",
+		cl_predict_memo.ival, pmmemo_hits, pmmemo_reach, pmmemo_runs, pmmemo_unkeyed, pmmemo_checked, pmmemo_bad);
+	pmmemo_hits = pmmemo_runs = pmmemo_unkeyed = pmmemo_checked = pmmemo_bad = pmmemo_reach = 0;
 }
 
 static void CL_PredictUsercmdPart (int pnum, int entnum, player_state_t *from, player_state_t *to, usercmd_t *u, float offsetmsec, qboolean *carrier_cleared, qboolean later)
