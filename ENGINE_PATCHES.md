@@ -78,11 +78,17 @@ shadows (env_cascade_light), the multiply darkened baked shade a second time.
   half the sun; x _AmbientScaleHDR on HDR) on maps with an env_cascade_light; vbsp_exposure 1 (archived, default 0) sets
   r_exposure = clamp(1, SetAutoExposureMin, Max) on HDR-lit maps (1 on LDR), and 0 hands r_exposure back.
 
-**Evidence.** Headless client (visual/vprobe.py) on this PC while the owner's game and OBS ran, so no fps is quoted.
+**Evidence.** Headless client (visual/vprobe.py).
 - Instancing under r_shadows 2 (r_budget_dump, two fence views on surf_fantasy_css, 673 copies of one fence): entity
   batches 157 -> 54 and 200 -> 83, draws 1084 -> 981 and 1590 -> 1473 -- the same as with shadows off; the old exe stays
   at 157/200 with r_instancing 1 or 0 (the gate). Draw-call CPU 0.74 -> 0.68 ms; props GPU 0.08 -> 0.19 ms (instanced
-  fetches, as with shadows off). Those frames are CPU-bound elsewhere (~2 ms, CSQC and HUD), so the frame barely moves.
+  fetches, as with shadows off).
+- Timed later on a quiet machine (23 Nov ~03:05 local, no game or OBS; one launch per setting, timerefresh one per line
+  3 s apart -- vprobe's 0.3 s stdin lines and chained timerefreshes both corrupt it), median of 5 sweeps, two reps,
+  0.1.59 exe: r_shadows 2 instanced 719/723 (view 0) and 880/787 (view 1) fps against r_instancing 0 832/769 and 824/840;
+  shadows off instanced 856/863 and 855/923 against 868/877 and 938/946. So on this map at ~800 fps instancing is no fps
+  gain, shadows or not (view 0 about 10% slower with it): the GPU's instanced path costs what the draw calls save.
+  Patch 831's gain was on draw-call-bound maps (surf_demise +22%), not reproduced here (the map is not on this PC).
 - ahop_coast save 7, shadows off -> on: the old exe darkens the crate and fence themselves (93,748 pixels > 8 levels);
   the new one leaves them lit and still shadows the ground beside the crate (51,527). r_shadows_color 0.44 0.49 0.56.
 - bhop_canals start: r_shadows_sunfloor 0.433 0.519 0.541 (review 1 checked the formula against the map's HDR
