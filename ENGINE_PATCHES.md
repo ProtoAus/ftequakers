@@ -1,5 +1,36 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1718 - qcframes as a build gate; three menu globals out of function frames (game QC + build.ps1 only; no engine change)
+
+**Problem.** fteqcc can give a function with only temporaries a frame (parm_start, locals) that covers file-scope
+globals declared near it, and qclib restores that range on every return -- with 0 warnings. P1617 shipped one for days,
+P1715 another for two (run lines never native). tools/qcframes.py finds them in a built .dat, but nothing ran it: on
+22 Nov's main the menu held three more -- dl_have_cancel in ui_dl_cancel_ready (a cache, so harmless: asked each time),
+and the tournament's request id mt_req in MF_PresencePoll and Sty_AskMe (overwritten by their temporaries while they run,
+any change made under them undone on return).
+
+**Change.** Each of the three functions declares a local (as P1617/P1715). src/build.ps1 runs tools/qcframes.py on the
+three built .dats after compiling and before deploying, and throws on its exit 1 (or 2, unreadable) -- so a release,
+which builds through build.ps1, cannot ship one. wos-build.sh (outside git) runs it after its QC build and fails.
+
+**Verified.** menu.dat 3 globals inside a frame -> 0 (qwprogs and csprogs 0). build.ps1 -NoDeploy on Linux pwsh: passes
+on this tree; with Sty_AskMe's change reverted it stops with "FRAME Sty_AskMe holds global mt_req" and nothing deployed.
+
+## Patch 1715 - Run lines draw natively again: ln_nath/ln_nat were inside Line_Alloc's frame (game QC only; no engine change)
+
+**Problem.** `lines native` read "native builtins 0": fteqcc put ln_nath and ln_nat inside Line_Alloc's frame, so the VM
+put them back to 0 when Line_Alloc returned and Patch 645's lines_draw never ran. Every replay path, board line, live
+trail and ghost line went through the QC loop (a replay path 0.38 ms of a 2.16 ms frame on ahop_coast). In every csprogs
+built since 20 Nov, the lobbies' included (cl_lines.qc and pr_csqc_lines.inc unchanged since mid-November: other code
+moved the frame).
+
+**Change.** A declared local in Line_Alloc.
+
+**Verified.** tools/qcframes.py: 2 globals inside a frame -> 0. bhop_canals Momentum replay (rep 9286): `lines native`
+builtins 1, in use 1, refused 0; native and QC report the same work (153 points, 151 segments, 25 clipped); path 0.24 ->
+0.08 ms. Lobby build (v0.1.56 + P1710 + this, 0.1.56's fteqcc; qwprogs 8bbf41ba unchanged, csprogs 20be3cff) on the
+0.1.56 engine: native, no errors; LIVE on all 12 lobbies 22 Nov 01:52Z (game tools/backend-pending.md).
+
 ## Patch 1714 - Prediction skips the physents a move cannot reach: lobbies at ping no longer halve the frame rate (engine common/pmovetst.c, com_bih.c, common.c)
 
 **Cause.** 22 Nov 2026 Lex: a player reports ahop_coast and bhop_canals "awful in a lobby" but better in a local
