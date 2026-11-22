@@ -27,6 +27,58 @@ up and popped in one step, and the extrapolation path did not keep (camera alter
 Re-measured at the final 0.03 / 0.5: bhop_canals 300 ms 295 -> 392 / 389 fps (straight / strafing), 9441 of 9448 and
 9995 of 9995 snapshots kept.
 
+## Patch 1739 - steam_libraryimage: a game's own icon from the player's Steam client cache, for the map browser's mount-game icons (engine client/pr_menu.c, common/fs.c, common/common.h)
+
+**Cause.** 23 Nov 2026 Lex: "game icons for each of the games that needs mounts? is it possible to find their logos
+for their games and display them visually? that would make the map picker look better."  The art cannot ship (it is
+the games' own), and mounting the Steam client folder as a search path would put it under the VFS's content checks.
+
+**Change.** Menu builtin steam_libraryimage(imagename, appid, kind): FS_SteamClientRoot finds the Steam client folder
+(Windows: HKCU SteamPath, else HKLM InstallPath; Unix: Sys_SteamVdfPath's $HOME candidates and $XDG_DATA_HOME/Steam,
+the first with appcache/librarycache), the builtin picks appcache/librarycache/<appid>/<40-hex>.jpg (Steam's 32x32
+app icon; the older <appid>_icon.jpg) or logo.png, reads it with FS_MallocFile(FS_SYSTEM) (8 MB cap) and loads it
+into a texture with Shader_Default2D's own flags, so drawpic's Image_FindTexture (which matches CLAMP and
+PREMULTIPLYALPHA) reuses it in either order.  Never a search path; nothing shipped.  The game's half (P1739, menu):
+an app-id table for the Steam folders data/mapdeps.txt names, 20 px icons at each card's name line, faded when the
+game is not installed, a tooltip naming it, reloaded in Menu_RendererRestarted.
+
+**Evidence.** Dev-install fixture, Maps screen (ui_bootcheck 2): surf_4am shows TF2's and CS:GO's icons, surf_aesthetic
+CS:GO's and Portal 2's.  First cut drew the missing-texture checker (RT_IMAGEFLAGS lacked PREMULTIPLYALPHA, so the 2D
+lookup made its own empty texture); fixed by the 2D flags.  A fake Steam folder (HOME) with a corrupt TF2 icon: the
+menu reaches the Maps screen, no TF2 icon, CS:GO's drawn faded (that HOME has no Steam libraries, so not installed).
+Review 1 (5 engine findings, 3 QC): a DOUBLE FREE on an undecodable file (Image_LoadMipsFromMemory frees filedata
+even on failure -- the builtin freed it again); no IF_NOPURGE, so a map load unloaded an icon no row had drawn and
+drawpic then looked for it in the VFS; the non-premultiplied 2D path (D3D9, dpcompat_nopremulpics 1) missed the
+lookup -- now Shader_2DPicPremul() is the one answer; Windows read SteamPath through the ANSI API, unterminated; the
+size cap came after the read.  QC: dep_game leaked per deps reload, %g named 1802710's texture 1.80271e+06, and each
+icon's click element sat over its row.  All fixed.
+
+**Left.** macOS never takes FS_SteamClientRoot's Unix branch (`__apple__` is not a compiler macro), as elsewhere in
+fs.c; no icons there.  The icon has no tooltip (a click element over the row would take its clicks); the detail line
+still says "needs TF2 CS:GO".
+
+## Patch 1736 - A Source liquid brush entity is not forced two-sided (engine client/r_surf.c)
+
+**Cause.** 23 Nov 2026 Lex (bhop_canals save 1): "water goop stuff is supposed to be static, it flickers black".  The
+goop is func_water_analog *18 (nature/toxicslime002a_dx70, LightmappedGeneric, %compileSlime) 8 units over the floor.
+VBSP gives its top two coplanar faces: 50121 up (HDR lightmap mean 8.3/7.5/4.7) and 50120 down (0.8/0.6/0.1, the
+underside).  The nettest rule that draws a liquid brush ENTITY (negative skinnum) two-sided -- GoldSrc/Quake func_water
+boxes have outward faces only -- rasterised both from above at one depth: they z-fought, near-black or lit by view.
+
+**Change.** BEF_FORCETWOSIDED is not set for an MDLF_SOURCEBSP model (inline submodels carry the flag); Source relies
+on backface culling there and VBSP emits both facings.  The alpha block beside it is unchanged; Vulkan never honoured
+the flag, so GL/D3D now match it.
+
+**Evidence.** Headless client at Lex's save-1 view: goop region mean 7.8 -> 20.4 (Lex's own screenshot 21.0); the
+other dark view 7.7 -> 20.0; fog, hl2_water and r_waterwarp toggles had changed nothing (7.5 each); r_drawentities 0
+showed the lit floor, fullbright the slime texture.  Review 1: 28 of the 30 water submodels on the 11 Source maps on
+this disk are fully twinned; GoldSrc unchanged.
+
+**Left.** A func_water_analog whose material compiles as WINDOW, not water, has one up face (TF2's cp_holyhell *58):
+sv_entities.qc SV_SpawnWater still makes it swimmable, and from inside it is now invisible (Source makes it solid).
+Unrelated, seen in review: r_waterinfo reads m->submodels[0], which the VBSP loader never fills (likely a crash on a
+Source map with water; not run).
+
 ## Patch 1734 - KSF demos get half of a small crawl budget: the slowed cron row's --max 8 had left them none (game surfd/ksfimport.py)
 
 **Problem.** Lex, 23 Nov: KSF demos are not grabbed (surf_insomnia: 221 KSF runs, boards read 7 Nov, 0 replays).
