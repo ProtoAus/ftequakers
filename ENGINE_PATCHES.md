@@ -1,32 +1,37 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
-## Patch 1729 - Source's distance water at hl2_water 1, opt-in (hl2_water_lod 1): water_lod_control's distances, Source's cheap pass fading in over the refraction, and no capture for water wholly past them (engine gl/gl_backend.c, gl/gl_shader.c, gl/shader.h, client/renderer.c; plugin hl2/mat_vmt.c, hl2/mod_vbsp.c, hl2/glsl/vmt/water.glsl)
+## Patch 1729 - hl2_water_lod: an opt-in distance cutoff for water at hl2_water 1 from the map's water_lod_control (or the material's own $cheapwater* distances), with Source's cheap pass fading in and no capture for water wholly past them -- not Source's rule for reflecting water (engine gl/gl_backend.c, gl/gl_shader.c, gl/shader.h, client/renderer.c; plugin hl2/mat_vmt.c, hl2/mod_vbsp.c, hl2/glsl/vmt/water.glsl)
 
-**Problem.** Lex, 22 Nov: "I don't mind trying the distance water effect". Source SDK 2013 viewrender.cpp
-DetermineWaterRenderInfo: water without a local reflection (Source's "simple reflections"; $forceexpensive or the
-reflect-world/all settings turn it off) renders no refraction once the eye is cheapwaterend from the water, and
-water.cpp DrawCheapWater blends its cheap pass (fog colour to the cubemap by (1-n.e)^5) over the refraction from
-$cheapwaterstartdistance to $cheapwaterenddistance (defaults 500/1000); a WaterLOD proxy sets those from the view, i.e.
-water_lod_control (view defaults 0/0.1: such water is cheap unless the eye is in it). hl2_water 1 (refraction plus a
-baked-cube reflection, the same arm) refracted at every distance and the keys were ignored (VMT_IsKnownIgnoredField).
+**Problem.** Lex, 22 Nov: "I don't mind trying the distance water effect". Source SDK 2013: viewrender.cpp
+DetermineWaterRenderInfo renders no refraction once the eye is cheapwaterend from water WITHOUT a local reflection, and
+water.cpp DrawCheapWater blends its cheap pass (fog colour to the cubemap by (1-n.e)^5, $nofresnel: $reflectblendfactor)
+over the refraction from $cheapwaterstartdistance to $cheapwaterenddistance; a WaterLOD proxy takes those from the view
+(water_lod_control). But on PC an absent $forceexpensive is set to 1 (water.cpp:102-109, "NO WE DON'T!!!!"), so any water
+whose (>=dx90) block has $reflecttexture has a local reflection and never takes the LOD: ahop_coast's water_coast02 and
+bhop_canals' water_canals_water_clear both reflect at every distance in Momentum. Source's LOD reaches only refract-only
+water. (The 22 Nov BACKLOG note said the opposite for hl2_water 1; corrected there.) So copying Source changes nothing on
+those maps; Lex asked to try the effect, so this is the mechanics as an opt-in cutoff, labelled as not Source's.
 
-**Change.** hl2_water_lod (plugin, CVAR_SHADERSYSTEM, default 0). Map load: water_lod_control -> r_cheapwaterstart/end
-(engine cvars, Source's names; 0/0.1 without one). At hl2_water 1 and hl2_water_lod 1, Water without $forceexpensive and
-with an $envmap builds vmt/water #CHEAPLOD, with the map's pair (#CHEAPLODMAP, the cvars as uniforms) under a WaterLOD
-proxy or its own $cheapwater* (500/1000), plus `fte_waterlod map|<start> <end>` (shader_t.waterlodend, max of the pair).
-water.glsl mixes the cheap colour in by the fragment's distance and returns before sampling the capture at or past the
-end. GLBE_WaterLodCheap: a world water batch with that keyword whose every on-screen face box is at least its end from
-the eye needs no capture -- it stays out of GLBE_WaterViewsBegin's choice and GLBE_GenerateBatchTextures draws it at once
-(r_capturelog "waterlod"). The fragment test and the box test agree, so a skipped capture is never sampled. Non-proxy
-water uses its own distances for the skip where Source uses the view's: Source would sample a stale target there.
+**Change.** hl2_water_lod (plugin, CVAR_SHADERSYSTEM, default 0). Map load: the last water_lod_control -> r_cheapwaterstart/
+end (engine cvars, Source's names; 0/0 without one = no cutoff). At hl2_water 1 and hl2_water_lod 1, Water with an $envmap
+and distances -- the map's under a WaterLOD proxy (#CHEAPLODMAP, the cvars as uniforms), else its own authored pair --
+builds vmt/water #CHEAPLOD plus `fte_waterlod map|<start> <end>` (shader_t.waterlodend = max of the pair). water.glsl mixes
+the cheap colour over the finished pass (base layer and fog included) by the fragment's distance, and at or past the end
+returns before reading the capture (placed after the depth block's derivatives). GLBE_WaterLodCheap: a world water batch
+with that keyword, some face on screen and every on-screen face box at least its end from r_origin (the shader's
+e_eyepos) needs no capture: it stays out of GLBE_WaterViewsBegin's choice and GLBE_WaterGather's merged visibility, and
+GLBE_GenerateBatchTextures draws it at once (r_capturelog "waterlod"). The fragment and box tests agree, so a skipped
+capture is never sampled. Review 1 (two lenses): the Source default above; r_origin not vieworg (stereo); an off-screen
+batch counted cheap and drawn; gathered into the capture's visibility; the cheap mix under the base layer (a seam at the
+end); derivatives after the early return.
 
-**Measured.** bhop_canals (water_canals_water_clear: WaterLOD, no $forceexpensive; water_lod_control 1000/2000), noclip
-over the canal: 1166 units up, captures in both modes (inside the end) and the picture nearly unchanged; with the pair
-forced to 200/500 there, lod 0 captures 138 of 549 views and lod 1 none, drawn as Source's opaque fog-coloured cheap water.
-Replays at speed 4: bhop_canals' route shows canal water in 18 of 19,846 views, ahop_coast's ocean is water_coast02
-($forceexpensive: no LOD in Source) -- captures 5285/5275 of ~51 k views, 611/610 fps warm. So nothing changes on those
-routes; it changes water without $forceexpensive seen from afar, and every such WaterLOD water on maps without
-water_lod_control (cheap unless the eye is in it, as Source).
+**Measured.** bhop_canals (water_lod_control 1000/2000), noclip over the canal: 1166 units up the capture still renders
+(inside the end), picture nearly unchanged; with the pair forced to 200/500 there lod 0 captures 138 of 549 views and lod 1
+none, drawn as Source's opaque fog-coloured cheap water; with 0/0 lod 1 captures as lod 0. Replay route: canal water in 18
+of 19,846 views, so no change. ahop_coast (3000/5000, water_coast02 has the WaterLOD proxy):
+the route never gets 5000 units from the ocean -- views with a capture 10.8% either way (5268 of 48,760 at lod 0, 4905 of
+45,323 at lod 1), fps within noise (warm 558/569, run 598/556) -- so there it changes how the far ocean looks (cheap past
+3000-5000), not the cost. It pays where the eye is far from all the water on screen. Review 2: text only.
 
 ## Patch 1724 - r_shadows re-parses the shader programs when it changes (engine client/renderer.c)
 
