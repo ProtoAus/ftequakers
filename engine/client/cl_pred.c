@@ -616,6 +616,199 @@ static qboolean CL_PredictSourcePhase(int seat, int sequence, player_state_t *st
 	return true;
 }
 
+/*
+FTESurf Patch 1720: the prediction memo.
+
+Prediction replays every unacknowledged command each rendered frame (cl_pred.c CL_PredictMovePNum): at 150 ms on a
+100-tick map, 11-12 commands a frame, and most of them ran last frame from exactly the same state.  PM_PlayerMove is a
+function of the pmove state it starts from (all of it but the physents and the touch list, which it rebuilds), the
+movevars, the physents, the game speed, the collision models (BIH's epoch) and the pm_/bih_ cvars it reads (their
+epoch, cvar.c) -- its per-command scratch is reset each command (Patch 1467).  So a move whose inputs are byte-for-byte
+those of one already run gets that run's result instead of running again.  The CSQC hooks either side of the move
+(CSQC_PredictPlayerPreMove before, CSQC_PredictPlayerMove after) still run for every command as before, so QC's replay
+chain, its triggers and anything it imposes on the move are untouched; a hook that changes the state makes the next
+command's inputs differ, and that command runs.  Only the main thread uses it (TAS rollout workers run their own moves).
+Review 1: also keyed are the cvars the traces read under other names (sv_prop_collision, r_meshpitch/roll); pmove.c's
+forward/right/up are kept and restored; a move during which a portal's camera_transform QC ran is never kept (pm_portalqc);
+not used for the QuakeWorld mover (groundplane persists), beside terrain, or under pm_dispprobe/pm_ladderprobe.
+
+cl_predict_memo 0: run every move, as before.  1: reuse (default).  2: reuse, but also run every reused move and compare
+the result byte for byte (must be 0 differences): cl_predict_memostats.
+*/
+cvar_t	cl_predict_memo = CVARFD("cl_predict_memo", "1", CVAR_NOTFROMSERVER|CVAR_NOSAVE, "FTESurf Patch 1720: client prediction reuses PM_PlayerMove's result for a command whose inputs are byte-for-byte those of a move it already ran (the replay of the unacknowledged commands repeats most of them every frame). Exact by construction; the CSQC prediction hooks still run for every command.\n0: run every move. 1: reuse (default). 2: reuse, but also run every reused move and count any difference (must be 0): cl_predict_memostats.");
+#define PMMEMO_SLOTS	256
+#define PMMEMO_KEYMAX	(32*1024)
+#define PMMEMO_TOUCHMAX	32
+#define PMI_A1	offsetof(playermove_t, physents)
+#define PMI_B0	offsetof(playermove_t, cmd)
+#define PMI_B1	offsetof(playermove_t, numtouch)
+#define PMI_C0	offsetof(playermove_t, onground)
+#define PMI_SIZE	(PMI_A1 + (PMI_B1 - PMI_B0) + (sizeof(playermove_t) - PMI_C0))
+typedef struct
+{
+	unsigned int hash;
+	int keylen;
+	qbyte *key;		//PMMEMO_KEYMAX bytes, made on first use
+	qbyte *img;		//PMI_SIZE: pmove after the move, but the physents and the touch list
+	vec3_t fwd, rt, upv;	//pmove.c's forward/right/up after it (review 1)
+	int numtouch;
+	int touchindex[PMMEMO_TOUCHMAX];
+	vec3_t touchvel[PMMEMO_TOUCHMAX];
+} pmmemo_t;
+static pmmemo_t pmmemo[PMMEMO_SLOTS];
+static unsigned int pmmemo_hits, pmmemo_runs, pmmemo_unkeyed, pmmemo_checked, pmmemo_bad;
+extern int cvar_physepoch;			//cvar.c, FTESurf Patch 1720
+extern int BIH_CollisionEpoch(void);	//com_bih.c
+extern cvar_t pm_dispprobe, pm_ladderprobe;
+extern vec3_t forward, right, up;		//pmove.c: written by the move, read after it (CL_CatagorizePosition)
+extern FTE_TLS int pm_portalqc;			//pmove.c: portal camera_transform QC runs
+static void PMMemo_Image(qbyte *out)
+{
+	const qbyte *p = (const qbyte *)&pmove;
+	memcpy(out, p, PMI_A1);
+	memcpy(out + PMI_A1, p + PMI_B0, PMI_B1 - PMI_B0);
+	memcpy(out + PMI_A1 + (PMI_B1 - PMI_B0), p + PMI_C0, sizeof(playermove_t) - PMI_C0);
+}
+static void PMMemo_Restore(const qbyte *in)
+{
+	qbyte *p = (qbyte *)&pmove;
+	memcpy(p, in, PMI_A1);
+	memcpy(p + PMI_B0, in + PMI_A1, PMI_B1 - PMI_B0);
+	memcpy(p + PMI_C0, in + PMI_A1 + (PMI_B1 - PMI_B0), sizeof(playermove_t) - PMI_C0);
+}
+#define PMMEMO_PUT(x) do { if (n + (int)sizeof(x) > PMMEMO_KEYMAX) return -1; memcpy(key + n, &(x), sizeof(x)); n += sizeof(x); } while (0)
+//the move's inputs, field by field where padding could differ
+static int PMMemo_Key(qbyte *key, float gamespeed)
+{
+	static cvar_t *propcol;
+	int n = PMI_SIZE, i, epoch = BIH_CollisionEpoch(), cm;
+	float meshpitch = r_meshpitch.value, meshroll = r_meshroll.value;
+	if (!propcol)
+		propcol = Cvar_FindVar("sv_prop_collision");
+	cm = propcol ? propcol->ival : 2;	//review 1: pmovetst.c picks a prop's collision by it
+	PMMemo_Image(key);
+	PMMEMO_PUT(movevars);
+	PMMEMO_PUT(gamespeed);
+	PMMEMO_PUT(epoch);
+	PMMEMO_PUT(cvar_physepoch);
+	PMMEMO_PUT(cm);
+	PMMEMO_PUT(meshpitch);	//review 1: AngleVectorsMesh turns a mesh prop's traces by them
+	PMMEMO_PUT(meshroll);
+	for (i = 0; i < pmove.numphysent; i++)
+	{
+		const physent_t *pe = &pmove.physents[i];
+		PMMEMO_PUT(pe->origin); PMMEMO_PUT(pe->angles); PMMEMO_PUT(pe->model); PMMEMO_PUT(pe->mins); PMMEMO_PUT(pe->maxs);
+		PMMEMO_PUT(pe->info); PMMEMO_PUT(pe->nonsolid); PMMEMO_PUT(pe->notouch); PMMEMO_PUT(pe->portalhalf);
+		PMMEMO_PUT(pe->portaltransform); PMMEMO_PUT(pe->isportal); PMMEMO_PUT(pe->slideflags);
+		PMMEMO_PUT(pe->forcecontentsmask); PMMEMO_PUT(pe->scale);
+	}
+	return n;
+}
+#undef PMMEMO_PUT
+static size_t PMMemo_FieldOffset(size_t imgoff)
+{	//an image offset back to an offset in playermove_t (for the mismatch report)
+	if (imgoff < PMI_A1)
+		return imgoff;
+	if (imgoff < PMI_A1 + (PMI_B1 - PMI_B0))
+		return PMI_B0 + (imgoff - PMI_A1);
+	return PMI_C0 + (imgoff - PMI_A1 - (PMI_B1 - PMI_B0));
+}
+static void CL_PredictMemoMove(float gamespeed)
+{
+	static qbyte key[PMMEMO_KEYMAX];
+	static qbyte img[PMI_SIZE];
+	unsigned int h, w;
+	int len, k, mode = cl_predict_memo.ival, qcruns;
+	pmmemo_t *m;
+
+	//review 1: the Source and AG movers only (QuakeWorld's keeps groundplane across calls); never beside terrain,
+	//which streams in without a collision epoch (com_bih.c's trace cache steps aside for it too), nor under the probes
+	if (!mode || pm_dispprobe.ival || pm_ladderprobe.ival || !Sys_IsMainThread() ||
+		(movevars.physicsmode != PHYSMODE_SOURCE && movevars.physicsmode != PHYSMODE_AG) ||
+		(cl.worldmodel && cl.worldmodel->terrain))
+	{
+		PM_PlayerMove(gamespeed);
+		return;
+	}
+	len = PMMemo_Key(key, gamespeed);
+	if (len < 0)
+	{
+		pmmemo_unkeyed++;
+		PM_PlayerMove(gamespeed);
+		return;
+	}
+	for (h = 2166136261u, k = 0; k + 4 <= len; k += 4)
+	{
+		memcpy(&w, key + k, 4);
+		h = (h ^ w) * 16777619u;
+	}
+	for (; k < len; k++)
+		h = (h ^ key[k]) * 16777619u;
+	m = &pmmemo[(h ^ (h >> 15)) & (PMMEMO_SLOTS-1)];
+	if (m->key && m->hash == h && m->keylen == len && !memcmp(m->key, key, len))
+	{
+		if (mode >= 2)
+		{
+			PM_PlayerMove(gamespeed);
+			PMMemo_Image(img);
+			pmmemo_checked++;
+			if (memcmp(img, m->img, PMI_SIZE) || pmove.numtouch != m->numtouch ||
+				!VectorCompare(forward, m->fwd) || !VectorCompare(right, m->rt) || !VectorCompare(up, m->upv) ||
+				(pmove.numtouch > 0 && pmove.numtouch <= PMMEMO_TOUCHMAX &&
+				 (memcmp(pmove.touchindex, m->touchindex, sizeof(int)*pmove.numtouch) ||
+				  memcmp(pmove.touchvel, m->touchvel, sizeof(vec3_t)*pmove.numtouch))))
+			{
+				size_t d;
+				for (d = 0; d < PMI_SIZE && img[d] == m->img[d]; d++)
+					;
+				if (pmmemo_bad++ < 8)
+					Con_Printf(CON_WARNING "cl_predict_memo: a reused move differs (playermove_t offset %u of %u%s)\n",
+						(unsigned int)(d < PMI_SIZE ? PMMemo_FieldOffset(d) : 0), (unsigned int)sizeof(playermove_t),
+						d < PMI_SIZE ? "" : ", touches");
+			}
+			return;	//the real result stands
+		}
+		PMMemo_Restore(m->img);
+		VectorCopy(m->fwd, forward);
+		VectorCopy(m->rt, right);
+		VectorCopy(m->upv, up);
+		pmove.numtouch = m->numtouch;
+		memcpy(pmove.touchindex, m->touchindex, sizeof(int)*m->numtouch);
+		memcpy(pmove.touchvel, m->touchvel, sizeof(vec3_t)*m->numtouch);
+		pmmemo_hits++;
+		return;
+	}
+	qcruns = pm_portalqc;
+	PM_PlayerMove(gamespeed);
+	pmmemo_runs++;
+	if (pm_portalqc != qcruns)
+		return;	//review 1: a portal's camera_transform QC ran inside it (reads and writes beyond the key): not kept.
+				//A kept move ran no QC, and the same inputs reach no portal QC again.
+	if (pmove.numtouch < 0 || pmove.numtouch > PMMEMO_TOUCHMAX)
+		return;	//too many touches to keep: this move is simply not remembered
+	if (!m->key)
+	{
+		m->key = BZ_Malloc(PMMEMO_KEYMAX);
+		m->img = BZ_Malloc(PMI_SIZE);
+	}
+	m->hash = h;
+	m->keylen = len;
+	memcpy(m->key, key, len);
+	PMMemo_Image(m->img);
+	VectorCopy(forward, m->fwd);
+	VectorCopy(right, m->rt);
+	VectorCopy(up, m->upv);
+	m->numtouch = pmove.numtouch;
+	memcpy(m->touchindex, pmove.touchindex, sizeof(int)*pmove.numtouch);
+	memcpy(m->touchvel, pmove.touchvel, sizeof(vec3_t)*pmove.numtouch);
+}
+static void CL_PredictMemoStats_f(void)
+{
+	Con_Printf("cl_predict_memo %i: %u reused, %u run, %u not keyed, %u reused-and-checked, %u of those differed (must be 0)\n",
+		cl_predict_memo.ival, pmmemo_hits, pmmemo_runs, pmmemo_unkeyed, pmmemo_checked, pmmemo_bad);
+	pmmemo_hits = pmmemo_runs = pmmemo_unkeyed = pmmemo_checked = pmmemo_bad = 0;
+}
+
 static void CL_PredictUsercmdPart (int pnum, int entnum, player_state_t *from, player_state_t *to, usercmd_t *u, float offsetmsec, qboolean *carrier_cleared, qboolean later)
 {
 	int preflags = 0;
@@ -748,7 +941,7 @@ static void CL_PredictUsercmdPart (int pnum, int entnum, player_state_t *from, p
 	r_spikes_pmoves++;	//FTESurf Patch 1446
 	{
 		double t0 = r_speeds_timing ? Sys_DoubleTime() : 0;
-		PM_PlayerMove (cl.gamespeed);
+		CL_PredictMemoMove (cl.gamespeed);	//FTESurf Patch 1720
 		if (r_speeds_timing)
 			r_spikes_pmus += (Sys_DoubleTime() - t0) * 1e6;
 	}
@@ -3076,6 +3269,8 @@ void CL_InitPrediction (void)
 	Cvar_Register (&cl_predict_velblend,	cl_predictiongroup);	//FTESurf Patch 269
 	Cvar_Register (&cl_predict_freshtype,	cl_predictiongroup);	//FTESurf Patch 243
 	Cvar_Register (&cl_predict_qchook,	cl_predictiongroup);	//FTESurf Patch 335
+	Cvar_Register (&cl_predict_memo,	cl_predictiongroup);	//FTESurf Patch 1720
+	Cmd_AddCommandD ("cl_predict_memostats", CL_PredictMemoStats_f, "FTESurf Patch 1720: print cl_predict_memo's counters since the last call, then reset them.");
 	Cvar_Register (&cl_predict_listen,	cl_predictiongroup);	//FTESurf Patch 862
 	Cvar_Register (&cl_predict_listenops,	cl_predictiongroup);	//FTESurf Patch 1588
 	Cvar_Register (&cl_prederror,	cl_predictiongroup);	//FTESurf Patch 335

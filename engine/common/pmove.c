@@ -143,6 +143,7 @@ void PM_ClipVelocity (vec3_t in, vec3_t normal, vec3_t out, float overbounce)
 }
 
 #include "pr_common.h"
+FTE_TLS int pm_portalqc;	//FTESurf Patch 1720: portal camera_transform QC runs, so cl_pred.c's memo never keeps a move that ran QC
 static qboolean PM_PortalTransform(world_t *w, physent_t *pe, vec3_t org, vec3_t move, vec3_t newang, vec3_t newvel, vec3_t neweye)
 {
 	vec3_t rounded, centre = {0,0,0}, eye = {0,0,0};
@@ -180,6 +181,7 @@ static qboolean PM_PortalTransform(world_t *w, physent_t *pe, vec3_t org, vec3_t
 	if (!linked && !DotProduct(w->g.v_up, w->g.v_up))
 		w->g.v_up[2] = -1;
 
+	pm_portalqc++;
 	PR_ExecuteProgram (w->progs, portal->xv->camera_transform);
 
 	for (i = 0; i < 3; i++)
@@ -217,6 +219,7 @@ static qboolean PM_PortalTransform(world_t *w, physent_t *pe, vec3_t org, vec3_t
 		VectorCopy(org, G_VECTOR(OFS_PARM0));
 		VectorCopy(pmove.angles, G_VECTOR(OFS_PARM1));
 		AngleVectors(pmove.angles, w->g.v_forward, w->g.v_right, w->g.v_up);
+		pm_portalqc++;
 		PR_ExecuteProgram (w->progs, portal->xv->camera_transform);
 		VectorAngles(w->g.v_forward, w->g.v_up, newang, false);
 	}

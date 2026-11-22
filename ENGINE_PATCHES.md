@@ -1,5 +1,36 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1720 - Prediction reuses a move it already ran: the replayed commands stop costing a whole PM_PlayerMove each (engine client/cl_pred.c, common/pmove.c, common/cvar.c, common/com_bih.c)
+
+**Problem.** Lex's BACKLOG list of 22 Nov: after Patch 1714 prediction still cost 0.72 ms a frame moving at 150 ms on
+ahop_coast and 1.75 ms on bhop_canals, almost all of it PM_PlayerMove (slow frames: pmove 1.0-1.7 ms for ~11 moves on
+ahop_coast, 3.2-3.8 ms for ~16 on bhop_canals; the CSQC hook 0.03-0.3). Client prediction replays every unacknowledged
+command each rendered frame (CL_PredictMovePNum), and most of those moves ran last frame from exactly the same state.
+Source repredicts only after an error (cl_pred_optimize 2); here CSQC's trigger hook is built on the full replay
+(TG_ChainStart rebuilds its chain from the acknowledged command every frame), so the replay itself has to stay.
+
+**Change.** CL_PredictUsercmdPart keeps the replay and the CSQC hooks either side of every move, but CL_PredictMemoMove
+gives a move whose inputs are byte-for-byte those of a move already run that run's result instead of running it: key =
+pmove's bytes but the physents and the touch list (which the move rebuilds), movevars, the game speed, every physent's
+fields, BIH's collision epoch, a new cvar epoch (cvar.c: any pm_ or bih_ cvar changing) and the cvars the traces read
+under other names (sv_prop_collision, r_meshpitch, r_meshroll); value = pmove after the move (same regions), its touch
+list and pmove.c's forward/right/up. 256 direct-mapped slots, full-key compare. A move during which a portal's
+camera_transform QC ran (it reads and writes beyond the key; pmove.c counts the runs) is never kept, so a kept move ran no
+QC and the same inputs reach none. Not used for the QuakeWorld mover (it keeps groundplane across calls), beside terrain
+(streams in without an epoch), under pm_dispprobe/pm_ladderprobe, or off the main thread. cl_predict_memo 0 runs every move; 1
+reuses (default); 2 also runs every reused move and compares it byte for byte; cl_predict_memostats prints the counts.
+Review 1 found those five unkeyed inputs/side effects (all off the default Source/AG path); all closed.
+
+**Evidence.** Task root FTESurf-worktrees/coastperf-20261122-08 (plans p1720_*, p1720f_*): lobby.cfg server at
+sv_minping 150, lobby QC, moving, alternated. First build: ahop_coast 527/544 -> 646/672 fps (memo off/on), bhop_canals
+266/272 -> 301/334; about 70% of moves reused on ahop_coast, ~47% on bhop_canals (its moving entities change the
+physents). cl_predict_memo 2: 275 k (ahop_coast) and 118 k (bhop_canals) reused moves re-run, 0 different.
+Final build (rebased on Patch 1719), 150 ms, alternated: bhop_canals 271/272 -> 343/315 fps (budget 267 -> 304), 49%
+of moves reused (its six linked_portal_doors: the first review fix, no memo beside any portal, had made every move
+unkeyed there; the QC-run guard replaced it); ahop_coast 476/533 -> 594/648 (a peer's probe overlapped that pair).
+cl_predict_memo 2 on the final builds: ahop_coast 232 k, bhop_canals 113 k, surf_classics (60 ms, surfing) 253 k reused
+moves re-run, 0 different.
+
 ## Patch 1719 - The 3D sky's water shares the main view's last water capture whatever its age (engine gl/gl_backend.c, client/renderer.c)
 
 **Problem.** Lex's BACKLOG list of 22 Nov (from the ahop_coast audit): water inside the 3D sky room rendered its own

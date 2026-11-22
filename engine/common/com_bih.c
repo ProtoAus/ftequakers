@@ -1897,6 +1897,7 @@ static void BIH_RecursiveTest (struct bihtrace_s *fte_restrict tr, const struct 
   anything reads it (pm_dispprobe, or a holder of bih_probe_readers such as pm_dettest). Main thread only.*/
 extern cvar_t bih_tracecache, pm_dispprobe;
 static int bih_collisionepoch = 1;
+int BIH_CollisionEpoch(void) { return *(volatile int *)&bih_collisionepoch; }	//FTESurf Patch 1720: cl_pred.c's memo key
 int bih_probe_readers;
 void BIH_CollisionChanged(void)
 {

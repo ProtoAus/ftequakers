@@ -21,6 +21,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 #include "quakedef.h"
 #include "shader.h"
+int cvar_physepoch = 1;	//FTESurf Patch 1720: bumped when a pm_ or bih_ cvar changes (cl_pred.c's prediction memo)
 
 cvar_group_t *cvar_groups;
 
@@ -1047,6 +1048,8 @@ static cvar_t *Cvar_SetCore (cvar_t *var, const char *value, qboolean force)
 		{	//don't do this on registration.
 			var->modified=true;	//only modified if it changed.
 			var->modifiedcount++;
+			if (!strncmp(var->name, "pm_", 3) || !strncmp(var->name, "bih_", 4))
+				cvar_physepoch++;	//FTESurf Patch 1720: the movement code reads these directly
 			if (var->callback)
 				var->callback(var, latch);
 
