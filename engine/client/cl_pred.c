@@ -644,12 +644,15 @@ what the client predicted for that command only by what the wire rounds away -- 
 from different bytes, so Patch 1720's memo reran them all: at sv_minping 300 prediction was 1.80 ms of bhop_canals'
 3.63 ms frame.  When the server's origin and velocity agree with the prediction within these tolerances (and its
 ground and jump state match), the replay starts from the prediction instead and the memo answers every older command;
-a real disagreement (a push, a teleport, a missed input) is past them and snaps to the server as before.  The client
-can sit at most a tolerance off the server's state per snapshot; the server's simulation is untouched.
+a real disagreement (a push, a teleport, a missed input) is past them and snaps to the server as before.  Each kept
+base is within the tolerance of that snapshot, so the client never sits further off than that (it does not add up);
+measured agreement is origin within 0.01 and velocity within ~0.24, so the defaults are tight on purpose (review 1: at
+0.25 a slow error -- the wire-rounded velocity a snap takes, an unpredicted slow push -- built up and popped in one
+step).  The server's simulation is untouched; the prederr ring still compares the server's state with the prediction.
 */
 cvar_t	cl_predict_keep = CVARFD("cl_predict_keep", "1", CVAR_NOTFROMSERVER|CVAR_NOSAVE, "FTESurf Patch 1742: when a snapshot's state for the command the client last predicted agrees with that prediction (cl_predict_keep_origin / cl_predict_keep_velocity), prediction continues from the prediction rather than the server's rounded copy of it, so the older commands are not rerun (Source's cl_pred_optimize). A disagreement snaps to the server as before.\n0: always restart from the server's state. 1: keep an agreeing prediction (default).");
-cvar_t	cl_predict_keep_origin = CVARFD("cl_predict_keep_origin", "0.25", CVAR_NOTFROMSERVER|CVAR_NOSAVE, "FTESurf Patch 1742: units the server's origin may differ from the prediction for cl_predict_keep to keep it.");
-cvar_t	cl_predict_keep_velocity = CVARFD("cl_predict_keep_velocity", "1", CVAR_NOTFROMSERVER|CVAR_NOSAVE, "FTESurf Patch 1742: units/s the server's velocity may differ from the prediction for cl_predict_keep to keep it.");
+cvar_t	cl_predict_keep_origin = CVARFD("cl_predict_keep_origin", "0.03", CVAR_NOTFROMSERVER|CVAR_NOSAVE, "FTESurf Patch 1742: units the server's origin may differ from the prediction for cl_predict_keep to keep it (at most 1).");
+cvar_t	cl_predict_keep_velocity = CVARFD("cl_predict_keep_velocity", "0.5", CVAR_NOTFROMSERVER|CVAR_NOSAVE, "FTESurf Patch 1742: units/s the server's velocity may differ from the prediction for cl_predict_keep to keep it (at most 8).");
 static unsigned int pkeep_kept, pkeep_snapped;
 static qboolean CL_PredictKeepAgrees(const player_state_t *s, const playerview_t *pv)
 {
@@ -661,6 +664,8 @@ static qboolean CL_PredictKeepAgrees(const player_state_t *s, const playerview_t
 			return false;
 	if (!(to >= 0) || !(tv >= 0))
 		return false;
+	to = min(to, 1);	//review 1: a big tolerance would hide a teleport or reset locally
+	tv = min(tv, 8);
 	VectorSubtract(s->origin, pv->prop.origin, d);
 	if (DotProduct(d, d) > to * to)
 		return false;
@@ -672,6 +677,18 @@ static qboolean CL_PredictKeepAgrees(const player_state_t *s, const playerview_t
 	if ((cls.z_ext & Z_EXT_PM_TYPE) && !s->jump_held != !pv->prop.jump_held)
 		return false;
 	return true;
+}
+//the replay's base: a copy of the server's state carrying the prediction's origin, velocity, ground and jump, when they agree
+static player_state_t *CL_PredictKeep(playerview_t *pv, player_state_t *s, player_state_t *keep)
+{
+	if (!cl_predict_keep.ival || s == keep || !CL_PredictKeepAgrees(s, pv))
+		return s;
+	*keep = *s;
+	VectorCopy(pv->prop.origin, keep->origin);
+	VectorCopy(pv->prop.velocity, keep->velocity);
+	keep->onground = pv->prop.onground;
+	keep->jump_held = pv->prop.jump_held;
+	return keep;
 }
 
 #define PMMEMO_SLOTS	256
@@ -2712,18 +2729,12 @@ void CL_PredictMovePNum (int seat)
 				//snapshot ring keeps the server's), so the older commands' inputs are the bytes the memo holds
 				if (i == pring_firsti && from.state != &keepstate)
 				{
-					if (cl_predict_keep.ival && CL_PredictKeepAgrees(from.state, pv))
-					{
-						keepstate = *from.state;
-						VectorCopy(pv->prop.origin, keepstate.origin);
-						VectorCopy(pv->prop.velocity, keepstate.velocity);
-						keepstate.onground = pv->prop.onground;
-						keepstate.jump_held = pv->prop.jump_held;
-						from.state = &keepstate;
+					player_state_t *k = CL_PredictKeep(pv, from.state, &keepstate);
+					if (k != from.state)
 						pkeep_kept++;
-					}
 					else
 						pkeep_snapped++;
+					from.state = k;
 				}
 			}
 			//FTESurf Patch 754: the posture the hull states, propagated or not (a
@@ -2800,6 +2811,10 @@ void CL_PredictMovePNum (int seat)
 					from.state->pmsrc = pv->prop.pmsrc;	//FTESurf: duck/tick state
 					if (!(cls.fteprotocolextensions2 & PEXT2_REPLACEMENTDELTAS))
 						VectorCopy(pv->prop.gravitydir, from.state->gravitydir);
+					//FTESurf Patch 1742 review 1: the replay ran no pass (every command acked), so this extrapolates
+					//from the snapshot itself -- the same keep, or the camera alternates between kept and server states
+					if (from.state != &framebuf[0] && from.state != &framebuf[1])
+						from.state = CL_PredictKeep(pv, from.state, &keepstate);
 				}
 				CL_PredictSourcePhase(seat, from.frame, from.state);
 				PMSrc_ReconcileHull(&from.state->pmsrc, from.state->szmins, from.state->szmaxs, pv->statsf[STAT_VIEWHEIGHT]);	//Patch 754
@@ -2938,7 +2953,9 @@ void CL_PredictMovePNum (int seat)
 			  This does NOT touch the mover.  prop.velocity is read only to
 			  build the reported value; from.state is left exactly as the
 			  network delivered it, so CL_PredictUsercmd still seeds from the
-			  server's own state and no movement outcome or run time can move.*/
+			  server's own state and no movement outcome or run time can move.
+			  (Patch 1742: from the prediction instead when the two agree within
+			  cl_predict_keep_origin/_velocity; the server's own runs never read it.)*/
 			if (!nopred && pv->prop.sequence && from.frame == pv->prop.sequence &&
 				cl_predict_velblend.ival >= 2)
 				VectorCopy(pv->prop.velocity, blendfromvel);
@@ -3370,6 +3387,7 @@ static void CL_PredErrDump_f(void)
 	VFS_PRINTF(f, "FTESURF-PREDRING 2\n# engine %s\n# command_identity ack-seat-tag-v1\n# rows %i seat %i now %.4f\n"
 		"# t seq porg(3) sorg(3) pvel(3) svel(3) pground sground pmtype msec pitch yaw roll fwd side up buttons cmdvalid predvalid predpm seedseq seedcarry phasehit parts ticks\n",
 		version_string(), n, seat, realtime);
+	VFS_PRINTF(f, "# predict_keep %i origin %g velocity %g\n", cl_predict_keep.ival, cl_predict_keep_origin.value, cl_predict_keep_velocity.value);	//FTESurf Patch 1742 review 1
 	for (k = 0; k < n; k++)
 	{
 		const pring_t *r = &pring[seat][(pring_head[seat] - n + k + 2 * PRING_MAX) % PRING_MAX];
