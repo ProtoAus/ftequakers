@@ -2012,6 +2012,7 @@ static qboolean BIH_TraceUncached(model_t *model, int forcehullnum, const frames
 	int		i;
 	vec3_t point;
 	struct bihtrace_s tr;
+	qboolean isvphys = false;
 
 	if (bih_phyfix && model->phyfixed)
 		model = model->phyfixed;	//Patch 888
@@ -2020,7 +2021,10 @@ static qboolean BIH_TraceUncached(model_t *model, int forcehullnum, const frames
 	   traces").  The hl2 plugin builds vphysalt only for the submodels whose entity Source makes VPHYSICS,
 	   with vphysics' half-unit separation in the shape (mod_vbsp.c VBSP_VPhysAlt). */
 	if (bih_vphys && model->vphysalt && !VectorEquals(mins, maxs))
+	{
 		model = model->vphysalt;
+		isvphys = true;	//its leaves are convex pieces: Patch 1248's crease rule, as for a prop's
+	}
 
 	if (axis)
 	{	//rotate everything
@@ -2051,7 +2055,7 @@ static qboolean BIH_TraceUncached(model_t *model, int forcehullnum, const frames
 
 	// fill in a default trace
 	memset (&tr.trace, 0, sizeof(tr.trace));
-	tr.inphy = false;	//Patch 1248: only the prop-piece loop sets it
+	tr.inphy = isvphys;	//Patch 1248: the prop-piece loop sets it, and a vphysalt sweep (Patch 1713)
 	tr.trace.fraction = tr.trace.truefraction = 1;
 	tr.trace.surface = &(nullsurface.c);
 

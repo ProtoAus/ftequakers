@@ -1134,6 +1134,7 @@ demos say faces stand 0.5 proud, so Momentum's sweeps are not that one.
 ==================
 */
 #define VBSP_VPHYS_MARGIN	0.5f	/*vphysics' 0.25 separation radius, on the hull and on the box*/
+static qboolean vbsp_tail1713;	//the exe answers plugmodeltail1713_name: its model_t has vphysalt (com_mesh.h)
 static unsigned int vbsp_stat_vphysmodels, vbsp_stat_vphysrefused, vbsp_stat_vphyspieces;
 
 typedef struct
@@ -1142,14 +1143,13 @@ typedef struct
 	int model, solidbsp, spawnflags;
 } vbsp_vpent_t;
 
-//Source's solid type for entity i: 1 SOLID_VPHYSICS, 2 SOLID_BSP, 0 anything else (point entities, props).
-static int VBSP_VPhysClass(const vbsp_vpent_t *e, int n, int i, int depth)
+//Source's solid type for entity i ignoring a door's parent: 1 SOLID_VPHYSICS, 2 SOLID_BSP, 0 anything else.
+static int VBSP_VPhysClassOwn(const vbsp_vpent_t *e, int i)
 {
 	const char *c = e[i].cls;
-	int j;
-	if (!Q_strcasecmp(c, "func_brush") || !Q_strcasecmp(c, "func_door_rotating") ||
+	if (!Q_strcasecmp(c, "func_brush") || !Q_strcasecmp(c, "func_reflective_glass") || !Q_strcasecmp(c, "func_door_rotating") ||
 		!Q_strcasecmp(c, "func_rotating") || !Q_strcasecmp(c, "momentary_rot_button"))
-		return e[i].solidbsp ? 2 : 1;	//modelentities.cpp:43/63, doors.cpp:1403/1407, bmodels.cpp:694/752, buttons.cpp:1047/1061
+		return e[i].solidbsp ? 2 : 1;	//modelentities.cpp:43/63 (+CFuncReflectiveGlass), doors.cpp:1403/1407, bmodels.cpp:694/752, buttons.cpp:1047/1061
 	if (!Q_strcasecmp(c, "func_rot_button") || !Q_strcasecmp(c, "func_movelinear") ||
 		!Q_strcasecmp(c, "momentary_door") || !Q_strcasecmp(c, "func_water_analog") ||
 		!Q_strcasecmp(c, "func_physbox") || !Q_strcasecmp(c, "func_physbox_multiplayer") ||
@@ -1157,22 +1157,10 @@ static int VBSP_VPhysClass(const vbsp_vpent_t *e, int n, int i, int depth)
 		return 1;	//buttons.cpp:870, func_movelinear.cpp:96, physobj.cpp:447/1243
 	if (!Q_strcasecmp(c, "func_pushable"))
 		return (e[i].spawnflags & 128) ? 2 : 1;	//func_break.cpp:1238-1246, SF_PUSH_BREAKABLE -> CBreakable
-	if (!Q_strcasecmp(c, "func_tracktrain"))
-		return (e[i].spawnflags & 0x80) ? 2 : 1;	//trains.cpp:2717, SF_TRACKTRAIN_HL1TRAIN
+	if (!Q_strcasecmp(c, "func_tracktrain") || !Q_strcasecmp(c, "func_tanktrain"))
+		return (e[i].spawnflags & 0x80) ? 2 : 1;	//trains.cpp:2717, SF_TRACKTRAIN_HL1TRAIN (tanktrain.cpp:40 derives)
 	if (!Q_strcasecmp(c, "func_door") || !Q_strcasecmp(c, "func_water"))
-	{	//doors.cpp:249-257: SOLID_BSP under a SOLID_BSP root move parent, else SOLID_VPHYSICS
-		int root = i;
-		for (depth = 0; depth < 16 && *e[root].parent; depth++)
-		{
-			for (j = 0; j < n; j++)
-				if (j != root && *e[j].name && !Q_strcasecmp(e[j].name, e[root].parent))
-					break;
-			if (j == n)
-				break;
-			root = j;
-		}
-		return (root != i && VBSP_VPhysClass(e, n, root, 16) == 2) ? 2 : 1;
-	}
+		return 1;	//doors.cpp:249-257; VBSP_VPhysClass applies the parent rule
 	if (!Q_strcasecmp(c, "func_wall") || !Q_strcasecmp(c, "func_wall_toggle") || !Q_strcasecmp(c, "func_conveyor") ||
 		!Q_strcasecmp(c, "func_breakable") || !Q_strcasecmp(c, "func_button") || !Q_strcasecmp(c, "func_plat") ||
 		!Q_strcasecmp(c, "func_platrot") || !Q_strcasecmp(c, "func_train") || !Q_strcasecmp(c, "func_lod") ||
@@ -1180,9 +1168,29 @@ static int VBSP_VPhysClass(const vbsp_vpent_t *e, int n, int i, int depth)
 		return 2;
 	return 0;
 }
+//...and with it: a func_door/func_water under a SOLID_BSP root move parent is SOLID_BSP (doors.cpp:249-257).
+//The parent walk is bounded, so a parentname loop (a map can hold one) ends instead of recursing.
+static int VBSP_VPhysClass(const vbsp_vpent_t *e, int n, int i)
+{
+	int own = VBSP_VPhysClassOwn(e, i), root = i, steps, j;
+	if (own != 1 || (Q_strcasecmp(e[i].cls, "func_door") && Q_strcasecmp(e[i].cls, "func_water")))
+		return own;
+	for (steps = 0; steps < 64 && *e[root].parent; steps++)
+	{
+		for (j = 0; j < n; j++)
+			if (j != root && *e[j].name && !Q_strcasecmp(e[j].name, e[root].parent))
+				break;
+		if (j == n)
+			break;
+		root = j;
+	}
+	if (steps == 64)
+		return 1;	//a loop has no root
+	return (root != i && VBSP_VPhysClassOwn(e, root) == 2) ? 2 : 1;
+}
 
 //-> per model index (1..nummodels-1), its vcollide's solid 0 when Source sweeps boxes against it, else NULL.
-static const qbyte **VBSP_VPhysSolids(model_t *wmod, qbyte *mod_base, vlump_t *lumps, int nummodels, size_t **outlen)
+static const qbyte **VBSP_VPhysSolids(qbyte *mod_base, size_t basesize, vlump_t *lumps, int nummodels, size_t **outlen)
 {
 	vlump_t *el = &lumps[VLUMP_ENTITIES], *pl = &lumps[VLUMP_PHYSCOLLIDE];
 	const qbyte *d = mod_base + pl->fileofs;
@@ -1194,10 +1202,11 @@ static const qbyte **VBSP_VPhysSolids(model_t *wmod, qbyte *mod_base, vlump_t *l
 	qbyte *want;
 
 	*outlen = NULL;
-	if (nummodels < 2 || n < 16 || !el->filelen)
+	if (nummodels < 2 || n < 16 || !el->filelen ||	//DecompressLumps skips a lump past the file, it does not drop it
+		(size_t)pl->fileofs + n > basesize || (size_t)el->fileofs + el->filelen > basesize)
 		return NULL;
 	want = plugfuncs->Malloc(nummodels);
-	text = plugfuncs->Malloc(el->filelen + 1);
+	text = plugfuncs->Malloc((size_t)el->filelen + 1);
 	if (!want || !text)
 	{
 		plugfuncs->Free(want);
@@ -1250,7 +1259,7 @@ static const qbyte **VBSP_VPhysSolids(model_t *wmod, qbyte *mod_base, vlump_t *l
 			break;
 	}
 	for (i = 0; i < numents; i++)
-		if (ents[i].model > 0 && ents[i].model < nummodels && VBSP_VPhysClass(ents, numents, i, 0) == 1)
+		if (ents[i].model > 0 && ents[i].model < nummodels && VBSP_VPhysClass(ents, numents, i) == 1)
 			want[ents[i].model] = 1;
 	plugfuncs->Free(ents);
 	plugfuncs->Free(text);
@@ -1322,8 +1331,7 @@ static void VBSP_VPhysAlt(model_t *sub, const qbyte *solid, size_t len)
 		Q_strlcpy(twin->name, sub->name, sizeof(twin->name));
 		twin->type = sub->type;
 		twin->loadstate = MLS_LOADED;
-		VectorCopy(sub->mins, twin->mins);
-		VectorCopy(sub->maxs, twin->maxs);
+		ClearBounds(twin->mins, twin->maxs);	//sub's are still the world's here (*mod = *wmod)
 		if (VBSP_PhyBrushesT(twin, &trn, &pc, VBSP_VPHYS_MARGIN, cont, &brushes, &nb) &&
 			(leafs = plugfuncs->Malloc(sizeof(*leafs)*nb)))
 		{
@@ -13803,7 +13811,7 @@ deliberately NOT retired when drawing, even though the loader picks one: it pick
 FALLS BACK LDR->HDR the way VBSP_LoadLeafLight does, which is the exact three-way this rule was
 written around, so "the map is HDR" does not make the LDR half dead.
 */
-static qbyte *VBSP_DecompressLumps(model_t *mod, qbyte *mod_base, size_t filelen, dvbspheader_t *header, const qboolean *skiplump)
+static qbyte *VBSP_DecompressLumps(model_t *mod, qbyte *mod_base, size_t filelen, dvbspheader_t *header, const qboolean *skiplump, size_t *outsize)
 {
 	size_t i, extra = 0, tail, saved = 0;
 	int anycompressed = 0, numskipped = 0;
@@ -13834,6 +13842,7 @@ static qbyte *VBSP_DecompressLumps(model_t *mod, qbyte *mod_base, size_t filelen
 	if (numskipped)
 		Con_DPrintf("%s: %i compressed lump%s retired unread, %.1f MB not decompressed\n",
 					mod->name, numskipped, numskipped==1?"":"s", saved/(1024*1024.0));
+	*outsize = filelen;	//FTESurf Patch 1713: the buffer every lump offset must fit in
 	if (!anycompressed)
 		return mod_base;	//uncompressed classic map: leave it exactly as-is
 
@@ -13875,6 +13884,7 @@ static qbyte *VBSP_DecompressLumps(model_t *mod, qbyte *mod_base, size_t filelen
 		l->filelen = actual;
 		tail += actual;
 	}
+	*outsize = filelen + extra;
 	return newbase;
 }
 
@@ -14151,6 +14161,7 @@ static qboolean VBSP_LoadModel(model_t *mod, qbyte *mod_base, size_t filelen, ch
 	vbspinfo_t *prv = mod->meshinfo;
 	size_t i;
 	qboolean noerrors = true;
+	size_t basesize = filelen;	//FTESurf Patch 1713: VBSP_DecompressLumps' buffer
 #ifdef HAVE_CLIENT
 	qboolean haverenderer = qrenderer != QR_NONE;
 #else
@@ -14248,7 +14259,7 @@ static qboolean VBSP_LoadModel(model_t *mod, qbyte *mod_base, size_t filelen, ch
 
 	//nettest: transparently decompress any LZMA-compressed lumps (repoints mod_base + rewrites the lump
 	//table, so every Load* below sees plain data).  Must run before LoadMapArchive / the Load* calls.
-	mod_base = VBSP_DecompressLumps(mod, mod_base, filelen, &header, lumpskip);
+	mod_base = VBSP_DecompressLumps(mod, mod_base, filelen, &header, lumpskip, &basesize);
 	if (!mod_base)
 		return false;
 
@@ -14288,17 +14299,22 @@ static qboolean VBSP_LoadModel(model_t *mod, qbyte *mod_base, size_t filelen, ch
 		VBSP_LoadLeafWater							(mod, mod_base, &header.lumps[VLUMP_LEAFWATERDATA]);	//FTESurf Patch 1013
 	noerrors = noerrors && VBSP_LoadNodes			(mod, mod_base, &header.lumps[VLUMP_NODES]);
 	noerrors = noerrors && VBSP_LoadSubmodels		(mod, mod_base, &header.lumps[VLUMP_MODELS]);
-	if (noerrors)	//FTESurf Patch 1713: copied out, because the decompressed lumps do not outlive this function
+	prv->vpsolid = NULL;	//FTESurf Patch 1713: copied out (the decompressed lumps die with this function), into
+	prv->vplen = NULL;		//the model's group so a later failed load frees them too
+	if (noerrors && vbsp_tail1713)
 	{
 		size_t *len = NULL;
-		const qbyte **sol = VBSP_VPhysSolids(mod, mod_base, header.lumps, prv->numcmodels, &len);
-		prv->vpsolid = NULL;
-		prv->vplen = len;
-		if (sol && len && (prv->vpsolid = plugfuncs->Malloc(sizeof(*prv->vpsolid)*prv->numcmodels)))
+		const qbyte **sol = VBSP_VPhysSolids(mod_base, basesize, header.lumps, prv->numcmodels, &len);
+		if (sol && len && (prv->vpsolid = plugfuncs->GMalloc(&mod->memgroup, sizeof(*prv->vpsolid)*prv->numcmodels)) &&
+			(prv->vplen = plugfuncs->GMalloc(&mod->memgroup, sizeof(*prv->vplen)*prv->numcmodels)))
 			for (i = 0; i < (size_t)prv->numcmodels; i++)
-				if ((prv->vpsolid[i] = sol[i] ? plugfuncs->Malloc(len[i]) : NULL))
+			{
+				prv->vplen[i] = len[i];
+				if ((prv->vpsolid[i] = sol[i] ? plugfuncs->GMalloc(&mod->memgroup, len[i]) : NULL))
 					memcpy(prv->vpsolid[i], sol[i], len[i]);
+			}
 		plugfuncs->Free((void*)sol);
+		plugfuncs->Free(len);
 	}
 	noerrors = noerrors && VBSP_LoadAreas			(mod, mod_base, &header.lumps[VLUMP_AREAS]);
 	noerrors = noerrors && VBSP_LoadAreaPortals		(mod, mod_base, &header.lumps[VLUMP_AREAPORTALS], &header.lumps[VLUMP_AREAPORTALVERTS]);
@@ -14559,10 +14575,12 @@ static qboolean VBSP_LoadMap (model_t *mod, void *filein, size_t filelen)
 		mod->firstmodelsurface = bm->firstsurface;
 
 		VBSP_BuildBIHSubmodel(mod, i);
-		mod->phyfixed = NULL;
-		mod->vphysalt = NULL;	//FTESurf Patch 1713: *mod = *wmod copied the world's
-		if (prv->vpsolid && i < prv->numcmodels && prv->vpsolid[i])
-			VBSP_VPhysAlt(mod, prv->vpsolid[i], prv->vplen[i]);
+		if (vbsp_tail1713)
+		{	//FTESurf Patch 1713: only an exe whose model_t has the field
+			mod->vphysalt = NULL;	//*mod = *wmod copied the world's
+			if (prv->vpsolid && i < prv->numcmodels && prv->vpsolid[i])
+				VBSP_VPhysAlt(mod, prv->vpsolid[i], prv->vplen[i]);
+		}
 
 		memset(&mod->batches, 0, sizeof(mod->batches));
 		mod->vbos = NULL;
@@ -14586,10 +14604,12 @@ static qboolean VBSP_LoadMap (model_t *mod, void *filein, size_t filelen)
 	if (prv->vpsolid)	//FTESurf Patch 1713
 	{
 		for (i = 0; i < prv->numcmodels; i++)
-			plugfuncs->Free(prv->vpsolid[i]);
-		plugfuncs->Free(prv->vpsolid);
+			if (prv->vpsolid[i])
+				plugfuncs->GFree(&wmod->memgroup, prv->vpsolid[i]);
+		plugfuncs->GFree(&wmod->memgroup, prv->vpsolid);
 	}
-	plugfuncs->Free(prv->vplen);
+	if (prv->vplen)
+		plugfuncs->GFree(&wmod->memgroup, prv->vplen);
 	prv->vpsolid = NULL;
 	prv->vplen = NULL;
 	if (vbsp_stat_vphysmodels || vbsp_stat_vphysrefused)
@@ -14918,6 +14938,7 @@ qboolean VBSP_Init(void)
 		modfuncs = NULL;
 	threadfuncs = plugfuncs->GetEngineInterface(plugthreadfuncs_name, sizeof(*threadfuncs));
 	loadingfuncs = plugfuncs->GetEngineInterface(plugloadingfuncs_name, sizeof(*loadingfuncs));
+	vbsp_tail1713 = plugfuncs->GetEngineInterface(plugmodeltail1713_name, sizeof(int)) != NULL;	//FTESurf Patch 1713
 
 	//nettest: a dedicated/headless server has no client Image/renderer interface (the same condition the
 	//"hl2: VTF/VMT/TTH support unavailable" banners report).  Mark qrenderer QR_NONE so the renderer-only

@@ -339,6 +339,8 @@ typedef struct modplugfuncs_s
 //FTESurf Patch 1440: answered (an int) by an exe whose model_t ends in geombase/geomcount (gl_model.h); a plugin
 //writes them only then -- on an older exe they would land past the struct, in the next model's slot.
 #define plugmodeltail1440_name "FTESurfModelTail/1440"
+//FTESurf Patch 1713: likewise for model_t.vphysalt; without it the hl2 plugin builds no vcollide trees.
+#define plugmodeltail1713_name "FTESurfModelTail/1713"
 } plugmodfuncs_t;
 #define MODPLUGFUNCS_VERSION 6	//FTESurf Patch 764: struct bihtransform_s grew (the plugin fills it, com_bih.c reads it); 888: again, and model_t.phyfixed
 
