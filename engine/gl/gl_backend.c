@@ -7506,10 +7506,11 @@ static qboolean GLBE_WaterOnScreen(const batch_t *b)
 	}
 	return false;
 }
-//FTESurf Patch 1729: Source's water LOD (viewrender.cpp DetermineWaterRenderInfo: past the end distance, water
-//without a local reflection renders no refraction). A world batch whose shader has `fte_waterlod` and whose every
-//on-screen face is at least its end from the eye: each of its pixels is cheap water (vmt/water #CHEAPLOD returns
-//before sampling the capture), so it needs none and weighs nothing in the view's choice.
+//FTESurf Patch 1729: hl2_water_lod's distance cutoff (Source's water LOD past its end distance renders no
+//refraction, viewrender.cpp DetermineWaterRenderInfo). A world batch whose shader has `fte_waterlod`, with some face
+//on screen and every on-screen face at least its end from the eye: each of its pixels is cheap water (vmt/water
+//#CHEAPLOD returns before sampling the capture), so it needs none, weighs nothing in the view's choice and is not
+//gathered into a capture's visibility. r_origin is the shader's e_eyepos (a stereo eye's, not vieworg).
 extern cvar_t r_cheapwaterstart, r_cheapwaterend;
 static qboolean GLBE_WaterLodCheap(const batch_t *b)
 {
@@ -7518,10 +7519,11 @@ static qboolean GLBE_WaterLodCheap(const batch_t *b)
 	vec3_t lo, hi;
 	float end, d2, e;
 	int k;
+	qboolean seen = false;
 	if (!s || !s->waterlodend || b->ent != &r_worldentity || b->buildmeshes || !b->mesh)
 		return false;
 	end = s->waterlodend > 0 ? s->waterlodend : max(r_cheapwaterstart.value, r_cheapwaterend.value);
-	if (!(end >= 0))
+	if (!(end > 0))
 		return false;
 	for (m = b->firstmesh; m < b->meshes; m++)
 	{
@@ -7533,13 +7535,14 @@ static qboolean GLBE_WaterLodCheap(const batch_t *b)
 			continue;
 		for (d2 = 0, k = 0; k < 3; k++)
 		{
-			e = (r_refdef.vieworg[k] < lo[k]) ? lo[k] - r_refdef.vieworg[k] : (r_refdef.vieworg[k] > hi[k]) ? r_refdef.vieworg[k] - hi[k] : 0;
+			e = (r_origin[k] < lo[k]) ? lo[k] - r_origin[k] : (r_origin[k] > hi[k]) ? r_origin[k] - hi[k] : 0;
 			d2 += e*e;
 		}
 		if (d2 < end*end)
 			return false;
+		seen = true;
 	}
-	return true;
+	return seen;
 }
 typedef struct
 {
@@ -7624,8 +7627,8 @@ static void GLBE_WaterGather(bewaterview_t *wv, batch_t *first, const plane_t *p
 				same = GLBE_WaterSamePlane(&p, pl);
 				if ((pass == 1 && !same) || (pass == 2 && (same || !all || !GLBE_WaterFacesEye(&p, wv->under))))
 					continue;
-				if (pass && !GLBE_WaterOnScreen(b))
-					continue;	//never drawn this view (GLBE_GenerateBatchTextures skips it)
+				if (pass && (!GLBE_WaterOnScreen(b) || GLBE_WaterLodCheap(b)))
+					continue;	//never drawn this view, or drawn without sampling a capture (P1729)
 				if (same)
 					*need |= b->shader->flags & BE_WATERKINDS;
 				if (n + (b->meshes - b->firstmesh) > *max)

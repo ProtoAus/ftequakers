@@ -1979,32 +1979,6 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 // Fresnel and cube lookup must use the SAME world-space normal/view.
 "vec3 worldnormal = normalize(tangenttoworld * n);\n"
 "vec3 viewdir = normalize(eye);\n"
-"#ifdef CHEAPLOD\n"
-//FTESurf Patch 1729: Source's cheap pass (watercheap_ps2x BLEND: fog colour to the cubemap by (1-n.e)^5) over the
-//refraction from the start to the end distance; past the end it is all there is, and the capture may not exist
-//(GLBE_WaterLodCheap uses the same test).
-"#ifdef CHEAPLODMAP\n"
-"float lods = cvar_r_cheapwaterstart, lode = max(cvar_r_cheapwaterend, cvar_r_cheapwaterstart);\n"
-"#else\n"
-"float lods = float(LODSTART), lode = max(float(LODEND), float(LODSTART));\n"
-"#endif\n"
-"float lodd = length(eye);\n"
-"float lodf = clamp((lodd - lods) / max(lode - lods, 0.001), 0.0, 1.0);\n"
-"vec3 cheap = vec3(FOGTINT);\n"
-"#ifdef REFLECTCUBEMASK\n"
-"#ifdef NOFRESNEL\n"
-"float cheapf = float(REFLECTBLEND);\n"
-"#else\n"
-"float cheapf = pow(1.0 - clamp(dot(worldnormal, viewdir), 0.0, 1.0), 5.0);\n"
-"#endif\n"
-"cheap = mix(cheap, textureCube(s_reflectcube, reflect(-viewdir, worldnormal)).rgb * vec3(TINT_REFL), cheapf);\n"
-"#endif\n"
-"if (lodd >= lode)\n"
-"{\n"
-"gl_FragColor = vec4(fog3(cheap), 1.0);\n"
-"return;\n"
-"}\n"
-"#endif\n"
 "fres = pow(1.0-clamp(dot(worldnormal, viewdir), 0.0, 1.0), float(FRESNEL_EXP)) * float(FRESNEL_RANGE) + float(FRESNEL_MIN);\n"
 
 "#ifdef DEPTH\n"
@@ -2033,6 +2007,32 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "float distortion = (topside ? clamp(depth / float(FOGRANGE), 0.0, 1.0) : 1.0) * nsample.a;\n"
 "#else\n"
 "float distortion = nsample.a;\n"
+"#endif\n"
+"#ifdef CHEAPLOD\n"
+//FTESurf Patch 1729: Source's cheap pass (watercheap_ps2x BLEND: fog colour to the cubemap by (1-n.e)^5) over the
+//refraction from the start to the end distance; past the end it is all there is, and the capture may not exist
+//(GLBE_WaterLodCheap uses the same test). Here: after the depth block's derivatives, before the capture is read.
+"#ifdef CHEAPLODMAP\n"
+"float lods = cvar_r_cheapwaterstart, lode = max(cvar_r_cheapwaterend, cvar_r_cheapwaterstart);\n"
+"#else\n"
+"float lods = float(LODSTART), lode = max(float(LODEND), float(LODSTART));\n"
+"#endif\n"
+"float lodd = length(eye);\n"
+"float lodf = lode > 0.0 ? clamp((lodd - lods) / max(lode - lods, 0.001), 0.0, 1.0) : 0.0;\n"
+"vec3 cheap = vec3(FOGTINT);\n"
+"#ifdef REFLECTCUBEMASK\n"
+"#ifdef NOFRESNEL\n"
+"float cheapf = float(REFLECTBLEND);\n"
+"#else\n"
+"float cheapf = pow(1.0 - clamp(dot(worldnormal, viewdir), 0.0, 1.0), 5.0);\n"
+"#endif\n"
+"cheap = mix(cheap, textureCube(s_reflectcube, reflect(-viewdir, worldnormal)).rgb * vec3(TINT_REFL), cheapf);\n"
+"#endif\n"
+"if (lode > 0.0 && lodd >= lode)\n"
+"{\n"
+"gl_FragColor = vec4(fog3(cheap), 1.0);\n"
+"return;\n"
+"}\n"
 "#endif\n"
 
 
@@ -2150,9 +2150,6 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 
 //interplate by fresnel
 "refr = mix(refr, refl, fres);\n"
-"#ifdef CHEAPLOD\n"
-"refr = mix(refr, cheap, lodf);\n"
-"#endif\n"
 
 "#ifdef ALPHA\n"
 "vec4 ts = texture2D(s_diffuse, ntc);\n"
@@ -2162,6 +2159,9 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "refr = fog3(refr); \n"
 "#endif\n"
 
+"#ifdef CHEAPLOD\n"
+"refr = mix(refr, fog3(cheap), lodf); //over the finished pass, base layer included, as Source's BLEND pass\n"
+"#endif\n"
 //done
 "gl_FragColor = vec4(refr, 1.0);\n"
 "}\n"
@@ -3924,32 +3924,6 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 // Fresnel and cube lookup must use the SAME world-space normal/view.
 "vec3 worldnormal = normalize(tangenttoworld * n);\n"
 "vec3 viewdir = normalize(eye);\n"
-"#ifdef CHEAPLOD\n"
-//FTESurf Patch 1729: Source's cheap pass (watercheap_ps2x BLEND: fog colour to the cubemap by (1-n.e)^5) over the
-//refraction from the start to the end distance; past the end it is all there is, and the capture may not exist
-//(GLBE_WaterLodCheap uses the same test).
-"#ifdef CHEAPLODMAP\n"
-"float lods = cvar_r_cheapwaterstart, lode = max(cvar_r_cheapwaterend, cvar_r_cheapwaterstart);\n"
-"#else\n"
-"float lods = float(LODSTART), lode = max(float(LODEND), float(LODSTART));\n"
-"#endif\n"
-"float lodd = length(eye);\n"
-"float lodf = clamp((lodd - lods) / max(lode - lods, 0.001), 0.0, 1.0);\n"
-"vec3 cheap = vec3(FOGTINT);\n"
-"#ifdef REFLECTCUBEMASK\n"
-"#ifdef NOFRESNEL\n"
-"float cheapf = float(REFLECTBLEND);\n"
-"#else\n"
-"float cheapf = pow(1.0 - clamp(dot(worldnormal, viewdir), 0.0, 1.0), 5.0);\n"
-"#endif\n"
-"cheap = mix(cheap, textureCube(s_reflectcube, reflect(-viewdir, worldnormal)).rgb * vec3(TINT_REFL), cheapf);\n"
-"#endif\n"
-"if (lodd >= lode)\n"
-"{\n"
-"gl_FragColor = vec4(fog3(cheap), 1.0);\n"
-"return;\n"
-"}\n"
-"#endif\n"
 "fres = pow(1.0-clamp(dot(worldnormal, viewdir), 0.0, 1.0), float(FRESNEL_EXP)) * float(FRESNEL_RANGE) + float(FRESNEL_MIN);\n"
 
 "#ifdef DEPTH\n"
@@ -3978,6 +3952,32 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "float distortion = (topside ? clamp(depth / float(FOGRANGE), 0.0, 1.0) : 1.0) * nsample.a;\n"
 "#else\n"
 "float distortion = nsample.a;\n"
+"#endif\n"
+"#ifdef CHEAPLOD\n"
+//FTESurf Patch 1729: Source's cheap pass (watercheap_ps2x BLEND: fog colour to the cubemap by (1-n.e)^5) over the
+//refraction from the start to the end distance; past the end it is all there is, and the capture may not exist
+//(GLBE_WaterLodCheap uses the same test). Here: after the depth block's derivatives, before the capture is read.
+"#ifdef CHEAPLODMAP\n"
+"float lods = cvar_r_cheapwaterstart, lode = max(cvar_r_cheapwaterend, cvar_r_cheapwaterstart);\n"
+"#else\n"
+"float lods = float(LODSTART), lode = max(float(LODEND), float(LODSTART));\n"
+"#endif\n"
+"float lodd = length(eye);\n"
+"float lodf = lode > 0.0 ? clamp((lodd - lods) / max(lode - lods, 0.001), 0.0, 1.0) : 0.0;\n"
+"vec3 cheap = vec3(FOGTINT);\n"
+"#ifdef REFLECTCUBEMASK\n"
+"#ifdef NOFRESNEL\n"
+"float cheapf = float(REFLECTBLEND);\n"
+"#else\n"
+"float cheapf = pow(1.0 - clamp(dot(worldnormal, viewdir), 0.0, 1.0), 5.0);\n"
+"#endif\n"
+"cheap = mix(cheap, textureCube(s_reflectcube, reflect(-viewdir, worldnormal)).rgb * vec3(TINT_REFL), cheapf);\n"
+"#endif\n"
+"if (lode > 0.0 && lodd >= lode)\n"
+"{\n"
+"gl_FragColor = vec4(fog3(cheap), 1.0);\n"
+"return;\n"
+"}\n"
 "#endif\n"
 
 
@@ -4095,9 +4095,6 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 
 //interplate by fresnel
 "refr = mix(refr, refl, fres);\n"
-"#ifdef CHEAPLOD\n"
-"refr = mix(refr, cheap, lodf);\n"
-"#endif\n"
 
 "#ifdef ALPHA\n"
 "vec4 ts = texture2D(s_diffuse, ntc);\n"
@@ -4107,6 +4104,9 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "refr = fog3(refr); \n"
 "#endif\n"
 
+"#ifdef CHEAPLOD\n"
+"refr = mix(refr, fog3(cheap), lodf); //over the finished pass, base layer included, as Source's BLEND pass\n"
+"#endif\n"
 //done
 "gl_FragColor = vec4(refr, 1.0);\n"
 "}\n"

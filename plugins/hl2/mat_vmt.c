@@ -4813,13 +4813,14 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 				}
 				if (VMT_WaterParallax(wmode, progargs))
 					Q_strlcat(wargs, "#PARALLAX", sizeof(wargs));
-				//FTESurf Patch 1729: hl2_water_lod -- Source's distance water at "simple reflections": its cheap pass
-				//blends over the refraction between the LOD distances (water.cpp DrawCheapWater, BLEND) and past them
-				//the view renders no refraction (viewrender.cpp DetermineWaterRenderInfo). Not for $forceexpensive
-				//water (a local reflection turns the LOD off) nor without an $envmap (no cheap pass).
-				if (wmode == 1 && hl2_waterlod && hl2_waterlod->ival && !st->water_expensive && st->envauthored)
+				//FTESurf Patch 1729: hl2_water_lod -- Source's LOD mechanics (water.cpp DrawCheapWater's BLEND pass over
+				//the refraction between the distances; viewrender.cpp: no refraction past the end) on any water with an
+				//$envmap (the cheap pass's) and distances: the map's under a WaterLOD proxy, else its own authored pair.
+				//Source keeps them for water without a local reflection; see the cvar.
+				if (wmode == 1 && hl2_waterlod && hl2_waterlod->ival && st->envauthored &&
+					(st->water_lodproxy || (st->water_lodend_set && st->water_lodend > 0)))
 				{
-					float ls = st->water_lodstart_set ? st->water_lodstart : 500, le = st->water_lodend_set ? st->water_lodend : 1000;
+					float ls = st->water_lodstart_set ? st->water_lodstart : 0, le = st->water_lodend;
 					if (st->water_lodproxy)
 						Q_strlcat(wargs, "#CHEAPLOD#CHEAPLODMAP", sizeof(wargs));
 					else

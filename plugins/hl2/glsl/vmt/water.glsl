@@ -276,32 +276,6 @@ void main (void)
 	// Fresnel and cube lookup must use the SAME world-space normal/view.
 	vec3 worldnormal = normalize(tangenttoworld * n);
 	vec3 viewdir = normalize(eye);
-#ifdef CHEAPLOD
-	//FTESurf Patch 1729: Source's cheap pass (watercheap_ps2x BLEND: fog colour to the cubemap by (1-n.e)^5) over the
-	//refraction from the start to the end distance; past the end it is all there is, and the capture may not exist
-	//(GLBE_WaterLodCheap uses the same test).
-#ifdef CHEAPLODMAP
-	float lods = cvar_r_cheapwaterstart, lode = max(cvar_r_cheapwaterend, cvar_r_cheapwaterstart);
-#else
-	float lods = float(LODSTART), lode = max(float(LODEND), float(LODSTART));
-#endif
-	float lodd = length(eye);
-	float lodf = clamp((lodd - lods) / max(lode - lods, 0.001), 0.0, 1.0);
-	vec3 cheap = vec3(FOGTINT);
-#ifdef REFLECTCUBEMASK
-#ifdef NOFRESNEL
-	float cheapf = float(REFLECTBLEND);
-#else
-	float cheapf = pow(1.0 - clamp(dot(worldnormal, viewdir), 0.0, 1.0), 5.0);
-#endif
-	cheap = mix(cheap, textureCube(s_reflectcube, reflect(-viewdir, worldnormal)).rgb * vec3(TINT_REFL), cheapf);
-#endif
-	if (lodd >= lode)
-	{
-		gl_FragColor = vec4(fog3(cheap), 1.0);
-		return;
-	}
-#endif
 	fres = pow(1.0-clamp(dot(worldnormal, viewdir), 0.0, 1.0), float(FRESNEL_EXP)) * float(FRESNEL_RANGE) + float(FRESNEL_MIN);
 
 #ifdef DEPTH
@@ -330,6 +304,32 @@ void main (void)
 	float distortion = (topside ? clamp(depth / float(FOGRANGE), 0.0, 1.0) : 1.0) * nsample.a;
 #else
 	float distortion = nsample.a;
+#endif
+#ifdef CHEAPLOD
+	//FTESurf Patch 1729: Source's cheap pass (watercheap_ps2x BLEND: fog colour to the cubemap by (1-n.e)^5) over the
+	//refraction from the start to the end distance; past the end it is all there is, and the capture may not exist
+	//(GLBE_WaterLodCheap uses the same test). Here: after the depth block's derivatives, before the capture is read.
+#ifdef CHEAPLODMAP
+	float lods = cvar_r_cheapwaterstart, lode = max(cvar_r_cheapwaterend, cvar_r_cheapwaterstart);
+#else
+	float lods = float(LODSTART), lode = max(float(LODEND), float(LODSTART));
+#endif
+	float lodd = length(eye);
+	float lodf = lode > 0.0 ? clamp((lodd - lods) / max(lode - lods, 0.001), 0.0, 1.0) : 0.0;
+	vec3 cheap = vec3(FOGTINT);
+#ifdef REFLECTCUBEMASK
+#ifdef NOFRESNEL
+	float cheapf = float(REFLECTBLEND);
+#else
+	float cheapf = pow(1.0 - clamp(dot(worldnormal, viewdir), 0.0, 1.0), 5.0);
+#endif
+	cheap = mix(cheap, textureCube(s_reflectcube, reflect(-viewdir, worldnormal)).rgb * vec3(TINT_REFL), cheapf);
+#endif
+	if (lode > 0.0 && lodd >= lode)
+	{
+		gl_FragColor = vec4(fog3(cheap), 1.0);
+		return;
+	}
 #endif
 
 
@@ -447,9 +447,6 @@ void main (void)
 
 	//interplate by fresnel
 	refr = mix(refr, refl, fres);
-#ifdef CHEAPLOD
-	refr = mix(refr, cheap, lodf);
-#endif
 
 #ifdef ALPHA
 	vec4 ts = texture2D(s_diffuse, ntc);
@@ -459,6 +456,9 @@ void main (void)
 	refr = fog3(refr);	
 #endif
 
+#ifdef CHEAPLOD
+	refr = mix(refr, fog3(cheap), lodf);	//over the finished pass, base layer included, as Source's BLEND pass
+#endif
 	//done
 	gl_FragColor = vec4(refr, 1.0);
 }

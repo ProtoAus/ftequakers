@@ -2301,19 +2301,19 @@ static void VBSP_LoadColourCorrection(model_t *loadmodel, const qbyte *entdata, 
 
 #ifdef HAVE_CLIENT
 //FTESurf Patch 1729: water_lod_control's distances into r_cheapwaterstart/end (the engine's; vmt/water #CHEAPLODMAP
-//and GLBE_WaterLodCheap read them). Source's C_WaterLODControl sets the view's pair; without one, its defaults 0/0.1.
+//and GLBE_WaterLodCheap read them), the last one as Source's C_WaterLODControl writes the view's pair on each. Without
+//one 0/0: no cutoff (Source's view keeps 0/0.1 or the previous map's, but this is not its rule anyway; see hl2_water_lod).
 static void VBSP_LoadWaterLod(const qbyte *entdata, size_t entlen)
 {
 	char key[64], token[1024], cls[64];
-	float start = 0, end = 0.1f, s, e;
-	qboolean seen = false;
+	float start = 0, end = 0, s, e;
 	char *text, *data;
 	text = plugfuncs->Malloc(entlen+1);
 	if (text)
 	{
 		memcpy(text, entdata, entlen);
 		text[entlen] = 0;
-		for (data = text; !seen && (data = cmdfuncs->ParseToken(data, token, sizeof(token), NULL)); )
+		for (data = text; (data = cmdfuncs->ParseToken(data, token, sizeof(token), NULL)); )
 		{
 			if (*token != '{')
 				continue;
@@ -2333,7 +2333,6 @@ static void VBSP_LoadWaterLod(const qbyte *entdata, size_t entlen)
 			}
 			if (!Q_strcasecmp(cls, "water_lod_control"))
 			{
-				seen = true;
 				start = s;
 				end = e;
 			}
@@ -15389,7 +15388,7 @@ qboolean VBSP_Init(void)
 		mod->envmaps while the BSP is being read, which no shader flush revisits.
 		*/
 		hl2_water = cvarfuncs->GetNVFDG("hl2_water", "0", CVAR_SHADERSYSTEM, "How Source water is drawn, and what it costs.\n0: flat translucent (default, FTESurf Patch 1587) -- a $fogcolor sheet, no extra scene render, but it still blends and still sorts.\n1: live refraction with approximate baked-cubemap reflection -- one extra scene render per batch.\n2: live refraction and reflection -- two extra scene renders per batch.\n3: dithered flat -- an ordered dither of $fogcolor. No blend, no sort, no render target; writes depth.\n4: budget animated -- translucent fog-coloured water with normal-map animation and approximate baked-cubemap reflection. No reflection, refraction, depth capture or screen copy; still blends/sorts and does not write depth. Not depth-correct or Source-exact.\n5: screen-space (FTESurf Patch 1020) -- refraction from a copy of the view's colour and depth, reflection marched through that depth copy, the fog colour where the reflected ray leaves the screen. No extra scene render; reflects only what is on screen.\nAt 1, 2 and 5 a material with $forcecheap (and an $envmap) draws as Source's cheap water instead: opaque $fogcolor to the cubemap by fresnel, its normal map's AnimatedTexture frames playing but not scrolled by $bumptransform (as Source's), no extra scene render (FTESurf Patch 879).", MAPOPTIONS);
-		hl2_waterlod = cvarfuncs->GetNVFDG("hl2_water_lod", "0", CVAR_SHADERSYSTEM, "FTESurf Patch 1729: Source's distance water at hl2_water 1 (Source's \"simple reflections\"). 1: water without $forceexpensive fades to Source's cheap water (fog colour to the cubemap by fresnel) between its LOD distances -- the map's water_lod_control for materials with the WaterLOD proxy (0/0.1 without one, so such water is cheap unless the eye is in it), otherwise the material's $cheapwaterstartdistance/$cheapwaterenddistance (500/1000) -- and water wholly past them renders no refraction. 0: refraction at every distance.", MAPOPTIONS);
+		hl2_waterlod = cvarfuncs->GetNVFDG("hl2_water_lod", "0", CVAR_SHADERSYSTEM, "FTESurf Patch 1729: a distance cutoff for water at hl2_water 1, from the LOD distances the map and material give. NOT Source's rule: on PC Source never applies them to water that reflects (an absent $forceexpensive is 1, water.cpp), which is most water. 1: water fades to Source's cheap water (fog colour to the cubemap by fresnel) between its distances -- the map's water_lod_control under a WaterLOD proxy, otherwise the material's own $cheapwaterstartdistance/$cheapwaterenddistance; water with neither keeps its refraction -- and water wholly past them renders no refraction. 0: refraction at every distance.", MAPOPTIONS);
 		hl2_refract = cvarfuncs->GetNVFDG("hl2_refract", "0", CVAR_SHADERSYSTEM, "How Source's Refract materials (glass, windows) are drawn.\n0: translucent (default, FTESurf Patch 1587), no framebuffer copy -- what is behind the pane tinted by $refracttint (and its tint texture), plus its $envmap reflection: Source's look without the warp.\n1: Source's refraction, which copies the framebuffer once per batch.\n2: dithered flat -- the pane keeps its own texture, $alpha sets the coverage, and it becomes opaque geometry that writes depth. A pane with no texture of its own draws as 0.", MAPOPTIONS);
 		hl2_vertexcolor = cvarfuncs->GetNVFDG("hl2_vertexcolor", "1", CVAR_SHADERSYSTEM, "FTESurf Patch 232: $vertexcolor / $vertexalpha on LightmappedGeneric and WorldVertexTransition materials -- the per-vertex tint and opacity a mapper paints onto a DISPLACEMENT (every other surface carries white at alpha 1, so this cannot change them).\n0: ignore both keys, which is what every build before P232 did.\n1: draw what the material asks for (default). 41 transition materials in 20 maps and 494 LightmappedGeneric ones in 111 maps carry them; surf_rise's ivy is the reported case.", MAPOPTIONS);
 		hl2_bottommaterial = cvarfuncs->GetNVFDG("hl2_bottommaterial", "1", CVAR_SHADERSYSTEM, "FTESurf Patch 233: a water material's $bottommaterial -- the underside of the water -- when the map names one and does not ship it.\n0: leave it unresolved, which is what every build before P233 did; the underside draws with the default wall shader and the map reports a missing material.\n1: draw it as the water material that names it (default). surf_aesthetic's water/clear_beneath is 325 faces and surf_demise's water_tar_beneath 7; neither exists in any pack, in either spelling.", MAPOPTIONS);
