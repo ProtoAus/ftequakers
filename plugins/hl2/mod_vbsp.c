@@ -1186,7 +1186,11 @@ static int VBSP_VPhysClass(const vbsp_vpent_t *e, int n, int i)
 	}
 	if (steps == 64)
 		return 1;	//a loop has no root
-	return (root != i && VBSP_VPhysClassOwn(e, root) == 2) ? 2 : 1;
+	if (root == i)
+		return 1;
+	if (!Q_strncasecmp(e[root].cls, "trigger_", 8))
+		return 2;	//an unparented trigger is SOLID_BSP (triggers.cpp CBaseTrigger::InitTrigger)
+	return VBSP_VPhysClassOwn(e, root) == 2 ? 2 : 1;
 }
 
 //-> per model index (1..nummodels-1), its vcollide's solid 0 when Source sweeps boxes against it, else NULL.
@@ -14601,15 +14605,8 @@ static qboolean VBSP_LoadMap (model_t *mod, void *filein, size_t filelen)
 #endif
 		modfuncs->EndSubmodelLoad(mod, MLS_LOADED);
 	}
-	if (prv->vpsolid)	//FTESurf Patch 1713
-	{
-		for (i = 0; i < prv->numcmodels; i++)
-			if (prv->vpsolid[i])
-				plugfuncs->GFree(&wmod->memgroup, prv->vpsolid[i]);
-		plugfuncs->GFree(&wmod->memgroup, prv->vpsolid);
-	}
-	if (prv->vplen)
-		plugfuncs->GFree(&wmod->memgroup, prv->vplen);
+	//FTESurf Patch 1713: the copies stay in wmod's group until the model goes (no GFree here: the main thread
+	//may already be allocating into that group for VBSP_GenerateMaterials, and ZG_* takes no lock)
 	prv->vpsolid = NULL;
 	prv->vplen = NULL;
 	if (vbsp_stat_vphysmodels || vbsp_stat_vphysrefused)

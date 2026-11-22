@@ -116,6 +116,22 @@ and this one identical on pm_dettest over 7 maps and pm_verify over 12 real lobb
 serverinfo pm_sourceversion 15 under the lobby cfg. Load census: ahop_coast 27 brush entities through their vcollide (62
 pieces), surf_classics 62 (144), none refused.
 
+**Review.** Two lenses (control flow and parsing; recorded evidence, version gates and what a cheater gains), no
+defect at movers <= 14. Fixed: VBSP_VPhysClass recursed without bound on a func_door parentname loop (a crafted map
+crashed lobby, verifier and clients at load) -- now a bounded walk; VBSP_VPhysSolids read lumps 0/29 unchecked against
+the buffer -- VBSP_DecompressLumps now reports its size; the plugin wrote model_t.vphysalt on any exe -- now only on
+one answering `FTESurfModelTail/1713` (Patch 1440's probe; an old exe beside a new plugin would have taken the write
+in the next model's slot); the twin's bounds started as the world's (no early-out ever fired); the copied vcollides
+leaked on a later failed load -- now in the model's group; vphysalt pieces now take Patch 1248's crease rule as a
+prop's do (7367486c tick 5811 snagged: |dv| 1447 -> 49, mover 14 had 71); func_reflective_glass (CFuncBrush) and
+func_tanktrain (CFuncTrackTrain) join the class list. Rebased on Patch 1714: vphysalt joins PM_PhysentOutOfReach's
+reach union (pm_physentcull 2 over a 16887-tick ahop_coast chain: 2381 skipped-but-checked, 0 touched). Regrade after
+the fixes: identical to the reviewed build on every graded tick.
+
+**Not shown.** No mover-15 RECORDING has been verified end to end: a TAS run Jargon recorded at pin 15 (surf_sandtrap2
+bonus 4, 0:07.815) is refused by pm_verify as a save-state run on any build, and its project's last saved revision
+stops short of the finish. The first plain mover-15 runs (a canary lobby before the fleet) are that check.
+
 **Left (BACKLOG "P1713").** The 3 worse ticks: Momentum twice passes within 0.40/0.47 of a *134 wedge EDGE mid-sweep
 without a hit -- vphysics' radius is a sphere, ours is offset planes, so our edges stand further out. Strata (v25) maps'
 physcollide is VPHY version 257, not the IVP layout: bhop_canals' 23 VPHYSICS entities are refused and keep their
