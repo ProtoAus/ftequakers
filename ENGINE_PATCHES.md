@@ -1,5 +1,49 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1717 - Source models lit at Source's scale and split: dynamic props and viewmodels take Patch 304's fold through model_t.LightPointFold, the fold encodes its lit level whole, and Strata maps read their leaf light (engine gl/gl_alias.c, gl/gl_model.[ch], common/plugin.c, common/com_mesh.h; plugin hl2/mod_vbsp.c)
+
+**Cause.** 22 Nov 2026 Lex, with Momentum and WoS screenshots of ahop_coast at one vantage: "The model vertex?
+brightness rendering is a bit inaccurate compared to momentum mod". The world and the VRAD-baked static props matched
+(shed wall 77 vs 76); the prop_dynamic fences and crate drew about twice as bright (fence 185 vs 94, crate 97 vs 51).
+Three faults on the leaf-ambient-cube path. (1) Patch 304's fold (flat base = the cube's level turned away from the
+light, directional half = the difference to the lit level, ramped by the half-lambert vertexlit.glsl/animated.glsl
+compile under hl2_lt_fold) reached only static props without a .vhv (prv->fold_prop). Every engine-lit Source MDL --
+prop_dynamic, prop_physics, viewmodels -- got the legacy split (base ~ the brightest face, the six-face mean on top)
+under that same half-lambert ramp, the mismatched pair hl2_lt_fold's note calls unreachable. Against Source's n^2 read
+of the fence's own cube that is 2.38x on its front, 2.35x on the crate's (display). (2) R_CalcModelLighting multiplies
+every model's light by 255/200 (Quake's fudge); HL2_CalcModelLighting's static props never get it, so Source models
+lit by the engine sat 1.275x over the same cube on a static prop. (3) The fold encoded its directional half on its
+own, sRGB(unlit) + sRGB(lit - unlit) > sRGB(lit): up to 1.47x on the lit end of unbaked static props (reviewer's
+offline check). Separately, Strata (v25) maps had no leaf light: their index lump is two uint32 per leaf (bhop_canals
+82208 bytes = 10276 x 8; the counts sum to its 54901 samples, every first in order) and the loader took only v20's two
+ushort, so every model there fell back to a fixed 64/192.
+
+**Change.** model_t gains LightPointFold (appended; answered as FTESurfModelTail/1717; zeroed on load, cleared on
+purge). R_CalcModelLighting samples through it for an MDLF_SOURCEPITCH model, entity and viewmodel alike; both light
+caches key on which sampler ran; a local `foldlit` (set only in the world branch) skips the 255/200 and floors a
+viewmodel's base, not the fold's lit-unlit range. The plugin sets it, only on an exe that answers, to the cube path
+with the fold forced. The fold encodes the two LEVELS and hands the shader their difference (hl2_lt_face's debug
+copy excepted). VBSP_LoadLeafLight reads the v25 index as uint32 pairs. The submodel copy in VBSP_LoadMap
+(`*mod = *wmod`) copies only the exe's model_t, by its tails -- on an older exe the whole-struct copy ran past the slot
+into the next model's name, since Patch 1440.
+
+**Evidence.** ahop_coast at Lex's save-7 vantage, headless client (visual/vprobe.py, 1918x1052): fence front 177 ->
+77 (x0.433; the cube predicts x0.432: Source 0.466, legacy 1.107, new 0.478), fence side 151 -> 67, crate 71 -> 33;
+the baked shed wall 67 and the road 60 unchanged. Scaled onto Lex's frame: fence 80 / side 73 / crate 45 against
+Momentum's 94 / 98 / 51 (were 185 / 165 / 90). An old exe with the new plugin draws the frame identical to the old
+build (no LightPointFold); the final tree (review 2) draws it identical to review 0's. bhop_canals: "leaf ambient HDR,
+54901 points, 54622 non-zero" (the old build read none); its drums, cans, crates and benches now take the room's tone
+instead of a pale flat grey. Three review rounds (boundary/lifetimes, lighting math, fix rounds): round 1 found the
+viewmodel gap, the r_softwarebanding fudge case, the hl2_lt_face copy and the old struct overrun; round 2
+the no-world fudge and the viewmodel floor; round 3 nothing.
+
+**Not shown.** A Source viewmodel (knife) on screen, and Momentum itself at the same vantage after the change (the
+residual: fences 15-25% under Momentum's frame with the cube math within 5% of Source's; Momentum/Strata's tonemap is
+the unmeasured term). The sun (emit_skylight) still reaches no dynamic model: Patch 302's missing sky-visibility trace.
+
+**Boundary.** Client only: lobbies draw nothing. Quake-format models (the player) are unchanged. A Source MDL whose
+material falls back to defaultskin.glsl (missing VMT) gets the fold under plain lambert.
+
 ## Patch 1720 - Prediction reuses a move it already ran: the replayed commands stop costing a whole PM_PlayerMove each (engine client/cl_pred.c, common/pmove.c, common/cvar.c, common/com_bih.c)
 
 **Problem.** Lex's BACKLOG list of 22 Nov: after Patch 1714 prediction still cost 0.72 ms a frame moving at 150 ms on
