@@ -2978,9 +2978,14 @@ void Surf_GenBrushBatches(batch_t **batches, entity_t *ent)
 	//not a contents volume.  Left in, every tagged slide -- 484 of them on
 	//bhop_aberrant -- would draw both sides of every face and lose its
 	//transparency flag below, which is not what 'traces as a skin-0 brush' means.
+	//FTESurf Patch 1736: not a Source brush entity.  VBSP emits a water brush's top in both facings (the down-facing
+	//one carries $bottommaterial, or the same material lit from below), so two-sided drew the dark underside over
+	//the lit top at the same depth from above -- bhop_canals' slime (func_water_analog *18) flickered black.
+	//Source relies on backface culling there; so does this now.
 	if (ent->skinnum < 0 && !PMSLIDE_FLAGS_FROM_SKIN(ent->skinnum))
 	{
-		bef |= BEF_FORCETWOSIDED;
+		if (!(model->engineflags & MDLF_SOURCEBSP))
+			bef |= BEF_FORCETWOSIDED;
 
 		//nettest: AND THE WATER SHADER'S OWN ALPHA IS THE WHOLE ANSWER.
 		//
