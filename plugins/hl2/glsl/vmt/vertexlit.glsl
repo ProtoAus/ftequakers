@@ -22,6 +22,7 @@
 //it; in FTESurf VBSP_Init has already done so by the time this compiles.
 !!cvardf hl2_lt_fold=1
 !!samps =FAKESHADOWS shadowmap
+!!cvar3f r_shadows_color=0.5 0.5 0.5
 
 // envmaps only
 !!samps =REFLECTCUBEMASK reflectmask reflectcube
@@ -52,6 +53,8 @@
 	#define e_light_dir (instfetch(9).xyz)
 	#define e_light_mul (instfetch(10).rgb)
 	#define e_colourident (instfetch(11))
+	#define e_noshadowrecv (instfetch(8).w)	//FTESurf Patch 1730: per prop (gl_backend.c BE_NoShadowRecv)
+	#define inst_origin vec3(instfetch(4).w, instfetch(5).w, instfetch(6).w)
 	#define m_model mat4(vec4(instfetch(4).xyz,0.0), vec4(instfetch(5).xyz,0.0), vec4(instfetch(6).xyz,0.0), vec4(0.0,0.0,0.0,1.0))
 	vec3 inst_cube[6];
 	#define e_light_ambientcube inst_cube
@@ -122,6 +125,12 @@ varying vec4 light;
 
 #ifdef FAKESHADOWS
 	varying vec4 vtexprojcoord;
+	uniform vec3 cvar_r_shadows_color;	//FTESurf Patch 1730
+	#ifdef INSTANCED
+	uniform mat4 l_cubeworld;			//FTESurf Patch 1730: the projection alone; each prop's matrix is per instance
+	#else
+	uniform float e_noshadowrecv;		//FTESurf Patch 1730: 1 = a Source model that casts (no self-shadow)
+	#endif
 #endif
 
 #ifdef VERTEX_SHADER
@@ -221,7 +230,11 @@ varying vec4 light;
 #endif
 		
 		#ifdef FAKESHADOWS
+		#ifdef INSTANCED
+		vtexprojcoord = l_cubeworld * vec4((m_model * vec4(w.xyz, 0.0)).xyz + inst_origin, 1.0);	//FTESurf Patch 1730
+		#else
 		vtexprojcoord = (l_cubematrix*vec4(w.xyz, 1.0));
+		#endif
 		#endif
 	}
 #endif
@@ -425,7 +438,8 @@ varying vec4 light;
 		diffuse_f.rgb *= lightrgb * e_colourident.rgb;
 
 	#ifdef FAKESHADOWS
-		diffuse_f.rgb *= ShadowmapFilter(s_shadowmap, vtexprojcoord);
+		if (e_noshadowrecv < 0.5)	//FTESurf Patch 1730: the filter's 0.5..1 onto shadow_control's colour
+			diffuse_f.rgb *= mix(cvar_r_shadows_color, vec3(1.0), 2.0*ShadowmapFilter(s_shadowmap, vtexprojcoord) - 1.0);
 	#endif
 
 	//FTESurf Patch 268 B: Source adds the envmap AFTER lighting and shadowing --

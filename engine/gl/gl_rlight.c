@@ -118,6 +118,11 @@ void R_UpdateHDR(vec3_t org)
 	}
 	else
 		r_refdef.hdr_value = 1;
+	{	//FTESurf Patch 1730: a fixed exposure on top (linear; the lightmap is sRGB, so its 1/2.2 power)
+		extern cvar_t r_exposure;
+		if (r_exposure.value > 0 && r_exposure.value != 1)
+			r_refdef.hdr_value *= pow(r_exposure.value, 1/2.2);
+	}
 }
 
 //nettest: dump every lightstyle's live value.

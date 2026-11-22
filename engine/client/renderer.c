@@ -350,6 +350,7 @@ cvar_t r_lightstylescale					= CVAR	("r_lightstylescale", "1");
 cvar_t r_lightmap_scale						= CVARFD ("r_shadow_realtime_nonworld_lightmaps", "1", 0, "Scaler for lightmaps used when not using realtime world lighting. Probably broken.");
 cvar_t r_hdr_framebuffer					= CVARFCD("r_hdr_framebuffer", "0", CVAR_ARCHIVE, R_HDR_FramebufferFormat_Changed, "If enabled, the map will be rendered into a high-precision image framebuffer. This avoids issues with shaders that contribute more than 1 in any single pass (like overbrights). Can also be set to the name of an image format, to force rendering to that format first - interesting formats are L8, RGB565, B10G11R11F, and others.");
 cvar_t r_hdr_irisadaptation					= CVARF	("r_hdr_irisadaptation", "0", CVAR_ARCHIVE);
+cvar_t r_exposure							= CVARD	("r_exposure", "1", "FTESurf Patch 1730 (test): a fixed exposure, Source's linear tonemap scale -- world lightmaps and model light are multiplied by its 1/2.2 power (sky, sprites and particles are not). 1 = off. The game sets it from the map's env_tonemap_controller when vbsp_exposure is 1.");
 cvar_t r_hdr_irisadaptation_multiplier		= CVAR	("r_hdr_irisadaptation_multiplier", "2");
 cvar_t r_hdr_irisadaptation_minvalue		= CVAR	("r_hdr_irisadaptation_minvalue", "0.5");
 cvar_t r_hdr_irisadaptation_maxvalue		= CVAR	("r_hdr_irisadaptation_maxvalue", "4");
@@ -1583,6 +1584,7 @@ void Renderer_Init(void)
 
 	Cvar_Register(&r_hdr_framebuffer, GRAPHICALNICETIES);
 	Cvar_Register(&r_hdr_irisadaptation, GRAPHICALNICETIES);
+	Cvar_Register(&r_exposure, GRAPHICALNICETIES);	//FTESurf Patch 1730
 	Cvar_Register(&r_hdr_irisadaptation_multiplier, GRAPHICALNICETIES);
 	Cvar_Register(&r_hdr_irisadaptation_minvalue, GRAPHICALNICETIES);
 	Cvar_Register(&r_hdr_irisadaptation_maxvalue, GRAPHICALNICETIES);

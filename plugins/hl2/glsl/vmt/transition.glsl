@@ -33,6 +33,8 @@
 !!cvardf r_glsl_pcf
 !!cvardf r_lightmap_bicubic_world=0
 !!samps =FAKESHADOWS shadowmap
+!!cvar3f r_shadows_color=0.5 0.5 0.5
+!!cvar3f r_shadows_sunfloor=0 0 0
 
 #include "sys/defs.h"
 
@@ -201,6 +203,10 @@ varying vec2 lm1, lm2, lm3;
 	#define SEAMSAMP(s) texture2D(s, tex_c)
 #endif
 
+#ifdef FAKESHADOWS
+	uniform vec3 cvar_r_shadows_color;		//FTESurf Patch 1730
+	uniform vec3 cvar_r_shadows_sunfloor;
+#endif
 	vec3 lightmap_fragment()
 	{
 		vec3 lightmaps;
@@ -297,11 +303,23 @@ varying vec2 lm1, lm2, lm3;
 		diffuse_f.rgb *= e_colourident.rgb * pow(vec3(COLOR), vec3(1.0/2.2));	//FTESurf Patch 1250: a brush entity's rendercolor
 
 		/* deluxemapping isn't working on Source BSP yet, FIXME */
-		diffuse_f.rgb *= lightmap_fragment();
-
+		vec3 lmv = lightmap_fragment();
 #ifdef FAKESHADOWS
-		diffuse_f.rgb *= ShadowmapFilter(s_shadowmap, vtexprojcoord);
+		//FTESurf Patch 1730: shlit 0 shadowed .. 1 lit (the filter's 0.5..1).  Over a lightmap that already holds the
+		//sun's shadows (r_shadows_sunfloor, Strata maps) a shadow only takes the sun out: down to the sky's share,
+		//never below the baked shade.  Elsewhere it is shadow_control's colour (r_shadows_color), as Source's RTT.
+		float shlit = 2.0*ShadowmapFilter(s_shadowmap, vtexprojcoord) - 1.0;
+	#ifdef LIGHTSTYLED
+		vec3 shfloor = cvar_r_shadows_sunfloor * e_lmscale[0].rgb;
+	#else
+		vec3 shfloor = cvar_r_shadows_sunfloor * e_lmscale.rgb;
+	#endif
+		if (shfloor.r + shfloor.g + shfloor.b > 0.0)
+			lmv = mix(min(lmv, shfloor), lmv, shlit);
+		else
+			diffuse_f.rgb *= mix(cvar_r_shadows_color, vec3(1.0), shlit);
 #endif
+		diffuse_f.rgb *= lmv;
 
 /* CUBEMAPS ONLY */
 #ifdef REFLECTCUBEMASK

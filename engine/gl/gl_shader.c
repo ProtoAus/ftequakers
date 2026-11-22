@@ -3339,6 +3339,7 @@ struct shader_field_names_s shader_unif_names[] =
 	{"l_lightdirection",		SP_LIGHTDIRECTION},	//light direction in modelspace (ortho lights only, instead of position)
 /**/{"l_lightcolourscale",		SP_LIGHTCOLOURSCALE},//ambient/diffuse/specular scalers
 /**/{"l_cubematrix",			SP_LIGHTCUBEMATRIX},//matrix used to control the rtlight's cubemap projection
+/**/{"l_cubeworld",				SP_LIGHTCUBEWORLD},	//FTESurf Patch 1730: the projection alone, world space (INSTANCED props)
 /**/{"l_shadowmapproj",			SP_LIGHTSHADOWMAPPROJ},	//compacted projection matrix for shadowmaps
 /**/{"l_shadowmapscale",		SP_LIGHTSHADOWMAPSCALE},//should probably use a samplerRect instead...
 

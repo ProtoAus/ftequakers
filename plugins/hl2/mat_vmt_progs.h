@@ -29,6 +29,8 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "!!cvardf r_lightmap_bicubic_world=0\n"
 "!!cvarf r_renderscale\n"
 "!!samps =FAKESHADOWS shadowmap\n"
+"!!cvar3f r_shadows_color=0.5 0.5 0.5\n"
+"!!cvar3f r_shadows_sunfloor=0 0 0\n"
 
 "#ifndef ENVTINT\n"
 "#define ENVTINT 1.0,1.0,1.0\n"
@@ -222,6 +224,10 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "#define LIGHTMAP LMSAMPLE(s_lightmap, lm0)\n"
 "#endif\n"
 
+"#ifdef FAKESHADOWS\n"
+"uniform vec3 cvar_r_shadows_color;  //FTESurf Patch 1730\n"
+"uniform vec3 cvar_r_shadows_sunfloor;\n"
+"#endif\n"
 "vec3 lightmap_fragment()\n"
 "{\n"
 "vec3 lightmaps;\n"
@@ -325,11 +331,23 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "diffuse_f.a *= vex_color.a;\n"
 "#endif\n"
 
+"vec3 lmv = lightmap_fragment();\n"
 "#ifdef FAKESHADOWS\n"
-"diffuse_f.rgb *= ShadowmapFilter(s_shadowmap, vtexprojcoord);\n"
+//FTESurf Patch 1730: shlit 0 shadowed .. 1 lit (the filter's 0.5..1).  Over a lightmap that already holds the
+//sun's shadows (r_shadows_sunfloor, Strata maps) a shadow only takes the sun out: down to the sky's share,
+//never below the baked shade.  Elsewhere it is shadow_control's colour (r_shadows_color), as Source's RTT.
+"float shlit = 2.0*ShadowmapFilter(s_shadowmap, vtexprojcoord) - 1.0;\n"
+"#ifdef LIGHTSTYLED\n"
+"vec3 shfloor = cvar_r_shadows_sunfloor * e_lmscale[0].rgb;\n"
+"#else\n"
+"vec3 shfloor = cvar_r_shadows_sunfloor * e_lmscale.rgb;\n"
 "#endif\n"
-
-"diffuse_f.rgb *= lightmap_fragment();\n"
+"if (shfloor.r + shfloor.g + shfloor.b > 0.0)\n"
+"lmv = mix(min(lmv, shfloor), lmv, shlit);\n"
+"else\n"
+"diffuse_f.rgb *= mix(cvar_r_shadows_color, vec3(1.0), shlit);\n"
+"#endif\n"
+"diffuse_f.rgb *= lmv;\n"
 "#if defined(DELUXE) && defined(BUMP)\n"
 "diffuse_f.rgb *= rnm_fragment(); //FTESurf Patch 1264\n"
 "#endif\n"
@@ -644,6 +662,8 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "!!cvardf r_glsl_pcf\n"
 "!!cvardf r_lightmap_bicubic_world=0\n"
 "!!samps =FAKESHADOWS shadowmap\n"
+"!!cvar3f r_shadows_color=0.5 0.5 0.5\n"
+"!!cvar3f r_shadows_sunfloor=0 0 0\n"
 
 "#include \"sys/defs.h\"\n"
 
@@ -812,6 +832,10 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "#define SEAMSAMP(s) texture2D(s, tex_c)\n"
 "#endif\n"
 
+"#ifdef FAKESHADOWS\n"
+"uniform vec3 cvar_r_shadows_color;  //FTESurf Patch 1730\n"
+"uniform vec3 cvar_r_shadows_sunfloor;\n"
+"#endif\n"
 "vec3 lightmap_fragment()\n"
 "{\n"
 "vec3 lightmaps;\n"
@@ -908,11 +932,23 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "diffuse_f.rgb *= e_colourident.rgb * pow(vec3(COLOR), vec3(1.0/2.2)); //FTESurf Patch 1250: a brush entity's rendercolor\n"
 
 /* deluxemapping isn't working on Source BSP yet, FIXME */
-"diffuse_f.rgb *= lightmap_fragment();\n"
-
+"vec3 lmv = lightmap_fragment();\n"
 "#ifdef FAKESHADOWS\n"
-"diffuse_f.rgb *= ShadowmapFilter(s_shadowmap, vtexprojcoord);\n"
+//FTESurf Patch 1730: shlit 0 shadowed .. 1 lit (the filter's 0.5..1).  Over a lightmap that already holds the
+//sun's shadows (r_shadows_sunfloor, Strata maps) a shadow only takes the sun out: down to the sky's share,
+//never below the baked shade.  Elsewhere it is shadow_control's colour (r_shadows_color), as Source's RTT.
+"float shlit = 2.0*ShadowmapFilter(s_shadowmap, vtexprojcoord) - 1.0;\n"
+"#ifdef LIGHTSTYLED\n"
+"vec3 shfloor = cvar_r_shadows_sunfloor * e_lmscale[0].rgb;\n"
+"#else\n"
+"vec3 shfloor = cvar_r_shadows_sunfloor * e_lmscale.rgb;\n"
 "#endif\n"
+"if (shfloor.r + shfloor.g + shfloor.b > 0.0)\n"
+"lmv = mix(min(lmv, shfloor), lmv, shlit);\n"
+"else\n"
+"diffuse_f.rgb *= mix(cvar_r_shadows_color, vec3(1.0), shlit);\n"
+"#endif\n"
+"diffuse_f.rgb *= lmv;\n"
 
 /* CUBEMAPS ONLY */
 "#ifdef REFLECTCUBEMASK\n"
@@ -1219,6 +1255,7 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 //it; in FTESurf VBSP_Init has already done so by the time this compiles.
 "!!cvardf hl2_lt_fold=1\n"
 "!!samps =FAKESHADOWS shadowmap\n"
+"!!cvar3f r_shadows_color=0.5 0.5 0.5\n"
 
 // envmaps only
 "!!samps =REFLECTCUBEMASK reflectmask reflectcube\n"
@@ -1249,6 +1286,8 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "#define e_light_dir (instfetch(9).xyz)\n"
 "#define e_light_mul (instfetch(10).rgb)\n"
 "#define e_colourident (instfetch(11))\n"
+"#define e_noshadowrecv (instfetch(8).w) //FTESurf Patch 1730: per prop (gl_backend.c BE_NoShadowRecv)\n"
+"#define inst_origin vec3(instfetch(4).w, instfetch(5).w, instfetch(6).w)\n"
 "#define m_model mat4(vec4(instfetch(4).xyz,0.0), vec4(instfetch(5).xyz,0.0), vec4(instfetch(6).xyz,0.0), vec4(0.0,0.0,0.0,1.0))\n"
 "vec3 inst_cube[6];\n"
 "#define e_light_ambientcube inst_cube\n"
@@ -1319,6 +1358,12 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 
 "#ifdef FAKESHADOWS\n"
 "varying vec4 vtexprojcoord;\n"
+"uniform vec3 cvar_r_shadows_color; //FTESurf Patch 1730\n"
+"#ifdef INSTANCED\n"
+"uniform mat4 l_cubeworld;   //FTESurf Patch 1730: the projection alone; each prop's matrix is per instance\n"
+"#else\n"
+"uniform float e_noshadowrecv;  //FTESurf Patch 1730: 1 = a Source model that casts (no self-shadow)\n"
+"#endif\n"
 "#endif\n"
 
 "#ifdef VERTEX_SHADER\n"
@@ -1418,7 +1463,11 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "#endif\n"
 
 "#ifdef FAKESHADOWS\n"
+"#ifdef INSTANCED\n"
+"vtexprojcoord = l_cubeworld * vec4((m_model * vec4(w.xyz, 0.0)).xyz + inst_origin, 1.0); //FTESurf Patch 1730\n"
+"#else\n"
 "vtexprojcoord = (l_cubematrix*vec4(w.xyz, 1.0));\n"
+"#endif\n"
 "#endif\n"
 "}\n"
 "#endif\n"
@@ -1622,7 +1671,8 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "diffuse_f.rgb *= lightrgb * e_colourident.rgb;\n"
 
 "#ifdef FAKESHADOWS\n"
-"diffuse_f.rgb *= ShadowmapFilter(s_shadowmap, vtexprojcoord);\n"
+"if (e_noshadowrecv < 0.5) //FTESurf Patch 1730: the filter's 0.5..1 onto shadow_control's colour\n"
+"diffuse_f.rgb *= mix(cvar_r_shadows_color, vec3(1.0), 2.0*ShadowmapFilter(s_shadowmap, vtexprojcoord) - 1.0);\n"
 "#endif\n"
 
 //FTESurf Patch 268 B: Source adds the envmap AFTER lighting and shadowing --

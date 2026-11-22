@@ -45,6 +45,26 @@ static int be_instancecount;		//>1 while the batch being submitted stands for a 
 static int be_instancebase;		//its first texel in inst_buf
 static qboolean be_instancefailed;	//something in it drew for the first prop alone: the caller draws the rest
 static qboolean be_instdraw;		//the program BE_RenderMeshProgram just bound is the INSTANCED one
+//FTESurf Patch 1730: r_exposure on model light (R_UpdateHDR puts it on the lightmap)
+static float BE_ModelExposure(void)
+{
+	extern cvar_t r_exposure;
+	return (r_exposure.value > 0 && r_exposure.value != 1) ? pow(r_exposure.value, 1/2.2) : 1;
+}
+//1 = this entity must not receive the r_shadows 2 shadow map: RF_NOSHADOWRECV, the viewmodel, and (Patch 1730) a Source
+//model that casts -- Source never lays a prop's shadow on itself, and a depth map cannot tell itself apart.  Static
+//props (RF_NOSHADOW: they do not cast) and the world still receive.
+static float BE_NoShadowRecv(const entity_t *e)
+{
+	extern cvar_t r_shadows_viewmodel;
+	if (e->flags & RF_NOSHADOWRECV)
+		return 1;
+	if ((e->flags & RF_WEAPONMODEL) && !r_shadows_viewmodel.ival)
+		return 1;
+	if (e->model && (e->model->engineflags & MDLF_SOURCEPITCH) && !(e->flags & RF_NOSHADOW))
+		return 1;
+	return 0;
+}
 static void GLBE_BindInstanceData(const struct programpermu_s *permu);
 static void GLBE_InstanceReset(void);
 extern cvar_t r_tessellation;
@@ -4914,13 +4934,7 @@ static void BE_Program_Set_Attributes(const program_t *prog, struct programpermu
 		//global compile-time define, so this per-entity uniform is the only way the shader can know.
 		//Polarity is FAIL-SAFE: an unbound/unsupported uniform reads 0 = normal receive (never "vanish").
 		case SP_E_NOSHADOWRECV:
-			{
-				extern cvar_t r_shadows_viewmodel;
-				float supp = (shaderstate.curentity->flags & RF_NOSHADOWRECV) ? 1.0f : 0.0f;
-				if ((shaderstate.curentity->flags & RF_WEAPONMODEL) && !r_shadows_viewmodel.ival)
-					supp = 1.0f;
-				qglUniform1fARB(ph, supp);
-			}
+			qglUniform1fARB(ph, BE_NoShadowRecv(shaderstate.curentity));
 			break;
 		//nettest: 1 = this entity is the LOCAL FIRST-PERSON BODY (cl_fpbody).  The mod draws the
 		//owner's own player model so they can look down and see their legs; the model shader then
@@ -5138,6 +5152,9 @@ static void BE_Program_Set_Attributes(const program_t *prog, struct programpermu
 				qglUniformMatrix4fvARB(ph, 1, false, t);
 			}
 			break;
+		case SP_LIGHTCUBEWORLD:	//FTESurf Patch 1730
+			qglUniformMatrix4fvARB(ph, 1, false, shaderstate.lightprojmatrix);
+			break;
 		case SP_LIGHTSHADOWMAPPROJ:
 			qglUniform4fvARB(ph, 1, shaderstate.lightshadowmapproj);
 			break;
@@ -5174,13 +5191,21 @@ static void BE_Program_Set_Attributes(const program_t *prog, struct programpermu
 			if (shaderstate.mode == BEM_DEPTHDARK)
 				qglUniform3fvARB(ph, 1, vec3_origin);
 			else
-				qglUniform3fvARB(ph, 1, (float*)shaderstate.curentity->light_range);
+			{	//FTESurf Patch 1730: r_exposure reaches models as it reaches the lightmap
+				vec3_t v;
+				VectorScale(shaderstate.curentity->light_range, BE_ModelExposure(), v);
+				qglUniform3fvARB(ph, 1, v);
+			}
 			break;
 		case SP_E_L_AMBIENT:
 			if (shaderstate.mode == BEM_DEPTHDARK)
 				qglUniform3fvARB(ph, 1, vec3_origin);
 			else
-				qglUniform3fvARB(ph, 1, (float*)shaderstate.curentity->light_avg);
+			{
+				vec3_t v;
+				VectorScale(shaderstate.curentity->light_avg, BE_ModelExposure(), v);
+				qglUniform3fvARB(ph, 1, v);
+			}
 			break;
 		case SP_E_L_AMBIENTCUBE:	//see BE_EntityAmbientCube
 			qglUniform3fvARB(ph, 6, BE_EntityAmbientCube(shaderstate.curentity, true));
@@ -8765,15 +8790,16 @@ static int GLBE_SubmitInstancedRun(batch_t *first, int count, int *alone)
 		d = inst_data + (size_t)i*INST_TEXELS*4;
 		R_RotateForEntity(m, mv, e, e->model);
 		Matrix4_Multiply(proj, mv, d);
-		d[16] = m[0]; d[17] = m[1]; d[18] = m[2]; d[19] = 0;
-		d[20] = m[4]; d[21] = m[5]; d[22] = m[6]; d[23] = 0;
-		d[24] = m[8]; d[25] = m[9]; d[26] = m[10]; d[27] = 0;
+		//FTESurf Patch 1730: the origin in the three .w slots, for the shadow map's world position (vertexlit.glsl)
+		d[16] = m[0]; d[17] = m[1]; d[18] = m[2]; d[19] = m[12];
+		d[20] = m[4]; d[21] = m[5]; d[22] = m[6]; d[23] = m[13];
+		d[24] = m[8]; d[25] = m[9]; d[26] = m[10]; d[27] = m[14];
 		Matrix4_Invert(m, inv);
 		Matrix4x4_CM_Transform3(inv, r_origin, eye);
 		VectorCopy(eye, d+28); d[31] = vc;
-		VectorCopy(e->light_avg, d+32); d[35] = 0;
+		VectorScale(e->light_avg, BE_ModelExposure(), d+32); d[35] = BE_NoShadowRecv(e);	//FTESurf Patch 1730
 		VectorCopy(e->light_dir, d+36); d[39] = 0;
-		VectorCopy(e->light_range, d+40); d[43] = 0;
+		VectorScale(e->light_range, BE_ModelExposure(), d+40); d[43] = 0;
 		if (b->flags & BEF_FORCECOLOURMOD)
 			Vector4Copy(e->shaderRGBAf, d+44);
 		else
@@ -8834,8 +8860,10 @@ static void GLBE_SubmitMeshesSortRange(batch_t *sortlist, batch_t *end)
 	batch_t *batch, *n;
 	shader_t *bs;
 	int run, used, alone, noinst = 0;
+	//FTESurf Patch 1730: r_shadows 2 no longer refuses it: vertexlit.glsl's INSTANCED path projects each prop's own world
+	//position (texels 4-6, origin in .w) through l_cubeworld
 	qboolean instancing = r_instancing.ival && !inst_broken && shaderstate.mode == BEM_STANDARD &&
-		qglDrawElementsInstanced && qglTexBuffer && !r_fakeshadows && !Sh_AnyLightToDraw();
+		qglDrawElementsInstanced && qglTexBuffer && !Sh_AnyLightToDraw();
 	int ncand = 0, nalias = 0, nruns = 0;
 	if (r_instancing.ival == 2)
 	{	//one frame's report, every view of it
