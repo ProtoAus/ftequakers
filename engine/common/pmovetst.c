@@ -606,6 +606,12 @@ static qboolean PM_PhysentOutOfReach (model_t *model, const vec3_t start, const 
 			!PM_GrowReach(reach, mins, maxs) || !PM_GrowReach(reach, model->phyfixed->mins, model->phyfixed->maxs))
 			return false;
 	}
+	if (model->vphysalt)
+	{	//bih_vphys may walk the vcollide tree instead (Patch 1713); its pieces' axial sides sit at their margin-grown boxes
+		if (model->vphysalt->loadstate != MLS_LOADED || !BIH_LeafBounds(model->vphysalt, mins, maxs) ||
+			!PM_GrowReach(reach, mins, maxs) || !PM_GrowReach(reach, model->vphysalt->mins, model->vphysalt->maxs))
+			return false;
+	}
 	PM_GrowReach(pr, player_mins, player_maxs);	//finite: checked above
 	r = sqrt(DotProduct(reach, reach)) * max(1, scale);
 	rho = sqrt(DotProduct(pr, pr));
