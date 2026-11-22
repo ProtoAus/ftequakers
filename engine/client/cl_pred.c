@@ -706,8 +706,8 @@ static int PMMemo_Reached(qbyte *key, const vec3_t omins, const vec3_t omaxs, co
 	for (i = 0; i < pmove.numphysent; i++)
 	{
 		const physent_t *pe = &pmove.physents[i];
-		if (pe->isportal || (pe->nonsolid ? !pe->forcecontentsmask : pe->info == pmove.skipent))
-			continue;
+		if (pe->isportal || (i && (pe->nonsolid ? !pe->forcecontentsmask : pe->info == pmove.skipent)))
+			continue;	//review 2: never the world (PM_PointContents and pm_ag_world.c read it whatever skipent is)
 		if (!PM_PhysentReachesBox(pe, omins, omaxs, bmins, bmaxs))
 			continue;
 		PMMEMO_PUT(i);
