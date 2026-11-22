@@ -35,6 +35,7 @@
 !!samps =FAKESHADOWS shadowmap
 !!cvar3f r_shadows_color=0.5 0.5 0.5
 !!cvar3f r_shadows_sunfloor=0 0 0
+!!cvarf gl_overbright
 
 #include "sys/defs.h"
 
@@ -204,8 +205,9 @@ varying vec2 lm1, lm2, lm3;
 #endif
 
 #ifdef FAKESHADOWS
-	uniform vec3 cvar_r_shadows_color;		//FTESurf Patch 1730
+	uniform vec3 cvar_r_shadows_color;		//FTESurf Patch 1732
 	uniform vec3 cvar_r_shadows_sunfloor;
+	uniform float cvar_gl_overbright;
 #endif
 	vec3 lightmap_fragment()
 	{
@@ -305,14 +307,17 @@ varying vec2 lm1, lm2, lm3;
 		/* deluxemapping isn't working on Source BSP yet, FIXME */
 		vec3 lmv = lightmap_fragment();
 #ifdef FAKESHADOWS
-		//FTESurf Patch 1730: shlit 0 shadowed .. 1 lit (the filter's 0.5..1).  Over a lightmap that already holds the
+		//FTESurf Patch 1732: shlit 0 shadowed .. 1 lit (the filter's 0.5..1).  Over a lightmap that already holds the
 		//sun's shadows (r_shadows_sunfloor, Strata maps) a shadow only takes the sun out: down to the sky's share,
 		//never below the baked shade.  Elsewhere it is shadow_control's colour (r_shadows_color), as Source's RTT.
 		float shlit = 2.0*ShadowmapFilter(s_shadowmap, vtexprojcoord) - 1.0;
+		//the floor is a displayed level; the world's e_lmscale also carries 2^gl_overbright (its texels are stored that much
+		//smaller, Surf_LightmapShift -- MDLF_NEEDOVERBRIGHT), which a prop's light does not
+		float shob = exp2(clamp(floor(cvar_gl_overbright), 0.0, 2.0));
 	#ifdef LIGHTSTYLED
-		vec3 shfloor = cvar_r_shadows_sunfloor * e_lmscale[0].rgb;
+		vec3 shfloor = cvar_r_shadows_sunfloor * e_lmscale[0].rgb / shob;
 	#else
-		vec3 shfloor = cvar_r_shadows_sunfloor * e_lmscale.rgb;
+		vec3 shfloor = cvar_r_shadows_sunfloor * e_lmscale.rgb / shob;
 	#endif
 		if (shfloor.r + shfloor.g + shfloor.b > 0.0)
 			lmv = mix(min(lmv, shfloor), lmv, shlit);

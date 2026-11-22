@@ -54,7 +54,7 @@
 	#define e_light_dir (instfetch(9).xyz)
 	#define e_light_mul (instfetch(10).rgb)
 	#define e_colourident (instfetch(11))
-	#define e_noshadowrecv (instfetch(8).w)	//FTESurf Patch 1730: per prop (gl_backend.c BE_NoShadowRecv)
+	#define e_noshadowrecv (instfetch(8).w)	//FTESurf Patch 1732: per prop (gl_backend.c BE_NoShadowRecv)
 	#define inst_origin vec3(instfetch(4).w, instfetch(5).w, instfetch(6).w)
 	#define m_model mat4(vec4(instfetch(4).xyz,0.0), vec4(instfetch(5).xyz,0.0), vec4(instfetch(6).xyz,0.0), vec4(0.0,0.0,0.0,1.0))
 	vec3 inst_cube[6];
@@ -126,12 +126,12 @@ varying vec4 light;
 
 #ifdef FAKESHADOWS
 	varying vec4 vtexprojcoord;
-	uniform vec3 cvar_r_shadows_color;	//FTESurf Patch 1730
+	uniform vec3 cvar_r_shadows_color;	//FTESurf Patch 1732
 	uniform vec3 cvar_r_shadows_sunfloor;
 	#ifdef INSTANCED
-	uniform mat4 l_cubeworld;			//FTESurf Patch 1730: the projection alone; each prop's matrix is per instance
+	uniform mat4 l_cubeworld;			//FTESurf Patch 1732: the projection alone; each prop's matrix is per instance
 	#else
-	uniform float e_noshadowrecv;		//FTESurf Patch 1730: 1 = a Source model that casts (no self-shadow)
+	uniform float e_noshadowrecv;		//FTESurf Patch 1732: 1 = a Source model that casts (no self-shadow)
 	#endif
 #endif
 
@@ -233,7 +233,7 @@ varying vec4 light;
 		
 		#ifdef FAKESHADOWS
 		#ifdef INSTANCED
-		vtexprojcoord = l_cubeworld * vec4((m_model * vec4(w.xyz, 0.0)).xyz + inst_origin, 1.0);	//FTESurf Patch 1730
+		vtexprojcoord = l_cubeworld * vec4((m_model * vec4(w.xyz, 0.0)).xyz + inst_origin, 1.0);	//FTESurf Patch 1732
 		#else
 		vtexprojcoord = (l_cubematrix*vec4(w.xyz, 1.0));
 		#endif
@@ -439,7 +439,7 @@ varying vec4 light;
 	#endif
 	#ifdef FAKESHADOWS
 		if (e_noshadowrecv < 0.5)
-		{	//FTESurf Patch 1730: as lightmapped.glsl -- a baked prop on a cascade map loses only the sun
+		{	//FTESurf Patch 1732: as lightmapped.glsl -- a baked prop on a cascade map loses only the sun
 			float shlit = 2.0*ShadowmapFilter(s_shadowmap, vtexprojcoord) - 1.0;
 			vec3 shfloor = cvar_r_shadows_sunfloor * e_lmscale.rgb;
 			if (shfloor.r + shfloor.g + shfloor.b > 0.0)

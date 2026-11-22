@@ -498,7 +498,7 @@ typedef struct {
 		SP_LIGHTCUBEMATRIX,
 		SP_LIGHTSHADOWMAPPROJ,
 		SP_LIGHTSHADOWMAPSCALE,
-		SP_LIGHTCUBEWORLD,		//FTESurf Patch 1730: the light's projection alone (world space), for INSTANCED props whose model matrix is per instance
+		SP_LIGHTCUBEWORLD,		//FTESurf Patch 1732: the light's projection alone (world space), for INSTANCED props whose model matrix is per instance
 		SP_FAKESHADOWMATRIX,	//nettest P110: mat4[N] - per-atlas-slot ortho proj*view for the multi-direction fake shadow. Composed with the model matrix at upload, exactly like SP_LIGHTCUBEMATRIX.
 		SP_FAKESHADOWCELL,		//nettest P110: vec4[N] - atlas cell remap per slot (xy = cell origin in GL bottom-origin UV, zw = cell scale).
 		SP_FAKESHADOWINFO,		//nettest: vec4[N] - per-slot metadata for the PERSPECTIVE lamp cells. x = sun-suppression factor (how much a sun-visible receiver washes this lamp's shadow out; 0 on unbaked maps = feature inert). yzw reserved.

@@ -225,7 +225,7 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "#endif\n"
 
 "#ifdef FAKESHADOWS\n"
-"uniform vec3 cvar_r_shadows_color;  //FTESurf Patch 1730\n"
+"uniform vec3 cvar_r_shadows_color;  //FTESurf Patch 1732\n"
 "uniform vec3 cvar_r_shadows_sunfloor;\n"
 "#endif\n"
 "vec3 lightmap_fragment()\n"
@@ -333,7 +333,7 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 
 "vec3 lmv = lightmap_fragment();\n"
 "#ifdef FAKESHADOWS\n"
-//FTESurf Patch 1730: shlit 0 shadowed .. 1 lit (the filter's 0.5..1).  Over a lightmap that already holds the
+//FTESurf Patch 1732: shlit 0 shadowed .. 1 lit (the filter's 0.5..1).  Over a lightmap that already holds the
 //sun's shadows (r_shadows_sunfloor, Strata maps) a shadow only takes the sun out: down to the sky's share,
 //never below the baked shade.  Elsewhere it is shadow_control's colour (r_shadows_color), as Source's RTT.
 "float shlit = 2.0*ShadowmapFilter(s_shadowmap, vtexprojcoord) - 1.0;\n"
@@ -833,7 +833,7 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "#endif\n"
 
 "#ifdef FAKESHADOWS\n"
-"uniform vec3 cvar_r_shadows_color;  //FTESurf Patch 1730\n"
+"uniform vec3 cvar_r_shadows_color;  //FTESurf Patch 1732\n"
 "uniform vec3 cvar_r_shadows_sunfloor;\n"
 "#endif\n"
 "vec3 lightmap_fragment()\n"
@@ -934,7 +934,7 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 /* deluxemapping isn't working on Source BSP yet, FIXME */
 "vec3 lmv = lightmap_fragment();\n"
 "#ifdef FAKESHADOWS\n"
-//FTESurf Patch 1730: shlit 0 shadowed .. 1 lit (the filter's 0.5..1).  Over a lightmap that already holds the
+//FTESurf Patch 1732: shlit 0 shadowed .. 1 lit (the filter's 0.5..1).  Over a lightmap that already holds the
 //sun's shadows (r_shadows_sunfloor, Strata maps) a shadow only takes the sun out: down to the sky's share,
 //never below the baked shade.  Elsewhere it is shadow_control's colour (r_shadows_color), as Source's RTT.
 "float shlit = 2.0*ShadowmapFilter(s_shadowmap, vtexprojcoord) - 1.0;\n"
@@ -1287,7 +1287,7 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "#define e_light_dir (instfetch(9).xyz)\n"
 "#define e_light_mul (instfetch(10).rgb)\n"
 "#define e_colourident (instfetch(11))\n"
-"#define e_noshadowrecv (instfetch(8).w) //FTESurf Patch 1730: per prop (gl_backend.c BE_NoShadowRecv)\n"
+"#define e_noshadowrecv (instfetch(8).w) //FTESurf Patch 1732: per prop (gl_backend.c BE_NoShadowRecv)\n"
 "#define inst_origin vec3(instfetch(4).w, instfetch(5).w, instfetch(6).w)\n"
 "#define m_model mat4(vec4(instfetch(4).xyz,0.0), vec4(instfetch(5).xyz,0.0), vec4(instfetch(6).xyz,0.0), vec4(0.0,0.0,0.0,1.0))\n"
 "vec3 inst_cube[6];\n"
@@ -1359,12 +1359,12 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 
 "#ifdef FAKESHADOWS\n"
 "varying vec4 vtexprojcoord;\n"
-"uniform vec3 cvar_r_shadows_color; //FTESurf Patch 1730\n"
+"uniform vec3 cvar_r_shadows_color; //FTESurf Patch 1732\n"
 "uniform vec3 cvar_r_shadows_sunfloor;\n"
 "#ifdef INSTANCED\n"
-"uniform mat4 l_cubeworld;   //FTESurf Patch 1730: the projection alone; each prop's matrix is per instance\n"
+"uniform mat4 l_cubeworld;   //FTESurf Patch 1732: the projection alone; each prop's matrix is per instance\n"
 "#else\n"
-"uniform float e_noshadowrecv;  //FTESurf Patch 1730: 1 = a Source model that casts (no self-shadow)\n"
+"uniform float e_noshadowrecv;  //FTESurf Patch 1732: 1 = a Source model that casts (no self-shadow)\n"
 "#endif\n"
 "#endif\n"
 
@@ -1466,7 +1466,7 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 
 "#ifdef FAKESHADOWS\n"
 "#ifdef INSTANCED\n"
-"vtexprojcoord = l_cubeworld * vec4((m_model * vec4(w.xyz, 0.0)).xyz + inst_origin, 1.0); //FTESurf Patch 1730\n"
+"vtexprojcoord = l_cubeworld * vec4((m_model * vec4(w.xyz, 0.0)).xyz + inst_origin, 1.0); //FTESurf Patch 1732\n"
 "#else\n"
 "vtexprojcoord = (l_cubematrix*vec4(w.xyz, 1.0));\n"
 "#endif\n"
@@ -1672,7 +1672,7 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "#endif\n"
 "#ifdef FAKESHADOWS\n"
 "if (e_noshadowrecv < 0.5)\n"
-"{ //FTESurf Patch 1730: as lightmapped.glsl -- a baked prop on a cascade map loses only the sun\n"
+"{ //FTESurf Patch 1732: as lightmapped.glsl -- a baked prop on a cascade map loses only the sun\n"
 "float shlit = 2.0*ShadowmapFilter(s_shadowmap, vtexprojcoord) - 1.0;\n"
 "vec3 shfloor = cvar_r_shadows_sunfloor * e_lmscale.rgb;\n"
 "if (shfloor.r + shfloor.g + shfloor.b > 0.0)\n"
