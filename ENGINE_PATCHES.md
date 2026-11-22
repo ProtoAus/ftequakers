@@ -1,5 +1,61 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1732 - r_shadows 2 on Source maps: instanced props stay instanced, a casting prop does not shadow itself, shadow_control's colour, a Strata map's shadow takes out only the sun; r_exposure, a test fixed exposure (engine gl/gl_backend.c, gl/gl_shader.c, gl/shader.h, gl/gl_rlight.c, gl/gl_shadow.c, client/renderer.c; plugin hl2/glsl/vmt/vertexlit.glsl, lightmapped.glsl, transition.glsl)
+
+**Cause.** 22 Nov 2026 Lex, after P1724 left r_shadows 2 short of Source: "is part of the bigger render job being able
+to get the performance back? can you finish up what was partly done? also the exposure, can you maybe add a test cvar".
+Four gaps (BACKLOG "P1717"). GLBE_SubmitMeshesSortRange refused instancing whenever r_fakeshadows was on, because
+vertexlit.glsl's INSTANCED path projected every prop of a run through the first entity's l_cubematrix (lightprojmatrix
+x modelmatrix). Every caster received its own depth map, so a prop shadowed itself (ahop_coast's crate near-black at
+Lex's save 7). The shadow was ShadowmapFilter's fixed 0.5..1. On a Strata map, whose lightmap already holds the sun's
+shadows (env_cascade_light), the multiply darkened baked shade a second time.
+
+**Change.**
+- Instancing: texels 4-6 carry the prop's origin in .w (were 0); new uniform l_cubeworld (SP_LIGHTCUBEWORLD, the
+  light's projection alone); vertexlit's INSTANCED+FAKESHADOWS coords = l_cubeworld x (rotation x w + origin), which
+  equals l_cubematrix x w for a single draw. The !r_fakeshadows term is gone from the gate.
+- BE_NoShadowRecv(entity) answers e_noshadowrecv for single draws and texel 8 .w per instance: RF_NOSHADOWRECV and the
+  viewmodel as before, and now a Source model (MDLF_SOURCEPITCH) that casts (no RF_NOSHADOW). Static props (they do not
+  cast) and the world still receive.
+- r_shadows_color (default 0.5 0.5 0.5 = the old look): the plugin's shaders multiply by mix(colour, 1, 2 x filter - 1).
+- r_shadows_sunfloor (default 0 = off), a displayed level: lightmapped/transition take the lightmap to
+  mix(min(lm, floor), lm, lit) and vertexlit does the same to a prop's light, so a shadow takes out the sun down to the
+  sky's share and leaves baked shade alone. The world's e_lmscale carries 2^gl_overbright (its texels are stored that
+  much smaller, Surf_LightmapShift), so the world divides it out; a model's does not carry it.
+- r_exposure (default 1, a test): R_UpdateHDR multiplies hdr_value by r_exposure^(1/2.2) -- lightmaps, dlights, scripted
+  particles and sprites (e_vlscale), as Source's tonemap scale reaches them -- and model light (SP_E_L_AMBIENT/MUL,
+  instance texels 8 and 10) takes the same factor. Not the sky (Source scales its HDR sky), not classic particles.
+- Game (P1732, cl_sun.qc Sun_MapLight): r_shadows_color from shadow_control's color (absent key = CShadowControl's 64 64
+  64; no shadow_control = CClientShadowMgr::LevelInitPreEntity's min(1, 3 x sky ambient + 0.3)); r_shadows_sunfloor =
+  sRGB of light_environment's sky ambient (VRAD ParseLightEnvironment: a legal _ambientHDR on HDR, else _ambient, else
+  half the sun; x _AmbientScaleHDR on HDR) on maps with an env_cascade_light; vbsp_exposure 1 (archived, default 0) sets
+  r_exposure = clamp(1, SetAutoExposureMin, Max) on HDR-lit maps (1 on LDR), and 0 hands r_exposure back.
+
+**Evidence.** Headless client (visual/vprobe.py) on this PC while the owner's game and OBS ran, so no fps is quoted.
+- Instancing under r_shadows 2 (r_budget_dump, two fence views on surf_fantasy_css, 673 copies of one fence): entity
+  batches 157 -> 54 and 200 -> 83, draws 1084 -> 981 and 1590 -> 1473 -- the same as with shadows off; the old exe stays
+  at 157/200 with r_instancing 1 or 0 (the gate). Draw-call CPU 0.74 -> 0.68 ms; props GPU 0.08 -> 0.19 ms (instanced
+  fetches, as with shadows off). Those frames are CPU-bound elsewhere (~2 ms, CSQC and HUD), so the frame barely moves.
+- ahop_coast save 7, shadows off -> on: the old exe darkens the crate and fence themselves (93,748 pixels > 8 levels);
+  the new one leaves them lit and still shadows the ground beside the crate (51,527). r_shadows_color 0.44 0.49 0.56.
+- bhop_canals start: r_shadows_sunfloor 0.433 0.519 0.541 (review 1 checked the formula against the map's HDR
+  lightmap: up-facing luxels' sky-only level 56-60 in VRAD units against 59.1 predicted); r_shadows_color 0.77 1.0 1.0.
+  Self-shadowing gone from the barrels and crates (view 0: 131,058 -> 22,663 pixels darkened, all floor).
+- r_exposure on ahop_coast (HDR, band .8-.9): vbsp_exposure 1 sets 0.9, the world 47.8 -> 45.6 (0.953 predicted);
+  r_exposure 2 -> 65.3 (65.5); the sky unchanged; vbsp_exposure 0 and a map load hand back 1.
+- Reviews: round 1 (renderer) one finding -- r_exposure's text claimed particles/sprites unscaled -- fixed by saying
+  what it reaches; round 1 (game) four, fixed (LDR maps, hand-back, a 0 0 0 colour, _ambientHDR). Round 2: six, fixed
+  (the HDR check asked of serverkey("map") in WorldLoaded -- "" or the previous map; the hand-back flag was a CSQC global,
+  reset every map; VRAD's half-sun fallback; the HDR scale before the legality test; the world floor 2^overbright too
+  high). Round 3: the generated mat_vmt_progs.h had missed the overbright divide (make saw it newer); regenerated.
+
+**Not shown / left.** The sun floor on a baked prop is reasoned, not measured: its light is a displayed level (P1717
+matched it to Momentum beside the world) but no shot has a shadow over both. Casters indoors still throw "sun" shadows
+(the depth map holds entities, not the world, and Strata's cascades only shade where the sun reaches) -- gating a caster
+on VBSP_SunVisible would approximate it. Exposure is fixed, not Source's adaptation (clamp(1, band) is the top of a band
+below 1, where a bright scene would push Source toward the bottom); the sky is not scaled. shadow_control's
+disableallshadows and distance are still ignored.
+
 ## Patch 1729 - hl2_water_lod: an opt-in distance cutoff for water at hl2_water 1 from the map's water_lod_control (or the material's own $cheapwater* distances), with Source's cheap pass fading in and no capture for water wholly past them -- not Source's rule for reflecting water (engine gl/gl_backend.c, gl/gl_shader.c, gl/shader.h, client/renderer.c; plugin hl2/mat_vmt.c, hl2/mod_vbsp.c, hl2/glsl/vmt/water.glsl)
 
 **Problem.** Lex, 22 Nov: "I don't mind trying the distance water effect". Source SDK 2013: viewrender.cpp
