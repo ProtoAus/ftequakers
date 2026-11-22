@@ -2378,6 +2378,8 @@ static char *VMT_ParseBlock(const char *fname, vmtstate_t *st, char *line)
 			{
 				if (dxtrue && ndx < countof(dxblock))
 					dxblock[ndx++] = line;
+				else if (dxtrue)
+					Con_DPrintf("%s: more than %i true DX-level blocks; \"%s\" not applied\n", fname, (int)countof(dxblock), key);
 			}
 			else if (VMT_IsKnownIgnoredBlock(key))
 				;	//nettest: Source per-DX/HDR shader-variant sub-block (vertexlitgeneric_dx9, Proxies, …) — benign

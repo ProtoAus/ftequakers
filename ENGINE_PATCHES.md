@@ -12,8 +12,11 @@ EP1, EP2 (Momentum mounts the same): 33 key lines in >=dx90 (3 Water, 2 Lightmap
 LMG, WVT); none in ahop_coast's or bhop_canals' pakfiles.
 
 **Change.** VMT_DXBlock parses [op]dx<N>[_20b] (op >=, <=, >, <, =) and evaluates it at dxlevel 98 with ps2.0b. A true
-block's text is parsed with the material's state after its own keys (and before a patch's replace), so its keys win as
-in Source; false and unrecognised names are skipped as before.
+block's text is parsed with the material's state after its own keys, so its keys win over the material's as in Source; a
+patch's insert/replace still comes after and wins (as before; Source expands the patch first, so there the block would).
+False and unrecognised names are skipped as before; past four true blocks a developer line names the dropped one (none
+in the census has two). Review 1: nothing worse; the toxic slime now draws its DX9 base and bump (no bump mask or scroll
+on that path); bhop_canals' reflection drawing entities costs its entity pass at hl2_water 2, as Source's does.
 
 **Measured.** bhop_canals, r_shaderpasses water_canals_water_clear: the program gains #STRENGTH_REFR=0.200000 (was the
 shader default), and $reflectentities reaches P868's flag by the same parse (no fte_reflectnoentities: hl2_water 2's
