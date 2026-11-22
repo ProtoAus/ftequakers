@@ -1205,6 +1205,10 @@ typedef struct model_s
 	//this model's brushes (Source's CEngineTrace::ClipRayToVPhysics; rays stay on the brushes).  A twin in
 	//memgroup with its own tree in its own group, like phyfixed; NULL = none.  APPEND-ONLY like the fields above.
 	struct model_s *vphysalt;
+	//FTESurf Patch 1717: the world's light sample for a Source MDL (MDLF_SOURCEPITCH): the hl2 plugin's VMT shaders
+	//ramp it by hl2_lt_fold's half-lambert, which LightPointValues' split does not fit.  NULL = LightPointValues for
+	//every model.  APPEND-ONLY like the fields above.
+	void (*LightPointFold)(struct model_s *model, const vec3_t point, vec3_t res_diffuse, vec3_t res_ambient, vec3_t res_dir);
 } model_t;
 
 #define MDLF_EMITREPLACE     0x0001 // particle effect engulphs model (don't draw)

@@ -1419,6 +1419,7 @@ typedef struct
 	vec3_t lightdir;
 	int keynum;				//FTESurf Patch 1398: the entity and model that wrote it (the moved rule's owner check)
 	model_t *model;
+	qboolean fold;			//FTESurf Patch 1717: sampled by LightPointFold (R_ModelLightFold); part of the key
 	vec3_t shade0, ambient0, dir0;	//FTESurf Patch 1398: what was shown when the sample above landed,
 	float blend;					//blended to it over this many seconds (0: shown as sampled)
 } modellightcache_t;
@@ -1467,12 +1468,20 @@ static struct
 	double time;
 } vmlightcache;
 
+//FTESurf Patch 1717: a Source MDL draws through the hl2 plugin's VMT shaders, whose ramp needs the world's other split
+static qboolean R_ModelLightFold(const model_t *clmodel)
+{
+	return clmodel && (clmodel->engineflags & MDLF_SOURCEPITCH) && cl.worldmodel->LightPointFold;
+}
+
 /*The world-lightmap sample, factored out so the cache-fill path and the r_modellight_cache 2
   self-check can run byte-identical code. Pure function of e->origin (+ the world/styles/cvars
   tracked by r_modellight_seq) -- that purity is the whole basis of the cache being exact.*/
 static void R_SampleModelLight(entity_t *e, model_t *clmodel, vec3_t shadelight, vec3_t ambientlight, vec3_t lightdir)
 {
 	vec3_t center;
+	void (*lightpoint)(struct model_s *model, const vec3_t point, vec3_t res_diffuse, vec3_t res_ambient, vec3_t res_dir) =
+		R_ModelLightFold(clmodel) ? cl.worldmodel->LightPointFold : cl.worldmodel->funcs.LightPointValues;
 	#if 0 /*hexen2*/
 	VectorAvg(clmodel->mins, clmodel->maxs, center);
 	VectorAdd(e->origin, center, center);
@@ -1480,7 +1489,7 @@ static void R_SampleModelLight(entity_t *e, model_t *clmodel, vec3_t shadelight,
 	VectorCopy(e->origin, center);
 	center[2] += 24;
 	#endif
-	cl.worldmodel->funcs.LightPointValues(cl.worldmodel, center, shadelight, ambientlight, lightdir);
+	lightpoint(cl.worldmodel, center, shadelight, ambientlight, lightdir);
 	if (r_modellight_fallback.ival)
 	{	/*the +24 sample point lands inside the ceiling for roof-mounted
 		  models, and a lightpoint trace that starts in solid returns
@@ -1494,7 +1503,7 @@ static void R_SampleModelLight(entity_t *e, model_t *clmodel, vec3_t shadelight,
 			if (ambientlight[0] || ambientlight[1] || ambientlight[2] || shadelight[0] || shadelight[1] || shadelight[2])
 				break;
 			center[2] = e->origin[2] + drop[attempt];
-			cl.worldmodel->funcs.LightPointValues(cl.worldmodel, center, shadelight, ambientlight, lightdir);
+			lightpoint(cl.worldmodel, center, shadelight, ambientlight, lightdir);
 		}
 	}
 }
@@ -1615,7 +1624,7 @@ qboolean R_CalcModelLighting(entity_t *e, model_t *clmodel)
 				qboolean exact;
 				cache = &modellightcache[(unsigned int)e->keynum & (MODELLIGHTCACHE_BUCKETS-1)];
 				VectorSubtract(e->origin, cache->origin, moved);
-				exact = VectorEquals(cache->origin, e->origin) &&
+				exact = VectorEquals(cache->origin, e->origin) && cache->fold == R_ModelLightFold(clmodel) &&
 					(!R_ModelLightSettles() || (realtime >= cache->time &&
 					 realtime - cache->time < 1 + (e->keynum & 63) * (1/64.0)));	//Patch 1283; spread, not all in one frame
 				//FTESurf Patch 1398: on a Source map (where a sample traces world lights) a model that moved keeps the
@@ -1683,6 +1692,7 @@ qboolean R_CalcModelLighting(entity_t *e, model_t *clmodel)
 					VectorCopy(lightdir, cache->lightdir);
 					cache->keynum = e->keynum;
 					cache->model = clmodel;
+					cache->fold = R_ModelLightFold(clmodel);
 					cache->time = realtime;
 					cache->seq = r_modellight_seq;	//publish last: the entry is only valid once filled
 					if (cache->blend > 0)

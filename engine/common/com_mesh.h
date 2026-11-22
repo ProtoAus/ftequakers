@@ -341,6 +341,8 @@ typedef struct modplugfuncs_s
 #define plugmodeltail1440_name "FTESurfModelTail/1440"
 //FTESurf Patch 1713: likewise for model_t.vphysalt; without it the hl2 plugin builds no vcollide trees.
 #define plugmodeltail1713_name "FTESurfModelTail/1713"
+//FTESurf Patch 1717: likewise for model_t.LightPointFold.
+#define plugmodeltail1717_name "FTESurfModelTail/1717"
 } plugmodfuncs_t;
 #define MODPLUGFUNCS_VERSION 6	//FTESurf Patch 764: struct bihtransform_s grew (the plugin fills it, com_bih.c reads it); 888: again, and model_t.phyfixed
 

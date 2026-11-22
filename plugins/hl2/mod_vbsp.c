@@ -1134,6 +1134,7 @@ demos say faces stand 0.5 proud, so Momentum's sweeps are not that one.
 ==================
 */
 #define VBSP_VPHYS_MARGIN	0.5f	/*vphysics' 0.25 separation radius, on the hull and on the box*/
+static qboolean vbsp_tail1717;	//FTESurf Patch 1717: the exe answers plugmodeltail1717_name: model_t has LightPointFold
 static qboolean vbsp_tail1713;	//the exe answers plugmodeltail1713_name: its model_t has vphysalt (com_mesh.h)
 static unsigned int vbsp_stat_vphysmodels, vbsp_stat_vphysrefused, vbsp_stat_vphyspieces;
 
@@ -12153,6 +12154,7 @@ static void VBSP_LoadLeafLight (model_t *mod, qbyte *mod_base, vlump_t *hdridx, 
 	size_t i, j;
 	unsigned short *in;
 	qbyte *inpoint;
+	qboolean wide;	//FTESurf Patch 1717
 
 	if (version == 17 || version == 19)
 		return; //nope. this info is in the leafs.
@@ -12199,7 +12201,10 @@ static void VBSP_LoadLeafLight (model_t *mod, qbyte *mod_base, vlump_t *hdridx, 
 	if (lump_vals->filelen%(7*4))
 		return;
 
-	if (lump_idx->filelen != mod->numleafs*sizeof(short)*2)
+	//FTESurf Patch 1717: Strata (v25) widens the index to two uint32 per leaf -- count, then first (bhop_canals: the
+	//10276 counts sum to its 54901 samples, every first in order); v20's is two ushort.
+	wide = lump_idx->filelen == mod->numleafs*sizeof(int)*2 && lump_idx->filelen != mod->numleafs*sizeof(short)*2;
+	if (!wide && lump_idx->filelen != mod->numleafs*sizeof(short)*2)
 		return;	//erk?
 
 	//easy enough to load some of the data...
@@ -12247,6 +12252,20 @@ static void VBSP_LoadLeafLight (model_t *mod, qbyte *mod_base, vlump_t *hdridx, 
 	lavender off strangers' cubes.
 	*/
 	prv->leaflight = plugfuncs->GMalloc(&mod->memgroup, sizeof(*prv->leaflight)*mod->numleafs);
+	if (wide)
+	{	//Patch 1717: 32-bit firsts cannot wrap
+		const unsigned int *in32 = (const unsigned int*)(mod_base + lump_idx->fileofs);
+		size_t npoints = lump_vals->filelen/(7*4);
+		for (i = 0; i < mod->numleafs; i++)
+		{
+			unsigned int count = LittleLong(in32[i*2]), first = LittleLong(in32[i*2+1]);
+			if (count && ((size_t)first + count > npoints || first + count < first))
+				count = 0;	//names cubes the lump does not hold
+			prv->leaflight[i].count = count;
+			prv->leaflight[i].point = point + (count ? first : 0);
+		}
+		return;
+	}
 	in = (unsigned short*)(mod_base + lump_idx->fileofs);
 	{
 		size_t npoints = lump_vals->filelen/(7*4), run = 0, first, wrapped = 0, disagree = 0, sum = 0;
@@ -13294,7 +13313,8 @@ static void VBSP_FloorModelAmbient(vec3_t base, float minimum)
 			base[c] += minimum - lum;
 }
 
-static void VBSP_LightPointValuesCube(struct model_s *model, const vec3_t point, vec3_t res_diffuse, vec3_t res_ambient, vec3_t res_dir, vec3_t res_cube[6])
+//fold: Patch 304's split whatever prv->fold_prop says -- LightPointFold's (Patch 1717)
+static void VBSP_LightPointCubeEx(struct model_s *model, const vec3_t point, vec3_t res_diffuse, vec3_t res_ambient, vec3_t res_dir, vec3_t res_cube[6], qboolean fold)
 {
 	vbspinfo_t	*prv = (vbspinfo_t*)model->meshinfo;
 	int leafnum = VBSP_PointLeafnum(model,point);
@@ -13330,6 +13350,7 @@ static void VBSP_LightPointValuesCube(struct model_s *model, const vec3_t point,
 	but bounded -- and then encoded, which is right for LDR and safe for HDR.
 	*/
 	static cvar_t *srgbmag, *scale, *forceface;
+	qboolean foldlevels = false;	//FTESurf Patch 1717: res_ambient holds lit-unlit (linear), see the encode
 	if (!srgbmag)	srgbmag		= cvarfuncs->GetNVFDG("hl2_lt_srgb_mag","1",	0, "sRGB-encode model lighting (0 = plain linear scale by hl2_lt_scale). Source's ambient cube is LINEAR light and needs a gamma encode to be displayed; a multiply is not one. Values are clamped to 1.0 first so an HDR cube cannot run away through pow().", "");
 	if (!scale)		scale		= cvarfuncs->GetNVFDG("hl2_lt_scale",	"255",	0, "Model-lighting brightness scale, applied after the encode. 255 maps a fully-lit luxel to white. The old default of 160 belonged to the linear path, where it was compensating for a missing gamma encode rather than setting a brightness.", "");
 	if (!forceface)	forceface	= cvarfuncs->GetNVFDG("hl2_lt_face",	"-1",	0, "TEST", "TEST");
@@ -13382,7 +13403,7 @@ static void VBSP_LightPointValuesCube(struct model_s *model, const vec3_t point,
 			VectorSubtract(rgb[j], res_ambient, diff[j]);
 			sig[j] = VectorLength(diff[j]);
 		}
-		if (hl2_lt_fold && hl2_lt_fold->ival && prv->fold_prop)
+		if (hl2_lt_fold && hl2_lt_fold->ival && (prv->fold_prop || fold))
 		{
 			/*
 			FTESurf Patch 304 -- WHICH END OF THE RAMP THE FLAT BASE IS.
@@ -13461,6 +13482,7 @@ static void VBSP_LightPointValuesCube(struct model_s *model, const vec3_t point,
 				//side, and a negative amp would subtract light from the lit face.
 				for (j = 0; j < 3; j++)
 					res_ambient[j] = (lit[j] > unlit[j]) ? lit[j]-unlit[j] : 0;
+				foldlevels = true;
 			}
 		}
 		else if (hl2_lt_dirsign && hl2_lt_dirsign->ival)
@@ -13530,12 +13552,16 @@ static void VBSP_LightPointValuesCube(struct model_s *model, const vec3_t point,
 				//what blew this out last time; 1.0 is "fully lit" and anything
 				//above it has nowhere brighter to go on an 8-bit screen anyway.
 				float a = res_ambient[j], d = res_diffuse[j];
+				if (foldlevels)
+					a += d;	//Patch 1717: encode the lit LEVEL; sRGB(unlit)+sRGB(lit-unlit) drew lit faces up to 1.4x hot
 				if (a > srgbmag->value) a = srgbmag->value;
 				if (d > srgbmag->value) d = srgbmag->value;
 				if (a < 0) a = 0;
 				if (d < 0) d = 0;
 				res_diffuse[j] = M_LinearToSRGB(d, srgbmag->value)*scale->value;
 				res_ambient[j] = M_LinearToSRGB(a, srgbmag->value)*scale->value;
+				if (foldlevels)
+					res_ambient[j] = max(0, res_ambient[j] - res_diffuse[j]);
 			}
 
 			/*for (j = 0; j < 6; j++)
@@ -13631,9 +13657,23 @@ static void VBSP_LightPointValuesCube(struct model_s *model, const vec3_t point,
 	//Patch 508: floor only the shader base, in both folds. Never scale the range.
 	VBSP_FloorModelAmbient(res_diffuse, hl2_lt_min ? hl2_lt_min->value : 16.0f);
 }
+static void VBSP_LightPointValuesCube(struct model_s *model, const vec3_t point, vec3_t res_diffuse, vec3_t res_ambient, vec3_t res_dir, vec3_t res_cube[6])
+{
+	VBSP_LightPointCubeEx(model, point, res_diffuse, res_ambient, res_dir, res_cube, false);
+}
 static void VBSP_LightPointValues(struct model_s *model, const vec3_t point, vec3_t res_diffuse, vec3_t res_ambient, vec3_t res_dir)
 {
-	VBSP_LightPointValuesCube(model, point, res_diffuse, res_ambient, res_dir, NULL);
+	VBSP_LightPointCubeEx(model, point, res_diffuse, res_ambient, res_dir, NULL, false);
+}
+//FTESurf Patch 1717: model_t.LightPointFold -- a Source MDL entity draws through vertexlit/animated.glsl, whose
+//half-lambert ramp (hl2_lt_fold) wants Patch 304's split as much as a static prop's does.  And the engine then
+//multiplies by 255/200 (gl_alias.c R_CalcModelLighting, Quake's fudge), which HL2_CalcModelLighting's static props
+//never get: taken back out, so 1.0 linear draws the texture at its own brightness, as Source's vertexlit does.
+static void VBSP_LightPointFold(struct model_s *model, const vec3_t point, vec3_t res_diffuse, vec3_t res_ambient, vec3_t res_dir)
+{
+	VBSP_LightPointCubeEx(model, point, res_diffuse, res_ambient, res_dir, NULL, true);
+	VectorScale(res_diffuse, 200.0f/255, res_diffuse);
+	VectorScale(res_ambient, 200.0f/255, res_ambient);
 }
 #else
 static void VBSP_LightPointValues	(struct model_s *model, const vec3_t point, vec3_t res_diffuse, vec3_t res_ambient, vec3_t res_dir)
@@ -14362,6 +14402,8 @@ static qboolean VBSP_LoadModel(model_t *mod, qbyte *mod_base, size_t filelen, ch
 #endif
 #ifdef HAVE_CLIENT
 	mod->funcs.LightPointValues		= VBSP_LightPointValues;
+	if (vbsp_tail1717)
+		mod->LightPointFold			= VBSP_LightPointFold;	//FTESurf Patch 1717
 //	mod->funcs.StainNode			= VBSP_StainNode;
 //	mod->funcs.MarkLights			= VBSP_MarkLights;
 	mod->funcs.GenerateShadowMesh	= VBSP_GenerateShadowMesh;
@@ -14936,6 +14978,7 @@ qboolean VBSP_Init(void)
 	threadfuncs = plugfuncs->GetEngineInterface(plugthreadfuncs_name, sizeof(*threadfuncs));
 	loadingfuncs = plugfuncs->GetEngineInterface(plugloadingfuncs_name, sizeof(*loadingfuncs));
 	vbsp_tail1713 = plugfuncs->GetEngineInterface(plugmodeltail1713_name, sizeof(int)) != NULL;	//FTESurf Patch 1713
+	vbsp_tail1717 = plugfuncs->GetEngineInterface(plugmodeltail1717_name, sizeof(int)) != NULL;	//FTESurf Patch 1717
 
 	//nettest: a dedicated/headless server has no client Image/renderer interface (the same condition the
 	//"hl2: VTF/VMT/TTH support unavailable" banners report).  Mark qrenderer QR_NONE so the renderer-only

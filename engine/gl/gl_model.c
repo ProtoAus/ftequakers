@@ -792,6 +792,7 @@ qboolean Mod_PurgeModel(model_t	*mod, enum mod_purge_e ptype)
 		ZG_FreeGroup(&mod->vphysalt->memgroup);
 		mod->vphysalt = NULL;
 	}
+	mod->LightPointFold = NULL;	//FTESurf Patch 1717: the plugin's
 	if (mod->archive)
 	{
 		FS_CloseMapPackFile(mod->archive);
