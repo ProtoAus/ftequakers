@@ -2723,6 +2723,82 @@ static void QCBUILTIN PF_m_fs_addonstate(pubprogfuncs_t *prinst, struct globalva
 	G_FLOAT(OFS_RETURN) = (spec && strlen(spec) < MAX_OSPATH) ? FS_AddonState(spec) : -1;
 }
 
+/*
+  FTESurf Patch 1739: a game's own art from the player's Steam client cache, for the map browser's mount-game icons.
+  steam_libraryimage(imagename, appid, kind) loads <steam>/appcache/librarycache/<appid>/ "icon" (the one 40-hex
+  .jpg there, Steam's 32x32 app icon; the older layout's <appid>_icon.jpg) or "logo" (logo.png) into a texture
+  named imagename, for drawpic.  1 loaded, 0 not.  Read off the disk, never through the VFS; nothing is shipped.
+*/
+static qboolean PF_m_ishex(char c)
+{
+	return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
+}
+static int QDECL PF_m_steamicon_pick(const char *fname, qofs_t fsize, time_t mtime, void *parm, searchpathfuncs_t *spath)
+{
+	char *best = parm;
+	const char *base = COM_SkipPath(fname);
+	size_t i;
+	if (strlen(base) != 44 || Q_strcasecmp(base + 40, ".jpg"))
+		return true;
+	for (i = 0; i < 40; i++)
+		if (!PF_m_ishex(base[i]))
+			return true;
+	if (fsize > 0 && fsize < 256*1024 && (!*best || Q_strcasecmp(base, best) < 0))	//one a game; the lowest name if more
+		Q_strncpyz(best, base, MAX_OSPATH);
+	return true;
+}
+static void QCBUILTIN PF_m_steam_libraryimage(pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
+{
+	const char *imagename = PR_GetStringOfs(prinst, OFS_PARM0);
+	int appid = G_FLOAT(OFS_PARM1);
+	const char *kind = PR_GetStringOfs(prinst, OFS_PARM2);
+	char root[MAX_OSPATH], dir[MAX_OSPATH], path[MAX_OSPATH], pick[MAX_OSPATH];
+	qofs_t len = 0;
+	qbyte *data = NULL;
+	texid_t tid;
+	G_FLOAT(OFS_RETURN) = 0;
+	if (!imagename || !*imagename || strlen(imagename) >= MAX_QPATH || appid <= 0 || appid > 99999999 || !kind)
+		return;
+	if (!FS_SteamClientRoot(root, sizeof(root)))
+		return;
+	Q_snprintfz(dir, sizeof(dir), "%s/appcache/librarycache/%i", root, appid);
+	if (!strcmp(kind, "logo"))
+		Q_snprintfz(path, sizeof(path), "%s/logo.png", dir);
+	else if (!strcmp(kind, "icon"))
+	{
+		*pick = 0;
+		Sys_EnumerateFiles(dir, "*.jpg", PF_m_steamicon_pick, pick, NULL);
+		if (*pick)
+			Q_snprintfz(path, sizeof(path), "%s/%s", dir, pick);
+		else
+			Q_snprintfz(path, sizeof(path), "%s/appcache/librarycache/%i_icon.jpg", root, appid);
+	}
+	else
+		return;
+	data = FS_MallocFile(path, FS_SYSTEM, &len);
+	if (!data)
+		return;
+	if (len <= 0 || len > 8*1024*1024)
+	{
+		BZ_Free(data);
+		return;
+	}
+	//the flags Shader_Default2D asks for, so drawpic's lookup (Image_FindTexture matches CLAMP and PREMULTIPLYALPHA)
+	//finds this texture, whether the pic was drawn before or after
+	tid = Image_FindTexture(imagename, NULL, IF_PREMULTIPLYALPHA|IF_UIPIC|IF_NOPICMIP|IF_NOMIPMAP|IF_CLAMP|IF_HIGHPRIORITY);
+	if (!TEXVALID(tid))
+		tid = Image_CreateTexture(imagename, NULL, IF_PREMULTIPLYALPHA|IF_UIPIC|IF_NOPICMIP|IF_NOMIPMAP|IF_CLAMP|IF_HIGHPRIORITY);
+	if (!TEXVALID(tid))
+	{
+		BZ_Free(data);
+		return;
+	}
+	if (Image_LoadTextureFromMemory(tid, tid->flags, tid->ident, imagename, data, len))	//it frees data on success
+		G_FLOAT(OFS_RETURN) = 1;
+	else
+		BZ_Free(data);
+}
+
 qboolean CL_FriendsSign(const char *nonce, const char *op, const char *who, char *out, size_t outlen);
 static void QCBUILTIN PF_m_friends_sign(pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
 {
@@ -3138,6 +3214,7 @@ static struct {
 	{"downloadmap",				PF_m_downloadmap,			0},	//FTESurf Patch 465
 	{"mapfilekb",				PF_m_mapfilekb,				0},	//FTESurf Patch 466
 	{"fs_addonstate",			PF_m_fs_addonstate,			0},	//FTESurf Patch 480
+	{"steam_libraryimage",		PF_m_steam_libraryimage,	0},	//FTESurf Patch 1739
 															//gap
 	{"uri_escape",				PF_uri_escape,				510},
 	{"uri_unescape",			PF_uri_unescape,			511},

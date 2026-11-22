@@ -742,6 +742,7 @@ qboolean FS_ValidateExternalDirectory(qboolean (*outside)(const char *root, void
 qboolean FS_DisplayPath(const char *fname, enum fs_relative relativeto, char *out, int outlen);	//retrieves a string for user display. prefixes may be masked for privacy.
 qboolean FS_WriteFile (const char *filename, const void *data, int len, enum fs_relative relativeto);
 void *FS_MallocFile(const char *filename, enum fs_relative relativeto, qofs_t *filesize);
+qboolean FS_SteamClientRoot(char *out, size_t outsize);	//FTESurf Patch 1739
 vfsfile_t *QDECL FS_OpenVFS(const char *filename, const char *mode, enum fs_relative relativeto);
 vfsfile_t *FS_OpenTableVFS(const char *name, qboolean unmapped);	//ftesurf (P1102): a data/map* table from the gamedir's own loose files only
 vfsfile_t *FS_OpenTemp(void);

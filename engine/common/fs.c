@@ -9,6 +9,8 @@
 #ifdef __linux__
 #include <sys/stat.h>
 #include <errno.h>
+#elif (defined(__unix__) || defined(__apple__)) && !defined(ANDROID)
+#include <sys/stat.h>	//FTESurf Patch 1739: FS_SteamClientRoot
 #endif
 
 #include "fs.h"
@@ -14090,3 +14092,70 @@ done:
 	}
 }
 #endif
+
+/*
+  FTESurf Patch 1739: the Steam CLIENT's own folder -- where appcache/librarycache keeps each game's art -- for the
+  menu's mount-game icons (pr_menu.c PF_m_steam_libraryimage).  Not a search path: that art is read straight off
+  the disk, decoded into one named texture, and never enters the VFS or its content checks.  The candidates are
+  Sys_SteamVdfPath's homes; Windows asks the registry as Sys_SteamHasFile does.
+*/
+qboolean FS_SteamClientRoot(char *out, size_t outsize)
+{
+#if defined(_WIN32) && !defined(WINRT) && !defined(_XBOX)
+	HKEY key = NULL;
+	DWORD len;
+	char path[MAX_OSPATH];
+	*path = 0;
+	if (RegOpenKeyExA(HKEY_CURRENT_USER, "SOFTWARE\\Valve\\Steam", 0, KEY_QUERY_VALUE, &key) == ERROR_SUCCESS)
+	{
+		len = sizeof(path) - 1;
+		if (RegQueryValueExA(key, "SteamPath", NULL, NULL, (LPBYTE)path, &len) != ERROR_SUCCESS)
+			*path = 0;
+		path[sizeof(path) - 1] = 0;
+		RegCloseKey(key);
+	}
+	if (!*path && RegOpenKeyExA(HKEY_LOCAL_MACHINE, "SOFTWARE\\Valve\\Steam", 0, KEY_QUERY_VALUE|KEY_WOW64_32KEY, &key) == ERROR_SUCCESS)
+	{
+		len = sizeof(path) - 1;
+		if (RegQueryValueExA(key, "InstallPath", NULL, NULL, (LPBYTE)path, &len) != ERROR_SUCCESS)
+			*path = 0;
+		path[sizeof(path) - 1] = 0;
+		RegCloseKey(key);
+	}
+	if (!*path)
+		return false;
+	Q_strncpyz(out, path, outsize);
+	return true;
+#elif (defined(__linux__) || defined(__unix__) || defined(__apple__)) && !defined(ANDROID)
+	static const char *homes[] = {
+		".steam/steam", ".local/share/Steam", ".steam/root", ".var/app/com.valvesoftware.Steam/.local/share/Steam",
+		"snap/steam/common/.local/share/Steam", "snap/steam/common/.steam/steam", ".steam/debian-installation",
+		"Library/Application Support/Steam",
+	};
+	const char *home = getenv("HOME"), *xdg = getenv("XDG_DATA_HOME");
+	char probe[MAX_OSPATH];
+	struct stat st;
+	size_t i;
+	for (i = 0; i <= countof(homes); i++)
+	{
+		if (i < countof(homes))
+		{
+			if (!home || !*home)
+				continue;
+			Q_snprintfz(out, outsize, "%s/%s", home, homes[i]);
+		}
+		else
+		{
+			if (!xdg || !*xdg)
+				continue;
+			Q_snprintfz(out, outsize, "%s/Steam", xdg);
+		}
+		Q_snprintfz(probe, sizeof(probe), "%s/appcache/librarycache", out);
+		if (stat(probe, &st) == 0 && S_ISDIR(st.st_mode))
+			return true;
+	}
+	return false;
+#else
+	return false;
+#endif
+}
