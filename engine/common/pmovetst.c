@@ -142,33 +142,32 @@ PM_PointContents
 */
 /*
 FTESurf Patch 1733: the prediction memo's query box (cl_pred.c CL_PredictMemoMove). While pm_memoq is set, every
-physent query of the move grows it: PM_PlayerTrace and PM_TestPlayerPosition by their swept player box,
-PM_ExtraBoxContents and PM_LadderEntPlane by the player box at their point, PM_PointContents by its point (the
-ladder's second trace and PM_PortalCSG only ever meet a physent one of those already reached). A physent out of reach
-of the box (PM_PhysentReachesBox) answered nothing the move asked. A non-finite query makes it everything.
+physent query of the move grows it -- as two boxes, the union of the query origins (start/end/pos/p) and the union of
+the player boxes they swept: PM_PlayerTrace, PM_TestPlayerPosition, PM_ExtraBoxContents and PM_LadderEntPlane with the
+player box, PM_PointContents with none (the ladder's second trace only follows a hit on the same physent). The pair is
+P1714's own sweep and box, so PM_PhysentOutOfReach keeps its rotated-box allowance and its convex-hull refusal (review 1:
+a box flattened into a point sweep lost both). Portal physents are keyed whole by the memo (PM_PortalCSG scans them
+all). A non-finite query makes the sweep everything.
 */
 FTE_TLS qboolean pm_memoq;
-FTE_TLS vec3_t pm_memoq_mins, pm_memoq_maxs;
+FTE_TLS vec3_t pm_memoq_omins, pm_memoq_omaxs, pm_memoq_bmins, pm_memoq_bmaxs;
 static void PM_MemoQ (const vec3_t a, const vec3_t b, const vec3_t mins, const vec3_t maxs)
 {
 	int i;
-	float lo, hi;
 	if (!pm_memoq)
 		return;
 	for (i = 0; i < 3; i++)
 	{
-		lo = min(a[i], b[i]) + mins[i];
-		hi = max(a[i], b[i]) + maxs[i];
-		if (!isfinite(lo) || !isfinite(hi))
+		if (!isfinite(a[i]) || !isfinite(b[i]) || !isfinite(mins[i]) || !isfinite(maxs[i]))
 		{
-			VectorSet(pm_memoq_mins, -INFINITY, -INFINITY, -INFINITY);
-			VectorSet(pm_memoq_maxs, INFINITY, INFINITY, INFINITY);
+			VectorSet(pm_memoq_omins, -INFINITY, -INFINITY, -INFINITY);
+			VectorSet(pm_memoq_omaxs, INFINITY, INFINITY, INFINITY);
 			return;
 		}
-		if (lo < pm_memoq_mins[i])
-			pm_memoq_mins[i] = lo;
-		if (hi > pm_memoq_maxs[i])
-			pm_memoq_maxs[i] = hi;
+		pm_memoq_omins[i] = min(pm_memoq_omins[i], min(a[i], b[i]));
+		pm_memoq_omaxs[i] = max(pm_memoq_omaxs[i], max(a[i], b[i]));
+		pm_memoq_bmins[i] = min(pm_memoq_bmins[i], mins[i]);
+		pm_memoq_bmaxs[i] = max(pm_memoq_bmaxs[i], maxs[i]);
 	}
 }
 
@@ -664,24 +663,25 @@ static qboolean PM_PhysentOutOfReach (model_t *model, const vec3_t start, const 
 	}
 	return false;
 }
-//FTESurf Patch 1733: may this physent touch anything in the box (P1714's exact reject for a model, with the box as a
-//point's sweep; a model-less physent's own axial box, grown by a unit)? false only when it cannot.
-qboolean PM_PhysentReachesBox (const physent_t *pe, const vec3_t mins, const vec3_t maxs)
+//FTESurf Patch 1733: may this physent touch anything the move asked (P1714's exact reject with the query origins as
+//the sweep and the player-box union as the box; a model-less physent's own axial box, grown by a unit, against the
+//swept union)? false only when it cannot.
+qboolean PM_PhysentReachesBox (const physent_t *pe, const vec3_t omins, const vec3_t omaxs, const vec3_t bmins, const vec3_t bmaxs)
 {
 	float s, lo, hi;
 	int i;
-	if (!(mins[0] <= maxs[0] && mins[1] <= maxs[1] && mins[2] <= maxs[2]))
+	if (!(omins[0] <= omaxs[0] && omins[1] <= omaxs[1] && omins[2] <= omaxs[2]))
 		return false;	//nothing was asked
 	if (pe->model)
-		return !PM_PhysentOutOfReach(pe->model, mins, maxs, vec3_origin, vec3_origin, pe->origin, pe->scale);
+		return !PM_PhysentOutOfReach(pe->model, omins, omaxs, bmins, bmaxs, pe->origin, pe->scale);
 	s = max(1, pe->scale);
 	for (i = 0; i < 3; i++)
 	{
 		lo = pe->origin[i] + pe->mins[i] * s - 1;
 		hi = pe->origin[i] + pe->maxs[i] * s + 1;
-		if (!isfinite(lo) || !isfinite(hi))
+		if (!isfinite(lo) || !isfinite(hi) || !isfinite(omins[i] + bmins[i]) || !isfinite(omaxs[i] + bmaxs[i]))
 			return true;
-		if (lo > maxs[i] || hi < mins[i])
+		if (lo > omaxs[i] + bmaxs[i] || hi < omins[i] + bmins[i])
 			return false;
 	}
 	return true;
