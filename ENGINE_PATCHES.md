@@ -1,5 +1,27 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1719 - The 3D sky's water shares the main view's last water capture whatever its age (engine gl/gl_backend.c, client/renderer.c)
+
+**Problem.** Lex's BACKLOG list of 22 Nov (from the ahop_coast audit): water inside the 3D sky room rendered its own
+reflection and refraction (two extra scene renders) whenever the outer view had not captured water in its last two
+world views -- on ahop_coast, looking out over the sky room's ocean with no level water on screen, 0.31 nested views a
+frame, even on frames with no water on screen at all. Source's skybox water never renders targets: it samples
+_rt_WaterReflection/_rt_WaterRefraction as the main view left them.
+
+**Change.** BE_SkyroomSharesWater shares the outer level's capture of each kind it reads whatever its age, while the
+stamp is this seat's and the target exists; the sky room captures its own only until the seat has captured each kind
+there (after a map change or a resize, a kind only it reads), and always for ripple-map or portal water.
+r_waterskyroomcapture 2 keeps Patch 1018's rule (0 the new default, 1 always its own). Review 1: a door (portalfbo) or a
+dp_camera surface renders into the same refraction target without stamping it, so under "any age" the sky water could
+sample a door's far side (or a refused door's black clear) as its refraction -- the portal branch now clears that
+level's refraction and depth stamps; a refraction rendered without its depth (reflective glass) clears the depth stamp,
+so colour and depth cannot come from different renders.
+
+**Verified.** ahop_coast, Akatosh's replay 85773 at 4x, path line off, alternated: nested depth-2 views 0.31 -> 0.00 a
+frame; 526/544 -> 581/566 fps (review-fixed build: 519 -> 537). Paused screenshots at eight points of the run differ only
+in the HUD's frame-time graph and the level water's animation; at 0:20 (no water on screen, where the old rule still
+rendered sky-room captures) the picture is the same. One review round (findings above, fixed).
+
 ## Patch 1718 - qcframes as a build gate; three menu globals out of function frames (game QC + build.ps1 only; no engine change)
 
 **Problem.** fteqcc can give a function with only temporaries a frame (parm_start, locals) that covers file-scope

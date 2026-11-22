@@ -312,11 +312,13 @@ static struct {
 	batch_t *wbatches;
 } shaderstate;
 //FTESurf Patch 1018: water in the 3D sky room samples the outer view's targets (Source's skybox water samples
-//the main view's; it renders targets for the eye's view only) -- when that view captured water this frame or
-//the last; otherwise it captures its own, as before, rather than sample nothing.
+//the main view's; it renders targets for the eye's view only); otherwise it captures its own, as before, rather
+//than sample nothing.  Patch 1719: whatever the capture's age (Patch 1018 wanted this world view or its last;
+//r_waterskyroomcapture 2 still does).
 //Stamps are per level and per kind (reflection, refraction, refraction depth): the seat's world-view count + 1
-//when that kind was last captured there (0 = never); a kind counts while the same seat captured it in this
-//world view or its last, and its target exists (a resize frees them).
+//when that kind was last captured there (0 = never, or overwritten by something that is not that capture: a
+//door's render, a refraction without its depth); a kind counts while its stamp is the same seat's and its target
+//exists (a resize frees them).
 enum {BE_CAPREFL, BE_CAPREFR, BE_CAPDEPTH, BE_CAPKINDS};
 static int be_capstamp[R_MAX_RECURSE][BE_CAPKINDS], be_capseat[R_MAX_RECURSE][BE_CAPKINDS];
 //FTESurf Patch 1245: what the top-level view's chosen water plane last rendered into the level-0 targets,
@@ -378,23 +380,31 @@ static void BE_StampCapture(int kind)
 	be_capstamp[r_refdef.recurse][kind] = be_seatviews[seat] + 1;
 	be_capseat[r_refdef.recurse][kind] = seat;
 }
-static qboolean BE_CaptureFresh(int level, int kind, texid_t target)
+//FTESurf Patch 1719: anyage -- any capture this seat made at the level since the map loaded (be_capstamp is cleared at
+//a map change), not only one from its last two world views
+static qboolean BE_CaptureFresh(int level, int kind, texid_t target, qboolean anyage)
 {
 	int seat = BE_Seat();
-	return be_capstamp[level][kind] && be_capseat[level][kind] == seat && be_capstamp[level][kind] >= be_seatviews[seat] &&
+	return be_capstamp[level][kind] && be_capseat[level][kind] == seat && (anyage || be_capstamp[level][kind] >= be_seatviews[seat]) &&
 		TEXVALID(target);
 }
+/*FTESurf Patch 1719: the 3D sky's water samples the outer view's last capture of each kind whatever its age, as Source's
+  skybox water samples _rt_WaterReflection/_rt_WaterRefraction as they stand (the skybox view renders no water targets).
+  Patch 1018 shared only a capture from the seat's last two world views and otherwise rendered the sky room's own pair: on
+  ahop_coast, looking out over the 3D sky's ocean with no level water on screen, ~0.3 scene renders a frame. It still
+  renders its own before this seat's first capture of the map. r_waterskyroomcapture 2 is Patch 1018's rule.*/
 static qboolean BE_SkyroomSharesWater(unsigned int shaderflags)
 {
 	int l = r_refdef.recurse - 1;
-	if (!r_refdef.recurse || r_refdef.recurse != r_skyroomlevel || r_waterskyroomcapture.ival ||
+	qboolean anyage = !r_waterskyroomcapture.ival;
+	if (!r_refdef.recurse || r_refdef.recurse != r_skyroomlevel || r_waterskyroomcapture.ival == 1 ||
 		(shaderflags & (SHADER_HASPORTAL|SHADER_HASRIPPLEMAP)))
 		return false;
-	if ((shaderflags & SHADER_HASREFLECT) && !BE_CaptureFresh(l, BE_CAPREFL, shaderstate.tex_reflection[l]))
+	if ((shaderflags & SHADER_HASREFLECT) && !BE_CaptureFresh(l, BE_CAPREFL, shaderstate.tex_reflection[l], anyage))
 		return false;
-	if ((shaderflags & SHADER_HASREFRACT) && !BE_CaptureFresh(l, BE_CAPREFR, shaderstate.tex_refraction[l]))
+	if ((shaderflags & SHADER_HASREFRACT) && !BE_CaptureFresh(l, BE_CAPREFR, shaderstate.tex_refraction[l], anyage))
 		return false;
-	if ((shaderflags & SHADER_HASREFRACTDEPTH) && !BE_CaptureFresh(l, BE_CAPDEPTH, shaderstate.tex_refractiondepth[l]))
+	if ((shaderflags & SHADER_HASREFRACTDEPTH) && !BE_CaptureFresh(l, BE_CAPDEPTH, shaderstate.tex_refractiondepth[l], anyage))
 		return false;
 	return true;
 }
@@ -8215,6 +8225,10 @@ static qboolean GLBE_GenerateBatchTextures(batch_t *batch, shader_t *bs)
 			qglClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 			if (bs->flags&SHADER_HASPORTAL)
 			{
+				//FTESurf Patch 1719 review: a door renders into this level's refraction target (and maybe its depth);
+				//what is there is no longer water, so the 3D sky's water must not share it (BE_SkyroomSharesWater)
+				be_capstamp[r_refdef.recurse][BE_CAPREFR] = 0;
+				be_capstamp[r_refdef.recurse][BE_CAPDEPTH] = 0;
 				/* FTESurf: SAY WHETHER THE PORTAL ACTUALLY DREW.
 
 				   The FBO was just cleared to opaque black three lines up, and this
@@ -8273,6 +8287,8 @@ static qboolean GLBE_GenerateBatchTextures(batch_t *batch, shader_t *bs)
 				BE_StampCapture(BE_CAPREFR);
 				if (cf & SHADER_HASREFRACTDEPTH)
 					BE_StampCapture(BE_CAPDEPTH);
+				else	//Patch 1719 review: the depth target now belongs to an older render than the colour beside it
+					be_capstamp[r_refdef.recurse][BE_CAPDEPTH] = 0;
 				be_watercapture++;
 				GLR_DrawPortal(cb, cl.worldmodel->batches, NULL, ((cf & SHADER_HASREFRACTDEPTH)?3:2));	//fixme
 				be_watercapture--;
