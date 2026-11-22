@@ -615,6 +615,10 @@ typedef struct vbspinfo_s
 		float	constant_attn, linear_attn, quadratic_attn;
 	} *worldlights;
 	size_t		numworldlights;
+	//FTESurf Patch 1722: the map's emit_skylight, kept out of worldlights[]: it reaches a point only by a trace that
+	//ends on sky (VBSP_SunVisible), Source's light-cache rule for it
+	qboolean	sun_have;
+	vec3_t		sun_normal, sun_intensity;
 	//Suppressed for exactly one population: props whose .vhv bake already
 	//contains VRAD's direct light.  Set around the HL2_CalcModelLighting call in
 	//the prop loop, never anywhere else.  See the essay there.
@@ -8383,6 +8387,7 @@ static cvar_t *hl2_lt_baked_dir;	//FTESurf Patch 296
 //for models that have no VRAD bake.  Read in VBSP_LightPointValues and by the
 //static-prop light cache invalidation; registered in VBSP_Init.
 static cvar_t *hl2_lt_worldlight;
+static cvar_t *hl2_lt_sun;	//FTESurf Patch 1722
 static cvar_t *hl2_lt_reusecube;
 #ifdef HAVE_CLIENT
 static void VBSP_LightPointValuesCube(struct model_s *model, const vec3_t point, vec3_t res_diffuse, vec3_t res_ambient, vec3_t res_dir, vec3_t res_cube[6]);
@@ -11649,6 +11654,8 @@ static void VBSP_PrepareFrame(model_t *mod, refdef_t *r_refdef, int area, int cl
 			//the right knob for a live A/B within one arm.
 			static int cubelight_live = -1;
 			int wantcube = (hl2_cubelight && hl2_cubelight->ival) ? 1 : 0;
+			static int sun_live = -1;	//FTESurf Patch 1722: changes solved data
+			int wantsun = (hl2_lt_sun && hl2_lt_sun->ival) ? 1 : 0;
 			static float min_live = -1;
 			static int occlusion_live = -1;
 			float wantmin = hl2_lt_min ? hl2_lt_min->value : 16.0f;
@@ -11664,8 +11671,9 @@ static void VBSP_PrepareFrame(model_t *mod, refdef_t *r_refdef, int area, int cl
 			float wantscale, wantsrgb;
 			wantscale = ltscale ? ltscale->value : 255;
 			wantsrgb = ltsrgb ? ltsrgb->value : 1;
-			if (want != vbsp_vc_live || vbsp_vc_mod != mod || wantsign != dirsign_live || wantdir != bakeddir_live || wantwl != worldlight_live || wantreusecube != reusecube_live || wantfold != fold_live || wantcube != cubelight_live || wantmin != min_live || wantocclusion != occlusion_live || wantblend != blend_live || wantillumpos != illumpos_live || wantscale != scale_live || wantsrgb != srgb_live)
+			if (want != vbsp_vc_live || vbsp_vc_mod != mod || wantsign != dirsign_live || wantdir != bakeddir_live || wantwl != worldlight_live || wantreusecube != reusecube_live || wantfold != fold_live || wantcube != cubelight_live || wantmin != min_live || wantocclusion != occlusion_live || wantblend != blend_live || wantillumpos != illumpos_live || wantscale != scale_live || wantsrgb != srgb_live || wantsun != sun_live)
 			{
+				sun_live = wantsun;
 				scale_live = wantscale;
 				srgb_live = wantsrgb;
 				blend_live = wantblend;
@@ -12554,6 +12562,15 @@ static void VBSP_LoadWorldLights (model_t *mod, qbyte *mod_base, vlump_t *hdr, v
 		flags = LittleLong(rec.flags);
 		cluster = LittleLong(rec.cluster);
 
+		if (type == VWL_SKYLIGHT && style == 0 && !(flags & DWL_FLAGS_INAMBIENTCUBE) && !prv->sun_have)
+		{	//FTESurf Patch 1722
+			prv->sun_have = true;
+			for (j = 0; j < 3; j++)
+			{
+				prv->sun_normal[j]		= LittleFloat(rec.normal[j]);
+				prv->sun_intensity[j]	= LittleFloat(rec.intensity[j]);
+			}
+		}
 		if (type != VWL_SURFACE && type != VWL_POINT && type != VWL_SPOTLIGHT)
 			{ drop_sky++; continue; }
 		if (style != 0)
@@ -12660,6 +12677,27 @@ static qboolean VBSP_WorldLightVisible(model_t *mod, const vec3_t point, const s
 	prv->wl_trace_model->funcs.NativeTrace(prv->wl_trace_model, 0, NULLFRAMESTATE,
 		NULL, point, end, zero, zero, false, FTECONTENTS_SOLID|VBSP_CONTENTS_LIGHTONLY, &tr);
 	return !tr.startsolid && !tr.allsolid && tr.fraction == 1;
+}
+
+/*FTESurf Patch 1722: Source's light cache admits emit_skylight to a model only when a trace from it toward the sun
+  ends on a sky face (SURF_SKY 0x4 / SURF_SKY2D 0x2; the plugin keeps Source's surface flags).  Through the same
+  world-only tree as the local lights: brushes and displacements, no props.  Leaving the world unhit counts as sky.*/
+static qboolean VBSP_SunVisible(model_t *mod, const vec3_t point)
+{
+	vbspinfo_t *prv = mod->meshinfo;
+	vec3_t end, zero = {0, 0, 0};
+	trace_t tr;
+	if (!prv->wl_trace_model || !prv->wl_trace_model->funcs.NativeTrace)
+		return false;
+	VectorMA(point, -65536, prv->sun_normal, end);
+	memset(&tr, 0, sizeof(tr));
+	prv->wl_trace_model->funcs.NativeTrace(prv->wl_trace_model, 0, NULLFRAMESTATE,
+		NULL, point, end, zero, zero, false, FTECONTENTS_SOLID|VBSP_CONTENTS_LIGHTONLY, &tr);
+	if (tr.startsolid || tr.allsolid)
+		return false;
+	if (tr.fraction >= 1)
+		return true;
+	return tr.surface && (tr.surface->flags & (0x0004|0x0002));
 }
 
 /* FTESurf Patch 879: the renderer's water-occlusion test (gl_backend.c GLBE_WaterSeen) through Patch 509's
@@ -13388,6 +13426,15 @@ static void VBSP_LightPointCubeEx(struct model_s *model, const vec3_t point, vec
 		vec3_t *rgb = leafcube;
 		if (prv->numworldlights && hl2_lt_worldlight && hl2_lt_worldlight->ival && !prv->wl_suppress)
 			VBSP_AddWorldLightCube(model, point, leafcube, false, false);	//the LEVEL: suppression stands
+		if (prv->sun_have && hl2_lt_sun && hl2_lt_sun->ival && !prv->wl_suppress && VBSP_SunVisible(model, point))
+		{	//FTESurf Patch 1722: the sun, no falloff, from where it shines (-normal)
+			struct vworldlight_s sun;
+			vec3_t todir;
+			memset(&sun, 0, sizeof(sun));
+			VectorCopy(prv->sun_intensity, sun.intensity);
+			VectorNegate(prv->sun_normal, todir);
+			VBSP_AddLightToCube(leafcube, &sun, todir, 1);
+		}
 		//Share the raw cube, never its encoded/folded/floored output.
 		if (res_cube)
 			memcpy(res_cube, leafcube, sizeof(leafcube));
@@ -15431,6 +15478,7 @@ qboolean VBSP_Init(void)
 		hl2_lt_prewarm = cvarfuncs->GetNVFDG("hl2_lt_prewarm", "3000", 0, "FTESurf Patch 1364: milliseconds of static-prop lighting solved in a map's first frame, after waiting for every prop model, so no prop is solved in the frame that first draws it. 0: solve each prop when it is first drawn, as before. hl2_lt_prewarm_info reports the pass.", "");
 		cmdfuncs->AddCommand("hl2_lt_prewarm_info", VBSP_PropLightWarmInfo_f, "FTESurf Patch 1364: what the last hl2_lt_prewarm pass solved.");
 		hl2_lt_reusecube = cvarfuncs->GetNVFDG("hl2_lt_reusecube", "1", 0, "Reuse the exact unbaked static-prop lighting cube instead of tracing it twice. 0 keeps the original two queries. Dynamic/approximate, baked and other lighting functions retain their original paths.", "");
+		hl2_lt_sun = cvarfuncs->GetNVFDG("hl2_lt_sun", "1", 0, "FTESurf Patch 1722: light models with no VRAD bake from the map's sun (emit_skylight) where a trace toward it ends on sky, as Source's light cache does. 0: no sun on models (the pre-1722 picture).", MAPOPTIONS);
 		hl2_lt_worldlight = cvarfuncs->GetNVFDG("hl2_lt_worldlight", "1", 0, "Light models with no VRAD bake from the map's worldlights as well as the leaf ambient cube, as Source's light cache does.\n0: the leaf ambient cube alone, which VRAD fills with BOUNCE ONLY, so a prop with no .vhv draws at roughly a fifth of its Source brightness. This is the falsifier -- it is bit-for-bit the pre-302 behaviour.\n1: default. Add the direct contribution of every emit_surface/point/spotlight whose cluster is in the sample point's PVS. Sky lights are deliberately excluded until a sky-visibility trace exists -- they have no distance falloff, so without one they would light sealed indoor rooms at full sun. Does nothing to props that DO have a .vhv bake; their direct light is already in it.", MAPOPTIONS);
 		//FTESurf Patch 308.  Registered here, beside the term it feeds, and NOT
 		//latched: VBSP_LoadWorldLights reads it once per map load, so changing it
