@@ -1,5 +1,46 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1714 - Prediction skips the physents a move cannot reach: lobbies at ping no longer halve the frame rate (engine common/pmovetst.c, com_bih.c, common.c)
+
+**Cause.** 22 Nov 2026 Lex: a player reports ahop_coast and bhop_canals "awful in a lobby" but better in a local
+game. His own dumps (Windows, 0.1.56): CPU-bound at 3.9 ms standing, 8.6 ms (116 fps) while playing, `prediction`
+1.9-2.4 ms of it, slow frames "pmove 1.34 ms, 43 physents, 12 moves". Client prediction replays every unacknowledged
+command each rendered frame (ping / tick of them: 11-12 at 150 ms on a 100-tick bhop/ahop map), and every trace of
+every replayed command visited every physent: PM_TransformedHullCheck had a bounds test only for an axis-aligned
+model, so a rotated prop or brush went to the full transformed trace. Linux rig, lobby.cfg dedicated server at
+sv_minping 150, moving: ahop_coast ran ~80 million BIH traces in 30 s (~7,700 a frame; bih_tracecache reused 13%
+and was a net loss: off 418 fps, on 346), prediction 0.55 ms -> 1.88 ms, 600 -> 345 fps.
+
+**Change.** PM_TransformedHullCheck is a wrapper: a physent the trace cannot reach is not traced (PM_PhysentOutOfReach).
+The bound is on the trace origin. In the model's frame every claimed leaf is capped by axial planes at its box grown
+by the trace's size -- a triangle by BIH's caps, a brush by its own six axial sides -- and that size is at most rho,
+the player box's farthest corner from the origin, however the box is turned or the planes pushed (triangle caps:
+|h| + |c| <= sqrt(2) rho in all). So contact needs the origin within R + sqrt(3) rho of the physent origin (R: the
+geometry box's farthest corner, times max(1, scale)) + 10 units (a triangle's 4-unit back face for point traces, a
+brush side up to a unit off its box, epsilons); a segment outside that cube on any axis would have returned no
+contact. Claimed: a BIH tree BIH_Build made in which every leaf is a capped triangle with area or a brush carrying all six axial
+sides at its box, with finite boxes -- BIH_Build now keeps their union in a header in front of the nodes
+(BIH_LeafBounds; model_t is untouched, the plugin reads it by offset) -- unioned with the model's bounds and its .phy
+tree's (Patch 888). Not claimed (traced as before): the convex hull paths, Quake/GoldSrc hulls, Q2/Q3, Mod_Trace
+meshes, the box_planes fallback, capsules, non-finite input. `pm_physentcull` 0 traces every physent as before; 1
+(default) skips; 2 decides, traces the skipped anyway and counts any that touched (fraction, startsolid, allsolid,
+inwater); `pm_physentstats` prints and resets the counters (main thread only: pmovetst.c also runs on TAS workers).
+Review 1 found the first cut (a world-aligned box against a model cube) inexact for rotated models -- every rotated
+path turns the box with the model or pushes the model's planes out by the box's reach (a 45-degree platform's corner
+reached 12 units past it); review 2 found brush caps unenforced (VBSP adds the axial sides, Patch 318 skips them),
+NaN bounds dropped by max(), and the hull path's near-axial bevel substitution unbounded; review 3 found a zero-area
+triangle startsolid to any point trace whose box overlaps it (zero normals); all closed by not claiming those trees.
+
+**Evidence.** Task root FTESurf-worktrees/coastperf-20261122-08 (artifacts/RESULTS.md, coast.py, plans p1714r3_*):
+headless sway on the RTX 2080 SUPER, local dedicated server on lobby.cfg (run_evidence_ul 0) at sv_minping 150, the
+lobby's own QC (v0.1.56 + P1710), moving with +forward +jump +left, 25-30 s windows alternated. Final build, cull 0
+vs 1: ahop_coast 322 -> 534/490/525 fps (r_budget prediction 1.88 -> 0.72 ms), bhop_canals 171/178 -> 294/284/268
+(prediction 3.23 -> 1.75 ms); after review 3, ahop_coast 331/334 -> 570/529.
+pm_physentcull 2: 289 M skipped-and-rechecked client traces (both maps, circling and strafing, the last 62 M on the
+final build) and 327 k on the dedicated server touched 0 times. Review 2's randomized model (4,000 boxes/triangles/hulls at random yaw, pitch and
+roll; AG, Source, ducked and Quake player boxes) reached at most 0.90 of the radius. Exact on what it claims, so
+movement and run verification are unchanged; the cvar is client-only and not part of a run's record for that reason.
+
 ## Patch 1712 - acct_sign kind -7: the TAS upload offer sends itself, signed as no key press (engine client cl_receipt.c, pr_csqc.c)
 
 Lex (22 Nov): a new TAS best should pop up "like the f6 to report an error, or ... do it automatically if they don't

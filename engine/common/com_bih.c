@@ -3059,23 +3059,107 @@ unsigned int BIH_HeldAirBoxTest(unsigned int *checks)
 }
 #endif
 
+/*FTESurf Patch 1714: the union of a tree's leaf boxes, kept in front of its nodes, so pmovetst.c can tell how far
+  from its origin this model's collision can reach (BIH_LeafBounds).  model_t is not touched: the plugin reads it by
+  offset.  The back-pointer and the magic tell a tree built here from any other cnodes.*/
+typedef struct
+{
+	const void *nodes;
+	unsigned int magic;
+	qboolean empty;		//no leaves, or a leaf the reach bound does not cover (BIH_LeafClaims): no claim
+	vec3_t mins, maxs;
+} bihhead_t;
+#define BIH_HEADMAGIC	0x34313731u	//"1714"
+#define BIH_HEADSIZE	((sizeof(bihhead_t) + 15) & ~(size_t)15)
+/*Patch 1714 review 2: the reach bound needs every leaf capped by axial planes at its box.  Triangles are, in code
+  (BIH_ClipToTriangle / BIH_TestToTriangle), for a shaped trace; a point trace meets the 4-unit prism -- unless the
+  triangle has no area: its planes then have zero normals and a point trace is startsolid anywhere its box overlaps
+  (review 3), so such a triangle leaves the tree unclaimed.  A brush is capped only by its own sides -- VBSP adds the
+  six axial bevels, but nothing here enforces it (Patch 318 skips axial edges) -- so a brush must carry all six, at
+  its leaf box within a unit.  Any other leaf type, and any non-finite box, leaves the tree unclaimed.*/
+static qboolean BIH_LeafClaims (const struct bihleaf_s *leaf)
+{
+	int a, k;
+	for (a = 0; a < 3; a++)
+		if (!isfinite(leaf->mins[a]) || !isfinite(leaf->maxs[a]))
+			return false;
+	switch (leaf->type)
+	{
+	case BIH_TRIANGLE:
+	case BIH_TRIANGLE_REWOUND:
+		{	//the face normal as BIH_ClipToTriangle forms it; near zero or not finite: no claim
+			const float *p1, *p2, *p3;
+			vec3_t e1, e2, n;
+			if (!leaf->data.tri.indexes || !leaf->data.tri.xyz)
+				return false;
+			p1 = leaf->data.tri.xyz[leaf->data.tri.indexes[0]];
+			p2 = leaf->data.tri.xyz[leaf->data.tri.indexes[1]];
+			p3 = leaf->data.tri.xyz[leaf->data.tri.indexes[2]];
+			VectorSubtract(p1, p2, e1);
+			VectorSubtract(p3, p2, e2);
+			CrossProduct(e1, e2, n);
+			return isfinite(n[0]) && isfinite(n[1]) && isfinite(n[2]) && DotProduct(n, n) > 1e-6f;
+		}
+#if defined(Q2BSPS) || defined(Q3BSPS)
+	case BIH_BRUSH:
+		{
+			const q2cbrush_t *b = leaf->data.brush;
+			unsigned int found = 0;
+			if (!b)
+				return false;
+			for (k = 0; k < b->numsides; k++)
+			{
+				const mplane_t *pl = b->brushside[k].plane;
+				if (!pl)
+					continue;
+				for (a = 0; a < 3; a++)
+				{
+					if (pl->normal[(a+1)%3] != 0 || pl->normal[(a+2)%3] != 0)
+						continue;
+					if (pl->normal[a] == 1 && fabs(pl->dist - leaf->maxs[a]) <= 1)
+						found |= 1u<<(a*2);
+					else if (pl->normal[a] == -1 && fabs(pl->dist + leaf->mins[a]) <= 1)
+						found |= 1u<<(a*2+1);
+				}
+			}
+			return found == 63;
+		}
+#endif
+	default:
+		return false;
+	}
+}
 void BIH_Build (model_t *mod, struct bihleaf_s *leafs, size_t numleafs)
 {
-	size_t numnodes;
+	size_t numnodes, i;
 	struct bihnode_s *nodes, *tmpnodes;
 	struct bihleaf_s *scratch;
+	bihhead_t *head;
 
 	if (!numleafs)
 	{	//if we don't actually have anything solid, we still need SOMETHING so we don't crash.
 		//we can just use an empty group node for that.
-		nodes = ZG_Malloc(&mod->memgroup, sizeof(*nodes));
+		head = ZG_Malloc(&mod->memgroup, BIH_HEADSIZE + sizeof(*nodes));
+		nodes = (struct bihnode_s *)((qbyte *)head + BIH_HEADSIZE);
 		nodes->type = BIH_GROUP;
 		nodes->group.numchildren = 0;
+		head->empty = true;
 	}
 	else
 	{
 		numnodes = numleafs*2-1;
-		nodes = ZG_Malloc(&mod->memgroup, sizeof(*nodes)*numnodes);
+		head = ZG_Malloc(&mod->memgroup, BIH_HEADSIZE + sizeof(*nodes)*numnodes);
+		nodes = (struct bihnode_s *)((qbyte *)head + BIH_HEADSIZE);
+		head->empty = false;
+		VectorCopy(leafs[0].mins, head->mins);
+		VectorCopy(leafs[0].maxs, head->maxs);
+		for (i = 0; i < numleafs && !head->empty; i++)
+		{	//before the build: BIH_BuildNode sorts and partitions leafs in place
+			if (!BIH_LeafClaims(&leafs[i]))
+				head->empty = true;
+			AddPointToBounds(leafs[i].mins, head->mins, head->maxs);
+			AddPointToBounds(leafs[i].maxs, head->mins, head->maxs);
+		}
 
 		tmpnodes = nodes+1;
 		/*ftesurf P323: ONE scratch array for the whole recursive build -- the
@@ -3088,11 +3172,27 @@ void BIH_Build (model_t *mod, struct bihleaf_s *leafs, size_t numleafs)
 		if (tmpnodes > nodes+numnodes)
 			Sys_Error("CM_BuildBIH: generated wrong number of nodes");
 	}
+	head->nodes = nodes;
+	head->magic = BIH_HEADMAGIC;
 	mod->cnodes = nodes;
 	BIH_CollisionChanged();	//FTESurf Patch 1266
 	mod->funcs.NativeTrace			= BIH_Trace;
 	mod->funcs.PointContents		= BIH_PointContents;
 	mod->funcs.NativeContents		= BIH_NativeContents;
+}
+//FTESurf Patch 1714: the leaf boxes' union of the tree BIH_Trace walks for this model, if BIH_Build made it.
+//false: not a tree built here, or one with no leaves (no claim either way).
+qboolean BIH_LeafBounds (const model_t *mod, vec3_t mins, vec3_t maxs)
+{
+	const bihhead_t *head;
+	if (!mod || !mod->cnodes || mod->funcs.NativeTrace != BIH_Trace)
+		return false;
+	head = (const bihhead_t *)((const qbyte *)mod->cnodes - BIH_HEADSIZE);
+	if (head->magic != BIH_HEADMAGIC || head->nodes != mod->cnodes || head->empty)
+		return false;
+	VectorCopy(head->mins, mins);
+	VectorCopy(head->maxs, maxs);
+	return true;
 }
 #ifdef SKELETALMODELS
 void BIH_BuildAlias (model_t *mod, galiasinfo_t *meshes)
