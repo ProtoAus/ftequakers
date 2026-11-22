@@ -1,5 +1,67 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1724 - r_shadows re-parses the shader programs when it changes (engine client/renderer.c)
+
+**Cause.** 22 Nov 2026, the ahop_coast/bhop_canals visual audit (Lex: "do all the stuff you said is not done yet"): turning
+`r_shadows 2` on in a running game on a Source map broke every vmt/vertexlit permutation -- `C1503 undefined variable
+"s_shadowmap"`. A program declares the sampler by `!!samps =FAKESHADOWS shadowmap`, which Com_PermuOrFloatArgument
+answers from r_shadows when the program is PARSED; programs parsed at 0 then compiled the FAKESHADOWS permutation with no
+sampler. The cold-start half of this was fixed before (the r_shadows.ival == 2 clause); a live change was not.
+
+**Change.** r_shadows is CVAR_SHADERSYSTEM: a change re-parses the programs. One shader rebuild per toggle.
+
+**Evidence.** ahop_coast at Lex's save-7 vantage, `r_shadows 2` typed after load: before, two vmt/vertexlit compile
+errors; after, none. The game's Sun_MapLight (P1724, game) sets r_shadows_throwdirection from the map's shadow_control.
+
+**Not shown / left.** r_shadows 2 on a Source map is not Source's shadowing: props shadow themselves (the depth map has
+no caster identity), the tint is a fixed 50% rather than shadow_control's colour, it disables instanced props, and on a
+Strata map it darkens the baked sun's shade a second time. BACKLOG "P1717".
+
+## Patch 1723 - r_bloom_mapscale: the map's SetBloomScale (engine gl/gl_bloom.c, gl/r_bishaders.h, shaders/glsl/bloom_final.glsl)
+
+**Cause / change.** env_tonemap_controller's SetBloomScale (from a logic_auto at map spawn: ahop_coast 0.1) replaces
+Source's mat_bloomscale. New cvar r_bloom_mapscale (default 1, not archived), set by the game at map load, multiplies
+r_bloom in bloom_final. Exposure (SetAutoExposureMin/Max) is deliberately NOT copied: ahop_coast's 0.8-0.9 band would
+darken a frame that already matches Momentum's world at scale 1 (P1717's measurement), and dynamic auto-exposure is
+not worth a per-frame luminance readback in a movement game.
+
+**Evidence.** ahop_coast: r_bloom_mapscale reads 0.1 after load; maps without the input read 1. r_bloom 1 with
+r_postprocess 1 compiles bloom_final clean. Review 1: the edit first reached only shaders/glsl/bloom_final.glsl, not the
+built-in r_bishaders.h entry that is compiled; both now carry it. Vulkan's blob does not (it ignores the scale).
+
+## Patch 1722 - The sun on unbaked Source models (plugin hl2/mod_vbsp.c; engine gl/gl_rlight.c)
+
+**Cause.** Patch 302 added a map's local worldlights to the model light cube and dropped emit_skylight for want of a
+"does this point see sky" trace, so no movable prop, player or unbaked static prop ever received the sun (ahop_coast's
+1.92 1.74 1.29 linear, 20 degrees up from the NE).
+
+**Change.** The first unstyled emit_skylight not already in the cube is kept at load; VBSP_SunVisible traces 65536 toward
+it through the world-only occluder tree (now also built for a map whose only light is the sun) and admits it only when
+the trace ENDS on a SURF_SKY/SKY2D face -- Source's light-cache rule; a miss is not sky. VBSP_AddSunCube adds it into
+the cube like Patch 302's lights, on the flat path and the bump-cube path, for every caller except baked static props
+(their bake has it), under hl2_lt_worldlight (its pre-302 control) and hl2_lt_sun; both are in the model-light cache
+hash and the static-prop relight list.
+
+**Evidence.** ahop_coast at the save-7 vantage: the fence (shaded by the cliff, as in Momentum) unchanged; the crate's
+top and edges catch the sun (2999 pixels > 6 levels, all on it, after review 1's sky-hit rule). Review 1: the tree was
+never built on sun-only maps, a miss counted as sky, the bump cube lacked the sun; fixed.
+
+## Patch 1721 - Infodecals at Source's size (plugin hl2/mat_vmt.c; engine gl/shader.h, gl/gl_shader.c, client/cl_ents.c, client/client.h)
+
+**Cause.** The game drew every infodecal as a 32-unit square (vbsp_decal_size); Source sizes one by its base texture's
+top mip x $decalscale (HL2's trash/plaster 512 x 0.25 = 128 units, ivy 512 x 0.5 = 256, industrial numbers 64x128 x 1),
+and the plugin ignored $decalscale.
+
+**Change.** For $decal (and Decal/DecalModulate) materials the plugin reads the VTF header and emits `decalsize W H`
+(shader keyword, appended shader_t field). A static decal asking PDC_SOURCESIZE (2) takes it: side's length 1/H, aspect
+W/H. A static decal's tris past the depth fade at every corner are dropped, so an invisible clip is not "placed".
+
+**Evidence.** With the game half (P1721, cl_decals.qc): ahop_coast 18 -> 45 of 48 infodecals placed, bhop_canals 80 ->
+383 of 416; bhop_canals' ivy covers its walls at full size. Review 1: four findings, all fixed.
+
+**Left.** Brush-entity decals (clipped only from the entity packet, absent at world load); the depth fade stays +-4, so a
+large decal on a curved displacement fades where the surface leaves its plane.
+
 ## Patch 1717 - Source models lit at Source's scale and split: dynamic props and viewmodels take Patch 304's fold through model_t.LightPointFold, the fold encodes its lit level whole, and Strata maps read their leaf light (engine gl/gl_alias.c, gl/gl_model.[ch], common/plugin.c, common/com_mesh.h; plugin hl2/mod_vbsp.c)
 
 **Cause.** 22 Nov 2026 Lex, with Momentum and WoS screenshots of ahop_coast at one vantage: "The model vertex?
