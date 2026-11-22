@@ -5228,14 +5228,23 @@ static void CL_AddDecalStatic_Callback(void *vctx, vec3_t *fte_restrict points, 
 		VectorScale(surf->plane->normal, (DotProduct(surf->plane->normal, ctx->axis[0]) > 0) ? -0.25f : 0.25f, lift);
 	for (tr = 0; tr < numtris; tr++)
 	{
-		persistdecaltri_t *tri = CL_PersistTri_Alloc();
-		tri->lightmap = page;
+		persistdecaltri_t tmp, *tri;
 		for (k = 0; k < 3; k++)
 		{
-			VectorAdd(points[tr*3+k], cc->shift, tri->vertex[k]);
-			CL_Decal_VertexAttribs(ctx, surf, page, points[tr*3+k], tri->vertex[k], tri->texcoord[k], tri->lmcoord[k], &tri->valpha[k]);
-			VectorAdd(tri->vertex[k], lift, tri->vertex[k]);
+			VectorAdd(points[tr*3+k], cc->shift, tmp.vertex[k]);
+			CL_Decal_VertexAttribs(ctx, surf, page, points[tr*3+k], tmp.vertex[k], tmp.texcoord[k], tmp.lmcoord[k], &tmp.valpha[k]);
+			VectorAdd(tmp.vertex[k], lift, tmp.vertex[k]);
 		}
+		//FTESurf Patch 1721: past the depth fade at every corner draws nothing.  A Source-sized decal's deep box
+		//reached the wall behind a prop hull, and those invisible tris counted the decal placed (no retry).
+		if (tmp.valpha[0] <= 0 && tmp.valpha[1] <= 0 && tmp.valpha[2] <= 0)
+			continue;
+		tri = CL_PersistTri_Alloc();
+		tri->lightmap = page;
+		memcpy(tri->vertex, tmp.vertex, sizeof(tri->vertex));
+		memcpy(tri->texcoord, tmp.texcoord, sizeof(tri->texcoord));
+		memcpy(tri->lmcoord, tmp.lmcoord, sizeof(tri->lmcoord));
+		memcpy(tri->valpha, tmp.valpha, sizeof(tri->valpha));
 		tri->next = cc->rec->tris;
 		cc->rec->tris = tri;
 	}

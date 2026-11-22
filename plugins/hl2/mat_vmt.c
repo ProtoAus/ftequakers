@@ -1312,6 +1312,7 @@ typedef struct
 	char selfillum;
 	char decal;
 	float decalscale;	//FTESurf Patch 1721: $decalscale, 0 = absent (Source's default 1)
+	char decalsrc;		//FTESurf Patch 1721: $decal as written (the Decal/DecalModulate arms clear st->decal)
 	char nofog;
 	char mod2x; /* modulate only */
 	char water_cheap; /* water only */
@@ -2607,7 +2608,7 @@ static char *VMT_ParseBlock(const char *fname, vmtstate_t *st, char *line)
 			st->vertexalpha_on = atof(value) != 0;	//FTESurf Patch 783: the value, for VMT_AdditiveBlend only
 		}
 		else if (!Q_strcasecmp(key, "$decal"))
-			st->decal = atoi(value);
+			st->decalsrc = st->decal = atoi(value);
 		else if (!Q_strcasecmp(key, "$decalscale"))
 			st->decalscale = atof(value);	//FTESurf Patch 1721
 		else if (!Q_strcasecmp(key, "$decalsize"))
@@ -5539,14 +5540,16 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 			vmt_stat_translucent++;	//it costs what a translucent surface costs; the census should say so
 	}
 
-	if (st->decal) {
-		//FTESurf Patch 1721: Source sizes an infodecal by its base texture's top mip x $decalscale (r_decal.cpp)
+	if (st->decal || st->decalsrc || !Q_strcasecmp(st->type, "DecalModulate"))
+	{	//FTESurf Patch 1721: Source sizes an infodecal by its base texture's top mip x $decalscale (r_decal.cpp)
 		int dw, dh;
 		if (VMT_VTFSize(st->tex[0].name, &dw, &dh))
 		{
 			float ds = st->decalscale > 0 ? st->decalscale : 1;
 			Q_strlcatfz(script, &offset, sizeof(script),	"\tdecalsize %g %g\n", dw * ds, dh * ds);
 		}
+	}
+	if (st->decal) {
 		//Patch 990: a $decal Refract one step nearer than other decals: bhop_ceaseless's ripple, the
 		//swirl decal and the floor share z 11616, and at equal bias the ripple flickered over the swirl.
 		Q_strlcatfz(script, &offset, sizeof(script),	"\tpolygonOffset %d\n", !Q_strcasecmp(st->vmtclass, "Refract") ? 2 : 1);
