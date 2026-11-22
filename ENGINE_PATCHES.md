@@ -72,6 +72,62 @@ final build) and 327 k on the dedicated server touched 0 times. Review 2's rando
 roll; AG, Source, ducked and Quake player boxes) reached at most 0.90 of the radius. Exact on what it claims, so
 movement and run verification are unchanged; the cvar is client-only and not part of a run's record for that reason.
 
+## Patch 1713 - Mover 15: a landing zeroes vertical speed, and SOLID_VPHYSICS brush entities collide through their vcollide (engine common/pm_source.c, common/com_bih.c, common/pmovetst.c, gl/gl_model.[ch]; plugin hl2/mod_vbsp.c, hl2/mod_phy.c)
+
+**Cause.** 22 Nov 2026 Lex, of P1709's "three ahop_coast spots where Momentum stays airborne at 1.75 units": "please
+fix"; then "do whatever you need to make it correct ... proper across all map fixes". Held against Momentum's ten
+ahop_coast bhop demos with pm_stepsim (P1709's harness, game tools/momstep.py), the 25 ground-flag disagreements P1709
+left on its five 2026 demos had two causes, neither geometry. (1) The three spots are teleport exits (34b1f4d9 ticks
+6380/10784, 987b7fe0 15983): the teleport moves the player after that tick's CategorizePosition, so Momentum records
+them airborne 1.5-1.8 up, falling 218-298 u/s; next tick it re-grounds them at the top (a game-moved body) and jumps at
+293.99, a from-rest jump. Ours re-grounded too, but Source's SetGroundEntity zeroes vertical speed (SDK 2013
+gamemovement.cpp:3649; Momentum's override calls it) and ours did not, so CheckJumpButton added the jump to the fall
+(-302 + 302 = -0.01) and the jump went a tick late. (2) Twenty-two, every hop up the climb at x 11400-12700, are
+func_brush *134: 16 player-clip wedges over the ramp, `solidbsp 0`, so SOLID_VPHYSICS. Source sweeps a BOX against
+such an entity's vcollide, not its brushes (CEngineTrace::ClipRayToVPhysics: "do ray traces with normal code, but use
+vphysics to do box traces"), and VBSP builds that vcollide from the brushes without their bevel sides (utils/vbsp/
+ivp.cpp BuildConvexForBrush). Seven of the wedges carry a compile bevel 22-34 units inside their own top; our brush
+trace honours it, so we stood on a cut-down ramp 2.2-4.3 units under Momentum's floor and landed a tick or more late.
+Against the stored hull (IVP ledges, decoded and checked equal to the brushes minus bevels): Momentum lands from up to
+2.44 above it with a 2-unit ground trace and takes off (sv_jump_z_offset 0's trace down) 0.53-0.57 above it -- the
+half unit of vphysics' 0.25 separation radius on each shape (ivp.cpp:31-37) plus the trace's 1/32.
+
+**Change.** PMSRC_VERSION 15 (SV_PMSrcVer accepts it at any fixslopes). (1) CategorizePosition zeroes velocity[2]
+whenever it sets a ground, except in PM_NONE/PM_FREEZE (our frozen holds). (2) The hl2 plugin decides at load, from the
+entity lump and Source's Spawn()s (SDK 2013 server/), which submodels Source collides as VPHYSICS: func_brush,
+func_door_rotating, func_rotating, momentary_rot_button unless solidbsp 1; func_door/func_water unless under a SOLID_BSP
+root parent; func_rot_button, func_movelinear, momentary_door, func_water_analog, func_physbox(_multiplayer),
+simple_physics_brush; func_pushable without SF_PUSH_BREAKABLE; func_tracktrain without SF_TRACKTRAIN_HL1TRAIN. For each
+it decodes the vcollide's solid 0 from LUMP_PHYSCOLLIDE (Mod_PHY_SolidPieces: the .phy parser, plus each ledge's
+client_data -- VBSP's brush number -- for its contents), builds it as Patch 764 builds a prop's hull with every side
+VBSP_VPHYS_MARGIN (0.5) out, into the submodel's new `vphysalt` tree (model_t, appended; freed with the model).
+BIH_TraceUncached sweeps a BOX against vphysalt while bih_vphys (Source movers from 15) is set; rays keep the brushes.
+PM_TransformedHullCheck's early-out reads vphysalt's bounds.
+
+**Evidence.** pm_stepsim over all ten ahop_coast demos and 13 surf demos (surf_ab, surf_kz_protraining, surf_classics),
+180,046 graded ticks, mover 14 -> 15: ahop_coast ground-flag disagreements 50 -> 16 (P1709's five 2026 demos 25 -> 6);
+the surf demos 0 -> 0 with not one tick changed. 57 ticks changed in all: the three teleport exits now jump at exactly
+Momentum's 293.99, the ramp's landings land and its four jump ticks take off within 0.002 of Momentum's position (were
+1.46-2.60 off), 42 better / 3 worse at the velocity level. Shapes tried and rejected on the same demos: a half unit kept
+only along the sweep (fixes two grazing passes, loses ten real hits on func_brush *25: 48 better / 12 worse); margin
+on faces and axial planes only (40 better, two landings lost). pm_selftest all checks passed; pm_dettest identical on
+surf_classics, surf_sandtrap2, ahop_coast. Lobby gate (arm64, the Pi, eng1713-20261122-88): the live patch-1709 engine
+and this one identical on pm_dettest over 7 maps and pm_verify over 12 real lobby runs (9 PASS, 3 REFUSE as before);
+serverinfo pm_sourceversion 15 under the lobby cfg. Load census: ahop_coast 27 brush entities through their vcollide (62
+pieces), surf_classics 62 (144), none refused.
+
+**Left (BACKLOG "P1713").** The 3 worse ticks: Momentum twice passes within 0.40/0.47 of a *134 wedge EDGE mid-sweep
+without a hit -- vphysics' radius is a sphere, ours is offset planes, so our edges stand further out. Strata (v25) maps'
+physcollide is VPHY version 257, not the IVP layout: bhop_canals' 23 VPHYSICS entities are refused and keep their
+brushes, as before this patch. The remaining 16 ahop_coast disagreements: three landings on displacements 2.016-2.033
+below (inside Source's 1/32 trace reach, but a 1.97-2.00 band of airborne ticks argues against a simple reach rule),
+and the 2025 demos' different jump settings. Source categorizes at the top of a tick only for a game-moved body; we
+still do it for any body not rising past 140 (c6c68413 tick 789).
+
+**Boundary.** A mover bump is one-way for the fleet: the lobbies' engine is also surfd's verifier, so it, the client
+release and this engine go together (an older verifier REFUSEs a 15 pin; an older client predicts 14 and mispredicts
+a teleport-exit jump and any func_brush ramp). Recordings replay at their own pmsrcver. Players on 0.1.56 or older
+predict 14 on a mover-15 server until they update.
 ## Patch 1712 - acct_sign kind -7: the TAS upload offer sends itself, signed as no key press (engine client cl_receipt.c, pr_csqc.c)
 
 Lex (22 Nov): a new TAS best should pop up "like the f6 to report an error, or ... do it automatically if they don't
