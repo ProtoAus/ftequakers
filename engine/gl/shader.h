@@ -746,6 +746,7 @@ struct shader_s
 	qboolean materialnofog;	//Authored policy; keep the shared prefix and full flag word unchanged.
 	float depthpush;		//FTESurf Patch 1251: `depthpush N` -- N depth steps away from the eye, negative toward it (BE_PolyOffset). Appended.
 	float decalsize[2];		//FTESurf Patch 1721: `decalsize W H` -- a Source decal material's world size (texture x $decalscale). Appended.
+	float waterlodend;		//FTESurf Patch 1729: `fte_waterlod <start> <end>` (stored max(start,end)) or `fte_waterlod map` (-1: r_cheapwaterstart/end); 0 none. GLBE_WaterLodCheap. Appended.
 
 	//arranged as a series of vec4s
 /*	struct

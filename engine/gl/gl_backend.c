@@ -7506,6 +7506,41 @@ static qboolean GLBE_WaterOnScreen(const batch_t *b)
 	}
 	return false;
 }
+//FTESurf Patch 1729: Source's water LOD (viewrender.cpp DetermineWaterRenderInfo: past the end distance, water
+//without a local reflection renders no refraction). A world batch whose shader has `fte_waterlod` and whose every
+//on-screen face is at least its end from the eye: each of its pixels is cheap water (vmt/water #CHEAPLOD returns
+//before sampling the capture), so it needs none and weighs nothing in the view's choice.
+extern cvar_t r_cheapwaterstart, r_cheapwaterend;
+static qboolean GLBE_WaterLodCheap(const batch_t *b)
+{
+	const shader_t *s = b->shader;
+	unsigned int m;
+	vec3_t lo, hi;
+	float end, d2, e;
+	int k;
+	if (!s || !s->waterlodend || b->ent != &r_worldentity || b->buildmeshes || !b->mesh)
+		return false;
+	end = s->waterlodend > 0 ? s->waterlodend : max(r_cheapwaterstart.value, r_cheapwaterend.value);
+	if (!(end >= 0))
+		return false;
+	for (m = b->firstmesh; m < b->meshes; m++)
+	{
+		const mesh_t *mesh = b->mesh[m];
+		if (!mesh || !mesh->xyz_array || mesh->numvertexes < 3)
+			continue;
+		GLBE_MeshBox(mesh, lo, hi);
+		if (R_CullBox(lo, hi))
+			continue;
+		for (d2 = 0, k = 0; k < 3; k++)
+		{
+			e = (r_refdef.vieworg[k] < lo[k]) ? lo[k] - r_refdef.vieworg[k] : (r_refdef.vieworg[k] > hi[k]) ? r_refdef.vieworg[k] - hi[k] : 0;
+			d2 += e*e;
+		}
+		if (d2 < end*end)
+			return false;
+	}
+	return true;
+}
 typedef struct
 {
 	plane_t p;
@@ -7659,7 +7694,7 @@ static void GLBE_WaterViewsBegin(batch_t **worldbatches)
 			for (b = worldbatches[i]; b; b = b->next)
 			{
 				qboolean facing;
-				if (!GLBE_WaterCandidate(b) || !GLR_BatchPlane(b, &p))
+				if (!GLBE_WaterCandidate(b) || GLBE_WaterLodCheap(b) || !GLR_BatchPlane(b, &p))
 					continue;
 				facing = GLBE_WaterFacesEye(&p, wv->under);
 				if (pass ? (facing || !GLBE_WaterOtherShares(b->shader, &p)) : !facing)
@@ -8024,6 +8059,11 @@ static qboolean GLBE_GenerateBatchTextures(batch_t *batch, shader_t *bs)
 	//(BEM_DEPTHDARK is used when lightmap scale is 0, but still shows any emissive stuff)
 	if (shaderstate.mode != BEM_STANDARD && shaderstate.mode != BEM_DEPTHDARK)
 		return false;
+	if (GLBE_WaterLodCheap(batch))
+	{	//FTESurf Patch 1729: all of it past its LOD end: cheap water, no capture
+		GLBE_CaptureLog(batch, bs, "waterlod", batch);
+		return true;
+	}
 	//FTESurf Patch 1018: water in the 3D sky room draws with the outer view's targets (BE_SkyroomSharesWater)
 	if (BE_SkyroomSharesWater(bs->flags))
 	{

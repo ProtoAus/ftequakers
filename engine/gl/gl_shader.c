@@ -1958,6 +1958,23 @@ static void Shader_Wireframe (parsestate_t *ps, const char **ptr)
 	ps->s->wireframe = true;
 }
 
+//FTESurf Patch 1729: Source's water LOD distances (vmt/water #CHEAPLOD); see GLBE_WaterLodCheap.
+static void Shader_WaterLod (parsestate_t *ps, const char **ptr)
+{
+	char *t = Shader_ParseString(ptr);
+	float start, end;
+	if (!Q_strcasecmp(t, "map"))
+	{
+		ps->s->waterlodend = -1;
+		return;
+	}
+	start = atof(t);
+	end = Shader_ParseFloat(ps->s, ptr, 0);
+	ps->s->waterlodend = (end > start) ? end : start;
+	if (!(ps->s->waterlodend > 0))
+		ps->s->waterlodend = 0;
+}
+
 //FTESurf Patch 868: Source water without $reflectentities -- its reflection draws only the world.
 static void Shader_ReflectNoEntities (parsestate_t *ps, const char **ptr)
 {
@@ -3939,6 +3956,7 @@ static shaderkey_t shaderkeys[] =
 	{"fullrate",			Shader_FullRate,			"fte"},	//blocks half-rate shading on this surface.
 	{"wireframe",			Shader_Wireframe,			"fte"},	//FTESurf Patch 780: Source's MATERIAL_VAR_WIREFRAME (GL only)
 	{"reflectnoentities",	Shader_ReflectNoEntities,	"fte"},	//FTESurf Patch 868: fte_reflectnoentities
+	{"waterlod",			Shader_WaterLod,			"fte"},	//FTESurf Patch 1729: fte_waterlod
 	{"materialnofog",		Shader_MaterialNoFog,		"fte"},
 
 	{"bemode",				Shader_BEMode,				"fte"},

@@ -64,6 +64,7 @@ build 11, which needs a vid_reload, so setting them and reloading the map did
 nothing at all.  See the note beside MAPOPTIONS in mod_vbsp.c.)
 */
 cvar_t *hl2_water;
+cvar_t *hl2_waterlod;	//FTESurf Patch 1729
 //FTESurf Patch 1475: water that reads its reflection's depth for r_captureparallax (an engine without it answers "")
 static qboolean VMT_WaterParallax(int wmode, const char *progargs)
 {
@@ -1318,6 +1319,9 @@ typedef struct
 	char water_cheap; /* water only */
 	char water_expensive; /* water only */
 	char water_nofresnel; /* water only, FTESurf Patch 879: the cheap path's fresnel off */
+	char water_lodproxy; /* water only, FTESurf Patch 1729: a WaterLOD proxy -- the map's distances */
+	char water_lodstart_set, water_lodend_set;
+	float water_lodstart, water_lodend; /* water only: $cheapwaterstartdistance/$cheapwaterenddistance */
 	char water_reflectblend_set; /* water only */
 	float water_reflectblend; /* water only: $reflectblendfactor, the cheap mix without fresnel */
 	char water_reflectents; /* FTESurf Patch 868: $reflectentities -- its reflection draws entities */
@@ -1433,7 +1437,6 @@ static qboolean VMT_IsKnownIgnoredField(const char *key)
 {
 	static const char *ig[] = {"$nolod", "$model", "$FlashlightNoLambert",
 		"$parallaxmap", "$parallaxmapscale",	//nettest: Source parallax-occlusion hints, FTE has no POM path
-		"$cheapwaterstartdistance", "$cheapwaterenddistance",	//nettest: Source water LOD distance cutoffs, unused by FTE water
 		"$multipass", "$fresnelreflection", "$modelmaterial", "$texture2", "$no_fullbright",	//nettest: more benign Source-only fields on HL2 glass/metal/combine props
 		"$gnoise", "$playerdistance", "$playerdistance2", "$alpharesult", "$alpharesultmin", "$alpharesultmax",	//nettest: COMBINESHIELD proxy result-vars (top-level $-var declarations the proxy system writes)
 		"$smallamount", "$largeamount", "$hundred", "$ten", "$frameminusten",
@@ -2108,7 +2111,11 @@ static char *VMT_ParseProxies(const char *fname, vmtstate_t *st, char *line)
 			else if (!Q_strcasecmp(key, "equals"))
 				line = VMT_ParseArithProxy(fname, st, VMTPRX_EQUALS, line);
 			else
+			{
+				if (st && !Q_strcasecmp(key, "waterlod"))
+					st->water_lodproxy = 1;	//FTESurf Patch 1729: its distances come from the view (water_lod_control)
 				line = VMT_ParseArithProxy(fname, st, VMTPRX_OTHER, line);
+			}
 			continue;
 		}
 	}
@@ -2785,6 +2792,10 @@ static char *VMT_ParseBlock(const char *fname, vmtstate_t *st, char *line)
 			st->water_expensive = !!atoi(value);
 		else if (!Q_strcasecmp(key, "$nofresnel"))
 			st->water_nofresnel = !!atoi(value);
+		else if (!Q_strcasecmp(key, "$cheapwaterstartdistance"))
+			st->water_lodstart = atof(value), st->water_lodstart_set = 1;	//FTESurf Patch 1729
+		else if (!Q_strcasecmp(key, "$cheapwaterenddistance"))
+			st->water_lodend = atof(value), st->water_lodend_set = 1;
 		else if (!Q_strcasecmp(key, "$reflectblendfactor"))
 			st->water_reflectblend = atof(value), st->water_reflectblend_set = 1;
 		else if (!Q_strcasecmp(key, "$normalmap"))
@@ -4781,6 +4792,7 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 		}
 		else
 		{
+			char waterlod[64] = "";	//FTESurf Patch 1729: its fte_waterlod line, if any
 			/*
 			Refraction always; reflection only at 2.  Dropping the reflection
 			removes one whole scene render per batch and is what Source's own
@@ -4801,6 +4813,24 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 				}
 				if (VMT_WaterParallax(wmode, progargs))
 					Q_strlcat(wargs, "#PARALLAX", sizeof(wargs));
+				//FTESurf Patch 1729: hl2_water_lod -- Source's distance water at "simple reflections": its cheap pass
+				//blends over the refraction between the LOD distances (water.cpp DrawCheapWater, BLEND) and past them
+				//the view renders no refraction (viewrender.cpp DetermineWaterRenderInfo). Not for $forceexpensive
+				//water (a local reflection turns the LOD off) nor without an $envmap (no cheap pass).
+				if (wmode == 1 && hl2_waterlod && hl2_waterlod->ival && !st->water_expensive && st->envauthored)
+				{
+					float ls = st->water_lodstart_set ? st->water_lodstart : 500, le = st->water_lodend_set ? st->water_lodend : 1000;
+					if (st->water_lodproxy)
+						Q_strlcat(wargs, "#CHEAPLOD#CHEAPLODMAP", sizeof(wargs));
+					else
+						Q_strlcat(wargs, va("#CHEAPLOD#LODSTART=%g#LODEND=%g", ls, le), sizeof(wargs));
+					if (st->water_nofresnel)
+						Q_strlcat(wargs, va("#NOFRESNEL#REFLECTBLEND=%g", st->water_reflectblend_set ? st->water_reflectblend : 1.0f), sizeof(wargs));
+					if (st->water_lodproxy)
+						Q_strlcpy(waterlod, "\tfte_waterlod map\n", sizeof(waterlod));
+					else
+						Q_snprintfz(waterlod, sizeof(waterlod), "\tfte_waterlod %g %g\n", ls, le);
+				}
 				Q_strlcatfz(script, &offset, sizeof(script),
 					"\t{\n"
 						"\t\tprogram \"vmt/water%s%s%s\"\n"	//P867: vmt/wateranim is vmt/water under GLSL 130
@@ -4831,6 +4861,8 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 			//FTESurf Patch 868: Source water reflects entities only under $reflectentities.
 			if (!st->water_reflectents)
 				Q_strlcatfz(script, &offset, sizeof(script), "\tfte_reflectnoentities\n");
+			if (*waterlod)
+				Q_strlcatfz(script, &offset, sizeof(script), "%s", waterlod);
 		}
 
 		/*

@@ -2,6 +2,9 @@
 !!cvardf r_glsl_turbscale_refract=1	//simpler scaler
 //FTESurf Patch 1019: refraction offset falls off past this many units; 0 = Source's constant (own line: a trailing comment lands in the default)
 !!cvarf hl2_waterrefractfalloff=512
+//FTESurf Patch 1729: Source's view water LOD pair, from the map's water_lod_control (#CHEAPLODMAP)
+!!cvarf r_cheapwaterstart=0
+!!cvarf r_cheapwaterend=0.1
 !!cvarf hl2_waterdebug=0	//P867: 1 capture untinted 2 after fog and tint 3 reflection 4 fresnel 5 fog factor 6/7 normal 8/9 the bound maps
 !!permu REFLECTCUBEMASK
 !!samps diffuse normalmap
@@ -148,6 +151,10 @@ void main (void)
 #include "sys/fog.h"
 uniform float cvar_hl2_waterdebug;
 uniform float cvar_hl2_waterrefractfalloff;
+#ifdef CHEAPLODMAP
+uniform float cvar_r_cheapwaterstart;	//FTESurf Patch 1729
+uniform float cvar_r_cheapwaterend;
+#endif
 
 #ifdef DEPTH
 // The depth capture uses the same non-oblique projection as the surface.
@@ -269,6 +276,32 @@ void main (void)
 	// Fresnel and cube lookup must use the SAME world-space normal/view.
 	vec3 worldnormal = normalize(tangenttoworld * n);
 	vec3 viewdir = normalize(eye);
+#ifdef CHEAPLOD
+	//FTESurf Patch 1729: Source's cheap pass (watercheap_ps2x BLEND: fog colour to the cubemap by (1-n.e)^5) over the
+	//refraction from the start to the end distance; past the end it is all there is, and the capture may not exist
+	//(GLBE_WaterLodCheap uses the same test).
+#ifdef CHEAPLODMAP
+	float lods = cvar_r_cheapwaterstart, lode = max(cvar_r_cheapwaterend, cvar_r_cheapwaterstart);
+#else
+	float lods = float(LODSTART), lode = max(float(LODEND), float(LODSTART));
+#endif
+	float lodd = length(eye);
+	float lodf = clamp((lodd - lods) / max(lode - lods, 0.001), 0.0, 1.0);
+	vec3 cheap = vec3(FOGTINT);
+#ifdef REFLECTCUBEMASK
+#ifdef NOFRESNEL
+	float cheapf = float(REFLECTBLEND);
+#else
+	float cheapf = pow(1.0 - clamp(dot(worldnormal, viewdir), 0.0, 1.0), 5.0);
+#endif
+	cheap = mix(cheap, textureCube(s_reflectcube, reflect(-viewdir, worldnormal)).rgb * vec3(TINT_REFL), cheapf);
+#endif
+	if (lodd >= lode)
+	{
+		gl_FragColor = vec4(fog3(cheap), 1.0);
+		return;
+	}
+#endif
 	fres = pow(1.0-clamp(dot(worldnormal, viewdir), 0.0, 1.0), float(FRESNEL_EXP)) * float(FRESNEL_RANGE) + float(FRESNEL_MIN);
 
 #ifdef DEPTH
@@ -414,6 +447,9 @@ void main (void)
 
 	//interplate by fresnel
 	refr = mix(refr, refl, fres);
+#ifdef CHEAPLOD
+	refr = mix(refr, cheap, lodf);
+#endif
 
 #ifdef ALPHA
 	vec4 ts = texture2D(s_diffuse, ntc);

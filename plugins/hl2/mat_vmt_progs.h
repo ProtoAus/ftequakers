@@ -1705,6 +1705,9 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "!!cvardf r_glsl_turbscale_refract=1 //simpler scaler\n"
 //FTESurf Patch 1019: refraction offset falls off past this many units; 0 = Source's constant (own line: a trailing comment lands in the default)
 "!!cvarf hl2_waterrefractfalloff=512\n"
+//FTESurf Patch 1729: Source's view water LOD pair, from the map's water_lod_control (#CHEAPLODMAP)
+"!!cvarf r_cheapwaterstart=0\n"
+"!!cvarf r_cheapwaterend=0.1\n"
 "!!cvarf hl2_waterdebug=0 //P867: 1 capture untinted 2 after fog and tint 3 reflection 4 fresnel 5 fog factor 6/7 normal 8/9 the bound maps\n"
 "!!permu REFLECTCUBEMASK\n"
 "!!samps diffuse normalmap\n"
@@ -1851,6 +1854,10 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "#include \"sys/fog.h\"\n"
 "uniform float cvar_hl2_waterdebug;\n"
 "uniform float cvar_hl2_waterrefractfalloff;\n"
+"#ifdef CHEAPLODMAP\n"
+"uniform float cvar_r_cheapwaterstart; //FTESurf Patch 1729\n"
+"uniform float cvar_r_cheapwaterend;\n"
+"#endif\n"
 
 "#ifdef DEPTH\n"
 // The depth capture uses the same non-oblique projection as the surface.
@@ -1972,6 +1979,32 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 // Fresnel and cube lookup must use the SAME world-space normal/view.
 "vec3 worldnormal = normalize(tangenttoworld * n);\n"
 "vec3 viewdir = normalize(eye);\n"
+"#ifdef CHEAPLOD\n"
+//FTESurf Patch 1729: Source's cheap pass (watercheap_ps2x BLEND: fog colour to the cubemap by (1-n.e)^5) over the
+//refraction from the start to the end distance; past the end it is all there is, and the capture may not exist
+//(GLBE_WaterLodCheap uses the same test).
+"#ifdef CHEAPLODMAP\n"
+"float lods = cvar_r_cheapwaterstart, lode = max(cvar_r_cheapwaterend, cvar_r_cheapwaterstart);\n"
+"#else\n"
+"float lods = float(LODSTART), lode = max(float(LODEND), float(LODSTART));\n"
+"#endif\n"
+"float lodd = length(eye);\n"
+"float lodf = clamp((lodd - lods) / max(lode - lods, 0.001), 0.0, 1.0);\n"
+"vec3 cheap = vec3(FOGTINT);\n"
+"#ifdef REFLECTCUBEMASK\n"
+"#ifdef NOFRESNEL\n"
+"float cheapf = float(REFLECTBLEND);\n"
+"#else\n"
+"float cheapf = pow(1.0 - clamp(dot(worldnormal, viewdir), 0.0, 1.0), 5.0);\n"
+"#endif\n"
+"cheap = mix(cheap, textureCube(s_reflectcube, reflect(-viewdir, worldnormal)).rgb * vec3(TINT_REFL), cheapf);\n"
+"#endif\n"
+"if (lodd >= lode)\n"
+"{\n"
+"gl_FragColor = vec4(fog3(cheap), 1.0);\n"
+"return;\n"
+"}\n"
+"#endif\n"
 "fres = pow(1.0-clamp(dot(worldnormal, viewdir), 0.0, 1.0), float(FRESNEL_EXP)) * float(FRESNEL_RANGE) + float(FRESNEL_MIN);\n"
 
 "#ifdef DEPTH\n"
@@ -2117,6 +2150,9 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 
 //interplate by fresnel
 "refr = mix(refr, refl, fres);\n"
+"#ifdef CHEAPLOD\n"
+"refr = mix(refr, cheap, lodf);\n"
+"#endif\n"
 
 "#ifdef ALPHA\n"
 "vec4 ts = texture2D(s_diffuse, ntc);\n"
@@ -3614,6 +3650,9 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "!!cvardf r_glsl_turbscale_refract=1 //simpler scaler\n"
 //FTESurf Patch 1019: refraction offset falls off past this many units; 0 = Source's constant (own line: a trailing comment lands in the default)
 "!!cvarf hl2_waterrefractfalloff=512\n"
+//FTESurf Patch 1729: Source's view water LOD pair, from the map's water_lod_control (#CHEAPLODMAP)
+"!!cvarf r_cheapwaterstart=0\n"
+"!!cvarf r_cheapwaterend=0.1\n"
 "!!cvarf hl2_waterdebug=0 //P867: 1 capture untinted 2 after fog and tint 3 reflection 4 fresnel 5 fog factor 6/7 normal 8/9 the bound maps\n"
 "!!permu REFLECTCUBEMASK\n"
 "!!samps diffuse normalmap\n"
@@ -3760,6 +3799,10 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "#include \"sys/fog.h\"\n"
 "uniform float cvar_hl2_waterdebug;\n"
 "uniform float cvar_hl2_waterrefractfalloff;\n"
+"#ifdef CHEAPLODMAP\n"
+"uniform float cvar_r_cheapwaterstart; //FTESurf Patch 1729\n"
+"uniform float cvar_r_cheapwaterend;\n"
+"#endif\n"
 
 "#ifdef DEPTH\n"
 // The depth capture uses the same non-oblique projection as the surface.
@@ -3881,6 +3924,32 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 // Fresnel and cube lookup must use the SAME world-space normal/view.
 "vec3 worldnormal = normalize(tangenttoworld * n);\n"
 "vec3 viewdir = normalize(eye);\n"
+"#ifdef CHEAPLOD\n"
+//FTESurf Patch 1729: Source's cheap pass (watercheap_ps2x BLEND: fog colour to the cubemap by (1-n.e)^5) over the
+//refraction from the start to the end distance; past the end it is all there is, and the capture may not exist
+//(GLBE_WaterLodCheap uses the same test).
+"#ifdef CHEAPLODMAP\n"
+"float lods = cvar_r_cheapwaterstart, lode = max(cvar_r_cheapwaterend, cvar_r_cheapwaterstart);\n"
+"#else\n"
+"float lods = float(LODSTART), lode = max(float(LODEND), float(LODSTART));\n"
+"#endif\n"
+"float lodd = length(eye);\n"
+"float lodf = clamp((lodd - lods) / max(lode - lods, 0.001), 0.0, 1.0);\n"
+"vec3 cheap = vec3(FOGTINT);\n"
+"#ifdef REFLECTCUBEMASK\n"
+"#ifdef NOFRESNEL\n"
+"float cheapf = float(REFLECTBLEND);\n"
+"#else\n"
+"float cheapf = pow(1.0 - clamp(dot(worldnormal, viewdir), 0.0, 1.0), 5.0);\n"
+"#endif\n"
+"cheap = mix(cheap, textureCube(s_reflectcube, reflect(-viewdir, worldnormal)).rgb * vec3(TINT_REFL), cheapf);\n"
+"#endif\n"
+"if (lodd >= lode)\n"
+"{\n"
+"gl_FragColor = vec4(fog3(cheap), 1.0);\n"
+"return;\n"
+"}\n"
+"#endif\n"
 "fres = pow(1.0-clamp(dot(worldnormal, viewdir), 0.0, 1.0), float(FRESNEL_EXP)) * float(FRESNEL_RANGE) + float(FRESNEL_MIN);\n"
 
 "#ifdef DEPTH\n"
@@ -4026,6 +4095,9 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 
 //interplate by fresnel
 "refr = mix(refr, refl, fres);\n"
+"#ifdef CHEAPLOD\n"
+"refr = mix(refr, cheap, lodf);\n"
+"#endif\n"
 
 "#ifdef ALPHA\n"
 "vec4 ts = texture2D(s_diffuse, ntc);\n"
