@@ -5258,6 +5258,15 @@ static qboolean CL_ClipPersistDecal(persistdecal_t *rec)
 	if (!rec->shader || !cl.worldmodel)
 		return false;
 
+	if ((rec->clipflags & PDC_SOURCESIZE) && rec->shader->decalsize[0] > 0 && rec->shader->decalsize[1] > 0)
+	{	//FTESurf Patch 1721: side's length is 1/height, aspect width/height (CL_Decal_SetupCtx)
+		float l = VectorLength(rec->side);
+		if (l > 0)
+		{
+			VectorScale(rec->side, 1/(l * rec->shader->decalsize[1]), rec->side);
+			rec->aspect = rec->shader->decalsize[0] / rec->shader->decalsize[1];
+		}
+	}
 	cc.rec = rec;
 	VectorClear(cc.shift);
 	CL_Decal_SetupCtx(&cc.base, rec->shader, rec->origin, rec->up, rec->side, rec->rgba, rec->rgba[3], rec->aspect, rec->texrange, cliptan1, cliptan2, &clipsize);

@@ -1311,6 +1311,7 @@ typedef struct
 	char vmtclass[32];	//FTESurf Patch 783: the Source shader class, before an arm rewrites `type`
 	char selfillum;
 	char decal;
+	float decalscale;	//FTESurf Patch 1721: $decalscale, 0 = absent (Source's default 1)
 	char nofog;
 	char mod2x; /* modulate only */
 	char water_cheap; /* water only */
@@ -1712,6 +1713,29 @@ static qboolean VMT_TextureHasAlpha(const char *name)
 	return alpha;
 }
 
+//FTESurf Patch 1721: a VTF's top-mip size from its header (VTFFileHeader_t width/height at 16/18)
+static qboolean VMT_VTFSize(const char *name, int *w, int *h)
+{
+	char path[MAX_QPATH];
+	unsigned char hdr[20];
+	vfsfile_t *f;
+	qboolean ok = false;
+	if (!*name)
+		return false;
+	Q_snprintfz(path, sizeof(path), "%s%s.vtf", strcmp(name, "materials/")?"materials/":"", name);
+	f = fsfuncs->OpenVFS(path, "rb", FS_GAME);
+	if (f)
+	{
+		if (VFS_READ(f, hdr, sizeof(hdr)) == sizeof(hdr) && !memcmp(hdr, "VTF", 4))
+		{
+			*w = hdr[16] | (hdr[17] << 8);
+			*h = hdr[18] | (hdr[19] << 8);
+			ok = *w > 0 && *h > 0;
+		}
+		VFS_CLOSE(f);
+	}
+	return ok;
+}
 /*
 FTESurf Patch 1218: a "mipmap fade" -- mip levels drawn to differ, so a pane changes with distance
 (surf_sidelines' fades/mipmap_black: clear, then white, then black from level 2).  A box filter keeps
@@ -2585,7 +2609,7 @@ static char *VMT_ParseBlock(const char *fname, vmtstate_t *st, char *line)
 		else if (!Q_strcasecmp(key, "$decal"))
 			st->decal = atoi(value);
 		else if (!Q_strcasecmp(key, "$decalscale"))
-			;	//nettest: recognised-but-ignored Source key; silenced (was per-field developer-1 spam)
+			st->decalscale = atof(value);	//FTESurf Patch 1721
 		else if (!Q_strcasecmp(key, "$decalsize"))
 			;	//nettest: recognised-but-ignored Source key; silenced (was per-field developer-1 spam)
 		else if (!Q_strcasecmp(key, "$envmap"))
@@ -5516,6 +5540,13 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 	}
 
 	if (st->decal) {
+		//FTESurf Patch 1721: Source sizes an infodecal by its base texture's top mip x $decalscale (r_decal.cpp)
+		int dw, dh;
+		if (VMT_VTFSize(st->tex[0].name, &dw, &dh))
+		{
+			float ds = st->decalscale > 0 ? st->decalscale : 1;
+			Q_strlcatfz(script, &offset, sizeof(script),	"\tdecalsize %g %g\n", dw * ds, dh * ds);
+		}
 		//Patch 990: a $decal Refract one step nearer than other decals: bhop_ceaseless's ripple, the
 		//swirl decal and the floor share z 11616, and at equal bias the ripple flickered over the swirl.
 		Q_strlcatfz(script, &offset, sizeof(script),	"\tpolygonOffset %d\n", !Q_strcasecmp(st->vmtclass, "Refract") ? 2 : 1);

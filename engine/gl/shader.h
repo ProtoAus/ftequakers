@@ -745,6 +745,7 @@ struct shader_s
 	qboolean reflectnoents;	//FTESurf Patch 868: `fte_reflectnoentities` -- Source water with no $reflectentities: its reflection draws only the world. Appended: plugins read shader_t by offset.
 	qboolean materialnofog;	//Authored policy; keep the shared prefix and full flag word unchanged.
 	float depthpush;		//FTESurf Patch 1251: `depthpush N` -- N depth steps away from the eye, negative toward it (BE_PolyOffset). Appended.
+	float decalsize[2];		//FTESurf Patch 1721: `decalsize W H` -- a Source decal material's world size (texture x $decalscale). Appended.
 
 	//arranged as a series of vec4s
 /*	struct

@@ -1939,6 +1939,13 @@ static void Shader_DepthPush (parsestate_t *ps, const char **ptr)
 	ps->s->depthpush = Shader_ParseFloat(ps->s, ptr, 0);
 }
 
+//FTESurf Patch 1721: `decalsize W H`, world units; a static decal asking PDC_SOURCESIZE takes it (cl_ents.c)
+static void Shader_DecalSize (parsestate_t *ps, const char **ptr)
+{
+	ps->s->decalsize[0] = Shader_ParseFloat(ps->s, ptr, 0);
+	ps->s->decalsize[1] = Shader_ParseFloat(ps->s, ptr, 0);
+}
+
 static void Shader_EntityMergable (parsestate_t *ps, const char **ptr)
 {
 	shader_t *shader = ps->s;
@@ -3924,6 +3931,7 @@ static shaderkey_t shaderkeys[] =
 
 	//fte extensions
 	{"depthpush",			Shader_DepthPush,			"fte"},	//FTESurf Patch 1251
+	{"decalsize",			Shader_DecalSize,			"fte"},	//FTESurf Patch 1721
 	{"clutter",				Shader_ClutterParms,		"fte"},
 	{"deferredlight",		Shader_Deferredlight,		"fte"},	//(sort = prelight)
 //	{"lpp_light",			Shader_Deferredlight,		"fte"},	//(sort = prelight)
