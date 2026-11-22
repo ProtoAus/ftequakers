@@ -1445,6 +1445,7 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 #ifdef GLQUAKE
 {QR_OPENGL, 110, "bloom_final",
 "!!cvarf r_bloom\n"
+"!!cvarf r_bloom_mapscale=1.0\n"
 "!!cvarf r_bloom_retain=1.0\n"
 "!!samps 4\n"
 //add them together
@@ -1462,12 +1463,13 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "#endif\n"
 "#ifdef FRAGMENT_SHADER\n"
 "uniform float cvar_r_bloom;\n"
+"uniform float cvar_r_bloom_mapscale;\n"
 "uniform float cvar_r_bloom_retain;\n"
 "void main ()\n"
 "{\n"
 "gl_FragColor = \n"
 "cvar_r_bloom_retain * texture2D(s_t0, tc) +\n"
-"cvar_r_bloom*(\n"
+"cvar_r_bloom*cvar_r_bloom_mapscale*(\n"
 "texture2D(s_t1, tc) +\n"
 "texture2D(s_t2, tc) +\n"
 "texture2D(s_t3, tc)\n"
