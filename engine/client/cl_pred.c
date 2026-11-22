@@ -636,6 +636,44 @@ cl_predict_memo 0: run every move, as before.  1: reuse (default).  2: reuse, bu
 the result byte for byte (must be 0 differences): cl_predict_memostats.
 */
 cvar_t	cl_predict_memo = CVARFD("cl_predict_memo", "1", CVAR_NOTFROMSERVER|CVAR_NOSAVE, "FTESurf Patch 1720: client prediction reuses PM_PlayerMove's result for a command whose inputs are byte-for-byte those of a move it already ran (the replay of the unacknowledged commands repeats most of them every frame). Exact by construction; the CSQC prediction hooks still run for every command.\n0: run every move. 1: reuse (default). 2: reuse, but also run every reused move and count any difference (must be 0): cl_predict_memostats.");
+/*
+FTESurf Patch 1742: Source's prediction optimisation (cl_pred_optimize).  Each rendered frame replays the unacknowledged
+commands from the server's state for the command it last finalised (pv->prop.sequence).  When a snapshot moves that
+base on, the server's state is the authority, but it is the same simulation with the same inputs, so it differs from
+what the client predicted for that command only by what the wire rounds away -- and every later command then starts
+from different bytes, so Patch 1720's memo reran them all: at sv_minping 300 prediction was 1.80 ms of bhop_canals'
+3.63 ms frame.  When the server's origin and velocity agree with the prediction within these tolerances (and its
+ground and jump state match), the replay starts from the prediction instead and the memo answers every older command;
+a real disagreement (a push, a teleport, a missed input) is past them and snaps to the server as before.  The client
+can sit at most a tolerance off the server's state per snapshot; the server's simulation is untouched.
+*/
+cvar_t	cl_predict_keep = CVARFD("cl_predict_keep", "1", CVAR_NOTFROMSERVER|CVAR_NOSAVE, "FTESurf Patch 1742: when a snapshot's state for the command the client last predicted agrees with that prediction (cl_predict_keep_origin / cl_predict_keep_velocity), prediction continues from the prediction rather than the server's rounded copy of it, so the older commands are not rerun (Source's cl_pred_optimize). A disagreement snaps to the server as before.\n0: always restart from the server's state. 1: keep an agreeing prediction (default).");
+cvar_t	cl_predict_keep_origin = CVARFD("cl_predict_keep_origin", "0.25", CVAR_NOTFROMSERVER|CVAR_NOSAVE, "FTESurf Patch 1742: units the server's origin may differ from the prediction for cl_predict_keep to keep it.");
+cvar_t	cl_predict_keep_velocity = CVARFD("cl_predict_keep_velocity", "1", CVAR_NOTFROMSERVER|CVAR_NOSAVE, "FTESurf Patch 1742: units/s the server's velocity may differ from the prediction for cl_predict_keep to keep it.");
+static unsigned int pkeep_kept, pkeep_snapped;
+static qboolean CL_PredictKeepAgrees(const player_state_t *s, const playerview_t *pv)
+{
+	vec3_t d;
+	float to = cl_predict_keep_origin.value, tv = cl_predict_keep_velocity.value;
+	int k;
+	for (k = 0; k < 3; k++)
+		if (!isfinite(s->origin[k]) || !isfinite(s->velocity[k]) || !isfinite(pv->prop.origin[k]) || !isfinite(pv->prop.velocity[k]))
+			return false;
+	if (!(to >= 0) || !(tv >= 0))
+		return false;
+	VectorSubtract(s->origin, pv->prop.origin, d);
+	if (DotProduct(d, d) > to * to)
+		return false;
+	VectorSubtract(s->velocity, pv->prop.velocity, d);
+	if (DotProduct(d, d) > tv * tv)
+		return false;
+	if ((cls.z_ext & Z_EXT_PF_ONGROUND) && !s->onground != !pv->prop.onground)
+		return false;
+	if ((cls.z_ext & Z_EXT_PM_TYPE) && !s->jump_held != !pv->prop.jump_held)
+		return false;
+	return true;
+}
+
 #define PMMEMO_SLOTS	256
 #define PMMEMO_KEYMAX	(32*1024)
 #define PMMEMO_TOUCHMAX	32
@@ -883,7 +921,10 @@ static void CL_PredictMemoStats_f(void)
 {
 	Con_Printf("cl_predict_memo %i: %u reused, %u run, %u not keyed, %u reused-and-checked, %u of those differed (must be 0)\n",
 		cl_predict_memo.ival, pmmemo_hits, pmmemo_runs, pmmemo_unkeyed, pmmemo_checked, pmmemo_bad);
+	Con_Printf("cl_predict_keep %i: %u replays from an agreeing prediction, %u from the server's state\n",
+		cl_predict_keep.ival, pkeep_kept, pkeep_snapped);
 	pmmemo_hits = pmmemo_runs = pmmemo_unkeyed = pmmemo_checked = pmmemo_bad = 0;
+	pkeep_kept = pkeep_snapped = 0;
 }
 
 static void CL_PredictUsercmdPart (int pnum, int entnum, player_state_t *from, player_state_t *to, usercmd_t *u, float offsetmsec, qboolean *carrier_cleared, qboolean later)
@@ -2156,6 +2197,7 @@ void CL_PredictMovePNum (int seat)
 	float		f;
 	outframe_t	*backdate;
 	player_state_t framebuf[2];	//need two framebufs so we can interpolate between two states.
+	player_state_t keepstate;	//FTESurf Patch 1742: the replay's base when the prediction is kept
 	static player_state_t nullstate;
 	int			oldphysent;
 	double		simtime;	//this is server time if nopred is set (lerp-only), and local time if we're predicting
@@ -2666,6 +2708,23 @@ void CL_PredictMovePNum (int seat)
 				from.state->pmsrc = pv->prop.pmsrc;
 				if (!(cls.fteprotocolextensions2 & PEXT2_REPLACEMENTDELTAS))
 					VectorCopy(pv->prop.gravitydir, from.state->gravitydir);
+				//FTESurf Patch 1742: an agreeing server state hands the replay the prediction itself (a copy: the
+				//snapshot ring keeps the server's), so the older commands' inputs are the bytes the memo holds
+				if (i == pring_firsti && from.state != &keepstate)
+				{
+					if (cl_predict_keep.ival && CL_PredictKeepAgrees(from.state, pv))
+					{
+						keepstate = *from.state;
+						VectorCopy(pv->prop.origin, keepstate.origin);
+						VectorCopy(pv->prop.velocity, keepstate.velocity);
+						keepstate.onground = pv->prop.onground;
+						keepstate.jump_held = pv->prop.jump_held;
+						from.state = &keepstate;
+						pkeep_kept++;
+					}
+					else
+						pkeep_snapped++;
+				}
 			}
 			//FTESurf Patch 754: the posture the hull states, propagated or not (a
 			//resume after a no-prediction stretch seeds a zeroed pmsrc).  Our own
@@ -3347,6 +3406,9 @@ void CL_InitPrediction (void)
 	Cvar_Register (&cl_predict_freshtype,	cl_predictiongroup);	//FTESurf Patch 243
 	Cvar_Register (&cl_predict_qchook,	cl_predictiongroup);	//FTESurf Patch 335
 	Cvar_Register (&cl_predict_memo,	cl_predictiongroup);	//FTESurf Patch 1720
+	Cvar_Register (&cl_predict_keep,	cl_predictiongroup);	//FTESurf Patch 1742
+	Cvar_Register (&cl_predict_keep_origin,	cl_predictiongroup);
+	Cvar_Register (&cl_predict_keep_velocity,	cl_predictiongroup);
 	Cmd_AddCommandD ("cl_predict_memostats", CL_PredictMemoStats_f, "FTESurf Patch 1720: print cl_predict_memo's counters since the last call, then reset them.");
 	Cvar_Register (&cl_predict_listen,	cl_predictiongroup);	//FTESurf Patch 862
 	Cvar_Register (&cl_predict_listenops,	cl_predictiongroup);	//FTESurf Patch 1588
