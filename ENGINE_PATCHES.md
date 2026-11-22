@@ -1,5 +1,35 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1734 - KSF demos get half of a small crawl budget: the slowed cron row's --max 8 had left them none (game surfd/ksfimport.py)
+
+**Problem.** Lex, 23 Nov: KSF demos are not grabbed (surf_insomnia: 221 KSF runs, boards read 7 Nov, 0 replays).
+The cause today is ksf.surf's 403 (every 48-h retry refused since 11 Nov 07:21Z). Behind it: `--watch --demos` gave
+demos `min(DEMO_MAX, max - WATCH_BOARDS)` (Patch 1240: boards keep the first 16 of a 40-request tick), and the 17 Nov
+"slow down" cron row (`--max 8 --delay 6`) leaves 8 - 16 -> 0. Once KSF lifts the block, that row would read board
+pages only and never download a demo.
+
+**Change.** ksfimport.main: demo_max = min(DEMO_MAX, max(0, max - WATCH_BOARDS, max // 2)): below --max 32 demos take
+half, rounded down (8 -> 4 boards + 4 demos, 20 -> 10 + 10); 32 and above unchanged (40 -> 16 + 24). The total per
+tick is still --max. watch_mode: unblock_step's share is min(UNBLOCK_MAX, boards // 4) (was // 2), so 4 board requests
+split walks 1, unblock 1, refresh 1, sweep >= 1; 8 and more board requests unchanged.
+
+**Verified.** surfd/test_ksfgrab.py: the budget test pins eight splits (8 -> (4, 4) ... default -> (16, 24)) and fails
+on the old ksfimport with exactly the bug, [('boards', 8), ('demos', 0)]; test_p1734_cron_row_board_budget_keeps_a_
+sweep_request spends each step's share of the real Pacer: --max 8 gives walks 1, unblock 1, refresh 1, sweep 1, demos
+4 (round 1's cut gave unblock 2, sweep 0), the default walks 3, unblock 2, refresh 4, sweep 7, demos 24 (an unblock-
+capped-at-1 mutant fails). The topup test that relied on --max 2 meaning no demo budget sets DEMO_MAX 0 for the same
+scenario; the zero-reservation repair test loops --max 0, 1. test_ksfgrab 86/86, test_ksfimport 0 failed, run in a
+network namespace with only loopback (a curl to ksf.surf from inside: rc 7).
+
+**Review.** One independent reader, two rounds (split arithmetic, downstream budgets, callers, the test patch). Round 1:
+the sweep could get 0 of 4 board requests (fixed, above); a refused player walk parks only the walks, so one download
+can follow it in the same tick (already true at 40; at most one extra refused request). Round 2: none blocking; with
+--demos, --max 6 or less leaves unblock 0 every tick (documented: keep --max at 8+), and two test/comment gaps (fixed).
+
+**Deployed.** Not yet: ships in the next guarded surfd generation. KSF itself was stopped the same day at Lex's word
+(game tools/backend-pending.md): the cron row commented out and data/ksf/.refused an open-ended park, so mapwatch and
+mapnew skip KSF too. Resume = uncomment the row AND restore/delete the park.
+
 ## Patch 1733 - The prediction memo keys only the physents a move could reach: far-away movers, other players and the server's lagging copy of the player stop forcing moves to rerun (engine client/cl_pred.c, common/pmovetst.c)
 
 **Problem.** The ahop_coast/bhop_canals BACKLOG (22 Nov): Patch 1720's key held every physent's fields, so any physent
