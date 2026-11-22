@@ -1,5 +1,32 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1742 - Source's prediction optimisation: a snapshot that agrees with what the client predicted for that command hands the replay the prediction, so the memo reuses every older command and ping stops costing most of its frame time (engine client/cl_pred.c)
+
+**Problem.** Lex, 23 Nov ("ping add zero frame time now correct?" -> "Yes please"). Measured on patch-1733 (rig lobby
+replica, moving): bhop_canals 434 / 373 / 276 fps at sv_minping 0 / 150 / 300, prediction 0.42 / 0.89 / 1.80 ms;
+ahop_coast 810 / 669 / 546 / 331 at 0 / 150 / 300 / 1000. Each frame replays the unacknowledged commands from the
+server's state for the command last finalised (pv->prop.sequence); when a snapshot moves that base on, the server's
+state differs from the client's own prediction for it only by wire rounding (prederr ring: origin within 0.01, velocity
+within ~0.24), and every later command then starts from other bytes, so Patch 1720/1733's memo reran them all. Source
+keeps an agreeing prediction (cl_pred_optimize).
+
+**Change.** In the replay's first pass, where the server's state for prop.sequence meets the prediction (the prederr
+ring compares them first, unchanged), CL_PredictKeepAgrees: origin within cl_predict_keep_origin (0.03) and velocity
+within cl_predict_keep_velocity (0.5; caps 1 / 8), ground and jump state equal where the protocol sends them. Then
+CL_PredictKeep hands the replay a copy of the server's state carrying the prediction's origin, velocity, ground and
+jump (the snapshot ring keeps the server's); otherwise it snaps to the server as before. The extrapolation from an
+all-acked snapshot keeps the same way. Each kept base is within the tolerance of that snapshot (it does not add up).
+cl_predict_keep 0 restores the old behaviour; cl_predict_memostats counts kept/snapped replays (not the extrapolation
+path's); the prederr ring header records the settings. Server simulation, runs and evidence untouched. Review: round 1
+-- at the first draft's 0.25 / 1.0 a slow error (the wire-rounded velocity a snap takes, an unpredicted slow push) built
+up and popped in one step, and the extrapolation path did not keep (camera alternation at low ping); round 2 clean.
+
+**Measured** (A/B by the cvar in one binary, rig lobby replica, moving, first-draft tolerances): every snapshot agreed
+(10-20 k kept per window, 0 snapped); bhop_canals 150 ms 368/385 -> 429/439 fps (prediction 0.87 -> 0.59 ms), 300 ms
+291/287 -> 385/404 (1.68 -> 0.85 ms); ahop_coast within noise.
+Re-measured at the final 0.03 / 0.5: bhop_canals 300 ms 295 -> 392 / 389 fps (straight / strafing), 9441 of 9448 and
+9995 of 9995 snapshots kept.
+
 ## Patch 1734 - KSF demos get half of a small crawl budget: the slowed cron row's --max 8 had left them none (game surfd/ksfimport.py)
 
 **Problem.** Lex, 23 Nov: KSF demos are not grabbed (surf_insomnia: 221 KSF runs, boards read 7 Nov, 0 replays).
