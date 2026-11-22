@@ -14102,30 +14102,30 @@ done:
 qboolean FS_SteamClientRoot(char *out, size_t outsize)
 {
 #if defined(_WIN32) && !defined(WINRT) && !defined(_XBOX)
-	HKEY key = NULL;
-	DWORD len;
-	char path[MAX_OSPATH];
-	*path = 0;
-	if (RegOpenKeyExA(HKEY_CURRENT_USER, "SOFTWARE\\Valve\\Steam", 0, KEY_QUERY_VALUE, &key) == ERROR_SUCCESS)
+	static const struct {HKEY hive; const wchar_t *value; DWORD extra;} keys[] = {
+		{HKEY_CURRENT_USER, L"SteamPath", 0},
+		{HKEY_LOCAL_MACHINE, L"InstallPath", KEY_WOW64_32KEY},
+	};
+	HKEY key;
+	DWORD len, type;
+	wchar_t wide[MAX_OSPATH];
+	size_t i;
+	for (i = 0; i < countof(keys); i++)
 	{
-		len = sizeof(path) - 1;
-		if (RegQueryValueExA(key, "SteamPath", NULL, NULL, (LPBYTE)path, &len) != ERROR_SUCCESS)
-			*path = 0;
-		path[sizeof(path) - 1] = 0;
+		key = NULL;
+		if (RegOpenKeyExW(keys[i].hive, L"SOFTWARE\\Valve\\Steam", 0, KEY_QUERY_VALUE|keys[i].extra, &key) != ERROR_SUCCESS)
+			continue;
+		len = sizeof(wide) - sizeof(wchar_t);
+		if (RegQueryValueExW(key, keys[i].value, NULL, &type, (LPBYTE)wide, &len) == ERROR_SUCCESS && type == REG_SZ && len)
+		{
+			wide[len / sizeof(wchar_t)] = 0;    //a REG_SZ need not be terminated
+			RegCloseKey(key);
+			narrowen(out, outsize, wide);       //paths are UTF-8 here (Sys_SteamDirsWithFile does the same)
+			return *out != 0;
+		}
 		RegCloseKey(key);
 	}
-	if (!*path && RegOpenKeyExA(HKEY_LOCAL_MACHINE, "SOFTWARE\\Valve\\Steam", 0, KEY_QUERY_VALUE|KEY_WOW64_32KEY, &key) == ERROR_SUCCESS)
-	{
-		len = sizeof(path) - 1;
-		if (RegQueryValueExA(key, "InstallPath", NULL, NULL, (LPBYTE)path, &len) != ERROR_SUCCESS)
-			*path = 0;
-		path[sizeof(path) - 1] = 0;
-		RegCloseKey(key);
-	}
-	if (!*path)
-		return false;
-	Q_strncpyz(out, path, outsize);
-	return true;
+	return false;
 #elif (defined(__linux__) || defined(__unix__) || defined(__apple__)) && !defined(ANDROID)
 	static const char *homes[] = {
 		".steam/steam", ".local/share/Steam", ".steam/root", ".var/app/com.valvesoftware.Steam/.local/share/Steam",

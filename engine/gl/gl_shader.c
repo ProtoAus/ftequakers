@@ -8942,6 +8942,16 @@ void Shader_DefaultSkinShell(parsestate_t *ps, const char *shortname, const void
 		"}\n"
 		);
 }
+//FTESurf Patch 1739: the image flags Shader_Default2D loads a pic with, for code that makes a pic's texture itself
+//(pr_menu.c steam_libraryimage) -- Image_FindTexture matches IF_PREMULTIPLYALPHA, so they must agree.
+qboolean Shader_2DPicPremul(void)
+{
+	return sh_config.progs_supported && qrenderer != QR_DIRECT3D9
+#ifdef HAVE_LEGACY
+			&& !dpcompat_nopremulpics.ival
+#endif
+			;
+}
 void Shader_Default2D(parsestate_t *ps, const char *shortname, const void *genargs)
 {
 	shader_t *s = ps->s;
@@ -8956,11 +8966,7 @@ void Shader_Default2D(parsestate_t *ps, const char *shortname, const void *genar
 	}
 	if (picname == s->name && Shader_ParseShader(ps, "default2d"))
 		return;
-	if (sh_config.progs_supported && qrenderer != QR_DIRECT3D9
-#ifdef HAVE_LEGACY
-			&& !dpcompat_nopremulpics.ival
-#endif
-	)
+	if (Shader_2DPicPremul())
 	{
 		//hexen2 needs premultiplied alpha to avoid looking ugly
 		//but that results in problems where things are drawn with alpha not 0, so scale vertex colour by alpha in the fragment program

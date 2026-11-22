@@ -2729,6 +2729,7 @@ static void QCBUILTIN PF_m_fs_addonstate(pubprogfuncs_t *prinst, struct globalva
   .jpg there, Steam's 32x32 app icon; the older layout's <appid>_icon.jpg) or "logo" (logo.png) into a texture
   named imagename, for drawpic.  1 loaded, 0 not.  Read off the disk, never through the VFS; nothing is shipped.
 */
+vfsfile_t *QDECL VFSOS_Open(const char *osname, const char *mode);	//fs.h
 static qboolean PF_m_ishex(char c)
 {
 	return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
@@ -2753,9 +2754,11 @@ static void QCBUILTIN PF_m_steam_libraryimage(pubprogfuncs_t *prinst, struct glo
 	int appid = G_FLOAT(OFS_PARM1);
 	const char *kind = PR_GetStringOfs(prinst, OFS_PARM2);
 	char root[MAX_OSPATH], dir[MAX_OSPATH], path[MAX_OSPATH], pick[MAX_OSPATH];
-	qofs_t len = 0;
-	qbyte *data = NULL;
+	vfsfile_t *f;
+	qofs_t len;
+	qbyte *data;
 	texid_t tid;
+	unsigned int flags;
 	G_FLOAT(OFS_RETURN) = 0;
 	if (!imagename || !*imagename || strlen(imagename) >= MAX_QPATH || appid <= 0 || appid > 99999999 || !kind)
 		return;
@@ -2775,28 +2778,38 @@ static void QCBUILTIN PF_m_steam_libraryimage(pubprogfuncs_t *prinst, struct glo
 	}
 	else
 		return;
-	data = FS_MallocFile(path, FS_SYSTEM, &len);
-	if (!data)
+	f = VFSOS_Open(path, "rb");     //the size is checked before anything is read
+	if (!f)
 		return;
+	len = VFS_GETLEN(f);
 	if (len <= 0 || len > 8*1024*1024)
 	{
+		VFS_CLOSE(f);
+		return;
+	}
+	data = BZ_Malloc(len);
+	if (VFS_READ(f, data, len) != len)
+	{
+		VFS_CLOSE(f);
 		BZ_Free(data);
 		return;
 	}
+	VFS_CLOSE(f);
 	//the flags Shader_Default2D asks for, so drawpic's lookup (Image_FindTexture matches CLAMP and PREMULTIPLYALPHA)
-	//finds this texture, whether the pic was drawn before or after
-	tid = Image_FindTexture(imagename, NULL, IF_PREMULTIPLYALPHA|IF_UIPIC|IF_NOPICMIP|IF_NOMIPMAP|IF_CLAMP|IF_HIGHPRIORITY);
+	//finds this texture whether the pic was drawn before or after; NOPURGE, or a map load's Image_Purge would unload
+	//an icon no row has drawn yet, and drawpic would then look for it in the VFS
+	flags = IF_UIPIC|IF_NOPICMIP|IF_NOMIPMAP|IF_CLAMP|IF_HIGHPRIORITY|IF_NOPURGE | (Shader_2DPicPremul()?IF_PREMULTIPLYALPHA:0);
+	tid = Image_FindTexture(imagename, NULL, flags);
 	if (!TEXVALID(tid))
-		tid = Image_CreateTexture(imagename, NULL, IF_PREMULTIPLYALPHA|IF_UIPIC|IF_NOPICMIP|IF_NOMIPMAP|IF_CLAMP|IF_HIGHPRIORITY);
+		tid = Image_CreateTexture(imagename, NULL, flags);
 	if (!TEXVALID(tid))
 	{
 		BZ_Free(data);
 		return;
 	}
-	if (Image_LoadTextureFromMemory(tid, tid->flags, tid->ident, imagename, data, len))	//it frees data on success
-		G_FLOAT(OFS_RETURN) = 1;
-	else
-		BZ_Free(data);
+	tid->flags |= IF_NOPURGE;
+	//Image_LoadMipsFromMemory frees data whether or not it decodes
+	G_FLOAT(OFS_RETURN) = Image_LoadTextureFromMemory(tid, tid->flags, tid->ident, imagename, data, len) ? 1 : 0;
 }
 
 qboolean CL_FriendsSign(const char *nonce, const char *op, const char *who, char *out, size_t outlen);

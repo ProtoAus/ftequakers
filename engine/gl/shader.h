@@ -916,6 +916,7 @@ typedef struct
 	qboolean showbatches;	//print batches... cleared at end of video frame.
 } sh_config_t;
 extern sh_config_t sh_config;
+qboolean Shader_2DPicPremul(void);	//FTESurf Patch 1739
 #endif
 
 enum
