@@ -3055,6 +3055,464 @@ static media_encoder_funcs_t capture_raw =
 	capture_raw_end
 };
 #endif
+
+/*FTESurf Patch 1747: the ffmpeg program as an encoder. Frames go raw to its stdin (no shell: an argument vector),
+  audio to a raw file beside the output; at the end a thread waits for it and muxes the two (-c:v copy, AAC).
+  Everything it is told is numeric or from a fixed list: capture_outwidth/height (scaled, lanczos -- render
+  larger for supersampling), capture_blurframes (tmix: subframes merged per output frame, a shutter),
+  capture_outrate (fps: capturerate is the subframe rate when blurring), capture_codec and capture_crf.*/
+cvar_t capturefixed = CVARD("capturefixed", "0", "1: capture steps the game (and a listen server) by exactly 1/capturerate per frame outside demos too, and capturedemowidth/height render it offscreen. For video of replays.");
+cvar_t capture_outwidth = CVARD("capture_outwidth", "0", "ffmpeg driver: scale frames to this width (0 = as rendered). Render larger (capturedemowidth) to supersample.");
+cvar_t capture_outheight = CVARD("capture_outheight", "0", "ffmpeg driver: scale frames to this height (0 = as rendered).");
+cvar_t capture_outrate = CVARD("capture_outrate", "0", "ffmpeg driver: the video's frame rate when capturerate is higher (motion blur subframes); 0 = capturerate.");
+cvar_t capture_blurframes = CVARD("capture_blurframes", "0", "ffmpeg driver: subframes averaged into each output frame (1 or 0 = no motion blur).");
+cvar_t capture_codec = CVARD("capture_codec", "h264", "ffmpeg driver: h264, h264_nvenc, hevc, hevc_nvenc or av1.");
+cvar_t capture_crf = CVARD("capture_crf", "16", "ffmpeg driver: quality, lower is better (x264/x265 crf, nvenc cq).");
+cvar_t capture_ffmpeg = CVARFD("capture_ffmpeg", "", CVAR_NOSET, "The ffmpeg program the ffmpeg capture driver found (empty: none, so it is unavailable).");
+cvar_t capture_ffmpeg_last = CVARFD("capture_ffmpeg_last", "", CVAR_NOSET, "The ffmpeg driver's last result: encoding <file>, saved <file> or failed <why>.");
+
+static qboolean FF_Exists(const char *path);
+static void Media_FFmpegFind(void)
+{
+	char path[MAX_OSPATH];
+	const char *p, *sep;
+#ifdef _WIN32
+	const char *exe = "ffmpeg.exe";
+	const char delim = ';';
+#else
+	const char *exe = "ffmpeg";
+	const char delim = ':';
+#endif
+	Q_snprintfz(path, sizeof(path), "%s%s", com_gamepath, exe);
+	if (FF_Exists(path))
+	{
+		Cvar_ForceSet(&capture_ffmpeg, path);
+		return;
+	}
+	for (p = getenv("PATH"); p && *p; p = sep?sep+1:NULL)
+	{
+		sep = strchr(p, delim);
+		Q_snprintfz(path, sizeof(path), "%.*s/%s", sep?(int)(sep-p):(int)strlen(p), p, exe);
+		if (FF_Exists(path))
+		{
+			Cvar_ForceSet(&capture_ffmpeg, path);
+			return;
+		}
+		if (!sep)
+			break;
+	}
+	Cvar_ForceSet(&capture_ffmpeg, "");
+}
+
+#ifdef _WIN32
+typedef HANDLE ffpid_t;
+typedef HANDLE ffpipe_t;
+#define FF_NOPIPE NULL
+static void FF_Quote(char *out, size_t outsize, const char *arg)
+{	//one argument for CreateProcess' parser: quoted when it has a space (no argument here has a quote in it). No va(): threads.
+	qboolean q = !!strchr(arg, ' ');
+	if (q) Q_strncatz(out, "\"", outsize);
+	Q_strncatz(out, arg, outsize);
+	Q_strncatz(out, q?"\" ":" ", outsize);
+}
+static qboolean FF_Exists(const char *path)
+{
+	wchar_t w[MAX_OSPATH];
+	DWORD a;
+	if (!MultiByteToWideChar(CP_UTF8, 0, path, -1, w, countof(w)))
+		return false;
+	a = GetFileAttributesW(w);
+	return a != INVALID_FILE_ATTRIBUTES && !(a & FILE_ATTRIBUTE_DIRECTORY);
+}
+static void FF_Remove(const char *path)
+{
+	wchar_t w[MAX_OSPATH];
+	if (MultiByteToWideChar(CP_UTF8, 0, path, -1, w, countof(w)))
+		DeleteFileW(w);
+}
+static qboolean FF_Spawn(const char **argv, ffpid_t *pid, ffpipe_t *in)
+{
+	char cmd[8192];
+	wchar_t *wcmd;
+	SECURITY_ATTRIBUTES sa = {sizeof(sa), NULL, TRUE};
+	STARTUPINFOW si;
+	PROCESS_INFORMATION pi;
+	HANDLE rd = NULL, wr = NULL;
+	int i;
+	*cmd = 0;
+	for (i = 0; argv[i]; i++)
+		FF_Quote(cmd, sizeof(cmd), argv[i]);
+	wcmd = malloc(sizeof(*wcmd)*8192);
+	if (!wcmd || !MultiByteToWideChar(CP_UTF8, 0, cmd, -1, wcmd, 8192) || (in && !CreatePipe(&rd, &wr, &sa, 1<<20)))
+	{
+		free(wcmd);
+		return false;
+	}
+	if (in)
+		SetHandleInformation(wr, HANDLE_FLAG_INHERIT, 0);
+	memset(&si, 0, sizeof(si));
+	si.cb = sizeof(si);
+	si.dwFlags = STARTF_USESTDHANDLES;
+	si.hStdInput = in?rd:GetStdHandle(STD_INPUT_HANDLE);
+	si.hStdOutput = GetStdHandle(STD_OUTPUT_HANDLE);
+	si.hStdError = GetStdHandle(STD_ERROR_HANDLE);
+	if (!CreateProcessW(NULL, wcmd, NULL, NULL, TRUE, CREATE_NO_WINDOW, NULL, NULL, &si, &pi))
+	{
+		if (in) {CloseHandle(rd); CloseHandle(wr);}
+		free(wcmd);
+		return false;
+	}
+	free(wcmd);
+	CloseHandle(pi.hThread);
+	if (in) {CloseHandle(rd); *in = wr;}
+	*pid = pi.hProcess;
+	return true;
+}
+static qboolean FF_Write(ffpipe_t p, const void *data, size_t len)
+{
+	DWORD w;
+	while (len)
+	{
+		if (!WriteFile(p, data, len > (1u<<30)?(1u<<30):(DWORD)len, &w, NULL) || !w)
+			return false;
+		data = (const char*)data + w;
+		len -= w;
+	}
+	return true;
+}
+static void FF_Close(ffpipe_t p) {CloseHandle(p);}
+static int FF_Wait(ffpid_t pid)
+{
+	DWORD code = 1;
+	WaitForSingleObject(pid, INFINITE);
+	GetExitCodeProcess(pid, &code);
+	CloseHandle(pid);
+	return code;
+}
+#else
+#include <spawn.h>
+#include <sys/wait.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <errno.h>
+extern char **environ;
+typedef pid_t ffpid_t;
+typedef int ffpipe_t;
+#define FF_NOPIPE -1
+static qboolean FF_Spawn(const char **argv, ffpid_t *pid, ffpipe_t *in)
+{
+	int fds[2] = {-1, -1};
+	posix_spawn_file_actions_t fa;
+	qboolean ok;
+	if (in && pipe(fds) < 0)
+		return false;
+	posix_spawn_file_actions_init(&fa);
+	if (in)
+	{
+		posix_spawn_file_actions_adddup2(&fa, fds[0], 0);
+		posix_spawn_file_actions_addclose(&fa, fds[0]);
+		posix_spawn_file_actions_addclose(&fa, fds[1]);
+	}
+	else
+		posix_spawn_file_actions_addopen(&fa, 0, "/dev/null", O_RDONLY, 0);
+	ok = !posix_spawn(pid, argv[0], &fa, NULL, (char *const*)argv, environ);
+	posix_spawn_file_actions_destroy(&fa);
+	if (in)
+	{
+		close(fds[0]);
+		if (!ok)
+			close(fds[1]);
+		else
+		{
+			fcntl(fds[1], F_SETFD, FD_CLOEXEC);
+			*in = fds[1];
+		}
+	}
+	return ok;
+}
+static qboolean FF_Write(ffpipe_t p, const void *data, size_t len)
+{
+	while (len)
+	{
+		ssize_t w = write(p, data, len);
+		if (w < 0 && errno == EINTR)
+			continue;
+		if (w <= 0)
+			return false;
+		data = (const char*)data + w;
+		len -= w;
+	}
+	return true;
+}
+static void FF_Close(ffpipe_t p) {close(p);}
+static qboolean FF_Exists(const char *path) {return access(path, X_OK) == 0;}
+static void FF_Remove(const char *path) {remove(path);}
+static int FF_Wait(ffpid_t pid)
+{
+	int status = 0;
+	while (waitpid(pid, &status, 0) < 0 && errno == EINTR)
+		;
+	return WIFEXITED(status)?WEXITSTATUS(status):1;
+}
+#endif
+
+struct capture_ffmpeg_ctx
+{
+	char out[MAX_OSPATH], tmpvideo[MAX_OSPATH], tmpaudio[MAX_OSPATH], ffmpeg[MAX_OSPATH];
+	int rate, outrate, blur, outw, outh, crf, frames;
+	char codec[16];
+	int sndkhz, sndchannels, sndbits;
+	vfsfile_t *audio;
+	qofs_t audiobytes;
+	qboolean started, failed;
+	ffpid_t pid;
+	ffpipe_t pipe;
+	enum uploadfmt fmt;
+	int width, height;
+	qboolean flip;
+};
+static void Media_FFmpegReport(void *ctx, void *data, size_t a, size_t b)
+{
+	Cvar_ForceSet(&capture_ffmpeg_last, data);
+	Con_Printf("capture: %s\n", (char*)data);
+	free(data);
+}
+static void *QDECL capture_ffmpeg_begin (char *streamname, int videorate, int width, int height, int *sndkhz, int *sndchannels, int *sndbits)
+{
+	struct capture_ffmpeg_ctx *ctx;
+	char name[MAX_QPATH];
+	if (!*capture_ffmpeg.string)
+	{
+		Con_Printf("capture: ffmpeg was not found (install it, or put ffmpeg beside the game)\n");
+		return NULL;
+	}
+	ctx = calloc(1, sizeof(*ctx));	//freed on the finishing thread
+	Q_strncpyz(ctx->ffmpeg, capture_ffmpeg.string, sizeof(ctx->ffmpeg));
+	Q_strncpyz(name, streamname, sizeof(name));
+	if (!FS_SystemPath(name, FS_GAMEONLY, ctx->out, sizeof(ctx->out)) || !*COM_SkipPath(ctx->out))
+	{	//a file, not raw's frame folder (no FS_FixPath: it would add a slash)
+		free(ctx);
+		return NULL;
+	}
+	FS_CreatePath(ctx->out, FS_SYSTEM);	//its folders, up to the last slash
+	Q_snprintfz(ctx->tmpvideo, sizeof(ctx->tmpvideo), "%s.video.mkv", ctx->out);
+	Q_snprintfz(ctx->tmpaudio, sizeof(ctx->tmpaudio), "%s.audio.raw", ctx->out);
+	ctx->rate = max(1, videorate);
+	ctx->outrate = bound(0, capture_outrate.ival, ctx->rate);
+	ctx->blur = bound(0, capture_blurframes.ival, 64);
+	ctx->outw = bound(0, capture_outwidth.ival, 16384) & ~1;
+	ctx->outh = bound(0, capture_outheight.ival, 16384) & ~1;
+	ctx->crf = bound(0, capture_crf.ival, 51);
+	Q_strncpyz(ctx->codec, capture_codec.string, sizeof(ctx->codec));
+	ctx->pipe = FF_NOPIPE;
+	if (*sndkhz)
+	{
+		*sndbits = 16;
+		*sndchannels = bound(1, *sndchannels, 2);
+		ctx->audio = FS_OpenVFS(ctx->tmpaudio, "wb", FS_SYSTEM);
+	}
+	if (ctx->audio)
+	{
+		ctx->sndkhz = *sndkhz;
+		ctx->sndchannels = *sndchannels;
+		ctx->sndbits = *sndbits;
+	}
+	else
+		*sndkhz = *sndchannels = *sndbits = 0;
+	Cvar_ForceSet(&capture_ffmpeg_last, va("encoding %s", name));
+	return ctx;
+}
+static qboolean capture_ffmpeg_start(struct capture_ffmpeg_ctx *ctx, int stride, int width, int height, enum uploadfmt fmt)
+{
+	const char *argv[64], *pixfmt;
+	char size[32], rate[16], crf[8], vf[512];
+	int n = 0, ow = ctx->outw, oh = ctx->outh;
+	switch(fmt)
+	{
+	case TF_BGR24:	pixfmt = "bgr24"; break;
+	case TF_RGB24:	pixfmt = "rgb24"; break;
+	case TF_BGRA32:	pixfmt = "bgra"; break;
+	case TF_RGBA32:	pixfmt = "rgba"; break;
+	case TF_BGRX32:	pixfmt = "bgr0"; break;
+	case TF_RGBX32:	pixfmt = "rgb0"; break;
+	default:
+		return false;
+	}
+	ctx->fmt = fmt;
+	ctx->width = width;
+	ctx->height = height;
+	ctx->flip = stride < 0;
+	if (!ow || !oh)
+	{
+		ow = width & ~1;
+		oh = height & ~1;
+	}
+	*vf = 0;
+	if (ctx->flip)
+		Q_strncatz(vf, "vflip,", sizeof(vf));
+	if (ow != width || oh != height)
+		Q_strncatz(vf, va("scale=%i:%i:flags=lanczos,", ow, oh), sizeof(vf));
+	if (ctx->blur > 1)
+		Q_strncatz(vf, va("tmix=frames=%i,", ctx->blur), sizeof(vf));
+	if (ctx->outrate && ctx->outrate < ctx->rate)
+		Q_strncatz(vf, va("fps=%i,", ctx->outrate), sizeof(vf));
+	Q_strncatz(vf, "format=yuv420p", sizeof(vf));
+	Q_snprintfz(size, sizeof(size), "%ix%i", width, height);
+	Q_snprintfz(rate, sizeof(rate), "%i", ctx->rate);
+	Q_snprintfz(crf, sizeof(crf), "%i", ctx->crf);
+	argv[n++] = ctx->ffmpeg;
+	argv[n++] = "-hide_banner"; argv[n++] = "-loglevel"; argv[n++] = "error"; argv[n++] = "-y";
+	argv[n++] = "-f"; argv[n++] = "rawvideo"; argv[n++] = "-pix_fmt"; argv[n++] = pixfmt;
+	argv[n++] = "-s"; argv[n++] = size; argv[n++] = "-r"; argv[n++] = rate; argv[n++] = "-i"; argv[n++] = "-";
+	argv[n++] = "-vf"; argv[n++] = vf;
+	if (!strcmp(ctx->codec, "h264_nvenc") || !strcmp(ctx->codec, "hevc_nvenc"))
+	{
+		argv[n++] = "-c:v"; argv[n++] = !strcmp(ctx->codec, "h264_nvenc")?"h264_nvenc":"hevc_nvenc";
+		argv[n++] = "-preset"; argv[n++] = "p7"; argv[n++] = "-rc"; argv[n++] = "vbr"; argv[n++] = "-cq"; argv[n++] = crf;
+		argv[n++] = "-b:v"; argv[n++] = "0";
+	}
+	else if (!strcmp(ctx->codec, "hevc"))
+	{
+		argv[n++] = "-c:v"; argv[n++] = "libx265"; argv[n++] = "-preset"; argv[n++] = "medium"; argv[n++] = "-crf"; argv[n++] = crf;
+		argv[n++] = "-tag:v"; argv[n++] = "hvc1";
+	}
+	else if (!strcmp(ctx->codec, "av1"))
+	{
+		argv[n++] = "-c:v"; argv[n++] = "libsvtav1"; argv[n++] = "-preset"; argv[n++] = "6"; argv[n++] = "-crf"; argv[n++] = crf;
+	}
+	else
+	{
+		argv[n++] = "-c:v"; argv[n++] = "libx264"; argv[n++] = "-preset"; argv[n++] = "medium"; argv[n++] = "-crf"; argv[n++] = crf;
+	}
+	argv[n++] = ctx->tmpvideo;
+	argv[n] = NULL;
+	if (!FF_Spawn(argv, &ctx->pid, &ctx->pipe))
+	{
+		Con_Printf("capture: could not start %s\n", ctx->ffmpeg);
+		return false;
+	}
+	Con_Printf("capture: ffmpeg %s %ix%i -> %ix%i, %i fps%s, %s\n", pixfmt, width, height, ow, oh,
+		(ctx->outrate && ctx->outrate < ctx->rate)?ctx->outrate:ctx->rate,
+		(ctx->blur > 1)?va(" (%i subframes a frame, %i blended)", ctx->rate/max(1,ctx->outrate), ctx->blur):"", ctx->codec);
+	return true;
+}
+static void QDECL capture_ffmpeg_video (void *vctx, int frame, void *data, int stride, int width, int height, enum uploadfmt fmt)
+{
+	struct capture_ffmpeg_ctx *ctx = vctx;
+	int bpp = (fmt == TF_BGR24 || fmt == TF_RGB24)?3:4;
+	int y, rowbytes = width*bpp;
+	const qbyte *row;
+	if (ctx->failed)
+		return;
+	if (!ctx->started)
+	{
+		ctx->started = true;
+		if (!capture_ffmpeg_start(ctx, stride, width, height, fmt))
+		{
+			ctx->failed = true;
+			return;
+		}
+	}
+	if (width != ctx->width || height != ctx->height || fmt != ctx->fmt || (stride < 0) != ctx->flip)
+	{
+		Con_Printf("capture: the frame size changed mid-video (%ix%i): stopped\n", width, height);
+		ctx->failed = true;
+		return;
+	}
+	//the buffer's own order (SCR_ScreenShot's convention: a negative stride is bottom-up from the buffer's start);
+	//ffmpeg's vflip puts a bottom-up one right
+	if (abs(stride) == rowbytes)
+		ctx->failed = !FF_Write(ctx->pipe, data, (size_t)rowbytes*height);
+	else for (y = 0, row = data; y < height && !ctx->failed; y++, row += abs(stride))
+		ctx->failed = !FF_Write(ctx->pipe, row, rowbytes);
+	if (ctx->failed)
+		Con_Printf("capture: ffmpeg stopped taking frames (see its messages on the terminal)\n");
+	else
+		ctx->frames = frame+1;
+}
+static void QDECL capture_ffmpeg_audio (void *vctx, void *data, int bytes)
+{
+	struct capture_ffmpeg_ctx *ctx = vctx;
+	if (ctx->audio && VFS_WRITE(ctx->audio, data, bytes) == bytes)
+		ctx->audiobytes += bytes;
+}
+static int capture_ffmpeg_finish(void *vctx)
+{	//on its own thread: the encoder may take a while to drain a big video
+	struct capture_ffmpeg_ctx *ctx = vctx;
+	const char *argv[40];
+	char khz[16], ch[8], result[MAX_OSPATH+128];
+	int n = 0, code = 1;
+	if (ctx->started && ctx->pipe != FF_NOPIPE)
+	{
+		FF_Close(ctx->pipe);
+		code = FF_Wait(ctx->pid);
+	}
+	if (!ctx->started || code)
+		Q_snprintfz(result, sizeof(result), "failed %s (ffmpeg exit %i after %i frames)", COM_SkipPath(ctx->out), code, ctx->frames);
+	else
+	{
+		argv[n++] = ctx->ffmpeg;
+		argv[n++] = "-hide_banner"; argv[n++] = "-loglevel"; argv[n++] = "error"; argv[n++] = "-y";
+		argv[n++] = "-i"; argv[n++] = ctx->tmpvideo;
+		if (ctx->audiobytes)
+		{
+			Q_snprintfz(khz, sizeof(khz), "%i", ctx->sndkhz);
+			Q_snprintfz(ch, sizeof(ch), "%i", ctx->sndchannels);
+			argv[n++] = "-f"; argv[n++] = "s16le"; argv[n++] = "-ar"; argv[n++] = khz; argv[n++] = "-ac"; argv[n++] = ch;
+			argv[n++] = "-i"; argv[n++] = ctx->tmpaudio;
+			argv[n++] = "-map"; argv[n++] = "0:v"; argv[n++] = "-map"; argv[n++] = "1:a";
+			argv[n++] = "-c:a"; argv[n++] = "aac"; argv[n++] = "-b:a"; argv[n++] = "192k"; argv[n++] = "-shortest";
+		}
+		argv[n++] = "-c:v"; argv[n++] = "copy";
+		if (!Q_strcasecmp(COM_GetFileExtension(ctx->out, NULL), ".mp4") || !Q_strcasecmp(COM_GetFileExtension(ctx->out, NULL), ".mov"))
+		{
+			argv[n++] = "-movflags"; argv[n++] = "+faststart";
+		}
+		argv[n++] = ctx->out;
+		argv[n] = NULL;
+		code = 1;
+		{
+			ffpid_t pid;
+			if (FF_Spawn(argv, &pid, NULL))
+				code = FF_Wait(pid);
+		}
+		if (code)
+			Q_snprintfz(result, sizeof(result), "failed %s (mux exit %i)", COM_SkipPath(ctx->out), code);
+		else
+			Q_snprintfz(result, sizeof(result), "saved %s (%i frames)", COM_SkipPath(ctx->out), ctx->frames);
+		if (!code)
+			FF_Remove(ctx->tmpvideo);
+	}
+	FF_Remove(ctx->tmpaudio);
+	COM_AddWork(WG_MAIN, Media_FFmpegReport, NULL, strdup(result), 0, 0);
+	free(ctx);
+	return 0;
+}
+static void QDECL capture_ffmpeg_end (void *vctx)
+{
+	struct capture_ffmpeg_ctx *ctx = vctx;
+	void *thread;
+	if (ctx->audio)
+		VFS_CLOSE(ctx->audio);
+	ctx->audio = NULL;
+	Con_Printf("capture: %i frames; finishing the video...\n", ctx->frames);
+	thread = Sys_CreateThread("ffmpegfinish", capture_ffmpeg_finish, ctx, THREADP_NORMAL, 0);
+	if (thread)
+		Sys_DetachThread(thread);
+	else
+		capture_ffmpeg_finish(ctx);
+}
+static media_encoder_funcs_t capture_ffmpeg_funcs =
+{
+	sizeof(media_encoder_funcs_t),
+	"ffmpeg",
+	"Pipes frames to the ffmpeg program (found on PATH or beside the game) and muxes the game's audio in. See capture_*.",
+	"mp4;mkv;mov;webm",
+	capture_ffmpeg_begin,
+	capture_ffmpeg_video,
+	capture_ffmpeg_audio,
+	capture_ffmpeg_end
+};
 #if defined(HAVE_API_VFW)
 
 /*screenshot capture*/
@@ -3410,7 +3868,7 @@ qboolean Media_PausedDemo (qboolean fortiming)
 
 	//capturedemo doesn't record any frames when the console is visible
 	//but that's okay, as we don't load any demo frames either.
-	if ((cls.demoplayback && Media_Capturing()))
+	if (((cls.demoplayback || capturefixed.ival) && Media_Capturing()))	//FTESurf Patch 1747: and a fixed live one
 		if (Key_Dest_Has(~kdm_game) || scr_con_current > 0 || (!fortiming&&!cl.validsequence))
 			return true;
 
@@ -3418,8 +3876,8 @@ qboolean Media_PausedDemo (qboolean fortiming)
 }
 
 static qboolean Media_ForceTimeInterval(void)
-{
-	return (cls.demoplayback && Media_Capturing() && captureframeinterval>0 && !Media_PausedDemo(false));
+{	//FTESurf Patch 1747: capturefixed forces it outside demos (a replay is not one)
+	return ((cls.demoplayback || capturefixed.ival) && Media_Capturing() && captureframeinterval>0 && !Media_PausedDemo(false));
 }
 
 double Media_TweekCaptureFrameTime(double oldtime, double time)
@@ -3956,7 +4414,10 @@ static void Media_RecordFilm (char *recordingname, qboolean demo)
 	captureframeinterval = 1/capturerate.value;
 	if (captureframeinterval < 0.001)
 		captureframeinterval = 0.001;	//no more than 1000 images per second.
-	capturelastvideotime = realtime = 0;
+	if (demo)
+		capturelastvideotime = realtime = 0;
+	else	//FTESurf Patch 1747: a live game's clock is not reset under it
+		capturelastvideotime = realtime;
 
 	Con_ClearNotify();
 
@@ -4020,7 +4481,7 @@ static void Media_RecordFilm (char *recordingname, qboolean demo)
 
 	vid.fbpwidth = vid.pixelwidth;
 	vid.fbpheight = vid.pixelheight;
-	if (demo && capturewidth.ival && captureheight.ival)
+	if ((demo || capturefixed.ival) && capturewidth.ival && captureheight.ival)	//FTESurf Patch 1747: fixed live too
 	{
 #ifdef GLQUAKE
 		if (qrenderer == QR_OPENGL && gl_config.ext_framebuffer_objects)
@@ -5196,6 +5657,7 @@ void Media_Init(void)
 		Media_RegisterEncoder(NULL, &capture_null);
 	#endif
 	Media_RegisterEncoder(NULL, &capture_raw);
+	Media_RegisterEncoder(NULL, &capture_ffmpeg_funcs);	//FTESurf Patch 1747
 	#if defined(HAVE_API_VFW)
 		Media_RegisterEncoder(NULL, &capture_avi);
 	#endif
@@ -5215,6 +5677,16 @@ void Media_Init(void)
 	Cvar_Register(&capturethrottlesize,		"Video Capture Controls");
 	Cvar_Register(&capturesoundbits,		"Video Capture Controls");
 	Cvar_Register(&capturesoundchannels,	"Video Capture Controls");
+	Cvar_Register(&capturefixed,			"Video Capture Controls");	//FTESurf Patch 1747
+	Cvar_Register(&capture_outwidth,		"Video Capture Controls");
+	Cvar_Register(&capture_outheight,		"Video Capture Controls");
+	Cvar_Register(&capture_outrate,			"Video Capture Controls");
+	Cvar_Register(&capture_blurframes,		"Video Capture Controls");
+	Cvar_Register(&capture_codec,			"Video Capture Controls");
+	Cvar_Register(&capture_crf,				"Video Capture Controls");
+	Cvar_Register(&capture_ffmpeg,			"Video Capture Controls");
+	Cvar_Register(&capture_ffmpeg_last,		"Video Capture Controls");
+	Media_FFmpegFind();
 #endif
 
 #ifdef HAVE_MEDIA_DECODER

@@ -7929,6 +7929,8 @@ double Host_Frame (double time)
 	if (sv.state)
 	{
 		float ohft = host_frametime;
+		extern double sv_capturestep;
+		sv_capturestep = (Media_Capturing() == 2 && !cls.demoplayback)?time:-1;	//FTESurf Patch 1747
 		RSpeedRemark();
 		SV_Frame();
 		RSpeedEnd(RSPEED_SERVER);

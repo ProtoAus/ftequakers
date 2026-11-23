@@ -5607,6 +5607,7 @@ SV_Frame
 
 ==================
 */
+double sv_capturestep = -1;	//FTESurf Patch 1747: set by Host_Frame for the next SV_Frame (cl_main.c)
 float SV_Frame (void)
 {
 	extern cvar_t pr_imitatemvdsv;
@@ -5709,6 +5710,12 @@ float SV_Frame (void)
 	{
 		oldtime = sv.time;
 		sv.time = (Sys_DoubleTime() - sv.starttime)*sv.gamespeed;
+		if (!isDedicated && sv_capturestep >= 0)
+		{	//FTESurf Patch 1747: a fixed-step capture moves this listen server by the video frame, not the wall clock
+			sv.time = oldtime + sv_capturestep*sv.gamespeed;
+			sv.starttime = Sys_DoubleTime() - sv.time/sv.gamespeed;
+			sv_capturestep = -1;
+		}
 		timedelta = sv.time - oldtime;
 		if (sv.time < oldtime)
 		{
