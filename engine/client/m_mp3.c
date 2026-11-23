@@ -3198,7 +3198,18 @@ static int FF_Wait(ffpid_t pid)
 #include <fcntl.h>
 #include <errno.h>
 extern char **environ;
+#ifdef __linux__
 int pipe2(int pipefd[2], int flags);	//glibc has it; its prototype wants _GNU_SOURCE before quakedef.h
+#else
+static int pipe2(int pipefd[2], int flags)	//no pipe2: close-on-exec just after (a narrow window)
+{
+	if (pipe(pipefd) < 0)
+		return -1;
+	fcntl(pipefd[0], F_SETFD, FD_CLOEXEC);
+	fcntl(pipefd[1], F_SETFD, FD_CLOEXEC);
+	return 0;
+}
+#endif
 /*sys_linux.c's SigChld reaps every child (wait3), so waitpid may find none and a status of 0 would read as success.
   ffmpeg runs under sh, which writes its exit code to fd 3: a pipe only this process reads.*/
 typedef struct {pid_t pid; int status;} ffpid_t;
@@ -3221,11 +3232,11 @@ static qboolean FF_Spawn(const char **argv, ffpid_t *pid, ffpipe_t *in)
 		return false;
 	}
 	posix_spawn_file_actions_init(&fa);
-	posix_spawn_file_actions_adddup2(&fa, st[1], 3);
-	if (in)
+	if (in)	//stdin first: fds[0] may itself be 3 (a game started with fds closed); st[1] is never 0
 		posix_spawn_file_actions_adddup2(&fa, fds[0], 0);
 	else
 		posix_spawn_file_actions_addopen(&fa, 0, "/dev/null", O_RDONLY, 0);
+	posix_spawn_file_actions_adddup2(&fa, st[1], 3);
 	ok = !posix_spawn(&pid->pid, sh[0], &fa, NULL, (char *const*)sh, environ);
 	posix_spawn_file_actions_destroy(&fa);
 	close(st[1]);
@@ -3263,7 +3274,9 @@ static int FF_Wait(ffpid_t pid)
 {	//the code sh wrote; none (sh killed, or the pipe broke) is a failure, never success
 	char buf[16];
 	int got = 0, r, status;
-	while (got < (int)sizeof(buf)-1 && ((r = read(pid.status, buf+got, sizeof(buf)-1-got)) > 0 || (r < 0 && errno == EINTR)))
+	//to the newline sh writes, not to EOF: a fork elsewhere in the game (no exec) may hold the write end for ever
+	while (got < (int)sizeof(buf)-1 && !memchr(buf, '\n', got)
+		&& ((r = read(pid.status, buf+got, sizeof(buf)-1-got)) > 0 || (r < 0 && errno == EINTR)))
 		if (r > 0)
 			got += r;
 	close(pid.status);
@@ -3432,6 +3445,7 @@ static void QDECL capture_ffmpeg_video (void *vctx, int frame, void *data, int s
 		if (!capture_ffmpeg_start(ctx, stride, width, height, fmt))
 		{
 			ctx->failed = true;
+			Cvar_ForceSet(&capture_ffmpeg_last, va("failed %s (ffmpeg would not start)", COM_SkipPath(ctx->out)));
 			return;
 		}
 	}
@@ -3985,11 +3999,11 @@ void Media_RecordFrame (void)
 
 		if (captureframeforce && cls.demoplayback)
 			capturelastvideotime += captureframeinterval;
-		else if (captureframeforce)
+		else if (capturefixed.ival && !cls.demoplayback)
 		{	//FTESurf Patch 1747: a live fixed capture holds: real time runs (nothing recorded) and the forced clock
-			//picks up from it on resume, instead of counting a frame interval for every paused frame
+			//picks up from it on resume, one step on (re-anchored every paused frame, not once)
 			captureframeforce = false;
-			capturelastvideotime = realtime + captureframeinterval;	//the first resumed frame moves one step
+			capturelastvideotime = realtime + captureframeinterval;
 		}
 		if (!capture_held.ival)
 			Cvar_ForceSet(&capture_held, "1");	//CSQC holds a replay on it (cl_vidrec.qc)
@@ -4016,6 +4030,12 @@ void Media_RecordFrame (void)
 	}
 
 	//time for another frame?
+	if (!captureframeforce && capturefixed.ival && !cls.demoplayback)
+	{	//FTESurf Patch 1747: a fixed live capture records only forced frames: the first after a pause is on the wall
+		//clock (the forcing starts next frame), so it is skipped and the forced clock anchored
+		capturelastvideotime = realtime + captureframeinterval;
+		goto skipframe;
+	}
 	if (!captureframeforce)
 	{
 		if (capturelastvideotime > realtime+1)
@@ -4256,7 +4276,7 @@ void Media_InitFakeSoundDevice (int speed, int channels, int samplebits)
 	//this means that the actual sound devices and the fake device will be going at different rates
 	//which really confuses any stream decoding, like music.
 	//so just kill all actual sound devices.
-	if (recordingdemo || capturefixed.ival)
+	if (recordingdemo)
 	{
 		soundcardinfo_t *next;
 		capture_killedcards = true;

@@ -638,8 +638,8 @@ vfsfile_t *FS_GZ_WriteFilter(vfsfile_t *outfile, qboolean autoclosefile, qboolea
 
 
 /*FTESurf Patch 1746: a whole file of `expect` bytes to a gzip stream at level 6 (Z_BEST_COMPRESSION is several times
-  slower on a 300 MB map for a few percent). *progress follows the bytes read. False on a read or write error, or a
-  file that is not `expect` bytes long (it changed while compressed); qofs_t is unsigned, so no -1 return.*/
+  slower on a 300 MB map for a few percent). *progress follows the bytes read. False on a read or write error or a file
+  shorter than `expect` (a longer one is cut at `expect`; the service's hash refuses either). qofs_t is unsigned: no -1.*/
 qboolean FS_GZ_CompressFile(vfsfile_t *in, vfsfile_t *out, qofs_t expect, volatile qofs_t *progress, qofs_t *outlen)
 {
 	z_stream strm;

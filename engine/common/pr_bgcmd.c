@@ -2897,16 +2897,7 @@ static qboolean QC_MenuUploadPath(pubprogfuncs_t *prinst, const char *name)
 #endif
 	return false;
 }
-/*...and what CSQC may not read: the menu's spool of files dropped for an upload (a server's code has no business there)*/
-static qboolean QC_DroppedDenied(pubprogfuncs_t *prinst, const char *name)
-{
-#if defined(CSQC_DAT) && !defined(SERVERONLY)
-	extern world_t csqc_world;
-	if (name && prinst == csqc_world.progs && (!strncmp(name, "dropped/", 8) || !strncmp(name, "data/dropped/", 13)))
-		return true;
-#endif
-	return false;
-}
+
 
 static qboolean QC_TasprojDenied(pubprogfuncs_t *prinst, const char *name, qboolean pattern)
 {
@@ -2918,6 +2909,14 @@ static qboolean QC_TasprojDenied(pubprogfuncs_t *prinst, const char *name, qbool
 		Con_Printf("qcfopen(\"%s\"): csqc may not use data/tasproj/\n", name);
 		return true;
 	}
+	//FTESurf Patch 1746: nor the menu's drop spool, dropped/ (or data/dropped/, which QC_FixFileName makes of it): a
+	//server's code must not read an admin's files or plant ones an upload signs. Every file builtin asks this.
+	s = name;
+	if (prinst == csqc_world.progs && name && QC_TasprojSeg(&s, "dropped", pattern))
+		return true;
+	s = name;
+	if (prinst == csqc_world.progs && name && QC_TasprojSeg(&s, "data", pattern) && QC_TasprojSeg(&s, "dropped", pattern))
+		return true;
 #endif
 	return false;
 }
@@ -2983,8 +2982,6 @@ void QCBUILTIN PF_fopen (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals
 	    && fmode != FRIK_FILE_READ_DELAY && fmode != FRIK_FILE_READSTREAM && QC_CfgChangeDenied(prinst, name))
 		return;
 	if (QC_TasprojDenied(prinst, name, false) || QC_TasprojDenied(prinst, fallbackread, false))
-		return;
-	if (QC_DroppedDenied(prinst, name) || QC_DroppedDenied(prinst, fallbackread))	//FTESurf Patch 1746
 		return;
 #if defined(CSQC_DAT) && !defined(SERVERONLY)
 	//ftesurf (P1102): any VM reads a map table only from the gamedir's own loose files, and
@@ -3052,9 +3049,11 @@ void QCBUILTIN PF_fopen (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals
 		//Loose writable gamedir only: never enter packed/decompression backends or file: URIs.
 		if (!strncmp(name, "file:", 5))
 			break;
-		pf_fopen_files[i].file = FS_OpenVFS(name, "rbn", FS_GAMEONLY);
-		if (!pf_fopen_files[i].file && QC_MenuUploadPath(prinst, fallbackread))
+		//FTESurf Patch 1746: an upload path is the real file, never its data/ twin (which CSQC can write)
+		if (QC_MenuUploadPath(prinst, fallbackread))
 			pf_fopen_files[i].file = FS_OpenVFS(fallbackread, "rbn", FS_GAMEONLY);
+		else
+			pf_fopen_files[i].file = FS_OpenVFS(name, "rbn", FS_GAMEONLY);
 		if (pf_fopen_files[i].file)
 		{
 			G_FLOAT(OFS_RETURN) = i + FIRST_QC_FILE_INDEX;
@@ -6788,9 +6787,10 @@ void QCBUILTIN PF_uri_postfile(pubprogfuncs_t *prinst, struct globalvars_s *pr_g
 	if (strncmp(name, "file:", 5) && QC_FixFileName(name, &name, &fallbackread)
 		&& !QC_TasprojDenied(prinst, name, false) && !QC_TasprojDenied(prinst, fallbackread, false))
 	{
-		file = FS_OpenVFS(name, "rbn", FS_GAMEONLY);
-		if (!file && QC_MenuUploadPath(prinst, fallbackread))
+		if (QC_MenuUploadPath(prinst, fallbackread))	//the real file, never its data/ twin
 			file = FS_OpenVFS(fallbackread, "rbn", FS_GAMEONLY);
+		else
+			file = FS_OpenVFS(name, "rbn", FS_GAMEONLY);
 	}
 	if (!file)
 	{
