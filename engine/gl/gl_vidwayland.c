@@ -1862,6 +1862,9 @@ static void WL_data_device_handle_drop(void *data, struct wl_data_device *device
 	close(fds[0]);
 	WL_DestroyOffer(&w.dnd_offer);
 	buf[len] = 0;
+	if (len == sizeof(buf)-1)	//cut off: its last line is part of a name
+		for (end = buf+len; end > buf && *end != '\n'; end--)
+			*end = 0;
 	for (line = buf; *line; line = end)
 	{
 		end = line + strcspn(line, "\r\n");

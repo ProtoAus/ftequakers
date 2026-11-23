@@ -637,34 +637,37 @@ vfsfile_t *FS_GZ_WriteFilter(vfsfile_t *outfile, qboolean autoclosefile, qboolea
 }
 
 
-/*FTESurf Patch 1746: one whole file to a gzip stream at level 6 (Z_BEST_COMPRESSION is several times slower on a
-  300 MB map for a few percent). *progress follows the bytes read. The compressed length, or -1.*/
-qofs_t FS_GZ_CompressFile(vfsfile_t *in, vfsfile_t *out, volatile qofs_t *progress)
+/*FTESurf Patch 1746: a whole file of `expect` bytes to a gzip stream at level 6 (Z_BEST_COMPRESSION is several times
+  slower on a 300 MB map for a few percent). *progress follows the bytes read. False on a read or write error, or a
+  file that is not `expect` bytes long (it changed while compressed); qofs_t is unsigned, so no -1 return.*/
+qboolean FS_GZ_CompressFile(vfsfile_t *in, vfsfile_t *out, qofs_t expect, volatile qofs_t *progress, qofs_t *outlen)
 {
 	z_stream strm;
 	static const size_t chunk = 256*1024;
 	qbyte *inbuf, *outbuf;
-	qofs_t total = 0;
+	qofs_t total = 0, read = 0;
 	int flush, ret, got;
+	qboolean ok = true;
 
 	if (!ZLIB_LOADED())
-		return -1;
+		return false;
 	memset(&strm, 0, sizeof(strm));
 	if (qdeflateInit2(&strm, 6, Z_DEFLATED, MAX_WBITS|16, 8, Z_DEFAULT_STRATEGY) != Z_OK)
-		return -1;
+		return false;
 	inbuf = BZ_Malloc(chunk*2);
 	outbuf = inbuf + chunk;
 	do
 	{
-		got = VFS_READ(in, inbuf, chunk);
-		if (got < 0)
+		got = (read < expect)?VFS_READ(in, inbuf, (int)min((qofs_t)chunk, expect - read)):0;
+		if (got < 0 || (got == 0 && read < expect))
 		{
-			total = -1;
+			ok = false;	//an error, or the file is shorter than it was
 			break;
 		}
+		read += got;
 		if (progress)
 			*progress += got;
-		flush = (got == 0)?Z_FINISH:Z_NO_FLUSH;
+		flush = (read >= expect)?Z_FINISH:Z_NO_FLUSH;
 		strm.next_in = inbuf;
 		strm.avail_in = got;
 		do
@@ -674,15 +677,16 @@ qofs_t FS_GZ_CompressFile(vfsfile_t *in, vfsfile_t *out, volatile qofs_t *progre
 			ret = qdeflate(&strm, flush);
 			if (ret == Z_STREAM_ERROR || VFS_WRITE(out, outbuf, chunk - strm.avail_out) != (int)(chunk - strm.avail_out))
 			{
-				total = -1;
+				ok = false;
 				break;
 			}
 			total += chunk - strm.avail_out;
 		} while (strm.avail_out == 0);
-	} while (total >= 0 && flush != Z_FINISH);
+	} while (ok && flush != Z_FINISH);
 	qdeflateEnd(&strm);
 	BZ_Free(inbuf);
-	return total;
+	*outlen = total;
+	return ok;
 }
 #endif
 #endif

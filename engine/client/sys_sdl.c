@@ -1725,6 +1725,12 @@ void Sys_WaitOnThread(void *thread)
 {
 	SDL_WaitThread((SDL_Thread *)thread, NULL);
 }
+void Sys_DetachThread(void *thread)	//FTESurf Patch 1746
+{
+#if SDL_VERSION_ATLEAST(2,0,2)
+	SDL_DetachThread((SDL_Thread *)thread);
+#endif
+}
 
 
 /* Mutex calls */

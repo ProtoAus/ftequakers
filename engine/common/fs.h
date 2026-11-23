@@ -142,5 +142,5 @@ vfsfile_t *FS_XZ_DecompressReadFilter(vfsfile_t *srcfile);
 #endif
 #ifdef AVAIL_GZDEC
 vfsfile_t *FS_GZ_WriteFilter(vfsfile_t *outfile, qboolean autoclosefile, qboolean compress);
-qofs_t FS_GZ_CompressFile(vfsfile_t *in, vfsfile_t *out, volatile qofs_t *progress);	//FTESurf Patch 1746
+qboolean FS_GZ_CompressFile(vfsfile_t *in, vfsfile_t *out, qofs_t expect, volatile qofs_t *progress, qofs_t *outlen);	//FTESurf Patch 1746
 #endif

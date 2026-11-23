@@ -2892,6 +2892,18 @@ static qboolean QC_MenuUploadPath(pubprogfuncs_t *prinst, const char *name)
 	if (!strncmp(name, "screenshots/", 12) && !strchr(name+12, '/')
 		&& (!Q_strcasecmp(ext, ".png") || !Q_strcasecmp(ext, ".jpg") || !Q_strcasecmp(ext, ".jpeg") || !Q_strcasecmp(ext, ".tga")))
 		return true;
+	if (!strncmp(name, "dropped/", 8) && !strchr(name+8, '/'))	//pr_menu.c MP_FileDropped's spool
+		return true;
+#endif
+	return false;
+}
+/*...and what CSQC may not read: the menu's spool of files dropped for an upload (a server's code has no business there)*/
+static qboolean QC_DroppedDenied(pubprogfuncs_t *prinst, const char *name)
+{
+#if defined(CSQC_DAT) && !defined(SERVERONLY)
+	extern world_t csqc_world;
+	if (name && prinst == csqc_world.progs && (!strncmp(name, "dropped/", 8) || !strncmp(name, "data/dropped/", 13)))
+		return true;
 #endif
 	return false;
 }
@@ -2971,6 +2983,8 @@ void QCBUILTIN PF_fopen (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals
 	    && fmode != FRIK_FILE_READ_DELAY && fmode != FRIK_FILE_READSTREAM && QC_CfgChangeDenied(prinst, name))
 		return;
 	if (QC_TasprojDenied(prinst, name, false) || QC_TasprojDenied(prinst, fallbackread, false))
+		return;
+	if (QC_DroppedDenied(prinst, name) || QC_DroppedDenied(prinst, fallbackread))	//FTESurf Patch 1746
 		return;
 #if defined(CSQC_DAT) && !defined(SERVERONLY)
 	//ftesurf (P1102): any VM reads a map table only from the gamedir's own loose files, and
@@ -6727,7 +6741,7 @@ void QCBUILTIN PF_uri_get  (pubprogfuncs_t *prinst, struct globalvars_s *pr_glob
 }
 #ifdef WEBCLIENT
 /*FTESurf Patch 1746: uploads the menu can watch (uri_progress), cleared when the reply is queued.*/
-static struct {pubprogfuncs_t *prinst; float id; struct dl_download *dl;} uri_posts[8];
+static struct {pubprogfuncs_t *prinst; int spawncount; float id; struct dl_download *dl;} uri_posts[8];
 static void PR_uri_postfile_callback(struct dl_download *dl)
 {
 	int i;
@@ -6811,6 +6825,7 @@ void QCBUILTIN PF_uri_postfile(pubprogfuncs_t *prinst, struct globalvars_s *pr_g
 	dl->user_sequence = w->spawncount;
 	dl->isquery = true;
 	uri_posts[slot].prinst = prinst;
+	uri_posts[slot].spawncount = w->spawncount;	//a restarted menu does not see the old one's upload
 	uri_posts[slot].id = id;
 	uri_posts[slot].dl = dl;
 #ifdef MULTITHREAD
@@ -6824,13 +6839,14 @@ void QCBUILTIN PF_uri_postfile(pubprogfuncs_t *prinst, struct globalvars_s *pr_g
 void QCBUILTIN PF_uri_progress(pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
 {
 	float id = G_FLOAT(OFS_PARM0);
+	world_t *w = prinst->parms->user;
 	int i;
 	G_VECTOR(OFS_RETURN)[0] = 0;
 	G_VECTOR(OFS_RETURN)[1] = 0;
 	G_VECTOR(OFS_RETURN)[2] = -1;
 #ifdef WEBCLIENT
 	for (i = 0; i < countof(uri_posts); i++)
-		if (uri_posts[i].dl && uri_posts[i].prinst == prinst && uri_posts[i].id == id)
+		if (uri_posts[i].dl && uri_posts[i].prinst == prinst && uri_posts[i].spawncount == w->spawncount && uri_posts[i].id == id)
 		{
 			struct dl_download *dl = uri_posts[i].dl;
 			qofs_t sent = dl->postsent, total = dl->posttotal;

@@ -3923,9 +3923,10 @@ qboolean MP_ConsoleCommand(const char *cmdtext)
 }
 
 
-/*FTESurf Patch 1746: while the menu asks for files (ui_dropfiles nonzero and a Menu_FileDropped function), a map,
-  picture or zone file dropped on the window or picked with sys_openfiledialog is copied to data/dropped/<name>
-  and the menu is told on the next frame, instead of the engine running it. True when taken.*/
+/*FTESurf Patch 1746: while the menu has the keys and asks for files (ui_dropfiles nonzero and a Menu_FileDropped
+  function), a map, picture or zone file dropped on the window or picked with sys_openfiledialog is copied to
+  dropped/<name> -- beside data/, where a server's CSQC cannot write -- and the menu is told on the next frame,
+  instead of the engine running it. True when taken.*/
 #define MP_DROP_MAX ((qofs_t)1<<30)
 typedef struct {char path[MAX_QPATH]; char name[MAX_QPATH];} mp_dropped_t;
 static void MP_FileDropped_Call(int iarg, void *data)
@@ -3955,7 +3956,8 @@ qboolean MP_FileDropped(const char *fname, int nlen, vfsfile_t **file)
 	char buf[65536];
 	int got, i, n;
 
-	if (!menu_world.progs || !want || !want->ival || !PR_FindFunction(menu_world.progs, "Menu_FileDropped", PR_ANY))
+	if (!menu_world.progs || !want || !want->ival || !Key_Dest_Has(kdm_menu)	//a server can set the cvar, not open the menu
+		|| !PR_FindFunction(menu_world.progs, "Menu_FileDropped", PR_ANY))
 		return false;
 	if (nlen <= 0 || nlen >= (int)sizeof(path))
 		return false;
@@ -3996,7 +3998,7 @@ qboolean MP_FileDropped(const char *fname, int nlen, vfsfile_t **file)
 		VFS_CLOSE(in);
 		return true;
 	}
-	Q_snprintfz(d.path, sizeof(d.path), "data/dropped/%s", base);
+	Q_snprintfz(d.path, sizeof(d.path), "dropped/%s", base);
 	Q_strncpyz(d.name, base, sizeof(d.name));
 	FS_CreatePath(d.path, FS_GAMEONLY);
 	out = FS_OpenVFS(d.path, "wb", FS_GAMEONLY);
@@ -4029,11 +4031,12 @@ qboolean MP_FileDropped(const char *fname, int nlen, vfsfile_t **file)
   file chosen arrives as a drop does (Menu_FileDropped). 0 when no picker exists here or one is already open.*/
 static qboolean mp_dialog_open;
 static void MP_FileDialogDone(void *ctx, void *data, size_t a, size_t b)
-{
+{	//to the menu or nowhere: the menu's own button must never run a file (Host_RunFile would)
 	char *path = data;
+	vfsfile_t *none = NULL;
 	mp_dialog_open = false;
-	if (path && *path)
-		Host_RunFile(path, strlen(path), NULL);
+	if (path && *path && !MP_FileDropped(path, strlen(path), &none))
+		Con_Printf("That file is not a map (.bsp), a picture (.png .jpg .tga) or a zone file (.json), or the window closed.\n");
 	free(path);
 }
 #if defined(_WIN32) && !defined(FTE_SDL) && !defined(WINRT)

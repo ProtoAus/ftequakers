@@ -5708,11 +5708,12 @@ float SV_Frame (void)
 
 // decide the simulation time
 	{
+		double prevtime = sv.time;	//oldtime is a float: added to every frame it would drift (P1747 review)
 		oldtime = sv.time;
 		sv.time = (Sys_DoubleTime() - sv.starttime)*sv.gamespeed;
 		if (!isDedicated && sv_capturestep >= 0)
 		{	//FTESurf Patch 1747: a fixed-step capture moves this listen server by the video frame, not the wall clock
-			sv.time = oldtime + sv_capturestep*sv.gamespeed;
+			sv.time = prevtime + sv_capturestep*sv.gamespeed;
 			sv.starttime = Sys_DoubleTime() - sv.time/sv.gamespeed;
 			sv_capturestep = -1;
 		}

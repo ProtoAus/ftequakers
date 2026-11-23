@@ -2931,6 +2931,7 @@ cvar_t capturesoundbits = CVAR("capturesoundbits", "16");
 cvar_t capturemessage = CVAR("capturemessage", "");
 cvar_t capturethrottlesize = CVARD("capturethrottlesize", "0", "If set, capturing will slow down significantly if there is less disk space available than this cvar (in mb). This is useful when recording a stream to (ram)disk while another program is simultaneously consuming frames.");
 qboolean recordingdemo;
+static qboolean capture_killedcards;	//FTESurf Patch 1747: Media_InitFakeSoundDevice shut the real ones
 
 media_encoder_funcs_t *currentcapture_funcs;
 void *currentcapture_ctx;
@@ -3068,6 +3069,7 @@ cvar_t capture_outrate = CVARD("capture_outrate", "0", "ffmpeg driver: the video
 cvar_t capture_blurframes = CVARD("capture_blurframes", "0", "ffmpeg driver: subframes averaged into each output frame (1 or 0 = no motion blur).");
 cvar_t capture_codec = CVARD("capture_codec", "h264", "ffmpeg driver: h264, h264_nvenc, hevc, hevc_nvenc or av1.");
 cvar_t capture_crf = CVARD("capture_crf", "16", "ffmpeg driver: quality, lower is better (x264/x265 crf, nvenc cq).");
+cvar_t capture_held = CVARFD("capture_held", "0", CVAR_NOSET, "1 while a capture is paused (a menu or the console is up): nothing is recorded and a forced clock does not run.");
 cvar_t capture_ffmpeg = CVARFD("capture_ffmpeg", "", CVAR_NOSET, "The ffmpeg program the ffmpeg capture driver found (empty: none, so it is unavailable).");
 cvar_t capture_ffmpeg_last = CVARFD("capture_ffmpeg_last", "", CVAR_NOSET, "The ffmpeg driver's last result: encoding <file>, saved <file> or failed <why>.");
 
@@ -3196,37 +3198,47 @@ static int FF_Wait(ffpid_t pid)
 #include <fcntl.h>
 #include <errno.h>
 extern char **environ;
-typedef pid_t ffpid_t;
+int pipe2(int pipefd[2], int flags);	//glibc has it; its prototype wants _GNU_SOURCE before quakedef.h
+/*sys_linux.c's SigChld reaps every child (wait3), so waitpid may find none and a status of 0 would read as success.
+  ffmpeg runs under sh, which writes its exit code to fd 3: a pipe only this process reads.*/
+typedef struct {pid_t pid; int status;} ffpid_t;
 typedef int ffpipe_t;
 #define FF_NOPIPE -1
 static qboolean FF_Spawn(const char **argv, ffpid_t *pid, ffpipe_t *in)
 {
-	int fds[2] = {-1, -1};
+	int fds[2] = {-1, -1}, st[2] = {-1, -1}, n;
 	posix_spawn_file_actions_t fa;
+	const char *sh[48];
 	qboolean ok;
-	if (in && pipe(fds) < 0)
+	for (n = 0; argv[n] && n < 44; n++)
+		sh[n+3] = argv[n];
+	sh[0] = "/bin/sh"; sh[1] = "-c"; sh[2] = "\"$0\" \"$@\"; echo $? >&3"; sh[n+3] = NULL;
+	if (pipe2(st, O_CLOEXEC) < 0)
 		return false;
-	posix_spawn_file_actions_init(&fa);
-	if (in)
+	if (in && pipe2(fds, O_CLOEXEC) < 0)
 	{
-		posix_spawn_file_actions_adddup2(&fa, fds[0], 0);
-		posix_spawn_file_actions_addclose(&fa, fds[0]);
-		posix_spawn_file_actions_addclose(&fa, fds[1]);
+		close(st[0]); close(st[1]);
+		return false;
 	}
+	posix_spawn_file_actions_init(&fa);
+	posix_spawn_file_actions_adddup2(&fa, st[1], 3);
+	if (in)
+		posix_spawn_file_actions_adddup2(&fa, fds[0], 0);
 	else
 		posix_spawn_file_actions_addopen(&fa, 0, "/dev/null", O_RDONLY, 0);
-	ok = !posix_spawn(pid, argv[0], &fa, NULL, (char *const*)argv, environ);
+	ok = !posix_spawn(&pid->pid, sh[0], &fa, NULL, (char *const*)sh, environ);
 	posix_spawn_file_actions_destroy(&fa);
+	close(st[1]);
+	pid->status = ok?st[0]:-1;
+	if (!ok)
+		close(st[0]);
 	if (in)
 	{
 		close(fds[0]);
 		if (!ok)
 			close(fds[1]);
 		else
-		{
-			fcntl(fds[1], F_SETFD, FD_CLOEXEC);
 			*in = fds[1];
-		}
 	}
 	return ok;
 }
@@ -3248,11 +3260,17 @@ static void FF_Close(ffpipe_t p) {close(p);}
 static qboolean FF_Exists(const char *path) {return access(path, X_OK) == 0;}
 static void FF_Remove(const char *path) {remove(path);}
 static int FF_Wait(ffpid_t pid)
-{
-	int status = 0;
-	while (waitpid(pid, &status, 0) < 0 && errno == EINTR)
-		;
-	return WIFEXITED(status)?WEXITSTATUS(status):1;
+{	//the code sh wrote; none (sh killed, or the pipe broke) is a failure, never success
+	char buf[16];
+	int got = 0, r, status;
+	while (got < (int)sizeof(buf)-1 && ((r = read(pid.status, buf+got, sizeof(buf)-1-got)) > 0 || (r < 0 && errno == EINTR)))
+		if (r > 0)
+			got += r;
+	close(pid.status);
+	while (waitpid(pid.pid, &status, 0) < 0 && errno == EINTR)
+		;	//(ECHILD when SigChld took it first: the pipe above is the answer)
+	buf[got] = 0;
+	return (got && buf[0] >= '0' && buf[0] <= '9')?atoi(buf):127;
 }
 #endif
 
@@ -3295,8 +3313,12 @@ static void *QDECL capture_ffmpeg_begin (char *streamname, int videorate, int wi
 		return NULL;
 	}
 	FS_CreatePath(ctx->out, FS_SYSTEM);	//its folders, up to the last slash
-	Q_snprintfz(ctx->tmpvideo, sizeof(ctx->tmpvideo), "%s.video.mkv", ctx->out);
-	Q_snprintfz(ctx->tmpaudio, sizeof(ctx->tmpaudio), "%s.audio.raw", ctx->out);
+	{	//unique: a capture to the same name while the last one still drains must not share its files
+		static unsigned int seq;
+		unsigned int tag = (unsigned int)(Sys_DoubleTime()*1000) ^ (++seq << 20);
+		Q_snprintfz(ctx->tmpvideo, sizeof(ctx->tmpvideo), "%s.%08x.video.mkv", ctx->out, tag);
+		Q_snprintfz(ctx->tmpaudio, sizeof(ctx->tmpaudio), "%s.%08x.audio.raw", ctx->out, tag);
+	}
 	ctx->rate = max(1, videorate);
 	ctx->outrate = bound(0, capture_outrate.ival, ctx->rate);
 	ctx->blur = bound(0, capture_blurframes.ival, 64);
@@ -3447,12 +3469,13 @@ static int capture_ffmpeg_finish(void *vctx)
 		FF_Close(ctx->pipe);
 		code = FF_Wait(ctx->pid);
 	}
-	if (!ctx->started || code)
-		Q_snprintfz(result, sizeof(result), "failed %s (ffmpeg exit %i after %i frames)", COM_SkipPath(ctx->out), code, ctx->frames);
+	if (!ctx->started || code || ctx->failed)
+		Q_snprintfz(result, sizeof(result), "failed %s (%s after %i frames; anything encoded is left in %s)", COM_SkipPath(ctx->out),
+			ctx->failed?"stopped":"ffmpeg failed", ctx->frames, COM_SkipPath(ctx->tmpvideo));
 	else
 	{
 		argv[n++] = ctx->ffmpeg;
-		argv[n++] = "-hide_banner"; argv[n++] = "-loglevel"; argv[n++] = "error"; argv[n++] = "-y";
+		argv[n++] = "-hide_banner"; argv[n++] = "-nostdin"; argv[n++] = "-loglevel"; argv[n++] = "error"; argv[n++] = "-y";
 		argv[n++] = "-i"; argv[n++] = ctx->tmpvideo;
 		if (ctx->audiobytes)
 		{
@@ -3461,7 +3484,7 @@ static int capture_ffmpeg_finish(void *vctx)
 			argv[n++] = "-f"; argv[n++] = "s16le"; argv[n++] = "-ar"; argv[n++] = khz; argv[n++] = "-ac"; argv[n++] = ch;
 			argv[n++] = "-i"; argv[n++] = ctx->tmpaudio;
 			argv[n++] = "-map"; argv[n++] = "0:v"; argv[n++] = "-map"; argv[n++] = "1:a";
-			argv[n++] = "-c:a"; argv[n++] = "aac"; argv[n++] = "-b:a"; argv[n++] = "192k"; argv[n++] = "-shortest";
+			argv[n++] = "-c:a"; argv[n++] = "aac"; argv[n++] = "-b:a"; argv[n++] = "192k";	//no -shortest: it cut frames
 		}
 		argv[n++] = "-c:v"; argv[n++] = "copy";
 		if (!Q_strcasecmp(COM_GetFileExtension(ctx->out, NULL), ".mp4") || !Q_strcasecmp(COM_GetFileExtension(ctx->out, NULL), ".mov"))
@@ -3960,10 +3983,20 @@ void Media_RecordFrame (void)
 #endif
 			Draw_FunString((strlen(capturemessage.string)+1)*8, y, S_COLOR_RED "PAUSED");
 
-		if (captureframeforce)
+		if (captureframeforce && cls.demoplayback)
 			capturelastvideotime += captureframeinterval;
+		else if (captureframeforce)
+		{	//FTESurf Patch 1747: a live fixed capture holds: real time runs (nothing recorded) and the forced clock
+			//picks up from it on resume, instead of counting a frame interval for every paused frame
+			captureframeforce = false;
+			capturelastvideotime = realtime + captureframeinterval;	//the first resumed frame moves one step
+		}
+		if (!capture_held.ival)
+			Cvar_ForceSet(&capture_held, "1");	//CSQC holds a replay on it (cl_vidrec.qc)
 		return;
 	}
+	if (capture_held.ival)
+		Cvar_ForceSet(&capture_held, "0");
 
 	//don't capture frames while we're loading.
 	if (cl.sendprespawn || (cls.state < ca_active && COM_HasWork()))
@@ -4086,8 +4119,8 @@ void Media_RecordFrame (void)
 		buffer = VID_GetRGBInfo(&bytestride, &truewidth, &trueheight, &fmt);
 		if (buffer)
 		{
-			qbyte *firstrow = (bytestride<0)?buffer - bytestride*(trueheight-1):buffer;
-			currentcapture_funcs->capture_video(currentcapture_ctx, captureframe, firstrow, bytestride, truewidth, trueheight, fmt);
+			//FTESurf Patch 1747: the buffer's start with a negative stride, as the PBO path and SCR_ScreenShot take it
+			currentcapture_funcs->capture_video(currentcapture_ctx, captureframe, buffer, bytestride, truewidth, trueheight, fmt);
 			BZ_Free (buffer);
 		}
 		else
@@ -4223,9 +4256,10 @@ void Media_InitFakeSoundDevice (int speed, int channels, int samplebits)
 	//this means that the actual sound devices and the fake device will be going at different rates
 	//which really confuses any stream decoding, like music.
 	//so just kill all actual sound devices.
-	if (recordingdemo)
+	if (recordingdemo || capturefixed.ival)
 	{
 		soundcardinfo_t *next;
+		capture_killedcards = true;
 		for (sc = sndcardinfo; sc; sc=next)
 		{
 			next = sc->next;
@@ -4362,8 +4396,10 @@ void Media_StopRecordFilm_f (void)
 		S_ShutdownCard(capture_fakesounddevice);
 	capture_fakesounddevice = NULL;
 
-	if (recordingdemo)	//start up their regular audio devices again.
+	if (recordingdemo || capture_killedcards)	//start up their regular audio devices again.
 		S_DoRestart(false);
+	capture_killedcards = false;
+	Cvar_ForceSet(&capture_held, "0");
 
 	recordingdemo=false;
 
@@ -5685,6 +5721,7 @@ void Media_Init(void)
 	Cvar_Register(&capture_codec,			"Video Capture Controls");
 	Cvar_Register(&capture_crf,				"Video Capture Controls");
 	Cvar_Register(&capture_ffmpeg,			"Video Capture Controls");
+	Cvar_Register(&capture_held,			"Video Capture Controls");
 	Cvar_Register(&capture_ffmpeg_last,		"Video Capture Controls");
 	Media_FFmpegFind();
 #endif

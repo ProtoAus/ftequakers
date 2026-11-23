@@ -7581,6 +7581,7 @@ double Host_Frame (double time)
 	double spike_audio = 0;
 	double hostwork_start;	//FTESurf Patch 782
 	int hostwork_depth;
+	double capturestep;		//FTESurf Patch 1747
 
 	RSpeedLocals();
 
@@ -7607,6 +7608,7 @@ double Host_Frame (double time)
 
 	time = newrealtime - realtime;
 	realtime = newrealtime;
+	capturestep = time;	//FTESurf Patch 1747: the forced step before cl.gamespeed (SV_Frame applies sv.gamespeed itself)
 
 	if (oldrealtime > realtime)
 		oldrealtime = realtime;
@@ -7930,7 +7932,7 @@ double Host_Frame (double time)
 	{
 		float ohft = host_frametime;
 		extern double sv_capturestep;
-		sv_capturestep = (Media_Capturing() == 2 && !cls.demoplayback)?time:-1;	//FTESurf Patch 1747
+		sv_capturestep = (Media_Capturing() == 2 && !cls.demoplayback)?capturestep:-1;	//FTESurf Patch 1747
 		RSpeedRemark();
 		SV_Frame();
 		RSpeedEnd(RSPEED_SERVER);

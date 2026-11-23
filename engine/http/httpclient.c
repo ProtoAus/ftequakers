@@ -297,11 +297,14 @@ void HTTP_Cleanup(struct dl_download *dl)
 	struct http_dl_ctx_s *con = dl->ctx;
 	dl->ctx = NULL;
 
-	if (con->stream)
-		VFS_CLOSE(con->stream);
-	con->stream = NULL;
-	free(con->buffer);
-	free(con);
+	if (con)	//FTESurf Patch 1746: an upload whose compression failed has none yet
+	{
+		if (con->stream)
+			VFS_CLOSE(con->stream);
+		con->stream = NULL;
+		free(con->buffer);
+		free(con);
+	}
 
 	dl->abort = NULL;
 	dl->status = DL_PENDING;
@@ -403,7 +406,8 @@ static qboolean HTTP_DL_Work(struct dl_download *dl)
 		dl->postsent += ammount;
 		if (!con->bufferused && dl->postfile && dl->postsent < dl->posttotal)
 		{	//FTESurf Patch 1746: the file body, a buffer at a time
-			int got = VFS_READ(dl->postfile, con->buffer, min(con->bufferlen, 256*1024));
+			//never past Content-Length, should the file have grown since
+			int got = VFS_READ(dl->postfile, con->buffer, (int)min((qofs_t)min(con->bufferlen, 256*1024), dl->posttotal - dl->postsent));
 			if (got <= 0)
 			{
 				dl->status = DL_FAILED;
@@ -888,6 +892,29 @@ void HTTPDL_Establish(struct dl_download *dl)
 	struct http_dl_ctx_s *con;
 	qboolean https = false;
 
+	if (dl->postfile && dl->postgzip)
+	{	//FTESurf Patch 1746: compressed whole first, so the length is known; before connecting, so no socket idles
+		qboolean zok = false;
+		qofs_t zlen = 0;
+#ifdef AVAIL_GZDEC
+		vfsfile_t *tmp = FS_OpenTemp();
+		dl->postphase = 1;
+		dl->posttotal = dl->postfilelen;
+		dl->postsent = 0;
+		if (tmp)
+			zok = FS_GZ_CompressFile(dl->postfile, tmp, dl->postfilelen, &dl->postsent, &zlen) && VFS_SEEK(tmp, 0);
+		VFS_CLOSE(dl->postfile);
+		dl->postfile = tmp;
+		dl->postgzip = false;
+#endif
+		if (!zok)
+		{
+			dl->status = DL_FAILED;
+			return;
+		}
+		dl->postfilelen = zlen;
+	}
+
 #ifdef COOKIECOOKIECOOKIE
 	char cookies[8192];
 #else
@@ -963,29 +990,6 @@ void HTTPDL_Establish(struct dl_download *dl)
 #ifdef COOKIECOOKIECOOKIE
 	Cookie_Regurgitate(con->server, con->secure, cookies, sizeof(cookies));
 #endif
-	if (dl->postfile && dl->postgzip)
-	{	//FTESurf Patch 1746: compressed whole before the request, so the length is known
-#ifdef AVAIL_GZDEC
-		vfsfile_t *tmp = FS_OpenTemp();
-		qofs_t zlen = -1;
-		dl->postphase = 1;
-		dl->posttotal = dl->postfilelen;
-		dl->postsent = 0;
-		if (tmp)
-			zlen = FS_GZ_CompressFile(dl->postfile, tmp, &dl->postsent);
-		VFS_CLOSE(dl->postfile);
-		dl->postfile = tmp;
-		dl->postgzip = false;
-		if (zlen < 0 || !tmp || !VFS_SEEK(tmp, 0))
-#endif
-		{
-			dl->status = DL_FAILED;
-			return;
-		}
-#ifdef AVAIL_GZDEC
-		dl->postfilelen = zlen;
-#endif
-	}
 	if (dl->postdata || dl->postfile)
 	{
 		ExpandBuffer(con, 1024 + strlen(uri) + strlen(con->server) + strlen(cookies) + strlen(dl->postmimetype) + dl->postlen);
