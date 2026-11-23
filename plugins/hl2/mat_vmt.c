@@ -3958,7 +3958,7 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 		if (*st->hdrbasetex || *st->hdrcompressedtex)
 		{
 			const char *hdrname = *st->hdrbasetex ? st->hdrbasetex : st->hdrcompressedtex;
-			const char *hdrpfx  = *st->hdrbasetex ? "" : "$hdr:";
+			const char *hdrpfx  = "$hdr:";	//FTESurf Patch 1758: a float face takes it too, for img_vtf's sRGB encode (the BGRA8 decode gate ignores RGBA16F)
 			Q_strlcatfz(script, &offset, sizeof(script),	"\tmap \"%s%s%s.vtf\"\n", hdrpfx, strcmp(hdrname, "materials/")?"materials/":"", hdrname);
 		}
 		else if (st->nobasetex)	//FTESurf Patch 190, see the fallback at the top of this function

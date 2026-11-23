@@ -707,7 +707,9 @@ struct pendingtextureinfo *Image_ReadVTFFile(unsigned int flags, const char *fna
 	//term through an sRGB encode; the shaders here add textureCube().rgb straight into a gamma
 	//framebuffer, so surf_demise's red underlay drew at 12/255 for Source's ~69. Encode once here.
 	//vid_srgb 1/2 (and -1) encode in the framebuffer instead, so they keep the linear texels.
-	if (mips && mips->type == PTI_CUBE && vmffmt == VMF_RGBA16F && !(flags & IF_HDRDECOMPRESS) &&
+	//FTESurf Patch 1758: a float HDR sky face ($hdrbasetexture, IF_HDRDECOMPRESS) is linear light
+	//too and the sky draws it straight into the same framebuffer, so it is encoded the same way.
+	if (mips && (mips->type == PTI_CUBE || (flags & IF_HDRDECOMPRESS)) && vmffmt == VMF_RGBA16F &&
 		!(vtf_vid_srgb && vtf_vid_srgb->ival))
 	{
 		unsigned int m;
@@ -728,7 +730,7 @@ struct pendingtextureinfo *Image_ReadVTFFile(unsigned int flags, const char *fna
 				px[4] = b & 0xff;	px[5] = b >> 8;
 			}
 		}
-		Con_DPrintf("%s: linear float cubemap encoded to sRGB (Patch 887)\n", fname);
+		Con_DPrintf("%s: linear float %s encoded to sRGB (Patch 887/1758)\n", fname, (mips->type == PTI_CUBE) ? "cubemap" : "sky face");
 	}
 
 	/*
@@ -779,39 +781,50 @@ struct pendingtextureinfo *Image_ReadVTFFile(unsigned int flags, const char *fna
 	// byte is a per-pixel LINEAR HDR scale (not real alpha). Flagged via the $hdr: shader name
 	// prefix (IF_HDRDECOMPRESS). Uploading the raw bytes treated the scale as alpha -> banded/
 	// dark. Decode to linear float (the engine repacks RGBA32F -> RGBA16F/byte on upload):
-	//   linear.rgb = srgb_to_linear(rgb/255) * (alpha/255) * 8.0
-	// matching Valve's sky_hdr_compressed_rgbs shader (result.rgb = rgb*alpha; result *=
-	// InputScale=8; with an sRGB read on rgb). $color tint is ignored (defaults to white).
+	//   linear.rgb = (rgb/255) * (alpha/255) * 8.0
+	// as Valve's sky_hdr_compressed_rgbs shader (result.rgb = rgb*alpha; result *= InputScale=8).
+	// $color tint is ignored (defaults to white).
+	//FTESurf Patch 1758: the rgb bytes are LINEAR, not sRGB -- the shader samples them with sRGB
+	// reads off (sky_hdr_dx9.cpp), and vtex chose each texel's scale so rgb*scale is the linear
+	// colour.  The sRGB read this used to do bent every texel by its own scale step, which drew
+	// contour bands through the clouds and turned bhop_canals' sky_day01_05_hdr a dark green; a
+	// linear read of the same bytes is smooth and grey, as Momentum draws it.  Then, as Patch 887
+	// does for float cubemaps, the linear result is encoded to sRGB for the gamma framebuffer
+	// (vid_srgb 0); vid_srgb 1/2/-1 encode in the framebuffer and keep it linear.
 	if (mips && (flags & IF_HDRDECOMPRESS) && vmffmt == VMF_BGRA8)
 	{
-		float srgblin[256];
-		unsigned int m, n;
-		for (n = 0; n < 256; n++)
-		{
-			float c = n / 255.0f;
-			srgblin[n] = (c <= 0.04045f) ? (c / 12.92f) : powf((c + 0.055f) / 1.055f, 2.4f);
-		}
+		qboolean encode = !(vtf_vid_srgb && vtf_vid_srgb->ival);
+		float *lut = plugfuncs->Malloc(256 * 256 * sizeof(float));	//[scale byte][rgb byte] -> the texel's channel
+		unsigned int m, s, c;
+		for (s = 0; s < 256; s++)
+			for (c = 0; c < 256; c++)
+			{
+				float v = (float)(c * s) * (8.0f / (255.0f * 255.0f));	//alpha = linear HDR scale; *8 = InputScale
+				lut[(s << 8) | c] = encode ? VTF_SRGBEncode(v) : v;
+			}
 		for (m = 0; m < mips->mipcount; m++)
 		{
 			const qbyte *src = mips->mip[m].data;
 			unsigned int px = mips->mip[m].width * mips->mip[m].height * (unsigned int)mips->mip[m].depth;
 			float *dst, *out;
+			const float *row;
 			unsigned int p;
 			if (!src || !px)
 				continue;
 			out = dst = plugfuncs->Malloc(px * 4 * sizeof(float));
 			for (p = 0; p < px; p++, src += 4, out += 4)
 			{
-				float a = src[3] * (8.0f / 255.0f);	//alpha = linear HDR scale; *8 = InputScale
-				out[0] = srgblin[src[2]] * a;	//R  (VTF byte order is B,G,R,A)
-				out[1] = srgblin[src[1]] * a;	//G
-				out[2] = srgblin[src[0]] * a;	//B
+				row = lut + (src[3] << 8);
+				out[0] = row[src[2]];	//R  (VTF byte order is B,G,R,A)
+				out[1] = row[src[1]];	//G
+				out[2] = row[src[0]];	//B
 				out[3] = 1.0f;
 			}
 			mips->mip[m].data = dst;
 			mips->mip[m].datasize = px * 4 * (unsigned int)sizeof(float);
 			mips->mip[m].needfree = true;
 		}
+		plugfuncs->Free(lut);
 		mips->encoding = PTI_RGBA32F;
 	}
 
