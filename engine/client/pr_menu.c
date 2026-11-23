@@ -2822,6 +2822,7 @@ static void QCBUILTIN PF_m_friends_sign(pubprogfuncs_t *prinst, struct globalvar
 		RETURN_TSTRING(out);
 }
 
+static void QCBUILTIN PF_m_sys_openfiledialog(pubprogfuncs_t *prinst, struct globalvars_s *pr_globals);	//FTESurf Patch 1746
 static struct {
 	char *name;
 	builtin_t bifunc;
@@ -3236,6 +3237,9 @@ static struct {
 	{"num_for_edict",			PF_etof,					512},
 	{"uri_get",					PF_uri_get,					513},
 	{"uri_post",				PF_uri_get,					513},
+	{"uri_postfile",			PF_uri_postfile,			0},	//FTESurf Patch 1746: menu only (a file body)
+	{"uri_progress",			PF_uri_progress,			0},
+	{"sys_openfiledialog",		PF_m_sys_openfiledialog,	0},	//FTESurf Patch 1746
 	{"tokenize_console",		PF_tokenize_console,		514},
 	{"argv_start_index",		PF_argv_start_index,		515},
 	{"argv_end_index",			PF_argv_end_index,			516},
@@ -3916,6 +3920,211 @@ qboolean MP_ConsoleCommand(const char *cmdtext)
 	PR_ExecuteProgram (menu_world.progs, mpfuncs.consolecommand);
 	inmenuprogs--;
 	return G_FLOAT(OFS_RETURN);
+}
+
+
+/*FTESurf Patch 1746: while the menu asks for files (ui_dropfiles nonzero and a Menu_FileDropped function), a map,
+  picture or zone file dropped on the window or picked with sys_openfiledialog is copied to data/dropped/<name>
+  and the menu is told on the next frame, instead of the engine running it. True when taken.*/
+#define MP_DROP_MAX ((qofs_t)1<<30)
+typedef struct {char path[MAX_QPATH]; char name[MAX_QPATH];} mp_dropped_t;
+static void MP_FileDropped_Call(int iarg, void *data)
+{
+	mp_dropped_t *d = data;
+	void *pr_globals;
+	func_t f;
+	if (!menu_world.progs || !(f = PR_FindFunction(menu_world.progs, "Menu_FileDropped", PR_ANY)))
+		return;
+	if (setjmp(mp_abort))
+		return;
+	inmenuprogs++;
+	pr_globals = PR_globals(menu_world.progs, PR_CURRENT);
+	(((string_t *)pr_globals)[OFS_PARM0] = PR_TempString(menu_world.progs, d->path));
+	(((string_t *)pr_globals)[OFS_PARM1] = PR_TempString(menu_world.progs, d->name));
+	PR_ExecuteProgram(menu_world.progs, f);
+	inmenuprogs--;
+}
+qboolean MP_FileDropped(const char *fname, int nlen, vfsfile_t **file)
+{
+	cvar_t *want = Cvar_FindVar("ui_dropfiles");
+	char path[MAX_OSPATH], base[64], ext[16];
+	const char *b, *e;
+	mp_dropped_t d;
+	vfsfile_t *in, *out;
+	qofs_t len, done = 0;
+	char buf[65536];
+	int got, i, n;
+
+	if (!menu_world.progs || !want || !want->ival || !PR_FindFunction(menu_world.progs, "Menu_FileDropped", PR_ANY))
+		return false;
+	if (nlen <= 0 || nlen >= (int)sizeof(path))
+		return false;
+	memcpy(path, fname, nlen);
+	path[nlen] = 0;
+	for (b = e = path; *e; e++)
+		if (*e == '/' || *e == '\\')
+			b = e+1;
+	COM_FileExtension(b, ext, sizeof(ext));
+	Q_strlwr(ext);
+	if (strcmp(ext, "bsp") && strcmp(ext, "png") && strcmp(ext, "jpg") && strcmp(ext, "jpeg") && strcmp(ext, "tga") && strcmp(ext, "json"))
+		return false;	//not a kind the upload takes: the engine runs it as before
+	//its name kept to what a map or picture name may be: letters, digits, _ - . (lowercase)
+	for (i = n = 0; b[i] && n < (int)sizeof(base)-1; i++)
+	{
+		char c = b[i];
+		if (c >= 'A' && c <= 'Z')
+			c += 'a'-'A';
+		if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_' || c == '-' || c == '.')
+			base[n++] = c;
+	}
+	base[n] = 0;
+	if (n < 5 || *base == '.')
+		return false;
+	in = *file;
+	*file = NULL;
+	if (!in)
+		in = FS_OpenVFS(path, "rb", FS_SYSTEM);
+	if (!in)
+	{
+		Con_Printf("dropped file: cannot read %s\n", path);
+		return true;
+	}
+	len = VFS_GETLEN(in);
+	if (len == qofs_ErrorValue() || len <= 0 || len > MP_DROP_MAX)
+	{
+		Con_Printf("dropped file: %s is empty or over 1 GiB\n", base);
+		VFS_CLOSE(in);
+		return true;
+	}
+	Q_snprintfz(d.path, sizeof(d.path), "data/dropped/%s", base);
+	Q_strncpyz(d.name, base, sizeof(d.name));
+	FS_CreatePath(d.path, FS_GAMEONLY);
+	out = FS_OpenVFS(d.path, "wb", FS_GAMEONLY);
+	if (!out)
+	{
+		Con_Printf("dropped file: cannot write %s\n", d.path);
+		VFS_CLOSE(in);
+		return true;
+	}
+	while (done < len && (got = VFS_READ(in, buf, sizeof(buf))) > 0)
+	{
+		if (VFS_WRITE(out, buf, got) != got)
+			break;
+		done += got;
+	}
+	VFS_CLOSE(out);
+	VFS_CLOSE(in);
+	if (done != len)
+	{
+		Con_Printf("dropped file: copying %s failed\n", base);
+		FS_Remove(d.path, FS_GAMEONLY);
+		return true;
+	}
+	Con_Printf("dropped file: %s -> %s (%u KiB)\n", base, d.path, (unsigned int)(len/1024));
+	Cmd_AddTimer(0, MP_FileDropped_Call, 0, &d, sizeof(d));
+	return true;
+}
+
+/*FTESurf Patch 1746: float(float kind) sys_openfiledialog -- the desktop's own file picker on its own thread; the
+  file chosen arrives as a drop does (Menu_FileDropped). 0 when no picker exists here or one is already open.*/
+static qboolean mp_dialog_open;
+static void MP_FileDialogDone(void *ctx, void *data, size_t a, size_t b)
+{
+	char *path = data;
+	mp_dialog_open = false;
+	if (path && *path)
+		Host_RunFile(path, strlen(path), NULL);
+	free(path);
+}
+#if defined(_WIN32) && !defined(FTE_SDL) && !defined(WINRT)
+#include <commdlg.h>
+extern HWND mainwindow;
+static int MP_FileDialogThread(void *arg)
+{
+	static wchar_t file[1024];
+	char utf8[MAX_OSPATH*3];
+	OPENFILENAMEW ofn;
+	HMODULE lib = LoadLibraryA("comdlg32.dll");
+	BOOL (WINAPI *pGetOpenFileNameW)(LPOPENFILENAMEW) = lib?(void*)GetProcAddress(lib, "GetOpenFileNameW"):NULL;
+	HMODULE ole = LoadLibraryA("ole32.dll");
+	HRESULT (WINAPI *pCoInitializeEx)(LPVOID, DWORD) = ole?(void*)GetProcAddress(ole, "CoInitializeEx"):NULL;
+	char *result = NULL;
+
+	if (pCoInitializeEx)
+		pCoInitializeEx(NULL, 0x2/*COINIT_APARTMENTTHREADED*/);
+	file[0] = 0;
+	memset(&ofn, 0, sizeof(ofn));
+	ofn.lStructSize = sizeof(ofn);
+	ofn.hwndOwner = mainwindow;
+	ofn.lpstrFilter = L"Maps, pictures and zones\0*.bsp;*.png;*.jpg;*.jpeg;*.tga;*.json\0All files\0*.*\0";
+	ofn.lpstrFile = file;
+	ofn.nMaxFile = countof(file);
+	ofn.lpstrTitle = L"World of Surf: choose a file";
+	ofn.Flags = OFN_FILEMUSTEXIST|OFN_PATHMUSTEXIST|OFN_NOCHANGEDIR|OFN_EXPLORER;
+	if (pGetOpenFileNameW && pGetOpenFileNameW(&ofn)
+		&& WideCharToMultiByte(CP_UTF8, 0, file, -1, utf8, sizeof(utf8), NULL, NULL) > 0)
+		result = strdup(utf8);
+	COM_AddWork(WG_MAIN, MP_FileDialogDone, NULL, result, 0, 0);
+	return 0;
+}
+static qboolean MP_FileDialogAvailable(void) {return true;}
+#elif defined(__linux__) && !defined(ANDROID) && !defined(FTE_TARGET_WEB)
+#include <unistd.h>
+static qboolean MP_InPath(const char *exe)
+{
+	const char *p = getenv("PATH"), *colon;
+	char full[MAX_OSPATH];
+	for (; p && *p; p = colon?colon+1:NULL)
+	{
+		colon = strchr(p, ':');
+		Q_snprintfz(full, sizeof(full), "%.*s/%s", colon?(int)(colon-p):(int)strlen(p), p, exe);
+		if (access(full, X_OK) == 0)
+			return true;
+		if (!colon)
+			break;
+	}
+	return false;
+}
+static int MP_FileDialogThread(void *arg)
+{	//fixed command lines only: nothing from QC or a cvar reaches the shell
+	static const char *zenity = "zenity --file-selection --title='World of Surf: choose a file' "
+		"--file-filter='Maps, pictures and zones | *.bsp *.BSP *.png *.PNG *.jpg *.JPG *.jpeg *.tga *.json' "
+		"--file-filter='All files | *' 2>/dev/null";
+	static const char *kdialog = "kdialog --title 'World of Surf: choose a file' --getopenfilename . "
+		"'*.bsp *.BSP *.png *.PNG *.jpg *.JPG *.jpeg *.tga *.json' 2>/dev/null";
+	char line[MAX_OSPATH*2];
+	char *result = NULL;
+	FILE *f = popen(MP_InPath("zenity")?zenity:kdialog, "r");
+	if (f)
+	{
+		if (fgets(line, sizeof(line), f))
+		{
+			line[strcspn(line, "\r\n")] = 0;
+			if (*line == '/')
+				result = strdup(line);
+		}
+		pclose(f);
+	}
+	COM_AddWork(WG_MAIN, MP_FileDialogDone, NULL, result, 0, 0);
+	return 0;
+}
+static qboolean MP_FileDialogAvailable(void) {return MP_InPath("zenity") || MP_InPath("kdialog");}
+#else
+static int MP_FileDialogThread(void *arg) {return 0;}
+static qboolean MP_FileDialogAvailable(void) {return false;}
+#endif
+static void QCBUILTIN PF_m_sys_openfiledialog(pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
+{
+	void *thread;
+	G_FLOAT(OFS_RETURN) = 0;
+	if (mp_dialog_open || !MP_FileDialogAvailable())
+		return;
+	thread = Sys_CreateThread("filedialog", MP_FileDialogThread, NULL, THREADP_NORMAL, 0);
+	if (!thread)
+		return;
+	Sys_DetachThread(thread);
+	mp_dialog_open = true;
+	G_FLOAT(OFS_RETURN) = 1;
 }
 
 void MP_CoreDump_f(void)

@@ -400,8 +400,23 @@ static qboolean HTTP_DL_Work(struct dl_download *dl)
 
 		con->bufferused -= ammount;
 		memmove(con->buffer, con->buffer+ammount, con->bufferused);
+		dl->postsent += ammount;
+		if (!con->bufferused && dl->postfile && dl->postsent < dl->posttotal)
+		{	//FTESurf Patch 1746: the file body, a buffer at a time
+			int got = VFS_READ(dl->postfile, con->buffer, min(con->bufferlen, 256*1024));
+			if (got <= 0)
+			{
+				dl->status = DL_FAILED;
+				dl->replycode = 0;
+				return false;
+			}
+			con->bufferused = got;
+		}
 		if (!con->bufferused)	//that's it, all sent.
+		{
 			con->state = HC_GETTINGHEADER;
+			dl->postphase = 3;
+		}
 		break;
 
 	case HC_GETTINGHEADER:
@@ -948,7 +963,30 @@ void HTTPDL_Establish(struct dl_download *dl)
 #ifdef COOKIECOOKIECOOKIE
 	Cookie_Regurgitate(con->server, con->secure, cookies, sizeof(cookies));
 #endif
-	if (dl->postdata)
+	if (dl->postfile && dl->postgzip)
+	{	//FTESurf Patch 1746: compressed whole before the request, so the length is known
+#ifdef AVAIL_GZDEC
+		vfsfile_t *tmp = FS_OpenTemp();
+		qofs_t zlen = -1;
+		dl->postphase = 1;
+		dl->posttotal = dl->postfilelen;
+		dl->postsent = 0;
+		if (tmp)
+			zlen = FS_GZ_CompressFile(dl->postfile, tmp, &dl->postsent);
+		VFS_CLOSE(dl->postfile);
+		dl->postfile = tmp;
+		dl->postgzip = false;
+		if (zlen < 0 || !tmp || !VFS_SEEK(tmp, 0))
+#endif
+		{
+			dl->status = DL_FAILED;
+			return;
+		}
+#ifdef AVAIL_GZDEC
+		dl->postfilelen = zlen;
+#endif
+	}
+	if (dl->postdata || dl->postfile)
 	{
 		ExpandBuffer(con, 1024 + strlen(uri) + strlen(con->server) + strlen(cookies) + strlen(dl->postmimetype) + dl->postlen);
 		Q_snprintfz(con->buffer, con->bufferlen,
@@ -962,14 +1000,20 @@ void HTTPDL_Establish(struct dl_download *dl)
 			"Accept-Encoding: %s\r\n"
 #endif
 			"User-Agent: "FULLENGINENAME"\r\n"
-			"\r\n", uri, con->server, cookies, (unsigned int)dl->postlen, dl->postmimetype
+			"\r\n", uri, con->server, cookies, (unsigned int)(dl->postlen + dl->postfilelen), dl->postmimetype
 #ifdef AVAIL_GZDEC
 			, dl->identityonly ? "identity" : "gzip"
 #endif
 			);
 		con->bufferused = strlen(con->buffer);
-		memcpy(con->buffer + con->bufferused, dl->postdata, dl->postlen);
+		if (dl->postlen)
+			memcpy(con->buffer + con->bufferused, dl->postdata, dl->postlen);
 		con->bufferused += dl->postlen;
+		dl->postsent = 0;
+		dl->posttotal = con->bufferused + dl->postfilelen;
+		dl->postphase = 2;
+		if (dl->postfile && con->bufferlen < 256*1024)
+			ExpandBuffer(con, 256*1024);
 	}
 	else
 	{
@@ -1407,6 +1451,9 @@ void DL_Close(struct dl_download *dl)
 		VFS_CLOSE(dl->file);
 	if (dl->postdata)
 		BZ_Free(dl->postdata);
+	if (dl->postfile)	//FTESurf Patch 1746
+		VFS_CLOSE(dl->postfile);
+	dl->postfile = NULL;
 	free(dl);
 }
 

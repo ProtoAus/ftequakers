@@ -617,6 +617,7 @@ qboolean CL_Receipt_AcctSign(const char *nonce, int kind, qboolean keyed, char *
 
 /* Fixed Friends/menu operations: never account/link consent, receipts or bearer
    capabilities. Message/tournament targets bind exact payload SHA256. MENU VM only. */
+qboolean IN_RealKeyDown(void);	/*in_generic.c*/
 qboolean CL_FriendsSign(const char *nonce, const char *op, const char *who, char *out, size_t outlen)
 {
 	char msg[256], pubhex[65], sighex[129];
@@ -635,6 +636,7 @@ qboolean CL_FriendsSign(const char *nonce, const char *op, const char *who, char
 	if (strcmp(op, "list") && strcmp(op, "chat"))
 	if (cls.state != ca_disconnected || CL_TryingToConnect())
 	if (cls.state < ca_connected || cls.netchan.remote_address.type != NA_LOOPBACK)
+	if (strcmp(op, "mapupload") || !IN_RealKeyDown())	/*P1746: on a lobby only under a device's press*/
 		return false;
 	for (p = nonce; *p; p++)
 		if (!((*p >= '0' && *p <= '9') || (*p >= 'a' && *p <= 'f')))
@@ -646,6 +648,13 @@ qboolean CL_FriendsSign(const char *nonce, const char *op, const char *who, char
 	else if (!strcmp(op, "join"))
 	{
 		if (strlen(who) != 8) return false;
+		for (p = who; *p; p++)
+			if (!((*p >= '0' && *p <= '9') || (*p >= 'a' && *p <= 'f')))
+				return false;
+	}
+	else if (!strcmp(op, "mapupload"))
+	{	//P1746: who is the SHA256 of the upload's manifest (map, files' hashes, details), which the service checks
+		if (strlen(who) != 64) return false;
 		for (p = who; *p; p++)
 			if (!((*p >= '0' && *p <= '9') || (*p >= 'a' && *p <= 'f')))
 				return false;

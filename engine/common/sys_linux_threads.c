@@ -133,6 +133,13 @@ void *Sys_CreateThread(char *name, int (*func)(void *), void *args, int priority
 }
 #endif
 
+/*FTESurf Patch 1746: never joined. The block is not freed: it holds the start arguments the new thread may not
+  have read yet (Sys_CreatedThread), and it is a few bytes per detached thread.*/
+void Sys_DetachThread(void *thread)
+{
+	pthread_detach(*(pthread_t *)thread);
+}
+
 void Sys_WaitOnThread(void *thread)
 {
 	int err;

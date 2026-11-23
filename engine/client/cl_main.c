@@ -7475,6 +7475,13 @@ qboolean Host_RunFile(const char *fname, int nlen, vfsfile_t *file)
 		}
 	}
 
+#ifdef MENU_DAT
+	{	//FTESurf Patch 1746: while the menu's map upload asks for files, a dropped or picked one goes to it
+		qboolean MP_FileDropped(const char *fname, int nlen, vfsfile_t **file);
+		if (MP_FileDropped(fname, nlen, &file))
+			return true;
+	}
+#endif
 	f = Z_Malloc(sizeof(*f) + nlen);
 	memcpy(f->fname, fname, nlen);
 	f->fname[nlen] = 0;

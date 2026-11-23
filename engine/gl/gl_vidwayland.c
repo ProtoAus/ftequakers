@@ -372,6 +372,7 @@ static struct wdisplay_s
 	int selection_mime;
 	qboolean selection_self;
 	struct wl_data_offer *dnd_offer;
+	qboolean newoffer_uris, dnd_uris;	//FTESurf Patch 1746: offers text/uri-list (dropped files)
 	struct wl_data_source *data_source;	//our newest source, until it is cancelled
 	char *cliptext;					//what data_source serves
 
@@ -1794,6 +1795,8 @@ static void WL_data_offer_handle_offer(void *data, struct wl_data_offer *offer, 
 		return;
 	if (!strcmp(mime, WL_SelfMime()))
 		w.newoffer_self = true;
+	if (!strcmp(mime, "text/uri-list"))
+		w.newoffer_uris = true;
 	for (i = 0; i < countof(wl_textmimes); i++)
 		if (!strcmp(mime, wl_textmimes[i]) && (!w.newoffer_mime || i+1 < w.newoffer_mime))
 			w.newoffer_mime = i+1;
@@ -1807,16 +1810,66 @@ static void WL_data_device_handle_data_offer(void *data, struct wl_data_device *
 	w.newoffer = offer;
 	w.newoffer_mime = 0;
 	w.newoffer_self = false;
+	w.newoffer_uris = false;
 	pwl_proxy_add_listener((struct wl_proxy *) offer, (void (**)(void)) &data_offer_listener, &w);
 }
 static void WL_data_device_handle_enter(void *data, struct wl_data_device *device, uint32_t serial, struct wl_surface *surface, wl_fixed_t x, wl_fixed_t y, struct wl_data_offer *offer)
-{	//we take no drops; the offer is only kept to be destroyed
+{	//FTESurf Patch 1746: files (text/uri-list) are taken; anything else is refused and kept only to be destroyed
 	WL_DestroyOffer(&w.dnd_offer);
 	w.dnd_offer = offer;
+	w.dnd_uris = (offer && offer == w.newoffer && w.newoffer_uris);
+	if (offer)
+		pwl_proxy_marshal((struct wl_proxy *) offer, WL_DATA_OFFER_ACCEPT, serial, w.dnd_uris?"text/uri-list":NULL);
 }
 static void WL_data_device_handle_leave(void *data, struct wl_data_device *device)
 {
 	WL_DestroyOffer(&w.dnd_offer);
+}
+static void WL_data_device_handle_drop(void *data, struct wl_data_device *device)
+{	//the list is read here, a second at most (the paste's budget), then each file goes to Host_RunFile as X11's drops do
+	int fds[2], ms;
+	char buf[16384], *line, *end;
+	size_t len = 0;
+	ssize_t r;
+	struct pollfd p;
+	double deadline;
+
+	if (!w.dnd_offer || !w.dnd_uris || pipe(fds) < 0)
+	{
+		WL_DestroyOffer(&w.dnd_offer);
+		return;
+	}
+	pwl_proxy_marshal((struct wl_proxy *) w.dnd_offer, WL_DATA_OFFER_RECEIVE, "text/uri-list", fds[1]);
+	close(fds[1]);
+	pwl_display_flush(w.display);
+	p.fd = fds[0];
+	p.events = POLLIN;
+	deadline = Sys_DoubleTime() + 1;
+	while (len < sizeof(buf)-1 && (ms = (deadline - Sys_DoubleTime())*1000) > 0)
+	{
+		int n = poll(&p, 1, ms);
+		if (n < 0 && errno == EINTR)
+			continue;
+		if (n <= 0)
+			break;
+		r = read(fds[0], buf+len, sizeof(buf)-1-len);
+		if (r < 0 && errno == EINTR)
+			continue;
+		if (r <= 0)
+			break;
+		len += r;
+	}
+	close(fds[0]);
+	WL_DestroyOffer(&w.dnd_offer);
+	buf[len] = 0;
+	for (line = buf; *line; line = end)
+	{
+		end = line + strcspn(line, "\r\n");
+		if (end > line && *line != '#')
+			Host_RunFile(line, end-line, NULL);
+		while (*end == '\r' || *end == '\n')
+			end++;
+	}
 }
 static void WL_data_device_handle_motion(void *data, struct wl_data_device *device, uint32_t time, wl_fixed_t x, wl_fixed_t y)
 {
@@ -1835,7 +1888,7 @@ static const struct wl_data_device_listener data_device_listener =
 	WL_data_device_handle_enter,
 	WL_data_device_handle_leave,
 	WL_data_device_handle_motion,
-	WL_data_device_handle_leave,	//drop: no leave follows it
+	WL_data_device_handle_drop,	//no leave follows it
 	WL_data_device_handle_selection,
 };
 static void WL_data_source_handle_target(void *data, struct wl_data_source *source, const char *mime)

@@ -106,6 +106,13 @@ struct dl_download
 	char postmimetype[64];
 	char *postdata;			/*if set, this is a post and not a get*/
 	size_t postlen;
+	//FTESurf Patch 1746: a body read from a file after postdata (uri_postfile); the thread owns and closes it.
+	//postgzip compresses it to a temp file on the download thread first. postsent/posttotal: request bytes written.
+	struct vfsfile_s *postfile;
+	qofs_t postfilelen;
+	qboolean postgzip;
+	volatile int postphase;		/*0 waiting, 1 compressing, 2 sending, 3 sent*/
+	volatile qofs_t postsent, posttotal;
 
 	/*stream status*/
 	enum
