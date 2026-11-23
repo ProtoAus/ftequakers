@@ -174,9 +174,12 @@ int SV_PMSrcVer(const float *pin)
 	//Patch 1709: v14 reads fixslopes 2/3 (Momentum 0.10's RNGFix, ahop).
 	//  Below fixslopes 2 it moves as 13, and pins 13 so an older verifier still replays it.
 	//Patch 1713: v15 zeroes vertical speed on every grounding (Source's SetGroundEntity), at any fixslopes.
+	//Patch 1748: v16 traces far brushes' rebuilt bevels; on a world without any it moves as 15 and pins 15.
 	if (pin[0] == 14 && !(pin[SV_PMPIN_FIXSLOPES] >= 2))
 		return 13;
-	if (pin[0] == 3 || pin[0] == 4 || pin[0] == 5 || pin[0] == 6 || pin[0] == 7 || pin[0] == 8 || pin[0] == 9 || pin[0] == 10 || pin[0] == 11 || pin[0] == 12 || pin[0] == 13 || pin[0] == 14 || pin[0] == 15)
+	if (pin[0] == 16 && !(sv.world.worldmodel && sv.world.worldmodel->farfixbrushes))
+		return 15;
+	if (pin[0] == 3 || pin[0] == 4 || pin[0] == 5 || pin[0] == 6 || pin[0] == 7 || pin[0] == 8 || pin[0] == 9 || pin[0] == 10 || pin[0] == 11 || pin[0] == 12 || pin[0] == 13 || pin[0] == 14 || pin[0] == 15 || pin[0] == 16)
 		return pin[0];
 	return f >= 2 ? 2 : f < 2 ? 1 : 0;
 }

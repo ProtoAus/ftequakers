@@ -1209,6 +1209,9 @@ typedef struct model_s
 	//ramp it by hl2_lt_fold's half-lambert, which LightPointValues' split does not fit.  NULL = LightPointValues for
 	//every model.  APPEND-ONLY like the fields above.
 	void (*LightPointFold)(struct model_s *model, const vec3_t point, vec3_t res_diffuse, vec3_t res_ambient, vec3_t res_dir);
+	//FTESurf Patch 1748: brushes the hl2 plugin rebuilt for mover 16 (BIH_BRUSHPAIR); 0 = the map moves as mover 15,
+	//and SV_PMSrcVer pins 15.  Written only by a plugin that saw pm_sourceversion >= 16.  APPEND-ONLY likewise.
+	unsigned int	farfixbrushes;
 } model_t;
 
 #define MDLF_EMITREPLACE     0x0001 // particle effect engulphs model (don't draw)

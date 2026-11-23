@@ -74,6 +74,8 @@ enum bihtype_e
 	BIH_MODEL,
 	BIH_TRIANGLE_REWOUND,	//FTESurf Patch 1630: a displacement triangle Patch 256 re-wound; traced in its render winding
 							//unless bih_oldwind (Source movers below 13). Appended: the hl2 plugin bakes these values.
+	BIH_BRUSHPAIR,			//FTESurf Patch 1748: data.brushpair; traced as its farfix brush unless bih_oldbevel (Source
+							//movers below 16). Appended likewise.
 };
 struct bihdata_s
 {
@@ -81,6 +83,10 @@ struct bihdata_s
 	union {
 #if defined(Q2BSPS) || defined(Q3BSPS)
 		q2cbrush_t *brush;
+		struct {	//FTESurf Patch 1748: BIH_BRUSHPAIR -- old aliases brush
+			q2cbrush_t *old;
+			q2cbrush_t *farfix;
+		} brushpair;
 #endif
 #ifdef Q3BSPS
 		q2cbrush_t *patchbrush;

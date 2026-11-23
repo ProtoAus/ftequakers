@@ -210,6 +210,7 @@ static cvar_t *hl2_brushbevels;
 static volatile int vbsp_stat_bevelbrushes;	//brushes that gained at least one plane
 static volatile int vbsp_stat_bevelplanes;	//planes added in total
 static volatile int vbsp_stat_bevelfull;	//brushes left alone for want of room
+static volatile int vbsp_stat_farfix;	//FTESurf Patch 1748: far brushes given a farfix
 static cvar_t *hl2_dispcollision;
 static cvar_t *hl2_dispflags;	//FTESurf Patch 250
 static cvar_t *hl2_dispwinding;	//FTESurf Patch 256
@@ -526,6 +527,7 @@ typedef struct vbspinfo_s
 
 	int				numbrushes;
 	q2cbrush_t		*brushes;
+	q2cbrush_t		**brushfarfix;	//FTESurf Patch 1748: [numbrushes], VBSP_FarBrushFix's; NULL = the exe predates mover 16
 	qboolean		*brushlightopaque;
 	qboolean		*brushvisopaque;	//FTESurf Patch 879: ...and hides what is behind it (VBSP_CONTENTS_LIGHTONLY)
 	model_t			*wl_trace_model;	//unregistered world-only light BIH; map-owned
@@ -1406,6 +1408,7 @@ static q2mapsurface_t	nullsurface;
 static int		VBSP_NumInlineModels (model_t *model);
 static cmodel_t	*VBSP_InlineModel (model_t *model, char *name);
 static void VBSP_FinalizeBrush(model_t *mod, q2cbrush_t *brush);
+static q2cbrush_t *VBSP_FarBrushFix(model_t *mod, const q2cbrush_t *brush, q2cbrushside_t *sides, int numsides);	//Patch 1748
 static void	FloodAreaConnections (vbspinfo_t	*prv);
 
 /*
@@ -2602,11 +2605,14 @@ static qboolean VBSP_LoadBrushes (model_t *mod, qbyte *mod_base, vlump_t *l)
 	out = prv->brushes;
 
 	prv->numbrushes = count;
+	//FTESurf Patch 1748: an exe below mover 16 has no BIH_BRUSHPAIR (Patch 1630's test) and no model_t farfixbrushes
+	prv->brushfarfix = cvarfuncs->GetFloat("pm_sourceversion") >= 16 ?
+		plugfuncs->GMalloc(&mod->memgroup, sizeof(*prv->brushfarfix) * (count+1)) : NULL;
 
 	/*Patch 318: reset here rather than at map load, because this is the one
 	  place the counters are filled and submodel brushes come out of the same
 	  lump -- there is no second pass to double-count. */
-	vbsp_stat_bevelbrushes = vbsp_stat_bevelplanes = vbsp_stat_bevelfull = 0;
+	vbsp_stat_bevelbrushes = vbsp_stat_bevelplanes = vbsp_stat_bevelfull = vbsp_stat_farfix = 0;
 
 	for (i=0 ; i<count ; i++, out++, in++)
 	{
@@ -2625,7 +2631,11 @@ static qboolean VBSP_LoadBrushes (model_t *mod, qbyte *mod_base, vlump_t *l)
 		}
 		out->contents = VBSP_TranslateContentBits(prv, LittleLong(in->contents));
 		VBSP_FinalizeBrush(mod, out);
+		if (prv->brushfarfix)
+			prv->brushfarfix[i] = VBSP_FarBrushFix(mod, out, &prv->brushsides[LittleLong(in->firstside)], LittleLong(in->numsides));
 	}
+	if (prv->brushfarfix)
+		mod->farfixbrushes = vbsp_stat_farfix;
 
 	return true;
 }
@@ -7492,7 +7502,9 @@ static qboolean VBSP_PlaneKnown (const vec4_t *list, int count, const vec3_t nor
 	return false;
 }
 
-static void VBSP_AddBrushBevels (model_t *mod, q2cbrush_t *brush, vec4_t *planes)
+/*FTESurf Patch 1748: planes may be given relative to ofs (the windings then come out relative to it too); the
+  bevels are stored absolute. stats: count into Patch 318's figures (the origin-frame pass only).*/
+static void VBSP_AddBrushBevels (model_t *mod, q2cbrush_t *brush, vec4_t *planes, const vec3_t ofs, qboolean stats)
 {
 	vecV_t		   *wverts;
 	int				wfirst[VBSP_MAXBRUSHSIDES], wcount[VBSP_MAXBRUSHSIDES];
@@ -7524,7 +7536,8 @@ static void VBSP_AddBrushBevels (model_t *mod, q2cbrush_t *brush, vec4_t *planes
 		if (nverts >= VBSP_MAXWINDVERTS)
 		{	/*no room to be sure the support test sees the whole hull, and a
 			  support test that cannot see every point is not a support test. */
-			vbsp_stat_bevelfull++;
+			if (stats)
+				vbsp_stat_bevelfull++;
 			goto done;
 		}
 	}
@@ -7574,7 +7587,8 @@ static void VBSP_AddBrushBevels (model_t *mod, q2cbrush_t *brush, vec4_t *planes
 
 				if (numbevels == VBSP_MAXBEVELS)
 				{
-					vbsp_stat_bevelfull++;
+					if (stats)
+						vbsp_stat_bevelfull++;
 					numbevels = 0;
 					goto done;	/*all or nothing; a partial set is still a superset*/
 				}
@@ -7599,7 +7613,7 @@ static void VBSP_AddBrushBevels (model_t *mod, q2cbrush_t *brush, vec4_t *planes
 	for (i = 0; i < numbevels; i++)
 	{
 		VectorCopy (bevels[i], nplane[i].normal);
-		nplane[i].dist = bevels[i][3];
+		nplane[i].dist = bevels[i][3] + DotProduct(bevels[i], ofs);	//Patch 1748: back from the brush's frame
 		/*A bevel is non-axial by construction (an axial one would have been the
 		  edge's own axis and was skipped), so PLANE_ANYX is right -- and giving
 		  it a type < 3 it does not have would make PlaneDiff read one component
@@ -7618,11 +7632,88 @@ static void VBSP_AddBrushBevels (model_t *mod, q2cbrush_t *brush, vec4_t *planes
 
 	brush->brushside = nside;
 	brush->numsides += numbevels;
-	vbsp_stat_bevelbrushes++;
-	vbsp_stat_bevelplanes += numbevels;
+	if (stats)
+	{
+		vbsp_stat_bevelbrushes++;
+		vbsp_stat_bevelplanes += numbevels;
+	}
 done:
 	plugfuncs->Free(wverts);
 	plugfuncs->Free(bevels);
+}
+
+/*FTESurf Patch 1748: Fragment_ClipPlaneToBrush starts each face from a quad 32767 either side of the plane's point
+  nearest the ORIGIN. Strata maps reach 50000+ (bhop_canals), so a far brush's windings come out cut at that quad's
+  edge: its hull is wrong, and Patch 318's support test then passes bevel planes that cut the real brush (bhop_canals
+  brush 1903 traced as empty; players fell through the canal banks). A brush with all six axial planes (vbsp emits
+  them on every brush) is rebuilt with its planes taken about its own centre, so the quad covers it. Kept beside the
+  original in a BIH_BRUSHPAIR leaf: a Source mover below 16 still traces the old sides, so recorded runs verify.*/
+static q2cbrush_t *VBSP_FarBrushFix(model_t *mod, const q2cbrush_t *brush, q2cbrushside_t *sides, int numsides)
+{
+	vec3_t mins, maxs, c, corner;
+	vec4_t sp[VBSP_MAXBRUSHSIDES];
+	int i, k, axes = 0;
+	qboolean far = false;
+	q2cbrush_t *fix;
+
+	if (numsides > VBSP_MAXBRUSHSIDES || (hl2_brushbevels && !hl2_brushbevels->ival))
+		return NULL;
+	for (i = 0; i < numsides; i++)
+	{
+		const mplane_t *pl = sides[i].plane;
+		for (k = 0; k < 3; k++)
+		{
+			if (pl->normal[k] == 1)		{ maxs[k] = pl->dist; axes |= 1<<(k*2); }
+			else if (pl->normal[k] == -1)	{ mins[k] = -pl->dist; axes |= 2<<(k*2); }
+		}
+	}
+	if (axes != 63)
+		return NULL;
+	for (i = 0; i < 8; i++)
+	{	/*a corner within 32000 of the origin keeps every face inside every quad (the in-plane part of a point is no
+		  longer than the point), so near brushes -- every brush on a classic Source map -- are left exactly as they were*/
+		for (k = 0; k < 3; k++)
+			corner[k] = (i & (1<<k)) ? maxs[k] : mins[k];
+		if (DotProduct(corner, corner) > 32000.0f*32000.0f)
+			far = true;
+	}
+	if (!far)
+		return NULL;
+	VectorAvg(mins, maxs, c);
+	for (i = 0; i < numsides; i++)
+	{
+		VectorCopy(sides[i].plane->normal, sp[i]);
+		sp[i][3] = sides[i].plane->dist - DotProduct(sides[i].plane->normal, c);
+	}
+	fix = plugfuncs->GMalloc(&mod->memgroup, sizeof(*fix));
+	if (!fix)
+		return NULL;
+	*fix = *brush;
+	fix->brushside = sides;
+	fix->numsides = numsides;
+	VectorCopy(mins, fix->absmins);		/*exact: the axial planes bound a Source brush*/
+	VectorCopy(maxs, fix->absmaxs);
+	VectorSubtract(maxs, c, corner);
+	if (DotProduct(corner, corner) <= 32000.0f*32000.0f)	//else even its own frame cuts the windings: no bevels (pre-318)
+		VBSP_AddBrushBevels(mod, fix, sp, c, false);
+	vbsp_stat_farfix++;
+	return fix;
+}
+
+//FTESurf Patch 1748: the leaf for prv->brushes[idx], paired with its farfix if it has one
+static void VBSP_BrushLeaf(vbspinfo_t *prv, struct bihleaf_s *l, size_t idx)
+{
+	if (prv->brushfarfix && prv->brushfarfix[idx])
+	{
+		l->type = BIH_BRUSHPAIR;
+		l->data.brushpair.old = &prv->brushes[idx];
+		l->data.brushpair.farfix = prv->brushfarfix[idx];
+	}
+	else
+	{
+		l->type = BIH_BRUSH;
+		l->data.brush = &prv->brushes[idx];
+	}
 }
 
 static void VBSP_FinalizeBrush(model_t *mod, q2cbrush_t *brush)
@@ -7665,7 +7756,7 @@ static void VBSP_FinalizeBrush(model_t *mod, q2cbrush_t *brush)
 	  absmins/absmaxs and those must describe the brush, not the beveled side
 	  list -- the bevels support the same hull, so the bounds do not change. */
 	if (!hl2_brushbevels || hl2_brushbevels->ival)
-		VBSP_AddBrushBevels(mod, brush, planes);
+		VBSP_AddBrushBevels(mod, brush, planes, vec3_origin, true);
 }
 
 /*
@@ -8410,8 +8501,7 @@ static void VBSP_BuildBIHSubmodel(model_t *mod, int submodel)
 	for (i = 0; i < sub->num_brushes; i++)
 	{
 		q2cbrush_t *b = &prv->brushes[sub->firstbrush+i];
-		l->type = BIH_BRUSH;
-		l->data.brush = b;
+		VBSP_BrushLeaf(prv, l, sub->firstbrush+i);
 
 		l->data.contents = b->contents;
 		VectorCopy(b->absmins, l->mins);
@@ -8676,8 +8766,7 @@ static void VBSP_BuildOccluderBIH(model_t *mod, const char *why)
 		q2cbrush_t *b = &prv->brushes[sub->firstbrush+i];
 		if (!prv->brushlightopaque[sub->firstbrush+i])
 			continue;
-		l->type = BIH_BRUSH;
-		l->data.brush = b;
+		VBSP_BrushLeaf(prv, l, sub->firstbrush+i);
 		l->data.contents = prv->brushvisopaque[sub->firstbrush+i] ? FTECONTENTS_SOLID : VBSP_CONTENTS_LIGHTONLY;
 		VectorCopy(b->absmins, l->mins);
 		VectorCopy(b->absmaxs, l->maxs);
@@ -9145,8 +9234,7 @@ static void VBSP_BuildBIHMain(void *ctx, void *unusedp, size_t unuseda, size_t u
 	for (i = 0; i < sub->num_brushes; i++)
 	{
 		q2cbrush_t *b = &prv->brushes[sub->firstbrush+i];
-		l->type = BIH_BRUSH;
-		l->data.brush = b;
+		VBSP_BrushLeaf(prv, l, sub->firstbrush+i);
 
 		l->data.contents = b->contents;
 		VectorCopy(b->absmins, l->mins);
@@ -9397,6 +9485,10 @@ static void VBSP_BuildBIHMain(void *ctx, void *unusedp, size_t unuseda, size_t u
 			mod->name, hl2_brushbevels?hl2_brushbevels->ival:1,
 			vbsp_stat_bevelplanes, vbsp_stat_bevelbrushes,
 			vbsp_stat_bevelfull ? va(", and %i MORE were left alone for want of room", vbsp_stat_bevelfull) : "");
+
+	if (vbsp_stat_farfix)	//FTESurf Patch 1748
+		Con_DPrintf("%s: %i brushes beyond 32000 units given bevels built about themselves (traced from mover 16)\n",
+			mod->name, vbsp_stat_farfix);
 
 	//FTESurf Patch 764
 	if (vbsp_stat_phyprops || vbsp_stat_phyrefused)

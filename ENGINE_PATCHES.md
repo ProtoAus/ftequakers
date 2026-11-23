@@ -1,5 +1,34 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1748 - Mover 16: brushes more than 32000 units from the origin collide as they are (engine common/com_bih.[ch], common/com_bih_ts.h, common/pm_source.c, common/pmove.h, gl/gl_model.h, server/sv_user.c, server/sv_phys.c; plugin hl2/mod_vbsp.c)
+
+**Problem.** Lex, 23 Nov: on bhop_canals "players fall though the map in some parts" (saves 2 and 3). Save 3's spot
+(51933 41015) dropped from above lands on the canal floor at z -512, through brush 1903 (solid, z -512..-307, a slope
+top); save 2 (39566 11869 -216) stands inside brush 4283 (solid, z -256..-128). With `hl2_brushbevels 0` both are solid.
+Patch 318 builds each face's winding with Fragment_ClipPlaneToBrush, which starts from a quad 32767 either side of the
+plane's point nearest the ORIGIN. Strata maps reach 50000+: a far brush's windings come out cut at the quad's edge or
+empty, the support test then sees too few hull points, and passes bevel planes that cut the brush. On bhop_canals 9661
+brushes have a corner beyond 32000.
+
+**Change.** VBSP_FarBrushFix rebuilds every brush with all six axial planes and a corner beyond 32000 with its planes
+taken about its own centre (AddBrushBevels takes the offset and stores the bevels absolute). A far brush wider than
+32000 itself gets no bevels (pre-318). The fixed copy sits beside the old one in a new leaf type, BIH_BRUSHPAIR (appended
+to bihtype_e; data.brushpair.old aliases data.brush), so q2cbrush_t keeps its layout. A trace takes the fixed brush
+unless bih_oldbevel, which the Source mover sets below 16 -- recorded mover-15 runs replay on the old geometry. Mover 16
+pins 15 on a world with no fixed brushes (model_t farfixbrushes, appended; SV_PMSrcVer), so on every map without far
+brushes an older verifier still replays new runs, as P1709 did below fixslopes 2. The plugin builds pairs only when the
+exe reports pm_sourceversion >= 16 (Patch 1630's test), so an old exe never sees the new leaf type or field; an old
+plugin never writes them. Leaf walkers that do not trace (BIH_HeldAirBoxEmpty_r, BIH_LeafClaims) treat a pair as
+unknown, their conservative answer.
+
+**Verified.** Rig drops on bhop_canals with the new build: save 3's spot lands at -422.7, spot B (52018 40779) at
+-329.7, save 2's at -152.6 on brush 4283's top; 0.1.61 lands at -512 / -512 / -216.5. pm_recsim of Lex's save 2 and
+save 3 recordings (mover 15) on 0.1.61 and on this build: 785/785 and 4058/4058 packets exact on both; save 2's with its
+pin edited to 16 diverges at t 4.74, where he walks into brush 4283 -- so the gate is what keeps old runs. Recorded pin
+on the new server: bhop_canals 16, surf_mesa 15. Local gate against 0.1.61 (pm_verify of 9 online records, pm_dettest
+on bhop_canals, ahop_coast, surf_mesa): identical except bhop_canals' trace/srctrace/proptrace/fixtrace/picktrace
+hashes, which are plain traces at default flags (they now meet the fixed brushes); every mover hash is identical.
+
 ## Patch 1745 - Fetchers send WOS User-Agents with no URL (game surfd/ksfimport.py, mapwatch.py, mapnew.py, momgrab.py, steam.py, tasupd.py; tools/momfetch.py and the PC fetchers)
 
 **Problem.** Lex, 23 Nov: "rename them WOS"; "remove the URL after the User agent, it's not correct yet". Main sent

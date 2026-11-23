@@ -260,8 +260,9 @@ typedef struct
    Patch 888: version 9 traces a .phy hull whose 16-bit indices wrapped as it really is.
    Patch 882: version 10 honours momlimit/momcool/momslide (Momentum's limitmovement and slide triggers).
    Patch 916: version 11 adds Source water-lip assist and ceiling eye clearance.
-   Patch 1713: version 15 zeroes vertical speed whenever CategorizePosition sets a ground (Source's SetGroundEntity). */
-#define PMSRC_VERSION 15
+   Patch 1713: version 15 zeroes vertical speed whenever CategorizePosition sets a ground (Source's SetGroundEntity).
+   Patch 1748: version 16 traces a far brush's bevels rebuilt about itself (BIH_BRUSHPAIR); a map with none pins 15. */
+#define PMSRC_VERSION 16
 
 typedef struct {
 	//standard quakeworld

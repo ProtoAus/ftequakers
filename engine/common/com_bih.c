@@ -1,5 +1,7 @@
 #include "quakedef.h"
 #include "com_bih_ts.h"
+//Patch 1748: a brush leaf's brush; a BIH_BRUSHPAIR gives its old brush to Source movers below 16
+#define BIH_LEAFBRUSH(n)	(((n)->type == BIH_BRUSHPAIR && !bih_oldbevel) ? (n)->data.brushpair.farfix : (n)->data.brush)
 //Patch 1467: the clip flags and probe record, one set a thread (com_bih_ts.h)
 static bih_tstate_t bih_main_ts = {0, 0, 0, 0, -1};
 FTE_TLS bih_tstate_t *bih_ts = &bih_main_ts;
@@ -1358,9 +1360,10 @@ static void BIH_RecursiveTrace (struct bihtrace_s *fte_restrict tr, const struct
 	{	//leaf
 #if defined(Q2BSPS) || defined(Q3BSPS)
 	case BIH_BRUSH:
+	case BIH_BRUSHPAIR:	//Patch 1748
 		if (node->data.contents & tr->hitcontents)
 		{
-			q2cbrush_t *b = node->data.brush;
+			q2cbrush_t *b = BIH_LEAFBRUSH(node);
 			if (BIH_BoundsIntersect(b->absmins, b->absmaxs, movesubbounds->min, movesubbounds->max))
 				BIH_ClipBoxToBrush (tr, b);
 		}
@@ -1737,9 +1740,10 @@ static void BIH_RecursiveTest (struct bihtrace_s *fte_restrict tr, const struct 
 	{
 #if defined(Q2BSPS) || defined(Q3BSPS)
 	case BIH_BRUSH:
+	case BIH_BRUSHPAIR:	//Patch 1748
 		if (node->data.contents & tr->hitcontents)
 		{
-			q2cbrush_t *b = node->data.brush;
+			q2cbrush_t *b = BIH_LEAFBRUSH(node);
 //			if (BIH_BoundsIntersect(tr->bounds.min, tr->bounds.max, b->absmins, b->absmaxs))
 				BIH_TestBoxInBrush (tr, b);
 		}
@@ -1953,7 +1957,7 @@ static qboolean BIH_Trace(model_t *model, int forcehullnum, const framestate_t *
 	key.nodes = m->cnodes;
 	key.contents = contents;
 	key.forcehullnum = forcehullnum;
-	key.flags = (capsule?1u:0u) | (axis?2u:0u) | (bih_sourceclip?4u:0u) | (bih_phybrushes?8u:0u) | (bih_phyfix?16u:0u) | (bih_phypick?32u:0u) | (bih_oldwind?64u:0u) | (bih_vphys?128u:0u);
+	key.flags = (capsule?1u:0u) | (axis?2u:0u) | (bih_sourceclip?4u:0u) | (bih_phybrushes?8u:0u) | (bih_phyfix?16u:0u) | (bih_phypick?32u:0u) | (bih_oldwind?64u:0u) | (bih_vphys?128u:0u) | (bih_oldbevel?256u:0u);
 	key.bevels = pm_trisoup_bevels.ival;
 	key.rotated = pm_rotatedboxhulls.ival;
 	VectorCopy(start, key.v+0);
@@ -2242,8 +2246,9 @@ restart:
 	{	//leaf
 #if defined(Q2BSPS) || defined(Q3BSPS)
 	case BIH_BRUSH:
+	case BIH_BRUSHPAIR:	//Patch 1748
 		{
-			q2cbrush_t *b = node->data.brush;
+			q2cbrush_t *b = BIH_LEAFBRUSH(node);
 			q2cbrushside_t *brushside = b->brushside;
 			size_t j;
 			if (!BIH_BoundsIntersect(p, p, b->absmins, b->absmaxs))
@@ -2803,11 +2808,12 @@ static void BIH_EnumBrushes_r (struct bihnode_s *node, const vec3_t mins, const 
 		break;
 #endif
 	case BIH_BRUSH:
+	case BIH_BRUSHPAIR:	//Patch 1748
 		/*the brush's own bounds, not the leaf's -- Patch 318 deliberately leaves
 		  absmins/absmaxs describing the un-beveled brush, and they are what the
 		  sweep's own cull uses, so this sees exactly the set a trace would. */
-		if (BIH_BoundsIntersect (node->data.brush->absmins, node->data.brush->absmaxs, mins, maxs))
-			cb (ctx, node->data.brush);
+		if (BIH_BoundsIntersect (BIH_LEAFBRUSH(node)->absmins, BIH_LEAFBRUSH(node)->absmaxs, mins, maxs))
+			cb (ctx, BIH_LEAFBRUSH(node));
 		break;
 	default:
 		break;	/*triangles, patches and submodels are not brushes; not our job*/
@@ -2852,8 +2858,9 @@ static void BIH_EnumCollision_r (struct bihnode_s *node, const vec3_t mins, cons
 		break;
 #endif
 	case BIH_BRUSH:
-		if (en->brush && BIH_BoundsIntersect (node->data.brush->absmins, node->data.brush->absmaxs, mins, maxs))
-			en->brush (en->ctx, node->data.brush);
+	case BIH_BRUSHPAIR:	//Patch 1748
+		if (en->brush && BIH_BoundsIntersect (BIH_LEAFBRUSH(node)->absmins, BIH_LEAFBRUSH(node)->absmaxs, mins, maxs))
+			en->brush (en->ctx, BIH_LEAFBRUSH(node));
 		break;
 	case BIH_TRIANGLE:
 	case BIH_TRIANGLE_REWOUND:	//FTESurf Patch 1630: winding plays no part here
