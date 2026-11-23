@@ -1,5 +1,77 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1760 - r_shadows 2 on Source maps: the single sun map, and props cast as Strata's cascades do (engine gl/gl_shadow.c; plugin hl2/mod_vbsp.c; game sv_entities.qc sv_main.qc)
+
+**Problem.** Lex, 24 Nov, bhop_canals save 8 beside Momentum: "shadowmaps in my game are much lower quality then
+momentum mod? and props don't cast shadows?". Three causes. (1) The Source receivers (plugins/hl2 vmt/lightmapped,
+transition, vertexlit.glsl) read only the single sun map (l_cubematrix); nothing they compile reads the slot, prop-shadow
+or cascade atlases. The default r_shadows_propshadows 1 renders its atlas whenever the map has point lights (bhop_canals
+295), so on such a Source map no shadow landed at all, and its lamp classification cost 2.67 ms a frame (r_budget,
+save 8: shadows 3.39 ms, "classify" 2.67). (2) Every static prop was RF_NOSHADOW, but Strata draws static props into its
+cascades unless FlagsEx says DISABLE_SHADOW_DEPTH (1) or DISABLE_CSM (2), and its VRAD bakes no prop shadows on such a
+map (canals' pipe03 shadows the ground in Momentum and nowhere in our lightmap). (3) P1724 made a prop's disableshadows
+stop it casting; on a cascade map Strata skips only disableshadowdepth (disableshadows is the RTT blob's), and 308 of
+canals' props write disableshadows 1 (its dock planks shadow the mound in Momentum's shot).
+
+**Change.** Sh_GenerateFakeShadows: on a VBSP world (fromgame fg_new, gl_warp.c's test) the atlases are skipped and the
+single sun map renders (fs_slotcount 1). Plugin: VBSP_LoadDetailKeys marks env_cascade_light (prv->csm, loaded before
+the game lump); a v10+ static prop there casts unless FlagsEx & 3; an off-screen static caster within r_shadows 2's reach
+(r_shadows_distance, or r_shadows_cascade_dist at cascades > 1) skips the frustum cull so its shadow does not pop at the
+screen edge (gl_alias.c culls it again in the main pass; the reach is 4/3 of r_shadows_distance about the eye, covering
+the sun map's cube a third ahead). FlagsEx is the inserted field where the lump has one (CS:GO's lineage, whose own
+dword there is DisableX360), else the canonical v11+ dword; an SDK 2013 v10 (LightmapRes there) never casts.
+The gate tests MDLF_SOURCEBSP (fg_new also covers Doom 3 and CoD). Game: env_cascade_light marks the map (vbsp_csm, reset per
+map); SV_PropCascadeCasters, after the lump, sets EF_NOSHADOW on a prop from disableshadowdepth instead of disableshadows,
+and a prop spawned later (a template copy) takes the same rule in SV_SpawnProp; the props line counts the props that cast
+because of it.
+
+**Verified.** Rig (headless client, Lex's saves, installed build vs this): save 8's pipe shadow on the ground as in
+Momentum (none before); canals' 3126 v13 records hold 0 in both FlagsEx candidates; the props line "308 cast cascades despite disableshadows". Uncapped frame, local game, two runs
+each: save 8 8.3-9.4 -> 4.4-5.2 ms, save 6 6.4-7.0 -> 3.3, save 5 5.3 -> 1.9-2.1 (shadows 3.39 -> 0.18 ms at save 8).
+Reviews (C/rendering and QC lenses, two rounds): round 1 found template copies keeping P1724's rule, the reach
+following cascades that never run, fg_new matching Doom 3/CoD worlds and FlagsEx read at the wrong v10 offset; round 2
+that CS:GO-lineage v11 keeps FlagsEx in the inserted field.
+
+**Limits.** Source surfaces still get one sun map: r_shadows_cascades and r_shadows_propshadows do nothing on Source
+maps until the vmt receivers read the atlas (BACKLOG). Momentum's shadow reaches 4000 units through cascades; ours
+r_shadows_distance (1024) at r_shadows_res (2048; 4096 is visibly crisper at a little GPU). Casting Source models do not
+receive shadows (P1732), which now includes canals' static props. Indoor casters still throw sun shadows (P1732's open
+item). EF_NOSHADOW is also the blob shadow's switch, so under r_shadows 1 a cascade map's disableshadows props now draw a
+blob. An env_cascade_light that starts disabled or is killed still counts (QC, cl_sun.qc and the plugin read the lump).
+
+## Patch 1759 - A prop's rendercolor tints it (game sv_entities.qc)
+
+**Problem.** Lex, 24 Nov, bhop_canals save 6: "lightshafts are way to bright". The shafts are prop_dynamic
+models/effects/vol_light128x384.mdl (UnlitTwoTexture, additive) with rendermode 1 and rendercolor 21 18 13 / 22 19 14;
+Source modulates every model by rendercolor, and SV_SpawnProp never read it, so both drew at full white.
+
+**Change.** A prop whose rendercolor is not 255 255 255 takes it as .colormod (SV_PropColour: P1250's SV_BrushColour,
+then rounded to the 1/32 step the wire truncates to, so 21 18 13 arrives as 24 16 16 rather than 16 16 8); white stays
+off the wire; the Color input reaches prop_* as well as brush entities. The props line counts tinted props. The
+vmt shaders already multiply e_colourident (twotexture.glsl, vertexlit.glsl).
+
+**Verified.** Rig at save 6: the shafts are dim gold beams over the floor, as in Source; props line "2 tinted" (the
+only two non-white props on the map).
+
+## Patch 1758 - Source's compressed-HDR sky decodes linear, and HDR skies reach the screen in sRGB (plugin hl2/img_vtf.c, hl2/mat_vmt.c; engine client/render.h comment)
+
+**Problem.** Lex, 24 Nov, bhop_canals save 7 beside Momentum: "skybox rendering looks bad, it's super low bit depth".
+sky_day01_05_hdr's faces are RGBS (BGRA8, alpha = a per-texel linear scale). img_vtf decoded rgb with an sRGB read, so
+each texel's colour bent by its own scale step: contour bands through the clouds. And it handed the linear result
+straight to a gamma framebuffer (vid_srgb 0), so the sky drew dark and saturated (a green-yellow storm for Momentum's
+grey overcast). A float $hdrbasetexture face was left linear the same way.
+
+**Change.** RGBS faces decode rgb*alpha*8/255^2 linearly (a 256x256 table over scale x byte), then are sRGB-encoded
+unless vid_srgb is set (Patch 887's rule for float cubemaps). RGBA16F faces with IF_HDRDECOMPRESS take Patch 887's
+half-float encode, and the material path prefixes $hdrbasetexture faces with $hdr: so they get it too.
+
+**Verified.** Offline decode of HL2's sky_day01_05_hdrbk.vtf four ways: the old decode reproduces Lex's shot exactly
+(contours, mean RGB 106/107/78); a linear read with the encode is smooth and grey (173/175/165) like Momentum's; an
+sRGB read with the encode still bands. Rig at save 7: the sky matches Momentum's. Review round 1: prefixing every $hdrbasetexture
+with $hdr: would decode a plain BGRA8 one as RGBS -- withdrawn.
+
+**Limits.** Source also scales the sky by its tonemap (auto-exposure); we draw it at exposure 1.
+
 ## Patch 1747 - Record a replay as a video: fixed-step capture outside demos, an ffmpeg encoder, and a Record window (game m_vidrec.qc, cl_vidrec.qc)
 
 **Problem.** A player (muri, via Lex 23 Nov): "is there an easy way to render a replayed run as a video". Lex wanted a
