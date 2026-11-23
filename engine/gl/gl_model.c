@@ -792,6 +792,8 @@ qboolean Mod_PurgeModel(model_t	*mod, enum mod_purge_e ptype)
 		ZG_FreeGroup(&mod->vphysalt->memgroup);
 		mod->vphysalt = NULL;
 	}
+	mod->farfixbrushes = 0;		//FTESurf Patch 1748: a reload by another loader must not inherit them
+	mod->farfixknown = false;
 	mod->LightPointFold = NULL;	//FTESurf Patch 1717: the plugin's
 	if (mod->archive)
 	{

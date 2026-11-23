@@ -210,7 +210,6 @@ static cvar_t *hl2_brushbevels;
 static volatile int vbsp_stat_bevelbrushes;	//brushes that gained at least one plane
 static volatile int vbsp_stat_bevelplanes;	//planes added in total
 static volatile int vbsp_stat_bevelfull;	//brushes left alone for want of room
-static volatile int vbsp_stat_farfix;	//FTESurf Patch 1748: far brushes given a farfix
 static cvar_t *hl2_dispcollision;
 static cvar_t *hl2_dispflags;	//FTESurf Patch 250
 static cvar_t *hl2_dispwinding;	//FTESurf Patch 256
@@ -2612,7 +2611,7 @@ static qboolean VBSP_LoadBrushes (model_t *mod, qbyte *mod_base, vlump_t *l)
 	/*Patch 318: reset here rather than at map load, because this is the one
 	  place the counters are filled and submodel brushes come out of the same
 	  lump -- there is no second pass to double-count. */
-	vbsp_stat_bevelbrushes = vbsp_stat_bevelplanes = vbsp_stat_bevelfull = vbsp_stat_farfix = 0;
+	vbsp_stat_bevelbrushes = vbsp_stat_bevelplanes = vbsp_stat_bevelfull = 0;
 
 	for (i=0 ; i<count ; i++, out++, in++)
 	{
@@ -2635,7 +2634,7 @@ static qboolean VBSP_LoadBrushes (model_t *mod, qbyte *mod_base, vlump_t *l)
 			prv->brushfarfix[i] = VBSP_FarBrushFix(mod, out, &prv->brushsides[LittleLong(in->firstside)], LittleLong(in->numsides));
 	}
 	if (prv->brushfarfix)
-	{	//counted here, not from vbsp_stat_farfix: two maps can load on worker threads at once (review)
+	{	//counted from the table: two maps can load on worker threads at once (review)
 		unsigned int nfix = 0;
 		for (i = 0; i < count; i++)
 			nfix += !!prv->brushfarfix[i];
@@ -7702,7 +7701,6 @@ static q2cbrush_t *VBSP_FarBrushFix(model_t *mod, const q2cbrush_t *brush, q2cbr
 	VectorSubtract(maxs, c, corner);
 	if (DotProduct(corner, corner) <= 32000.0f*32000.0f)	//else even its own frame cuts the windings: no bevels (pre-318)
 		VBSP_AddBrushBevels(mod, fix, sp, c, false);
-	vbsp_stat_farfix++;
 	return fix;
 }
 
@@ -9492,9 +9490,9 @@ static void VBSP_BuildBIHMain(void *ctx, void *unusedp, size_t unuseda, size_t u
 			vbsp_stat_bevelplanes, vbsp_stat_bevelbrushes,
 			vbsp_stat_bevelfull ? va(", and %i MORE were left alone for want of room", vbsp_stat_bevelfull) : "");
 
-	if (vbsp_stat_farfix)	//FTESurf Patch 1748
-		Con_DPrintf("%s: %i brushes beyond 32000 units given bevels built about themselves (traced from mover 16)\n",
-			mod->name, vbsp_stat_farfix);
+	if (mod->farfixknown && mod->farfixbrushes)	//FTESurf Patch 1748: this map's own count (the static is shared)
+		Con_DPrintf("%s: %u brushes beyond 32000 units given bevels built about themselves (traced from mover 16)\n",
+			mod->name, mod->farfixbrushes);
 
 	//FTESurf Patch 764
 	if (vbsp_stat_phyprops || vbsp_stat_phyrefused)
