@@ -1,5 +1,59 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1747 - Record a replay as a video: fixed-step capture outside demos, an ffmpeg encoder, and a Record window (game m_vidrec.qc, cl_vidrec.qc)
+
+**Problem.** A player (muri, via Lex 23 Nov): "is there an easy way to render a replayed run as a video". Lex wanted a
+record window with the HUD off, supersampling, reflections and refractions at their maximum, a fixed frame time, and
+motion blur only as a toggle that looks right. capture forced fixed frame times only for engine demos (a replay is
+CSQC playing a .rec), a listen server kept the wall clock, capturedemowidth/height applied to capturedemo only, and a
+Linux build could only write image frames.
+
+**Change.** Engine: `capturefixed 1` forces 1/capturerate steps outside demos too, pauses with a menu or the console
+up (the forced clock re-anchors on resume; `capture_held` says so), renders offscreen at capturedemowidth/height, and
+steps a listen server by the same interval (`sv_capturestep`, before cl.gamespeed). A live capture no longer resets
+realtime; real sound cards are off while a fixed one runs (as capturedemo does). New capture driver `ffmpeg`: raw frames
+to the ffmpeg program's stdin (argv through `/bin/sh -c '"$0" "$@"; echo $? >&3'`, so sys_linux.c's SigChld cannot
+steal the exit code; CreateProcessW on Windows), lanczos scale to capture_outwidth/height (render larger to
+supersample), `tmix` of capture_blurframes subframes then `fps=capture_outrate` for a shutter blur, then a thread muxes
+the game's audio (AAC) and reports `saved`/`failed` in capture_ffmpeg_last; ffmpeg is found beside the game or on PATH
+(capture_ffmpeg). The non-PBO capture path passes the buffer start like the PBO path. Game: the replay bar's "record
+video" opens the menu's Record window (size, fps, supersampling, blur Off/Light/Film = a 90/180-degree shutter over
+6-8 subframes, HUD, water and glass at maximum, encoder); Record saves 28 cvars, sets them, has CSQC rewind the replay
+(vidrec_cs), runs `capture` (only the menu may), stops at the replay's end plus a second, and puts every setting back.
+With the HUD hidden CSQC draws no 2D at all; the bar never shows.
+
+**Verified.** linux64 and win64 build, no warnings in changed lines. Real client on surf_ace (3.69 s replay):
+3840x2160 -> 1920x1080 h264, 281 frames at 60 fps (3.69 s + the 1 s hold; the frame before forcing starts is skipped),
+no HUD, the right way up; with blur Film 1683 subframes -> 277 frames plus AAC audio; a fake ffmpeg that takes every
+frame and exits 3 is reported "failed" (sys_linux.c's SigChld could make that read "saved" before the status pipe).
+Reviews: security, C correctness and QC state machines, two rounds, then a security round (it found the Record
+window's capture path open to command injection through a server-set cvar; closed). Not verified: Windows at runtime.
+
+## Patch 1746 - Admin map upload from the game (F8): a streamed file POST with progress, file drops on Wayland, a file picker, and the signing op (game m_mapupload.qc, surfd/mapupd.py)
+
+**Problem.** Lex, 23 Nov: admins (Proto, MarkBeaton54) want to upload a map in game -- F8 in the main menu or on a lobby,
+pick the .bsp or drag it on, a screenshot from a grid, tier/stages/bonuses, the local zone file, a progress bar -- and
+have everyone get it. uri_post sends a QC string (no NUL, all in memory), friends_sign had no upload op, native
+Wayland refused drops, and a dropped BSP was loaded as a map.
+
+**Change.** `uri_postfile(url, id, mime, head, path, flags)` (menu only) streams head + a loose file through
+HTTP_CL_Get, gzipped first on the download thread with flag 1 (FS_GZ_CompressFile, level 6, fails a file that is not its
+length); `uri_progress(id)` reads KiB sent/total and the phase. The menu may READSTREAM and send maps/*.bsp,
+screenshots/ pictures and its drop spool dropped/ (CSQC may not read the spool). friends_sign op `mapupload` (who = the
+manifest's SHA-256): off a lobby as before, on one only under a device's press. While the menu has the keys and asks
+(ui_dropfiles + Menu_FileDropped), Host_RunFile copies a dropped or picked bsp/png/jpg/tga/json to dropped/ and tells
+it; native Wayland takes text/uri-list drops; `sys_openfiledialog` runs zenity/kdialog (Linux) or GetOpenFileNameW
+(Windows) and hands the file only to the menu. An upload path (maps/, screenshots/, dropped/) opens only the real file,
+never QC_FixFileName's data/ twin. Sys_DetachThread for Linux and SDL. Game: the window, and the isolated role-gated
+service surfd/mapupd.py with its root installer (tools/mapupd.md).
+
+**Verified.** linux64 and win64 build, no warnings in changed lines; test_mapupd 23/23; the real client hashed, signed
+and streamed a 1.9 MB map (gzip), a PNG and a zone file to a local mapupd, which published byte-identical copies, the
+pictures and both table rows. Reviews: three lenses, two rounds, then a security round. They found, among others, a
+data/ twin of an upload path that a server's CSQC could plant (upload paths now open only the real file), the drop
+spool readable from CSQC (now in QC_TasprojDenied, which every file builtin asks), and SigChld stealing ffmpeg's
+status. Not verified: real drags (Wayland, X11, Windows), the picker, Windows at runtime, the Pi install.
+
 ## Patch 1748 - Mover 16: brushes more than 32000 units from the origin collide as they are (engine common/com_bih.[ch], common/com_bih_ts.h, common/pm_source.c, common/pmove.h, gl/gl_model.h, server/sv_user.c, server/sv_phys.c; plugin hl2/mod_vbsp.c)
 
 **Problem.** Lex, 23 Nov: on bhop_canals "players fall though the map in some parts" (saves 2 and 3). Save 3's spot
