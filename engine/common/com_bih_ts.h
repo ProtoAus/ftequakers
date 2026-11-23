@@ -19,6 +19,7 @@ typedef struct
 	int oldwind;				//Patch 1630: 1 = Patch 256's winding (Source movers below 13); last, so positional initializers keep their fields
 	int vphys;					//Patch 1713: 1 = boxes meet a submodel's vphysalt (Source movers from 15); appended for the same reason
 	int oldbevel;				//Patch 1748: 1 = a BIH_BRUSHPAIR traces its old brush (Source movers below 16); appended likewise
+	int rotbevel;				//Patch 1761: 1 = a triangle's axial bevels take a rotated box's real extents (Source movers from 17); appended likewise
 } bih_tstate_t;
 extern FTE_TLS bih_tstate_t *bih_ts;
 size_t BIH_ThreadStateSize(void);
@@ -30,6 +31,7 @@ void BIH_ThreadState(void *state);	//NULL: the main one
 #define bih_oldwind			(bih_ts->oldwind)
 #define bih_vphys			(bih_ts->vphys)
 #define bih_oldbevel		(bih_ts->oldbevel)
+#define bih_rotbevel		(bih_ts->rotbevel)
 #define bih_probe_plane		(bih_ts->probe_plane)
 #define bih_probe_kind		(bih_ts->probe_kind)
 #define bih_probe_idx		(bih_ts->probe_idx)

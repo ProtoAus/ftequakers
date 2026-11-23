@@ -80,6 +80,8 @@ struct bihtrace_s
 	vec3_t totalmove;
 	vec3_t endpos;	//bounds.[min|max]
 	qboolean inphy;	//FTESurf Patch 1248: BIH_ClipBoxToBrush is clipping a .phy piece (set round the piece loop)
+	qboolean bevelrot;	//FTESurf Patch 1761: the triangle bevels use bevelext (BIH_BevelHi)
+	vec3_t bevelext;
 	trace_t trace;
 };
 
@@ -605,6 +607,20 @@ the unswept test still calls solid, and PMSrc_TryPlayerMove would clear velocity
 there.  One function means they cannot drift apart.
 ==================
 */
+/*FTESurf Patch 1761: a triangle's axial bevels sit at the box's extent along each MODEL axis.  Patch 320 made the face
+  and edge planes take an oriented box's support (boxdist) and the cull bounds its real extent, but these two blocks kept
+  the unrotated half-size: in a pitched, rolled or diagonally yawed prop the bevel stood too close, so the box sank past
+  the face before it counted (bhop_canals' metal_panel01a ramp, angles -70 90 -180: 7.5 units at its high edge) and a move
+  ending in front of a bevel missed the triangle outright (walked through its low half).  Movers below 17 keep the old
+  half-size, so their recordings replay exactly.*/
+static float BIH_BevelHi(const struct bihtrace_s *tr, int a)
+{
+	return tr->bevelrot ? tr->bevelext[a] : tr->size.max[a];
+}
+static float BIH_BevelLo(const struct bihtrace_s *tr, int a)
+{
+	return tr->bevelrot ? -tr->bevelext[a] : tr->size.min[a];	//the box is centred (BIH_TraceUncached): symmetric
+}
 static int BIH_TriangleBevels(mplane_t *out, const mplane_t *face, const float *p1, const float *p2, const float *p3)
 {
 	static const int ev[3][3] = {{0,1,2},{1,2,0},{2,0,1}};	//edge start, edge end, off-vertex
@@ -795,7 +811,7 @@ static void BIH_ClipToTriangle(struct bihtrace_s *fte_restrict tr, const struct 
 	{
 		if (i < 3)
 		{	//positive normal
-			dist = tr->size.min[i];
+			dist = BIH_BevelLo(tr, i);	//FTESurf Patch 1761
 			dist = tmaxs[i] - dist;
 			d1 = tr->startpos[i] - dist;
 			d2 = tr->endpos[i] - dist;
@@ -803,7 +819,7 @@ static void BIH_ClipToTriangle(struct bihtrace_s *fte_restrict tr, const struct 
 		else
 		{	//negative normal
 			j = i-3;
-			dist = -tr->size.max[j];
+			dist = -BIH_BevelHi(tr, j);	//FTESurf Patch 1761
 			dist = -tmins[j] - dist;
 			d1 = -tr->startpos[j] - dist;
 			d2 = -tr->endpos[j] - dist;
@@ -980,14 +996,14 @@ static void BIH_TestToTriangle(struct bihtrace_s *fte_restrict tr, const struct 
 	{
 		if (i < 3)
 		{	//positive normal
-			dist = tr->size.min[i];
+			dist = BIH_BevelLo(tr, i);	//FTESurf Patch 1761
 			dist = tmaxs[i] - dist;
 			d1 = tr->startpos[i] - dist;
 		}
 		else
 		{	//negative normal
 			j = i-3;
-			dist = -tr->size.max[j];
+			dist = -BIH_BevelHi(tr, j);	//FTESurf Patch 1761
 			dist = -tmins[j] - dist;
 			d1 = -tr->startpos[j] - dist;
 		}
@@ -1957,7 +1973,7 @@ static qboolean BIH_Trace(model_t *model, int forcehullnum, const framestate_t *
 	key.nodes = m->cnodes;
 	key.contents = contents;
 	key.forcehullnum = forcehullnum;
-	key.flags = (capsule?1u:0u) | (axis?2u:0u) | (bih_sourceclip?4u:0u) | (bih_phybrushes?8u:0u) | (bih_phyfix?16u:0u) | (bih_phypick?32u:0u) | (bih_oldwind?64u:0u) | (bih_vphys?128u:0u) | (bih_oldbevel?256u:0u);
+	key.flags = (capsule?1u:0u) | (axis?2u:0u) | (bih_sourceclip?4u:0u) | (bih_phybrushes?8u:0u) | (bih_phyfix?16u:0u) | (bih_phypick?32u:0u) | (bih_oldwind?64u:0u) | (bih_vphys?128u:0u) | (bih_oldbevel?256u:0u) | (bih_rotbevel?512u:0u);
 	key.bevels = pm_trisoup_bevels.ival;
 	key.rotated = pm_rotatedboxhulls.ival;
 	VectorCopy(start, key.v+0);
@@ -2093,6 +2109,21 @@ static qboolean BIH_TraceUncached(model_t *model, int forcehullnum, const frames
 			}
 			VectorSubtract(tr.size.min, point, tr.size.min);
 			VectorSubtract(tr.size.max, point, tr.size.max);
+		}
+
+		/*FTESurf Patch 1761: the rotated box's extent along each model axis, taken only where it moves a bevel by more
+		  than 1/64: a prop turned by whole right angles (z kept vertical) then traces bit-identically to mover 16, which
+		  is what lets SV_PMSrcVer pin 16 on a map whose solid props are all within 1e-4 of that.*/
+		tr.bevelrot = false;
+		if (tr.boxrotated && bih_rotbevel)
+		{
+			int a;
+			for (a = 0; a < 3; a++)
+			{
+				tr.bevelext[a] = tr.size.max[0]*fabs(tr.boxaxis[0][a]) + tr.size.max[1]*fabs(tr.boxaxis[1][a]) + tr.size.max[2]*fabs(tr.boxaxis[2][a]);
+				if (fabs(tr.bevelext[a] - tr.size.max[a]) > 1.0f/64)
+					tr.bevelrot = true;
+			}
 		}
 
 
@@ -2902,6 +2933,69 @@ void BIH_EnumCollision (model_t *mod, const vec3_t mins, const vec3_t maxs, stru
 	if (!mod || !mod->cnodes || !en)
 		return;
 	BIH_EnumCollision_r ((struct bihnode_s*)mod->cnodes, mins, maxs, en);
+}
+
+//FTESurf Patch 1761: a rotation mover 17's triangle bevels can tell apart from mover 16's -- an axis component more than
+//1e-4 off 0 or 1, or z not kept vertical (a player box is square only in x and y).  See BIH_TraceUncached's 1/64 rule.
+qboolean BIH_AxisOffGrid (const vec3_t axis[3])
+{
+	int i, j;
+	for (i = 0; i < 3; i++)
+		for (j = 0; j < 3; j++)
+		{
+			float c = fabs(axis[i][j]);
+			if (!(c <= 1e-4f || c >= 1-1e-4f))
+				return true;	//also NaN
+		}
+	return !(fabs(axis[2][2]) >= 1-1e-4f);
+}
+static unsigned int BIH_OffGridProps_r (const struct bihnode_s *node, unsigned int depth)
+{
+	const struct bihtransform_s *trn;
+	unsigned int i, n = 0;
+	if (depth > 256)
+		return 1;	//cannot tell: count it
+	switch (node->type)
+	{
+	case BIH_GROUP:
+		for (i = 0; i < (unsigned int)node->group.numchildren; i++)
+			n += BIH_OffGridProps_r (node+node->group.firstchild+i, depth+1);
+		break;
+#ifdef BIH_USEBIH
+	case BIH_X:
+	case BIH_Y:
+	case BIH_Z:
+		n += BIH_OffGridProps_r (node+node->bihnode.firstchild+0, depth+1);
+		n += BIH_OffGridProps_r (node+node->bihnode.firstchild+1, depth+1);
+		break;
+#endif
+#ifdef BIH_USEBVH
+	case BVH_X:
+	case BVH_Y:
+	case BVH_Z:
+		n += BIH_OffGridProps_r (node+node->bvhnode.firstchild+0, depth+1);
+		n += BIH_OffGridProps_r (node+node->bvhnode.firstchild+1, depth+1);
+		break;
+#endif
+	case BIH_MODEL:
+		trn = node->data.mesh.tr;
+		if (!trn)
+			break;
+		//traced as its model (triangles) when it has no pieces for the movers that count here (7+, 9+: the fixed set)
+		if (!(trn->phyfix ? trn->numphyfixbrushes : trn->numphybrushes) && BIH_AxisOffGrid((const vec3_t*)trn->axis))
+			n++;
+		break;
+	default:
+		break;
+	}
+	return n;
+}
+//Patch 1761: the static props in mod's tree that the Source mover traces through a rotated model off the grid.
+unsigned int BIH_OffGridProps (model_t *mod)
+{
+	if (!mod || !mod->cnodes || mod->funcs.NativeTrace != BIH_Trace)
+		return 0;
+	return BIH_OffGridProps_r ((const struct bihnode_s*)mod->cnodes, 0);
 }
 
 static qboolean BIH_HeldFinite(float value)

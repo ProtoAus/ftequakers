@@ -29,6 +29,8 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include "sv_tas.h"
 #include "pm_thread.h"	//Patch 1467: last -- pmove and movevars are this thread's
 #include "com_bih_ts.h"	//Patch 1467: the BIH clip flags and probe record, a worker binds its own
+qboolean BIH_AxisOffGrid (const vec3_t axis[3]);	//Patch 1761 (com_bih.h has no include guard)
+unsigned int BIH_OffGridProps (model_t *mod);
 
 #define Q2EDICT_NUM(i) (q2edict_t*)((char *)ge->edicts+i*ge->edict_size)
 #define Q2NUM_FOR_EDICT(ent) (((char *)ent - (char *)ge->edicts) / ge->edict_size)
@@ -147,6 +149,70 @@ const char *sv_pmpin_names[SV_PMPIN_COUNT] =
 	"momlimit", "momcool", "momslide"	//Patch 882: mover 10's inputs
 };
 
+/*FTESurf Patch 1761: whether mover 17 can trace anything on this map differently from 16, from the map's own data so
+  the lobby and the verifier agree: a prop entity the lump makes solid (its "solid" key, else its class's default as
+  SV_SpawnProp reads it), turned off the grid (BIH_AxisOffGrid) or parented (a parent may turn it), or a static prop the
+  mover traces through its rotated model.  Counting a prop the game later leaves non-solid only pins 17 where 16 would
+  also have replayed.*/
+static qboolean SV_PMOffGridRead(model_t *wm)
+{
+	const char *d = Mod_GetEntitiesString(wm);
+	char key[64], val[256], cls[64];
+	vec3_t ang, ax[3];
+	int solid, hassolid, parented;
+	if (BIH_OffGridProps(wm))
+		return true;
+	while (d && (d = COM_ParseOut(d, key, sizeof(key))) && *key == '{')
+	{
+		*cls = 0; VectorClear(ang); solid = 0; hassolid = false; parented = false;
+		while ((d = COM_ParseOut(d, key, sizeof(key))) && *key != '}')
+		{
+			if (!(d = COM_ParseOut(d, val, sizeof(val))))
+				break;
+			if (!Q_strcasecmp(key, "classname"))
+				Q_strncpyz(cls, val, sizeof(cls));
+			else if (!Q_strcasecmp(key, "angles"))
+				sscanf(val, "%f %f %f", &ang[0], &ang[1], &ang[2]);
+			else if (!Q_strcasecmp(key, "angle"))
+				{ ang[0] = 0; ang[1] = atof(val); ang[2] = 0; }
+			else if (!Q_strcasecmp(key, "solid"))
+				{ solid = atoi(val); hassolid = true; }
+			else if (!Q_strcasecmp(key, "parentname") && *val)
+				parented = true;
+		}
+		if (Q_strncasecmp(cls, "prop_", 5))
+			continue;
+		if (!hassolid || !solid)	//SV_SpawnProp: 0 or absent takes the class default
+			solid = (!Q_strncasecmp(cls, "prop_physics", 12) || !Q_strcasecmp(cls, "prop_door_rotating")) ? 6 : 0;
+		if (!solid)
+			continue;
+		AngleVectors(ang, ax[0], ax[1], ax[2]);
+		if (parented || BIH_AxisOffGrid((const vec3_t*)ax))
+			return true;
+	}
+	return false;
+}
+static qboolean SV_PMOffGrid(void)
+{
+	static const model_t *cm;
+	static const char *ce;
+	static unsigned int ccrc;
+	static char cname[MAX_QPATH];
+	static qboolean cv;
+	model_t *wm = sv.world.worldmodel;
+	const char *ents;
+	qboolean v;
+	if (!wm || !(wm->engineflags & MDLF_SOURCEBSP))
+		return false;
+	ents = Mod_GetEntitiesString(wm);
+	if (wm == cm && ents == ce && (unsigned int)wm->entitiescrc == ccrc && !strcmp(wm->name, cname))
+		return cv;
+	v = SV_PMOffGridRead(wm);
+	if (Sys_IsMainThread())
+		{ cm = wm; ce = ents; ccrc = (unsigned int)wm->entitiescrc; Q_strncpyz(cname, wm->name, sizeof(cname)); cv = v; }
+	return v;
+}
+
 //Patch 492: the mover a pin's numbers need.  Below fixrampbugs 2, version 1
 //replays them identically, so older verifiers still can.  An engine that
 //pinned 1 at 2 ran other rules (pre-492, or 492's first cut).  0 is no mover:
@@ -175,11 +241,15 @@ int SV_PMSrcVer(const float *pin)
 	//  Below fixslopes 2 it moves as 13, and pins 13 so an older verifier still replays it.
 	//Patch 1713: v15 zeroes vertical speed on every grounding (Source's SetGroundEntity), at any fixslopes.
 	//Patch 1748: v16 traces far brushes' rebuilt bevels; on a world without any it moves as 15 and pins 15.
+	//Patch 1761: v17 bevels rotated mesh props at the box's real extent; on a world without one off the grid it moves
+	//  as 16 (and so, without far brushes, as 15).
 	if (pin[0] == 14 && !(pin[SV_PMPIN_FIXSLOPES] >= 2))
 		return 13;
+	if (pin[0] == 17 && !SV_PMOffGrid())
+		return (sv.world.worldmodel && sv.world.worldmodel->farfixbrushes) ? 16 : 15;
 	if (pin[0] == 16 && !(sv.world.worldmodel && sv.world.worldmodel->farfixbrushes))
 		return 15;
-	if (pin[0] == 3 || pin[0] == 4 || pin[0] == 5 || pin[0] == 6 || pin[0] == 7 || pin[0] == 8 || pin[0] == 9 || pin[0] == 10 || pin[0] == 11 || pin[0] == 12 || pin[0] == 13 || pin[0] == 14 || pin[0] == 15 || pin[0] == 16)
+	if (pin[0] == 3 || pin[0] == 4 || pin[0] == 5 || pin[0] == 6 || pin[0] == 7 || pin[0] == 8 || pin[0] == 9 || pin[0] == 10 || pin[0] == 11 || pin[0] == 12 || pin[0] == 13 || pin[0] == 14 || pin[0] == 15 || pin[0] == 16 || pin[0] == 17)
 		return pin[0];
 	return f >= 2 ? 2 : f < 2 ? 1 : 0;
 }

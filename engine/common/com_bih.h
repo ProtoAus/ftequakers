@@ -147,6 +147,8 @@ struct bihenum_s
 	unsigned int props, propsnohull;	//out: BIH_MODEL leaves met, and those without hull pieces
 };
 void BIH_EnumCollision (model_t *mod, const vec3_t mins, const vec3_t maxs, struct bihenum_s *en);
+qboolean BIH_AxisOffGrid (const vec3_t axis[3]);	//FTESurf Patch 1761
+unsigned int BIH_OffGridProps (model_t *mod);		//FTESurf Patch 1761
 /* Conservative VBSP air proof; false includes unknown shape or exhausted budget. */
 qboolean BIH_HeldAirBoxEmpty(model_t *mod, const vec3_t mins, const vec3_t maxs);
 unsigned int BIH_HeldAirBoxTest(unsigned int *checks);

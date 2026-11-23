@@ -4570,6 +4570,7 @@ void PMSrc_PlayerMove (float gamespeed)
 	bih_oldwind = (movevars.sourceversion < 13);	//Patch 1630: likewise (render winding is everyone else's default)
 	bih_vphys = (movevars.sourceversion >= 15);	//Patch 1713: likewise (VPHYSICS brush entities through their vcollide)
 	bih_oldbevel = (movevars.sourceversion < 16);	//Patch 1748: likewise (far brushes keep the bevels built about the origin)
+	bih_rotbevel = (movevars.sourceversion >= 17);	//Patch 1761: likewise (a rotated box's triangle bevels at its real extent)
 
 	/* FTESurf Patch 280: once per command -- the physent set does not change
 	   inside a move.  With pm_slide 0, or on a map with no func_slide, this is
@@ -4707,6 +4708,7 @@ void PMSrc_PlayerMove (float gamespeed)
 	bih_oldwind = 0;
 	bih_vphys = 0;
 	bih_oldbevel = 0;
+	bih_rotbevel = 0;
 }
 
 /*
