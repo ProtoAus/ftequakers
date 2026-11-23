@@ -2635,7 +2635,13 @@ static qboolean VBSP_LoadBrushes (model_t *mod, qbyte *mod_base, vlump_t *l)
 			prv->brushfarfix[i] = VBSP_FarBrushFix(mod, out, &prv->brushsides[LittleLong(in->firstside)], LittleLong(in->numsides));
 	}
 	if (prv->brushfarfix)
-		mod->farfixbrushes = vbsp_stat_farfix;
+	{	//counted here, not from vbsp_stat_farfix: two maps can load on worker threads at once (review)
+		unsigned int nfix = 0;
+		for (i = 0; i < count; i++)
+			nfix += !!prv->brushfarfix[i];
+		mod->farfixbrushes = nfix;
+		mod->farfixknown = true;
+	}
 
 	return true;
 }

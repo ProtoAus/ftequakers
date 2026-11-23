@@ -1196,6 +1196,9 @@ void SV_SpawnServer (const char *server, const char *startspot, qboolean noents,
 			Sys_Error("\"%s\" is not a bsp model\n", sv.modelname);
 		else if (!Mod_GetEntitiesString(sv.world.worldmodel))
 			Sys_Error("\"%s\" has no entity data\n", sv.modelname);
+		//FTESurf Patch 1748: a mismatched plugin would silently record 15 on far brushes (review)
+		if ((sv.world.worldmodel->engineflags & MDLF_SOURCEBSP) && !sv.world.worldmodel->farfixknown)
+			Con_Printf(CON_WARNING "%s: the hl2 plugin predates mover 16 -- brushes far from the origin collide and record as mover 15; ship the plugin with this engine\n", sv.modelname);
 	}
 
 	sv.state = ss_dead;

@@ -3122,6 +3122,7 @@ static qboolean BIH_LeafClaims (const struct bihleaf_s *leaf)
 		}
 #if defined(Q2BSPS) || defined(Q3BSPS)
 	case BIH_BRUSH:
+	case BIH_BRUSHPAIR:	//Patch 1748: the old brush; its farfix carries the same six axial sides
 		{
 			const q2cbrush_t *b = leaf->data.brush;
 			unsigned int found = 0;

@@ -1210,8 +1210,10 @@ typedef struct model_s
 	//every model.  APPEND-ONLY like the fields above.
 	void (*LightPointFold)(struct model_s *model, const vec3_t point, vec3_t res_diffuse, vec3_t res_ambient, vec3_t res_dir);
 	//FTESurf Patch 1748: brushes the hl2 plugin rebuilt for mover 16 (BIH_BRUSHPAIR); 0 = the map moves as mover 15,
-	//and SV_PMSrcVer pins 15.  Written only by a plugin that saw pm_sourceversion >= 16.  APPEND-ONLY likewise.
+	//and SV_PMSrcVer pins 15.  farfixknown: a plugin that saw pm_sourceversion >= 16 counted them (an older plugin
+	//leaves both 0, and its far brushes keep mover 15's collision).  APPEND-ONLY likewise.
 	unsigned int	farfixbrushes;
+	qboolean		farfixknown;
 } model_t;
 
 #define MDLF_EMITREPLACE     0x0001 // particle effect engulphs model (don't draw)
