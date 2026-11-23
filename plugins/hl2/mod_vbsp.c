@@ -189,6 +189,7 @@ extern cvar_t *hl2_dither_force;	//FTESurf Patch 174, likewise
 cvar_t *hl2_texdiag;	//FTESurf build 11: the engine's r_texdiag, borrowed -- see VBSP_GenerateMaterials.
 							//Patch 239 dropped `static`: img_vtf.c reports the per-file image format under it.
 static cvar_t *hl2_propdist;	//FTESurf Patch 193: default draw distance for props that declare no fade -- see VBSP_PrepareFrame.
+static cvar_t *vbsp_r_shadows, *vbsp_r_shadows_distance, *vbsp_r_shadows_cascades, *vbsp_r_shadows_cascade_dist;	//FTESurf Patch 1760: the engine's
 static cvar_t *hl2_detail;	//FTESurf Patch 1038: detail props (grass) -- see VBSP_DetailBuild.
 cvar_t *hl2_rigidprops;			//FTESurf Patch 230: read by Mod_LoadHL2Model in mod_hl2.c, registered here with the rest.
 
@@ -746,6 +747,7 @@ typedef struct vbspinfo_s
 	size_t			detailrawsize;
 	char			detailmaterial[MAX_QPATH];	//worldspawn "detailmaterial"
 	float			detailfadestart, detailfadeend;	//env_detail_controller's; -1 = none
+	qboolean		csm;	//FTESurf Patch 1760: the map has a Strata env_cascade_light, so static props cast the sun's shadow
 	float			detailmaxd, detailfade;		//as Source sets cl_detaildist / cl_detailfade from them
 	qboolean		detailbuilt;
 	size_t			numdetailcells, maxdetailcells;
@@ -2386,6 +2388,8 @@ static void VBSP_LoadDetailKeys(model_t *mod, const qbyte *entdata, size_t entle
 		}
 		if (!Q_strcasecmp(classname, "worldspawn") && *mat)
 			Q_strlcpy(prv->detailmaterial, mat, sizeof(prv->detailmaterial));
+		else if (!Q_strcasecmp(classname, "env_cascade_light"))
+			prv->csm = true;	//FTESurf Patch 1760
 		else if (!Q_strcasecmp(classname, "env_detail_controller"))
 		{
 			prv->detailfadestart = fmin;
@@ -6484,7 +6488,13 @@ static qboolean VBSP_LoadStaticProps(model_t *mod, qbyte *offset, size_t size, i
 			the code pretending to use it.
 			*/
 			propflagsex = LittleLong(*(unsigned int*)prop);				prop += sizeof(unsigned int);
-			(void)propflagsex;
+#ifdef HAVE_CLIENT
+			//FTESurf Patch 1760: on a cascade map Strata draws every static prop into the sun's shadow maps
+			//unless FlagsEx says DISABLE_SHADOW_DEPTH (1) or DISABLE_CSM (2) -- its VRAD bakes no prop shadows
+			//there (bhop_canals' pipes shadow the ground in Momentum and nowhere in the lightmap).
+			if (prv->csm && !(propflagsex & 3))
+				ent->flags &= ~RF_NOSHADOW;
+#endif
 		}
 		/*
 		FTESurf Patch 228 -- the inserted field, and it belongs HERE: after FlagsEx
@@ -10078,6 +10088,31 @@ static qboolean VBSP_CullBox (vec3_t mins, vec3_t maxs)
 			return true;
 	return false;
 }
+
+//FTESurf Patch 1760: an off-screen static caster within r_shadows 2's reach still throws its shadow on screen,
+//so it is submitted (the main pass culls it again, gl_alias.c R_CullEntityBox).
+static qboolean VBSP_ShadowCasterInReach (const entity_t *e, float radius)
+{
+	vec3_t d;
+	float reach;
+	if (e->flags & RF_NOSHADOW)
+		return false;
+	if (!vbsp_r_shadows)
+	{	//the engine's own (renderer.c, gl_shadow.c): a NULL default only finds
+		vbsp_r_shadows = cvarfuncs->GetNVFDG("r_shadows", NULL, 0, NULL, NULL);
+		vbsp_r_shadows_distance = cvarfuncs->GetNVFDG("r_shadows_distance", NULL, 0, NULL, NULL);
+		vbsp_r_shadows_cascades = cvarfuncs->GetNVFDG("r_shadows_cascades", NULL, 0, NULL, NULL);
+		vbsp_r_shadows_cascade_dist = cvarfuncs->GetNVFDG("r_shadows_cascade_dist", NULL, 0, NULL, NULL);
+	}
+	if (!vbsp_r_shadows || vbsp_r_shadows->ival != 2 || !vbsp_r_shadows_distance)
+		return false;
+	reach = vbsp_r_shadows_distance->value;
+	if (vbsp_r_shadows_cascades && vbsp_r_shadows_cascades->ival > 1 && vbsp_r_shadows_cascade_dist)
+		reach = max(reach, vbsp_r_shadows_cascade_dist->value);
+	reach += radius;
+	VectorSubtract(e->origin, refdef->vieworg, d);
+	return DotProduct(d, d) < reach * reach;
+}
 // nettest: SAFE world-surface emit. A VBSP/Source world face reached by the leaf/node
 // walk can have NO valid render batch: mod->nummodelsurfaces is narrowed to
 // cmodels[0].numsurfaces (see ~"nummodelsurfaces = prv->cmodels[0].numsurfaces"), so
@@ -11981,7 +12016,7 @@ static void VBSP_PrepareFrame(model_t *mod, refdef_t *r_refdef, int area, int cl
 				float r = src->model->radius * (src->scale > 0 ? src->scale : 1);	//Patch 1559: a scale-10 logo was culled at a tenth of its size
 				VectorSet(cmin, src->origin[0]-r, src->origin[1]-r, src->origin[2]-r);
 				VectorSet(cmax, src->origin[0]+r, src->origin[1]+r, src->origin[2]+r);
-				if (VBSP_CullBox(cmin, cmax))
+				if (VBSP_CullBox(cmin, cmax) && !VBSP_ShadowCasterInReach(src, r))
 				{
 					PROP_VERDICT(PROPV_FRUSTUM);
 					continue;

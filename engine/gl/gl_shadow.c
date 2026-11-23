@@ -5145,6 +5145,7 @@ void Sh_GenerateFakeShadows(void)	//generates shadowmaps and selects the dlight,
 	srect_t rect;
 	int smsize;
 	int texwidth, texheight;
+	qboolean atlas = true;	//FTESurf Patch 1760
 
 	if (*r_shadows_throwdirection.string)
 		VectorCopy(r_shadows_throwdirection.vec4, l->axis[0]);
@@ -5221,6 +5222,15 @@ void Sh_GenerateFakeShadows(void)	//generates shadowmaps and selects the dlight,
 	fs_sunpass = true;
 	VectorNegate(l->axis[0], fs_sundir);
 
+	//FTESurf Patch 1760: Source surfaces (plugins/hl2 vmt/*.glsl) read only the single sun map (l_cubematrix), so on
+	//a VBSP world (fg_new, as gl_warp.c tests) the atlases below left them sampling a stale matrix: bhop_canals' point
+	//lights turned the default r_shadows_propshadows 1 into its atlas, and no prop shadow landed, at a third of the fps.
+	if (r_worldentity.model && r_worldentity.model->fromgame == fg_new)
+	{
+		fs_slotcount = 1;
+		atlas = false;
+	}
+
 	//nettest P110: more than one cast direction this frame -> render the atlas instead of the single map.
 	if (fs_slotcount > 1 && qrenderer == QR_OPENGL)
 	{
@@ -5231,7 +5241,7 @@ void Sh_GenerateFakeShadows(void)	//generates shadowmaps and selects the dlight,
 	//nettest Phase-1: per-prop PERSPECTIVE shadows (only reachable with slots==1, since slots>1 returned
 	//above).  Cell 0 = the sun, cells 1..N = one spot shadow per prop from its dominant lamp.  For now this
 	//replaces the cascades (Phase 2 merges them); gl_shader.c injects the matching FAKESHADOWS_PERSP_FIRST.
-	if (r_shadows_propshadows.ival && qrenderer == QR_OPENGL)
+	if (atlas && r_shadows_propshadows.ival && qrenderer == QR_OPENGL)
 	{
 		fs_propshadowpass = true;	//Patch 120: tells Sh_FakeShadowFilter that lamp cells are ADDITIVE,
 									//so the sun cells must admit every caster (see the filter's sun branch)
@@ -5243,7 +5253,7 @@ void Sh_GenerateFakeShadows(void)	//generates shadowmaps and selects the dlight,
 	//nettest P114: single cast direction -> optionally split the SUN into view-depth cascades.  Mutually
 	//exclusive with slots (which already claimed the cells above); fs_slotcount is 1 here so the caster
 	//filter passes everything into every cascade.
-	if (qrenderer == QR_OPENGL)
+	if (atlas && qrenderer == QR_OPENGL)
 	{
 		int cascades = bound(1, r_shadows_cascades.ival, SH_MAX_CASCADES);
 		if (cascades > 1)
