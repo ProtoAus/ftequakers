@@ -41,7 +41,7 @@ Deploy: the online verifier is the lobby binary (surfd sweep.py ENGINE), so the 
 client on a mover-16 lobby predicts the old far brushes and is corrected by the server.
 **Review round 2** (ABI; evidence): no defects in round 1. The note now needs an exact replay (an approximate one runs
 the live mover, 16); Mod_PurgeModel clears farfixbrushes/farfixknown; the shared static counter is gone (the dev line
-prints the map's own count).
+prints the map's own count). Round 3: that line checks the exe's tail first.
 
 ## Patch 1745 - Fetchers send WOS User-Agents with no URL (game surfd/ksfimport.py, mapwatch.py, mapnew.py, momgrab.py, steam.py, tasupd.py; tools/momfetch.py and the PC fetchers)
 

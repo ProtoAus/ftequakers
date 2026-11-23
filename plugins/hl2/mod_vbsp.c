@@ -9490,7 +9490,7 @@ static void VBSP_BuildBIHMain(void *ctx, void *unusedp, size_t unuseda, size_t u
 			vbsp_stat_bevelplanes, vbsp_stat_bevelbrushes,
 			vbsp_stat_bevelfull ? va(", and %i MORE were left alone for want of room", vbsp_stat_bevelfull) : "");
 
-	if (mod->farfixknown && mod->farfixbrushes)	//FTESurf Patch 1748: this map's own count (the static is shared)
+	if (vbsp_tail1748 && mod->farfixknown && mod->farfixbrushes)	//FTESurf Patch 1748: an older exe's model_t has no such fields
 		Con_DPrintf("%s: %u brushes beyond 32000 units given bevels built about themselves (traced from mover 16)\n",
 			mod->name, mod->farfixbrushes);
 
