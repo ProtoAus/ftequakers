@@ -29,6 +29,17 @@ on the new server: bhop_canals 16, surf_mesa 15. Local gate against 0.1.61 (pm_v
 on bhop_canals, ahop_coast, surf_mesa): identical except bhop_canals' trace/srctrace/proptrace/fixtrace/picktrace
 hashes, which are plain traces at default flags (they now meet the fixed brushes); every mover hash is identical.
 
+**Review round 1** (control flow; evidence; cheater's gain). The new model_t fields broke Patch 1717's submodel copy on
+an older exe (a whole-struct memcpy ran into the next model slot): the exe now answers FTESurfModelTail/1748 and the
+plugin builds pairs, writes the fields and copies the whole struct only then. farfixbrushes came from a static counter
+two worker-thread loads could share: counted from the plugin's own table. A mover-16 exe with an older plugin recorded
+15 on far brushes without a word: farfixknown, and a load-time warning on a Source world without it. BIH_LeafClaims
+treated a pair as unbounded, which switched off P1714/P1733's entity skipping on every model with a far brush: it
+claims through the old brush (both carry the same six axial sides). pm_verify/pm_recsim print a note (not a verdict)
+when a pre-16 run replays on a map with rebuilt brushes, so runs ranked through the old collision can be found.
+Deploy: the online verifier is the lobby binary (surfd sweep.py ENGINE), so the lobby engine swap moves both; an old
+client on a mover-16 lobby predicts the old far brushes and is corrected by the server.
+
 ## Patch 1745 - Fetchers send WOS User-Agents with no URL (game surfd/ksfimport.py, mapwatch.py, mapnew.py, momgrab.py, steam.py, tasupd.py; tools/momfetch.py and the PC fetchers)
 
 **Problem.** Lex, 23 Nov: "rename them WOS"; "remove the URL after the User agent, it's not correct yet". Main sent

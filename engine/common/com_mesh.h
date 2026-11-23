@@ -343,6 +343,8 @@ typedef struct modplugfuncs_s
 #define plugmodeltail1713_name "FTESurfModelTail/1713"
 //FTESurf Patch 1717: likewise for model_t.LightPointFold.
 #define plugmodeltail1717_name "FTESurfModelTail/1717"
+//FTESurf Patch 1748: likewise for model_t.farfixbrushes/farfixknown, and the exe traces BIH_BRUSHPAIR (com_bih.h).
+#define plugmodeltail1748_name "FTESurfModelTail/1748"
 } plugmodfuncs_t;
 #define MODPLUGFUNCS_VERSION 6	//FTESurf Patch 764: struct bihtransform_s grew (the plugin fills it, com_bih.c reads it); 888: again, and model_t.phyfixed
 

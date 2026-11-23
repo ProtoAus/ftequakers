@@ -1141,6 +1141,7 @@ demos say faces stand 0.5 proud, so Momentum's sweeps are not that one.
 */
 #define VBSP_VPHYS_MARGIN	0.5f	/*vphysics' 0.25 separation radius, on the hull and on the box*/
 static qboolean vbsp_tail1717;	//FTESurf Patch 1717: the exe answers plugmodeltail1717_name: model_t has LightPointFold
+static qboolean vbsp_tail1748;	//FTESurf Patch 1748: ...plugmodeltail1748_name: farfixbrushes/farfixknown, BIH_BRUSHPAIR
 static qboolean vbsp_tail1713;	//the exe answers plugmodeltail1713_name: its model_t has vphysalt (com_mesh.h)
 static unsigned int vbsp_stat_vphysmodels, vbsp_stat_vphysrefused, vbsp_stat_vphyspieces;
 
@@ -2605,9 +2606,8 @@ static qboolean VBSP_LoadBrushes (model_t *mod, qbyte *mod_base, vlump_t *l)
 	out = prv->brushes;
 
 	prv->numbrushes = count;
-	//FTESurf Patch 1748: an exe below mover 16 has no BIH_BRUSHPAIR (Patch 1630's test) and no model_t farfixbrushes
-	prv->brushfarfix = cvarfuncs->GetFloat("pm_sourceversion") >= 16 ?
-		plugfuncs->GMalloc(&mod->memgroup, sizeof(*prv->brushfarfix) * (count+1)) : NULL;
+	//FTESurf Patch 1748: an exe without tail 1748 has no BIH_BRUSHPAIR and no model_t farfix fields
+	prv->brushfarfix = vbsp_tail1748 ? plugfuncs->GMalloc(&mod->memgroup, sizeof(*prv->brushfarfix) * (count+1)) : NULL;
 
 	/*Patch 318: reset here rather than at map load, because this is the one
 	  place the counters are filled and submodel brushes come out of the same
@@ -14793,7 +14793,8 @@ static qboolean VBSP_LoadMap (model_t *mod, void *filein, size_t filelen)
 		mod = modfuncs->BeginSubmodelLoad(name);
 		//FTESurf Patch 1717: only as much of model_t as the exe has (its tails, com_mesh.h); a whole-struct copy
 		//on an older exe ran past this slot into the next model's name
-		memcpy(mod, wmod, vbsp_tail1717 ? sizeof(*mod) : vbsp_tail1713 ? offsetof(model_t, LightPointFold) :
+		memcpy(mod, wmod, vbsp_tail1748 ? sizeof(*mod) : vbsp_tail1717 ? offsetof(model_t, farfixbrushes) :
+			vbsp_tail1713 ? offsetof(model_t, LightPointFold) :
 			hl2_bodyparts ? offsetof(model_t, vphysalt) : offsetof(model_t, geombase));
 		mod->archive = NULL;
 		mod->entities_raw = NULL;
@@ -15181,6 +15182,7 @@ qboolean VBSP_Init(void)
 	loadingfuncs = plugfuncs->GetEngineInterface(plugloadingfuncs_name, sizeof(*loadingfuncs));
 	vbsp_tail1713 = plugfuncs->GetEngineInterface(plugmodeltail1713_name, sizeof(int)) != NULL;	//FTESurf Patch 1713
 	vbsp_tail1717 = plugfuncs->GetEngineInterface(plugmodeltail1717_name, sizeof(int)) != NULL;	//FTESurf Patch 1717
+	vbsp_tail1748 = plugfuncs->GetEngineInterface(plugmodeltail1748_name, sizeof(int)) != NULL;	//FTESurf Patch 1748
 
 	//nettest: a dedicated/headless server has no client Image/renderer interface (the same condition the
 	//"hl2: VTF/VMT/TTH support unavailable" banners report).  Mark qrenderer QR_NONE so the renderer-only
