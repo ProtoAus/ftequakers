@@ -189,7 +189,7 @@ extern cvar_t *hl2_dither_force;	//FTESurf Patch 174, likewise
 cvar_t *hl2_texdiag;	//FTESurf build 11: the engine's r_texdiag, borrowed -- see VBSP_GenerateMaterials.
 							//Patch 239 dropped `static`: img_vtf.c reports the per-file image format under it.
 static cvar_t *hl2_propdist;	//FTESurf Patch 193: default draw distance for props that declare no fade -- see VBSP_PrepareFrame.
-static cvar_t *vbsp_r_shadows, *vbsp_r_shadows_distance, *vbsp_r_shadows_cascades, *vbsp_r_shadows_cascade_dist;	//FTESurf Patch 1760: the engine's
+static cvar_t *vbsp_r_shadows, *vbsp_r_shadows_distance;	//FTESurf Patch 1760: the engine's
 static cvar_t *hl2_detail;	//FTESurf Patch 1038: detail props (grass) -- see VBSP_DetailBuild.
 cvar_t *hl2_rigidprops;			//FTESurf Patch 230: read by Mod_LoadHL2Model in mod_hl2.c, registered here with the rest.
 
@@ -6491,8 +6491,9 @@ static qboolean VBSP_LoadStaticProps(model_t *mod, qbyte *offset, size_t size, i
 #ifdef HAVE_CLIENT
 			//FTESurf Patch 1760: on a cascade map Strata draws every static prop into the sun's shadow maps
 			//unless FlagsEx says DISABLE_SHADOW_DEPTH (1) or DISABLE_CSM (2) -- its VRAD bakes no prop shadows
-			//there (bhop_canals' pipes shadow the ground in Momentum and nowhere in the lightmap).
-			if (prv->csm && !(propflagsex & 3))
+			//there (bhop_canals' pipes shadow the ground in Momentum and nowhere in the lightmap).  From v11:
+			//a v10 dword here is LightmapRes (SDK 2013) or DisableX360 (CS:GO, FlagsEx in the inserted field).
+			if (prv->csm && version >= 11 && !(propflagsex & 3))
 				ent->flags &= ~RF_NOSHADOW;
 #endif
 		}
@@ -10090,7 +10091,9 @@ static qboolean VBSP_CullBox (vec3_t mins, vec3_t maxs)
 }
 
 //FTESurf Patch 1760: an off-screen static caster within r_shadows 2's reach still throws its shadow on screen,
-//so it is submitted (the main pass culls it again, gl_alias.c R_CullEntityBox).
+//so it is submitted (the main pass culls it again, gl_alias.c R_CullEntityBox).  The sun map is a sphere of
+//r_shadows_distance centred a third of it ahead of the eye (Sh_OrthoAlignToFrustum); 4/3 about the eye covers it.
+//Cascades never run on a Source map (gl_shadow.c), so their distance does not count.
 static qboolean VBSP_ShadowCasterInReach (const entity_t *e, float radius)
 {
 	vec3_t d;
@@ -10101,15 +10104,10 @@ static qboolean VBSP_ShadowCasterInReach (const entity_t *e, float radius)
 	{	//the engine's own (renderer.c, gl_shadow.c): a NULL default only finds
 		vbsp_r_shadows = cvarfuncs->GetNVFDG("r_shadows", NULL, 0, NULL, NULL);
 		vbsp_r_shadows_distance = cvarfuncs->GetNVFDG("r_shadows_distance", NULL, 0, NULL, NULL);
-		vbsp_r_shadows_cascades = cvarfuncs->GetNVFDG("r_shadows_cascades", NULL, 0, NULL, NULL);
-		vbsp_r_shadows_cascade_dist = cvarfuncs->GetNVFDG("r_shadows_cascade_dist", NULL, 0, NULL, NULL);
 	}
 	if (!vbsp_r_shadows || vbsp_r_shadows->ival != 2 || !vbsp_r_shadows_distance)
 		return false;
-	reach = vbsp_r_shadows_distance->value;
-	if (vbsp_r_shadows_cascades && vbsp_r_shadows_cascades->ival > 1 && vbsp_r_shadows_cascade_dist)
-		reach = max(reach, vbsp_r_shadows_cascade_dist->value);
-	reach += radius;
+	reach = vbsp_r_shadows_distance->value * (4.0f/3) + radius;
 	VectorSubtract(e->origin, refdef->vieworg, d);
 	return DotProduct(d, d) < reach * reach;
 }

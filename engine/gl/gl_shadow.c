@@ -5223,9 +5223,9 @@ void Sh_GenerateFakeShadows(void)	//generates shadowmaps and selects the dlight,
 	VectorNegate(l->axis[0], fs_sundir);
 
 	//FTESurf Patch 1760: Source surfaces (plugins/hl2 vmt/*.glsl) read only the single sun map (l_cubematrix), so on
-	//a VBSP world (fg_new, as gl_warp.c tests) the atlases below left them sampling a stale matrix: bhop_canals' point
-	//lights turned the default r_shadows_propshadows 1 into its atlas, and no prop shadow landed, at a third of the fps.
-	if (r_worldentity.model && r_worldentity.model->fromgame == fg_new)
+	//a VBSP world the atlases below left them sampling a stale matrix: bhop_canals' point lights turned the default
+	//r_shadows_propshadows 1 into its atlas, and no prop shadow landed, at a third of the fps.
+	if (r_worldentity.model && (r_worldentity.model->engineflags & MDLF_SOURCEBSP))
 	{
 		fs_slotcount = 1;
 		atlas = false;
