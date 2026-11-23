@@ -707,7 +707,7 @@ struct pendingtextureinfo *Image_ReadVTFFile(unsigned int flags, const char *fna
 	//term through an sRGB encode; the shaders here add textureCube().rgb straight into a gamma
 	//framebuffer, so surf_demise's red underlay drew at 12/255 for Source's ~69. Encode once here.
 	//vid_srgb 1/2 (and -1) encode in the framebuffer instead, so they keep the linear texels.
-	//FTESurf Patch 1758: a float HDR sky face ($hdrbasetexture, IF_HDRDECOMPRESS) is linear light
+	//FTESurf Patch 1758: a float HDR sky face (the sky loader's IF_HDRDECOMPRESS) is linear light
 	//too and the sky draws it straight into the same framebuffer, so it is encoded the same way.
 	if (mips && (mips->type == PTI_CUBE || (flags & IF_HDRDECOMPRESS)) && vmffmt == VMF_RGBA16F &&
 		!(vtf_vid_srgb && vtf_vid_srgb->ival))

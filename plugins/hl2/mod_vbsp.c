@@ -6488,14 +6488,6 @@ static qboolean VBSP_LoadStaticProps(model_t *mod, qbyte *offset, size_t size, i
 			the code pretending to use it.
 			*/
 			propflagsex = LittleLong(*(unsigned int*)prop);				prop += sizeof(unsigned int);
-#ifdef HAVE_CLIENT
-			//FTESurf Patch 1760: on a cascade map Strata draws every static prop into the sun's shadow maps
-			//unless FlagsEx says DISABLE_SHADOW_DEPTH (1) or DISABLE_CSM (2) -- its VRAD bakes no prop shadows
-			//there (bhop_canals' pipes shadow the ground in Momentum and nowhere in the lightmap).  From v11:
-			//a v10 dword here is LightmapRes (SDK 2013) or DisableX360 (CS:GO, FlagsEx in the inserted field).
-			if (prv->csm && version >= 11 && !(propflagsex & 3))
-				ent->flags &= ~RF_NOSHADOW;
-#endif
 		}
 		/*
 		FTESurf Patch 228 -- the inserted field, and it belongs HERE: after FlagsEx
@@ -6504,6 +6496,16 @@ static qboolean VBSP_LoadStaticProps(model_t *mod, qbyte *offset, size_t size, i
 		canonical v10@72 maps propextra is 0 and this line does nothing, which is
 		the property that keeps those maps byte-identical to before.
 		*/
+#ifdef HAVE_CLIENT
+		/*FTESurf Patch 1760: on a cascade map Strata draws every static prop into the sun's shadow maps unless
+		  FlagsEx says DISABLE_SHADOW_DEPTH (1) or DISABLE_CSM (2) -- its VRAD bakes no prop shadows there (bhop_canals'
+		  pipes shadow the ground in Momentum and nowhere in the lightmap).  FlagsEx is the inserted field where there
+		  is one (CS:GO's lineage: its dword above is DisableX360), else the canonical v11+ dword; an SDK 2013 v10's
+		  dword is LightmapRes, so it never casts.*/
+		if (prv->csm && ((version >= 10 && propextra >= 4) || version >= 11) &&
+			!((version >= 10 && propextra >= 4 ? LittleLong(*(unsigned int*)prop) : propflagsex) & 3))
+			ent->flags &= ~RF_NOSHADOW;
+#endif
 		prop += propextra;
 
 		if (version >= 12)
@@ -10091,8 +10093,9 @@ static qboolean VBSP_CullBox (vec3_t mins, vec3_t maxs)
 }
 
 //FTESurf Patch 1760: an off-screen static caster within r_shadows 2's reach still throws its shadow on screen,
-//so it is submitted (the main pass culls it again, gl_alias.c R_CullEntityBox).  The sun map is a sphere of
-//r_shadows_distance centred a third of it ahead of the eye (Sh_OrthoAlignToFrustum); 4/3 about the eye covers it.
+//so it is submitted (the main pass culls it again, gl_alias.c R_CullEntityBox).  The sun map is a cube of half-side
+//r_shadows_distance centred a third of it ahead of the eye (Sh_OrthoAlignToFrustum); with its edge fade and the throw
+//fade, 4/3 of it about the eye holds every caster whose shadow shows.
 //Cascades never run on a Source map (gl_shadow.c), so their distance does not count.
 static qboolean VBSP_ShadowCasterInReach (const entity_t *e, float radius)
 {
