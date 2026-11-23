@@ -150,66 +150,84 @@ const char *sv_pmpin_names[SV_PMPIN_COUNT] =
 };
 
 /*FTESurf Patch 1761: whether mover 17 can trace anything on this map differently from 16, from the map's own data so
-  the lobby and the verifier agree: a prop entity the lump makes solid (its "solid" key, else its class's default as
-  SV_SpawnProp reads it), turned off the grid (BIH_AxisOffGrid) or parented (a parent may turn it), or a static prop the
-  mover traces through its rotated model.  Counting a prop the game later leaves non-solid only pins 17 where 16 would
-  also have replayed.*/
+  the lobby and the verifier agree.  It must never say no where 17 differs (the pin would name a mover that does not
+  replay the run), so every rule leans to yes: a prop class SV_SpawnProp spawns (prop_*, simple_physics_prop) that any
+  solid key or its class default makes solid, whose angles in any spelling are off the grid (BIH_AxisOffGrid), or that
+  is parented; any point_template or env_entity_maker (they respawn props, turned); or a static prop the mover traces
+  through its rotated model.  A yes where nothing differs only pins 17 where 16 would also replay.*/
 static qboolean SV_PMOffGridRead(model_t *wm)
 {
 	const char *d = Mod_GetEntitiesString(wm);
-	char key[64], val[256], cls[64];
+	char *key, *val, cls[64];
+	size_t len;
 	vec3_t ang, ax[3];
-	int solid, hassolid, parented;
+	qboolean solid, parented, offgrid, found = false;
 	if (BIH_OffGridProps(wm))
 		return true;
-	while (d && (d = COM_ParseOut(d, key, sizeof(key))) && *key == '{')
+	if (!d)
+		return false;
+	len = strlen(d) + 1;	//no token can be longer than the lump, so the parse cannot fall out of step
+	key = BZ_Malloc(len*2);
+	val = key + len;
+	while ((d = COM_ParseOut(d, key, len)) && *key == '{')
 	{
-		*cls = 0; VectorClear(ang); solid = 0; hassolid = false; parented = false;
-		while ((d = COM_ParseOut(d, key, sizeof(key))) && *key != '}')
+		*cls = 0; solid = parented = offgrid = false;
+		while ((d = COM_ParseOut(d, key, len)) && *key != '}')
 		{
-			if (!(d = COM_ParseOut(d, val, sizeof(val))))
+			if (!(d = COM_ParseOut(d, val, len)))
 				break;
 			if (!Q_strcasecmp(key, "classname"))
 				Q_strncpyz(cls, val, sizeof(cls));
-			else if (!Q_strcasecmp(key, "angles"))
-				sscanf(val, "%f %f %f", &ang[0], &ang[1], &ang[2]);
-			else if (!Q_strcasecmp(key, "angle"))
-				{ ang[0] = 0; ang[1] = atof(val); ang[2] = 0; }
+			else if (!Q_strcasecmp(key, "angles") || !Q_strcasecmp(key, "angle"))
+			{
+				VectorClear(ang);
+				if (!Q_strcasecmp(key, "angle"))
+					ang[1] = atof(val);
+				else
+					sscanf(val, "%f %f %f", &ang[0], &ang[1], &ang[2]);
+				AngleVectors(ang, ax[0], ax[1], ax[2]);
+				if (BIH_AxisOffGrid((const vec3_t*)ax))
+					offgrid = true;
+			}
 			else if (!Q_strcasecmp(key, "solid"))
-				{ solid = atoi(val); hassolid = true; }
+			{
+				if (atof(val))
+					solid = true;	//SV_Key2: any non-zero spelling wins
+			}
 			else if (!Q_strcasecmp(key, "parentname") && *val)
 				parented = true;
 		}
-		if (Q_strncasecmp(cls, "prop_", 5))
+		if (!Q_strcasecmp(cls, "point_template") || !Q_strcasecmp(cls, "env_entity_maker"))
+			{ found = true; break; }
+		if (Q_strncasecmp(cls, "prop_", 5) && Q_strcasecmp(cls, "simple_physics_prop"))
 			continue;
-		if (!hassolid || !solid)	//SV_SpawnProp: 0 or absent takes the class default
-			solid = (!Q_strncasecmp(cls, "prop_physics", 12) || !Q_strcasecmp(cls, "prop_door_rotating")) ? 6 : 0;
-		if (!solid)
-			continue;
-		AngleVectors(ang, ax[0], ax[1], ax[2]);
-		if (parented || BIH_AxisOffGrid((const vec3_t*)ax))
-			return true;
+		if (!solid)	//0 or absent takes the class default (sv_entities.qc's prop spawn functions)
+			solid = !Q_strncasecmp(cls, "prop_physics", 12) || !Q_strcasecmp(cls, "prop_door_rotating") ||
+			        !Q_strcasecmp(cls, "simple_physics_prop") || !Q_strcasecmp(cls, "prop_sphere");
+		if (solid && (parented || offgrid))
+			{ found = true; break; }
 	}
-	return false;
+	BZ_Free(key);
+	return found;
 }
 static qboolean SV_PMOffGrid(void)
 {
 	static const model_t *cm;
 	static const char *ce;
-	static unsigned int ccrc;
+	static unsigned int ccrc, csum;
 	static char cname[MAX_QPATH];
 	static qboolean cv;
 	model_t *wm = sv.world.worldmodel;
 	const char *ents;
 	qboolean v;
-	if (!wm || !(wm->engineflags & MDLF_SOURCEBSP))
+	if (!wm)
 		return false;
 	ents = Mod_GetEntitiesString(wm);
-	if (wm == cm && ents == ce && (unsigned int)wm->entitiescrc == ccrc && !strcmp(wm->name, cname))
+	if (wm == cm && ents == ce && (unsigned int)wm->entitiescrc == ccrc && wm->checksum2 == csum && !strcmp(wm->name, cname))
 		return cv;
 	v = SV_PMOffGridRead(wm);
 	if (Sys_IsMainThread())
-		{ cm = wm; ce = ents; ccrc = (unsigned int)wm->entitiescrc; Q_strncpyz(cname, wm->name, sizeof(cname)); cv = v; }
+		{ cm = wm; ce = ents; ccrc = (unsigned int)wm->entitiescrc; csum = wm->checksum2; Q_strncpyz(cname, wm->name, sizeof(cname)); cv = v; }
 	return v;
 }
 
