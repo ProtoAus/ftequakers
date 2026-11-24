@@ -3906,8 +3906,11 @@ static void Sh_DrawSunWorldChunks(dlight_t *l)
 
 static void Sh_GenerateCascadeAtlas(dlight_t *l, int cascades, int txsize)
 {
-	qboolean worldcast = Sh_SunWorldMesh();	//FTESurf Patch 1765
 	qboolean nothrowfade = (r_shadows_sunfloor.vec4[0] + r_shadows_sunfloor.vec4[1] + r_shadows_sunfloor.vec4[2] > 0);
+	//FTESurf Patch 1765: the world casts only on a cascade map (r_shadows_sunfloor: Strata's env_cascade_light), whose
+	//shadow only takes the sun out down to the floor; elsewhere the lightmap holds the world's shadows and Source's
+	//dynamic ones are models' alone, so the world drawn here would darken them twice
+	qboolean worldcast = nothrowfade && Sh_SunWorldMesh();
 	int inset = 16;	/*same proven margin as the direction atlas: wider than the PCF tap radius so cells can't bleed*/
 	int s, restorefbo = 0;
 	int cx, cy, csize, smsize;
