@@ -368,7 +368,11 @@ varying vec2 lm1, lm2, lm3;
 			#else
 				vec3 sunn = vec3(0.0, 0.0, 1.0);
 			#endif
+			#ifdef BUMP
 				float ndl = max(dot(sunn, shsunt) * inversesqrt(max(dot(shsunt, shsunt), 1e-8)), 0.0);
+			#else
+				float ndl = max(shsunt.z, 0.0);	//the unit sun on the unit normal: no tangent (degenerate on a cliff) involved
+			#endif
 				sun = mix(sun, cvar_r_shadows_sunlm * (0.984 * pow(ndl, 1.4) * clamp(shlit, 0.0, 1.0)), sunw);
 			}
 		#endif

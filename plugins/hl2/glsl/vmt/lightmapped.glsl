@@ -407,7 +407,11 @@ uniform float cvar_r_renderscale;
 				vec3 swe = abs((swc.xyz/swc.w + vec3(1.0)) * 0.5 - vec3(0.5));
 				float sunw = 1.0 - clamp((max(max(swe.x, swe.y), swe.z) - 0.30) / 0.05, 0.0, 1.0);
 				vec3 sunn = sun_normal();
+			#ifdef BUMP
 				float ndl = max(dot(sunn, shsunt) * inversesqrt(max(dot(shsunt, shsunt), 1e-8)), 0.0);
+			#else
+				float ndl = max(shsunt.z, 0.0);	//the unit sun on the unit normal: no tangent (degenerate on a cliff) involved
+			#endif
 				sun = mix(sun, cvar_r_shadows_sunlm * (0.984 * pow(ndl, 1.4) * clamp(shlit, 0.0, 1.0)), sunw);
 			}
 		#endif
