@@ -361,6 +361,7 @@ cvar_t r_autoexposure_bright				= CVARD	("r_autoexposure_bright", "0.005", "FTES
 cvar_t r_autoexposure_minavg				= CVARD	("r_autoexposure_minavg", "0", "FTESurf Patch 1764: the exposure rises until the average pixel reaches at least this linear level (mat_tonemap_min_avglum 3). Patch 1775: 0 (off) -- Momentum's dark barn sits near the band's minimum, not its maximum.");
 cvar_t r_autoexposure_hdrsat				= CVARD	("r_autoexposure_hdrsat", "1", "FTESurf Patch 1775: a measured colour channel at full scale (a skylight, a sun patch) counts as at least this linear level on its own: our frame clamps what Source's HDR frame keeps, and without it a bright window read dimmer the further the exposure opened.");
 cvar_t r_autoexposure_current				= CVARFD	("r_autoexposure_current", "1", CVAR_NOSET|CVAR_NOSAVE, "FTESurf Patch 1764 (read-only): the auto-exposure in use and its target, updated with each measurement.");
+cvar_t r_dither							= CVARFD	("r_dither", "1", CVAR_ARCHIVE, "FTESurf Patch 1785: render the 3D view into a 16-bit float image and write it to the screen through the scene-gamma pass with a fine, still noise of half a step (interleaved gradient noise), so dark gradients and soft glows never band. Blacks stay black (no noise under 2/255). 0: an 8-bit scene unless gamma/contrast or something else needs the float one.");
 cvar_t r_autoexposure_sky					= CVARFD	("r_autoexposure_sky", "1", CVAR_NOSET|CVAR_NOSAVE, "FTESurf Patch 1764 (internal): what the skybox is multiplied by -- the exposure's 1/2.2 power.");
 float r_autoexposure_value = 1;			//FTESurf Patch 1764: the eased exposure in use (linear)
 cvar_t r_hdr_irisadaptation_multiplier		= CVAR	("r_hdr_irisadaptation_multiplier", "2");
@@ -1607,6 +1608,7 @@ void Renderer_Init(void)
 	Cvar_Register(&r_autoexposure_hdrsat, GRAPHICALNICETIES);	//FTESurf Patch 1775
 	Cvar_Register(&r_autoexposure_current, GRAPHICALNICETIES);
 	Cvar_Register(&r_autoexposure_sky, GRAPHICALNICETIES);
+	Cvar_Register(&r_dither, GRAPHICALNICETIES);	//FTESurf Patch 1785
 	Cvar_Register(&r_hdr_irisadaptation_multiplier, GRAPHICALNICETIES);
 	Cvar_Register(&r_hdr_irisadaptation_minvalue, GRAPHICALNICETIES);
 	Cvar_Register(&r_hdr_irisadaptation_maxvalue, GRAPHICALNICETIES);

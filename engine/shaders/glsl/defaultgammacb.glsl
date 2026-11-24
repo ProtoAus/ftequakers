@@ -1,6 +1,7 @@
 !!ver 100-450
 !!samps 1
 !!cvarf shadows=0
+!!cvarf r_dither=0
 //this shader is applies gamma/contrast/brightness to the source image, and dumps it out.
 
 varying vec2 tc;
@@ -18,6 +19,7 @@ void main ()
 #endif
 #ifdef FRAGMENT_SHADER
 uniform float cvar_shadows;
+uniform float cvar_r_dither;	//FTESurf Patch 1785: the noise always, not only when the picture changed
 void main ()
 {
 	vec3 t = texture2D(s_t0, tc).rgb;
@@ -32,7 +34,7 @@ void main ()
 	t = pow(max(t, vec3(0.0)), vec3(vc.r))*vc.g + vc.b;
 	// Stable, sub-LSB interleaved noise: no temporal shimmer or lifted black floor.
 	float noise = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715)))) - 0.5;
-	float changed = (lift > 0.0 || vc.r != 1.0 || vc.g != 1.0 || vc.b != 0.0 || vc.a != 1.0) ? 1.0 : 0.0;
+	float changed = (lift > 0.0 || vc.r != 1.0 || vc.g != 1.0 || vc.b != 0.0 || vc.a != 1.0 || cvar_r_dither > 0.0) ? 1.0 : 0.0;
 	float toe = smoothstep(2.0/255.0, 0.04, y);
 	gl_FragColor = vec4(t + vec3(noise * changed * toe / 255.0), 1.0);
 }

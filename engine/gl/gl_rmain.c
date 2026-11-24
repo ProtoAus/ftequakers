@@ -71,6 +71,7 @@ static qboolean r_uwnowarp;	//FTESurf Patch 1013: a Source volume with no overla
 static shader_t *cc_warned;			//Patch 290: last grade shader we complained about
 extern cvar_t	r_hdr_framebuffer;
 extern cvar_t	r_exposure, r_autoexposure_sky, r_autoexposure_current, r_autoexposure, r_autoexposure_min, r_autoexposure_max, r_autoexposure_rate, r_autoexposure_target, r_autoexposure_bright, r_autoexposure_minavg, r_autoexposure_hdrsat;	//FTESurf Patch 1764/1775
+extern cvar_t	r_dither;	//FTESurf Patch 1785
 
 extern cvar_t	gl_screenangle;
 
@@ -3252,6 +3253,8 @@ void GLR_RenderView (void)
 			fbdepth = forcedfb = true;
 		if (V_UseSceneGamma() && (v_gamma.value != 1 || v_contrast.value != 1 || v_contrastboost.value != 1 || v_brightness.value != 0 || v_shadows.value > 0))
 			r_refdef.flags |= RDF_SCENEGAMMA;
+		if (r_dither.ival)	//FTESurf Patch 1785: the pass that dithers, and with it a float scene
+			r_refdef.flags |= RDF_SCENEGAMMA;
 	}
 
 	//disable stuff if its simply not supported.
@@ -3529,7 +3532,10 @@ void GLR_RenderView (void)
 		sourcetex = R_RenderPostProcess (sourcetex, sourcedepth, RDF_COLOURCORRECT, ccpostproc, "rt/$colourcorrected");
 		if (r_refdef.flags & RDF_SCENEGAMMA)
 		{
-			R2D_ImageColours (v_gammainverted.ival?v_gamma.value:(1/v_gamma.value), v_contrast.value, v_brightness.value, v_contrastboost.value);
+			if (V_UseSceneGamma())
+				R2D_ImageColours (v_gammainverted.ival?v_gamma.value:(1/v_gamma.value), v_contrast.value, v_brightness.value, v_contrastboost.value);
+			else	//FTESurf Patch 1785: here only to dither; the hardware ramp does the gamma
+				R2D_ImageColours (1, 1, 0, 1);
 			sourcetex = R_RenderPostProcess (sourcetex, sourcedepth, RDF_SCENEGAMMA, scenepp_gamma, "rt/$gammaed");
 			R2D_ImageColours (1, 1, 1, 1);
 		}
