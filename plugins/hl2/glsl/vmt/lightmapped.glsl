@@ -22,8 +22,12 @@
 !!cvardf r_lightmap_bicubic_world=0
 !!cvarf r_renderscale
 !!samps =FAKESHADOWS shadowmap
+!!samps sunvis
 !!cvar3f r_shadows_color=0.5 0.5 0.5
 !!cvar3f r_shadows_sunfloor=0 0 0
+!!cvar3f r_shadows_sunlm=0 0 0
+!!cvarf r_shadows_worldcast=1
+!!cvar3f r_shadows_throwdirection=0 0 -1
 !!cvarf gl_overbright
 
 #ifndef ENVTINT
@@ -127,6 +131,8 @@ varying vec2 lm1, lm2, lm3;
 #endif
 
 #ifdef FAKESHADOWS
+	varying vec3 shsunt;	//FTESurf Patch 1781: toward the sun in the surface's (s, t, n)
+	uniform vec3 cvar_r_shadows_throwdirection;
 	varying vec4 vtexprojcoord;
 	#ifdef FAKESHADOWS_CASCADE
 	varying vec3 shwpos;	//FTESurf Patch 1762: world position for the sun cascades (sys/pcf.h CascadeShadowFilter)
@@ -182,6 +188,11 @@ varying vec2 lm1, lm2, lm3;
 		#ifdef FAKESHADOWS_CASCADE
 		shwpos = (m_model*vec4(v_position.xyz, 1.0)).xyz;
 		#endif
+		{
+			vec3 tosun = -cvar_r_shadows_throwdirection;
+			shsunt = vec3(dot(tosun, (m_model*vec4(v_svector, 0.0)).xyz), dot(tosun, (m_model*vec4(v_tvector, 0.0)).xyz),
+				dot(tosun, (m_model*vec4(v_normal, 0.0)).xyz));
+		}
 	#endif
 	}
 #endif
@@ -227,8 +238,10 @@ uniform float cvar_r_renderscale;
 #ifdef FAKESHADOWS
 	uniform vec3 cvar_r_shadows_color;		//FTESurf Patch 1732
 	uniform vec3 cvar_r_shadows_sunfloor;
-	uniform float cvar_gl_overbright;
 #endif
+	uniform vec3 cvar_r_shadows_sunlm;		//FTESurf Patch 1781
+	uniform float cvar_r_shadows_worldcast;	//the live sun needs the world in the cascades
+	uniform float cvar_gl_overbright;
 	vec3 lightmap_fragment()
 	{
 		vec3 lightmaps;
@@ -270,7 +283,7 @@ uniform float cvar_r_renderscale;
 	//with the basis, normalized; an ssbump IS the three weights, unnormalized.  That ratio is linear
 	//light and the lightmap is sRGB-encoded (VBSP_ConvertLuxel), hence the 1/2.2.  A zero direction is
 	//a luxel with no basis data (or no static light): left alone.
-	float rnm_fragment()
+	float rnm_linear()
 	{
 		vec3 share = max(vec3(dot(texture2D(s_deluxemap, lm0).rgb * 2.0 - 1.0, rnm_b0),
 		                      dot(texture2D(s_deluxemap, lm0).rgb * 2.0 - 1.0, rnm_b1),
@@ -285,7 +298,28 @@ uniform float cvar_r_renderscale;
 		float total = dot(share, vec3(1.0));
 		if (total < 0.01)
 			return 1.0;
-		return pow(3.0 * dot(w, share) / total, 1.0 / 2.2);
+		return 3.0 * dot(w, share) / total;
+	}
+	float rnm_fragment()
+	{
+		return pow(rnm_linear(), 1.0 / 2.2);
+	}
+#endif
+#ifdef FAKESHADOWS
+	//FTESurf Patch 1781: the pixel's normal in (s, t, n) for the live sun -- a DX normal map's green flipped as
+	//transition.glsl's cubemap path does; an ssbump's three weights put back on Source's basis
+	vec3 sun_normal()
+	{
+	#if defined(BUMP) && defined(SSBUMP)
+		vec3 w = SEAMSAMP(s_normalmap).rgb;
+		vec3 n = w.x*rnm_b0 + w.y*rnm_b1 + w.z*rnm_b2;
+		return normalize(vec3(n.x, -n.y, n.z));
+	#elif defined(BUMP)
+		vec3 n = SEAMSAMP(s_normalmap).rgb;
+		return normalize(vec3(n.r, 1.0 - n.g, n.b) - 0.5);
+	#else
+		return vec3(0.0, 0.0, 1.0);
+	#endif
 	}
 #endif
 
@@ -333,26 +367,61 @@ uniform float cvar_r_renderscale;
 #endif
 
 		vec3 lmv = lightmap_fragment();
+		float rnmlin = -1.0;	//FTESurf Patch 1781: set once the radiosity weights are in lmv
+		//the world's e_lmscale also carries 2^gl_overbright (its texels are stored that much smaller, Surf_LightmapShift --
+		//MDLF_NEEDOVERBRIGHT), which a prop's light does not
+		float shob = exp2(clamp(floor(cvar_gl_overbright), 0.0, 2.0));
 #ifdef FAKESHADOWS
-		//FTESurf Patch 1732: shlit 0 shadowed .. 1 lit (the filter's 0.5..1).  Over a lightmap that already holds the
-		//sun's shadows (r_shadows_sunfloor, Strata maps) a shadow only takes the sun out: down to the sky's share,
-		//never below the baked shade.  Elsewhere it is shadow_control's colour (r_shadows_color), as Source's RTT.
+		//FTESurf Patch 1732: shlit 0 shadowed .. 1 lit (the filter's 0.5..1)
 		#ifdef FAKESHADOWS_CASCADE
 		float shlit = 2.0*CascadeShadowFilter(s_shadowmap, vtexprojcoord, shwpos) - 1.0;	//FTESurf Patch 1762
 		#else
 		float shlit = 2.0*ShadowmapFilter(s_shadowmap, vtexprojcoord) - 1.0;
 		#endif
-		//the floor is a displayed level; the world's e_lmscale also carries 2^gl_overbright (its texels are stored that much
-		//smaller, Surf_LightmapShift -- MDLF_NEEDOVERBRIGHT), which a prop's light does not
-		float shob = exp2(clamp(floor(cvar_gl_overbright), 0.0, 2.0));
-	#ifdef LIGHTSTYLED
-		vec3 shfloor = cvar_r_shadows_sunfloor * e_lmscale[0].rgb / shob;
-	#else
-		vec3 shfloor = cvar_r_shadows_sunfloor * e_lmscale.rgb / shob;
-	#endif
-		if (shfloor.r + shfloor.g + shfloor.b > 0.0)
-			{	//FTESurf Patch 1774: down to the floor's LEVEL, the lightmap's own hue kept part-way -- a per-channel min left
-				//the channels above the floor at the floor and the rest at the lightmap, a teal-green cast on warm walls
+#endif
+		if (cvar_r_shadows_sunlm.r + cvar_r_shadows_sunlm.g + cvar_r_shadows_sunlm.b > 0.0)
+		{	//FTESurf Patch 1781: Strata's world sun.  Style 0 is the indirect light and s_sunvis (1 - page) the sun VRAD baked
+			//over it (VBSP_SunPageToIndirect): the bake goes back on, or under the cascades with the world in them the sun at
+			//this pixel's N.L -- VRAD's 0.984 * N.L^1.4 at full sun -- shadowed by them, the bake again by 0.35 of the outer
+			//cascade (its own fade starts there).  In linear light: lmv is the texel's sRGB times e_lmscale.
+		#ifdef LIGHTSTYLED
+			vec3 shk = max(e_lmscale[0].rgb / shob, vec3(1e-4));
+		#else
+			vec3 shk = max(e_lmscale.rgb / shob, vec3(1e-4));
+		#endif
+			vec3 lml = max(lmv, vec3(0.0)) / shk;
+			lml = mix(lml / 12.92, pow((lml + 0.055) / 1.055, vec3(2.4)), step(0.04045, lml));
+			vec3 sun = cvar_r_shadows_sunlm * (1.0 - texture2D(s_sunvis, lm0).r);
+		#if defined(DELUXE) && defined(BUMP)
+			rnmlin = rnm_linear();
+			lml *= rnmlin;
+			sun *= rnmlin;
+		#endif
+		#ifdef FAKESHADOWS_CASCADE
+			if (cvar_r_shadows_worldcast > 0.0 && l_fakeshadowinfo[0].z > 0.5)
+			{
+				vec4 swc = l_fakeshadowworld[FAKESHADOWS_SUNCELLS-1] * vec4(shwpos, 1.0);
+				vec3 swe = abs((swc.xyz/swc.w + vec3(1.0)) * 0.5 - vec3(0.5));
+				float sunw = 1.0 - clamp((max(max(swe.x, swe.y), swe.z) - 0.30) / 0.05, 0.0, 1.0);
+				vec3 sunn = sun_normal();
+				float ndl = max(dot(sunn, normalize(shsunt)), 0.0);
+				sun = mix(sun, cvar_r_shadows_sunlm * (0.984 * pow(ndl, 1.4) * clamp(shlit, 0.0, 1.0)), sunw);
+			}
+		#endif
+			lml += sun;
+			lmv = shk * mix(lml * 12.92, 1.055 * pow(lml, vec3(1.0/2.4)) - 0.055, step(0.0031308, lml));
+		}
+#ifdef FAKESHADOWS
+		else
+		{	//over a lightmap that holds the sun's shadows (r_shadows_sunfloor, a Strata map without the page) a shadow only
+			//takes the sun out, down to the sky's share; elsewhere it is shadow_control's colour (r_shadows_color)
+		#ifdef LIGHTSTYLED
+			vec3 shfloor = cvar_r_shadows_sunfloor * e_lmscale[0].rgb / shob;
+		#else
+			vec3 shfloor = cvar_r_shadows_sunfloor * e_lmscale.rgb / shob;
+		#endif
+			if (shfloor.r + shfloor.g + shfloor.b > 0.0)
+			{	//FTESurf Patch 1774: down to the floor's LEVEL, the lightmap's own hue kept part-way
 				float shll = dot(lmv, vec3(0.2126, 0.7152, 0.0722)), shlf = dot(shfloor, vec3(0.2126, 0.7152, 0.0722));
 				vec3 shdark = lmv;
 				if (shll > shlf)
@@ -362,12 +431,14 @@ uniform float cvar_r_renderscale;
 				}
 				lmv = mix(shdark, lmv, shlit);
 			}
-		else
-			diffuse_f.rgb *= mix(cvar_r_shadows_color, vec3(1.0), shlit);
+			else
+				diffuse_f.rgb *= mix(cvar_r_shadows_color, vec3(1.0), shlit);
+		}
 #endif
 		diffuse_f.rgb *= lmv;
 #if defined(DELUXE) && defined(BUMP)
-		diffuse_f.rgb *= rnm_fragment();	//FTESurf Patch 1264
+		if (rnmlin < 0.0)
+			diffuse_f.rgb *= rnm_fragment();	//FTESurf Patch 1264
 #endif
 
 /* CUBEMAPS ONLY */

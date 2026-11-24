@@ -102,6 +102,7 @@ static cvar_t *hl2_lumpretire;	//FTESurf Patch 298
 static cvar_t *hl2_lightmap_repack;	//FTESurf Patch 281: see VBSP_RepackLighting
 static cvar_t *hl2_bumpstride;	//FTESurf Patch 268 D1: tag surfaces with their per-style luxel-set stride, see VBSP_ProbeLightmapStride
 static cvar_t *hl2_rnm;	//FTESurf Patch 1264: bumped faces lit by their basis maps, see VBSP_BuildRNM
+static cvar_t *hl2_sunpage;	//FTESurf Patch 1781: Strata's baked direct-sun page, see VBSP_BuildSunPage
 static cvar_t *map_noareas;
 static cvar_t *map_autoopenportals;
 static cvar_t *hl2_areaportals;		//FTESurf Build 8
@@ -5049,6 +5050,124 @@ static void VBSP_EncodeRGBE(const float *c, qbyte *p)
 	for (k = 0; k < 3; k++)
 		p[k] = (qbyte)bound(0, (int)(ldexp(c[k], -e) + 0.5f), 255);
 	p[3] = (qbyte)(signed char)e;
+}
+
+/*FTESurf Patch 1781: Strata's lighting lump (the 2/5 layout) ends every style with one more luxel set whose red byte is
+  VRAD's baked direct sun, its shadowing included, in units of the sun's own intensity: the lightmap is
+  indirect + sun * R/255 (bhop_canals: 0 in shade, 32 in a penumbra, 115 on a sunlit floor, linear across the edge;
+  full sun about 0.984 * N.L^1.4).  Kept as the SUNVIS page (1 byte a luxel at style 0, r_surf.c builds its texture)
+  for lightmapped.glsl/transition.glsl to swap for the sun under the cascades.  Every lit face must carry the set.*/
+static void VBSP_BuildSunPage(model_t *mod)
+{
+	vbspinfo_t	*prv = (vbspinfo_t*)mod->meshinfo;
+	size_t		si, i, nlux, faces = 0, sunlit = 0;
+	qbyte		*sv;
+
+	mod->sunvisdata = NULL;
+	if (!hl2_sunpage || !hl2_sunpage->ival || prv->bspversion < 25 || !mod->lightdata || !prv->lightraw ||
+		prv->lightrepacked || mod->lightmaps.fmt != LM_E5BGR9 || (mod->lightdatasize & 3))
+		return;
+	for (si = 0; si < mod->numsurfaces; si++)
+	{
+		msurface_t *surf = mod->surfaces + si;
+		int extra = (surf->flags & SURF_LMSTRIDE_MASK) >> SURF_LMSTRIDE_SHIFT;
+		if (surf->samples && extra != (prv->texinfo[surf->texinfo - mod->texinfo].bumped ? 16 : 4))
+		{
+			Con_DPrintf("VBSP: %s: no Strata sun page (a lit face has %i extra bytes a luxel)\n", mod->name, extra);
+			return;
+		}
+	}
+	nlux = mod->lightdatasize / 4;
+	sv = plugfuncs->GMalloc(&mod->memgroup, nlux);
+	memset(sv, 0, nlux);
+	for (si = 0; si < mod->numsurfaces; si++)
+	{
+		msurface_t *surf = mod->surfaces + si;
+		size_t extra = (surf->flags & SURF_LMSTRIDE_MASK) >> SURF_LMSTRIDE_SHIFT;
+		size_t ofs, lux;
+		const qbyte *src;
+		if (!surf->samples)
+			continue;
+		lux = (size_t)((surf->extents[0]>>surf->lmshift)+1) * ((surf->extents[1]>>surf->lmshift)+1);
+		ofs = surf->samples - mod->lightdata;	//== the file's lightofs (VBSP_LoadLighting keeps offsets)
+		if ((ofs & 3) || ofs + extra*lux + 4*lux > prv->lightrawsize || ofs/4 + lux > nlux)
+			continue;
+		src = prv->lightraw + ofs + extra*lux;	//style 0's last set
+		for (i = 0; i < lux; i++)
+		{
+			sv[ofs/4 + i] = src[4*i];
+			sunlit += src[4*i] != 0;
+		}
+		faces++;
+	}
+	mod->sunvisdata = sv;
+	Con_DPrintf("VBSP: %s: Strata sun page on %u faces, %u luxels sunlit\n", mod->name, (unsigned)faces, (unsigned)sunlit);
+}
+
+/*FTESurf Patch 1781: once the sun is known (VBSP_LoadWorldLights), style 0 becomes the INDIRECT light -- VRAD's own
+  split, per luxel in linear light -- and the page what was taken out (sun * page/255 IS the sun), so the shaders add
+  the sun back: the bake, or under the cascades the live sun.  Done here rather than in the shader because the lightmap
+  filters in sRGB and the page linearly: a subtraction after filtering overshot across a baked edge (a teal ring round
+  every sun patch).  A bumped face's style 0 is its basis maps' mean (VBSP_BuildRNM): its sun share is scaled by
+  mean/flat, and the page carries what was removed, so with no cascades the shaders rebuild the bake exactly.*/
+static void VBSP_SunPageToIndirect(model_t *mod)
+{
+	vbspinfo_t	*prv = (vbspinfo_t*)mod->meshinfo;
+	size_t		si, i, faces = 0;
+	if (!mod->sunvisdata)
+		return;
+	if (!prv->sun_have || prv->sun_intensity[0] + prv->sun_intensity[1] + prv->sun_intensity[2] <= 0)
+	{
+		mod->sunvisdata = NULL;	//no sun to put back: the bake as it is
+		return;
+	}
+	for (si = 0; si < mod->numsurfaces; si++)
+	{
+		msurface_t *surf = mod->surfaces + si;
+		size_t ofs, lux;
+		unsigned int *lm;
+		qbyte *sv;
+		const qbyte *raw;
+		if (!surf->samples)
+			continue;
+		lux = (size_t)((surf->extents[0]>>surf->lmshift)+1) * ((surf->extents[1]>>surf->lmshift)+1);
+		ofs = surf->samples - mod->lightdata;
+		if ((ofs & 3) || ofs + 4*lux > prv->lightrawsize || ofs + 4*lux > (size_t)mod->lightdatasize)
+			continue;
+		lm = (unsigned int*)(mod->lightdata + ofs);
+		sv = mod->sunvisdata + ofs/4;
+		raw = prv->lightraw + ofs;
+		for (i = 0; i < lux; i++)
+		{
+			float cur[3], d[3], k = 1, q = 1, lflat, lcur, rs;
+			qbyte rgbe[4];
+			unsigned int h = lm[i];
+			int c;
+			if (!sv[i])
+				continue;
+			rs = ldexp(1.0f, (int)(h>>27) - 15 - 9);
+			for (c = 0; c < 3; c++)
+				cur[c] = M_SRGBToLinear(((h >> (9*c)) & 0x1ff) * rs, 1.0);
+			rs = ldexp(1.0f, (signed char)raw[4*i+3]) / 255.0f;
+			lflat = (0.2126f*raw[4*i+0] + 0.7152f*raw[4*i+1] + 0.0722f*raw[4*i+2]) * rs;
+			lcur = 0.2126f*cur[0] + 0.7152f*cur[1] + 0.0722f*cur[2];
+			if (lflat > 0 && lcur > 0)
+				q = lcur / lflat;	//1 on a flat face (style 0 is the file's set); mean/flat on a basis-lit one
+			for (c = 0; c < 3; c++)
+			{
+				d[c] = prv->sun_intensity[c] * sv[i] * (1.0f/255) * q;
+				if (d[c] > cur[c])
+					k = min(k, cur[c] / d[c]);	//never more than the luxel holds, in the sun's own hue
+			}
+			for (c = 0; c < 3; c++)
+				cur[c] = (cur[c] - d[c]*k) * 255.0f;
+			VBSP_EncodeRGBE(cur, rgbe);
+			lm[i] = VBSP_ConvertLuxel(rgbe);
+			sv[i] = (qbyte)bound(0, (int)(sv[i] * q * k + 0.5f), 255);	//exactly what came out
+		}
+		faces++;
+	}
+	Con_DPrintf("VBSP: %s: style 0 is the indirect light on %u faces (Strata sun page)\n", mod->name, (unsigned)faces);
 }
 
 static void VBSP_BuildRNM(model_t *mod)
@@ -14624,6 +14743,8 @@ static qboolean VBSP_LoadModel(model_t *mod, qbyte *mod_base, size_t filelen, ch
 		VBSP_ProbeLightmapStride				(mod);
 	if (noerrors && haverenderer)	//FTESurf Patch 1264: after the stride tags it reads, before anything allocates lightmaps
 		VBSP_BuildRNM							(mod);
+	if (noerrors && haverenderer)	//FTESurf Patch 1781: likewise
+		VBSP_BuildSunPage						(mod);
 #endif
 	noerrors = noerrors && VBSP_LoadDisplacements	(mod, mod_base, header.lumps);
 	noerrors = noerrors && VBSP_LoadMarksurfaces	(mod, mod_base, &header.lumps[VLUMP_LEAFFACES]);
@@ -14678,6 +14799,15 @@ static qboolean VBSP_LoadModel(model_t *mod, qbyte *mod_base, size_t filelen, ch
 		//bare, like its two neighbours: a missing or malformed optional lighting
 		//lump must leave props on bounce-only light, never fail the map load.
 		VBSP_LoadWorldLights						(mod, mod_base, &header.lumps[VLUMP_WORLDLIGHTS_HDR], &header.lumps[VLUMP_WORLDLIGHTS_LDR], usehdr, header.version);
+		{	//FTESurf Patch 1781: the sun the sun page is in units of (lightmapped.glsl); 0 = the shaders keep the bake
+			char sunlm[96] = "0 0 0";
+#ifdef HAVE_CLIENT
+			VBSP_SunPageToIndirect(mod);
+#endif
+			if (mod->sunvisdata && prv->sun_have)
+				Q_snprintfz(sunlm, sizeof(sunlm), "%g %g %g", prv->sun_intensity[0], prv->sun_intensity[1], prv->sun_intensity[2]);
+			cvarfuncs->ForceSetString("r_shadows_sunlm", sunlm);
+		}
 
 		//after LoadFaces (needs surfaces + surfedges) and LoadDisplacements
 		//(needs surfdisp), before the batch builder reads surf->envmap.
@@ -15363,6 +15493,7 @@ qboolean VBSP_Init(void)
 		which walk was used either way.  MAPLATCH: the tags are written while the BSP is
 		read, so a map reload is when a change takes effect.
 		*/
+		hl2_sunpage = cvarfuncs->GetNVFDG("hl2_sunpage", "1", CVAR_MAPLATCH, "FTESurf Patch 1781: on a Strata (v25) map, keep its lightmap's baked direct-sun page so that, with the sun cascades on, the world takes the sun live (sharp, per pixel, through its normal maps) as Strata does, the bake beyond their reach. 0: the bake as it is. Takes effect on a map reload.", MAPOPTIONS);
 		hl2_rnm = cvarfuncs->GetNVFDG("hl2_rnm", "1", CVAR_MAPLATCH, "Light bumped Source brush faces as Source does (radiosity normal mapping): the three basis lightmaps VRAD stores for a $bumpmap face, weighted by the normal map or $ssbump; needs r_deluxemapping. 0 shows the flat lightmap and no bump lighting (an $ssbump material still reflects off its own normal). Takes effect on a map reload.", MAPOPTIONS);
 		hl2_bumpstride = cvarfuncs->GetNVFDG("hl2_bumpstride", "1", CVAR_MAPLATCH, "Walk a Source map's lightstyles at the stride VRAD wrote them: a $bumpmap face stores four luxel sets per style (flat plus three radiosity-normal-map basis maps), and 150 library maps add a non-lightmap record after every style's sets.\n0: the old walk, which summed a basis map in as the next lightstyle at full brightness and never read the real one, on ~67,000 faces across 153 library maps.\n1: probe the layout per map and skip the extra sets (default). Faces then show their real second style -- brighter where it is a bright switchable light, darker where it is dim. Maps whose layout cannot be proven from the lighting lump size fall back to 0 and say so in the console.", MAPOPTIONS);
 		/*

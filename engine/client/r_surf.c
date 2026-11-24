@@ -1493,6 +1493,7 @@ static void Surf_BuildLightMap (model_t *model, msurface_t *surf, int map, int s
 				//black (0) means "fully lit, dynamic shadow at full strength".  That makes every
 				//failure mode - sampler unbound, texture never created, format unsupported -
 				//land on the OLD behaviour instead of silently deleting every shadow in the game.
+				qbyte *svblock = svdst;
 				for (svrow = 0; svrow < tmax; svrow++)
 				{
 					for (svcol = 0; svcol < smax; svcol++)
@@ -1500,6 +1501,8 @@ static void Surf_BuildLightMap (model_t *model, msurface_t *surf, int map, int s
 					svsrc += smax;
 					svdst += lm->width;
 				}
+				if (pad)	//FTESurf Patch 1781: the lightmap's one-texel border (Patch 1275), or a face's edge filters in its atlas neighbour's sun
+					Surf_PadLightmapBlock(svblock, smax, tmax, lm->width, 1);
 				lm->sunvis_modified = true;
 			}
 		}
