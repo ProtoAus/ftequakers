@@ -1,5 +1,106 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1799 - Map uploads: zones optional, published zones no longer block a name, Zone editor and Map upload tabs (game surfd/mapupd.py, m_mapupload.qc m_main.qc, cl_zoneedit.qc cl_zoneedit_extra.qc)
+
+**Problem.** Lex, 24 Nov: "Allow uploading without zone, just ask the client 'Are you sure, this doesn't have a zone
+file' Allow uploading of a map with the zone files already on the server. I accidently Published a zone for
+bhop_uncanny not understanding the process, and then it refused to let me upload it, so I had to rename it to
+bhop_uncanny2. Place a zone_edit 'tab' on the map upload page, and a map load 'tab' to the zone_edit page." mapupd
+refused a name with a zone file in either zone dir, and a bhop map without zones; the two tools had no way between them.
+
+**Change.** mapupd: only a BSP in the library or a list/table row blocks a name; zones are optional for every mode;
+begin says which zone copies exist and which an attachment replaces (warns about a data/maps/zones/local copy, which
+lobbies read first). Finish validates the pictures and stages the BSP .part first, then under zonepub's publish.lock
+(read-only flock, 30 s) re-checks the name, undoes a crashed earlier attempt, copies replaced zones to the store's
+zones-aside/, writes the upload_zones record, the zones, the pictures, links the BSP last, then the uploads row; any
+failure puts the old zones back. Without an attached zone file the zone dirs are not touched. remove does all its
+reads and writes under the same lock, acts only on zone files whose SHA-256 is still the upload's (puts back what it
+displaced), leaves zones of unknown provenance (uploads before this patch), zones zonepub published at or after the
+upload's (its publications table, read-only), and unhandled dirs in the record (exit 1), records progress at once and
+deletes the rows last, so a re-run finishes it. A crashed attempt is undone by the next finish on the same rules. New
+table upload_zones (CREATE IF NOT EXISTS: init on upgrade, the service and remove too). Menu: with no
+zone file the Upload press opens "Are you sure? This map doesn't have a zone file." (Upload anyway signs on its own
+press, once per manifest); a Zone editor tab loads the picked map (maps/ only) in a local game and opens zone_edit on
+it (second press to leave a game); zone_edit's Map upload tab (a real click only) opens F8 with the map picked through
+ui_mapupload_request, acted on only in a fully joined game this client hosts, never a demo; ui_zoneedit_want expires;
+coming back keeps the typed name and picture; the newer of <name>.json and the editor's own file is offered.
+
+**Verified.** test_mapupd 46 (crash reconcile, lock, record, the remove race and re-run, the store migration each
+fail when disabled); fteqcc 0 warnings, qcframes clean. Four review rounds on the service, two on the menu/editor.
+
+**Limits.** No in-game check yet (lextest). Old zones are restored only by remove (or by hand from zones-aside); a
+record remove leaves (a file changed by a later publish) is cleared by hand; tools/mapupd.md "Limits".
+
+## Patch 1798 - TAS uploads are judged by their motion, not by importer header lines (game surfd/tasupd.py, tasupd_wsgi.py, tools/install_tasupd.py)
+
+**Problem.** Lex, 24 Nov: Rounin could not upload his surf_sandtrap2 bonus 4 TAS at play.proto.bar/tasup -- "That is
+an imported run (KSF or Momentum): it is its player's, not an upload." tasupd refused any header carrying a line only
+surfd's KSF/Momentum importers write (foreign, ksfdemo, ksftime, momdemo, a ksf-/mom- runid...). A bot that builds its
+file on a downloaded replay's header keeps them; a real copy of a public replay passed once they were deleted (BACKLOG
+P1640 "Human replays passed off as TAS").
+
+**Change.** No header refusal. Each upload's motion signature (velocity and path on the tick grid, copy_of's two
+passes) is compared with the course's public replays from surfd.db (kinds run, ksf, momentum; 66.67 tick; never the
+uploader's own): the one its ksf-/mom- runid names, then the nearest in length, two a player (capped in SQL), up to 8
+files that read (missing, >16 MB or unparsable ones logged and not counted), one at a time in the checker slot, 6 s
+then the rest unread (nearest first: a re-headed replay has its original's length). A match is refused "That is the
+motion of <player>'s <KSF|Momentum|World of Surf> run on this course (replay N)". Held instead, for the owner: a match
+with a lobby TAS-style row; with a lobby row surfd hides (a current review reject, a banned owner; never named); or an
+upload shorter than the replay by more than the matcher's 16-tick shift window when the zones vouch for its start and
+finish (a tool improving a seed run). surfd unreadable holds it. Roots come from TASUPD_REPLAYS (installer ENV_ADDED
+group 3: --upgrade-from still recognises the da9042b3-era unit), resolved as surfd.replay_file does; /api/health fails
+while a root cannot be listed or a column the queries use is missing (the installer's probe then refuses).
+
+**Verified.** test_tasupd 402 (4 known Werkzeug set_cookie API errors on this PC); PublicReplays (every Service test
+with the check on, plus its own) fails against 11 mutants. test_install_tasupd 56. Live Pi data (a scratch copy as
+proto, not the service): Jargon samples under agentflwrs's KSF header accepted; agentflwrs's run re-headed refused as
+replay 34061; a 6.9 MB surf_meme KSF run re-headed refused in 4.3 s as replay 60662. Lex's 8 local Jargon b4 runs
+match none of the 3 KSF guides. Five review rounds.
+
+**Limits.** Nearest-N sampling: a copy filed under another map/track, its end nudged past 8 nearer replays, its last
+~8% changed, or shifted on an unzoned course still passes (BACKLOG). A genuine improvement within 17 ticks that still
+matches is refused.
+
+## Patch 1797 - The TAS menu's Upload tab lists every TAS run in the game, and opens its folder (engine client/cl_receipt.c pr_csqc.c; game cl_tasupload.qc sv_tasautosurf.qc)
+
+**Problem.** Lex, 24 Nov: "Tas upload needs to list all tas runs in your game, also a directory link button." The tab
+listed only this map's runs the local game had noted finishing (data/tasproj/<map>/uploads.txt, P1696), at most 10:
+older runs, other maps' and a bot's .rec placed in data/runs never showed, and nothing pointed at the folder.
+
+**Change.** SV_TASUpList sends the noted runs, then every other loose whole-course data/runs/<map>/<main|bonus_N>/
+*_tas.rec, this map's first, up to 64, the folder ones with sha "-". The tab reads each listed header itself (any
+map: TASUp_Head), labels other maps and "(folder)" runs, pages 8 at a time, and Upload of a folder run skips the
+"changed since saved" check (it makes no such claim). An Open folder chip, acted on the press, calls the new CSQC
+builtin float sys_openfolder(string gamepath): only while a device's key press is delivered (acct_browse's budget),
+the path must be data/runs[/...] of plain characters with no '..', a real directory in the writable gamedir
+(lstat / GetFileAttributesW, no reparse point), once a second; xdg-open through a double fork, or ShellExecuteW
+explore; -nobrowse prints the path. Review: only in a game this client hosts, from the very csprogs it serves (the
+tasrev_sign gate; a server's or demo's code could swap a script in for the checked folder before xdg-open read it);
+not a link; the opener gets a trailing slash, /dev/null, its own session and no inherited fds. The list holds the
+16 newest noted runs then a name-sorted folder scan (kept 15 s, dropped when a run is noted), at most 48 (~7.6 KB);
+another map's noted run keeps its SHA; the P1712 offer box takes noted runs only.
+
+**Verified.** fteqcc 0 warnings, qcframes clean; m-rel builds without new warnings. Two review rounds each (engine,
+QC).
+
+**Limits.** A file a hostile server's csprogs wrote into data/runs is now listed (labelled "(folder)"); sending it
+still needs the player's Upload click and Send press under their account, and tasupd checks it.
+
+## Patch 1796 - +jumpduck: one key jumps and holds duck (engine client/cl_input.c menu.c; game cl_keycfg.qc cl_keys.qc cl_rewind.qc cl_spectate.qc sui_sys.qc)
+
+**Problem.** Lex, 24 Nov: "we need a +jumpduck button, some people want to be able to jump, and hold duck on the same
+key, they use it at the inital jump, of a run." An alias of +jump;+duck is a chained bind: Patch 1646 counts it, and
+the Normal categories allow one button per action.
+
+**Change.** +jumpduck/-jumpduck press and release in_jump (through IN_JumpDown, smartjump included) and in_duck with
+the key's number, so either releases with the key. The duck's KeyDown is the same press (keydown_unjudged), judged
+once; IN_JumpDown's flying branch now leaves keydown_judged as the press had it. Listed in the engine bind menu; the
+game's Key config gets a Jump + duck row under Movement (row 40 listed after Duck), the key display and .view key mask
+mark both jump and duck for that key, rewind and spectate treat it as movement.
+
+**Verified.** fteqcc 0 warnings; m-rel builds; review: no lapse miscounted in any press path (keys, repeat,
+wheel, gamepad, console, smartjump swim/fly), +jumpduck cannot launder another command.
+
 ## Patch 1780 - Strata's baked prop sun: the .vhv alpha, added under the cascades (plugin hl2/mod_vbsp.c, glsl/vmt/vertexlit.glsl; engine gl/gl_shadow.c; game cl_sun.qc cl_emit.qc)
 
 **Problem.** Lex, 24 Nov, save 31 (after P1779 removed the lamp's white disc): Momentum's street lamp has a warm
