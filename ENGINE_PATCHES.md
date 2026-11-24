@@ -1,5 +1,89 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1805 - Strata maps light unbaked props with the map's local lights again (plugin hl2/mod_vbsp.c)
+
+**Problem.** Lex, 25 Nov, save 38/39: "Models don't seem to have the 'vertex light glow' like in momentum" -- the barrels
+and jerry cans under the props room's fluorescent drew black. P1777 (hl2_lt_wlv25 1) had taken every point/spot light
+off unbaked props on v25 maps from one view of the same room (save 28); Momentum's 0025 and 0013 of that room show the
+cans, the rusty barrel and the red toolbox lit.
+
+**Change.** hl2_lt_wlv25 defaults to 0 (Source 2013's light cache: the leaf cube plus the visible local lights); 1 keeps
+P1777's rule.
+
+**Verified.** Rig save 39 against Momentum 0025: cans lit grey, one barrel blue and one rusty as Momentum's (black with
+1); hl2_lightprobe at the barrel: the room's warm spot and the cyan spot visible, an outdoor one blocked.
+
+**Limits.** Save 34's barrels (no local light reaches them) stay dimmer than Momentum's: the leaf cube there is low.
+
+## Patch 1804 - The sun sprite fades as hills, skybox geometry and solid props cover it (game cl_sun.qc)
+
+**Problem.** Lex, 25 Nov: "sun sprite should be blocked by 3d skybox geometry". Sun_Draw drew the noz glow at full
+strength whenever one ray from the eye reached the sky; it never looked into the 3D skybox, so the low sun (bhop_canals'
+env_sun pitch -10) glowed over the skybox's hills and over near hills it half sat behind. Source fades it by a pixel
+query of its disc.
+
+**Change.** Nine rays across the disc's core (the centre and eight at half the quad's radius), each traced in the world
+and, with the 3D skybox drawn (vbsp_skyroom, scale defaulting to 16 as cl_main.qc), again from the skybox eye
+(sky_camera + view / scale); the sprite eases toward the share that reaches the sky. Traced only with the sun near the
+screen and again only once the eye has moved.
+
+**Verified.** Rig, saves 40/41 and a camera sweep down toward the sun: the glow fades by the share behind the hills
+(skybox and world) where it drew whole; save 7 now shows the part-hidden sun between trees.
+
+**Limits.** Traces see brushes, displacements and solid props, not non-solid props (skybox tree cards); a pixel query
+would.
+
+## Patch 1803 - func_smokevolume takes the light where it hangs (game cl_emit.qc)
+
+**Problem.** Lex, 25 Nov, save 38: "smokevolume way to opaque, blocking view" -- P1772 drew each billboard in its
+Color1/Color2 unlit, so the basin smoke glowed in a dark corridor where Momentum's barely shows.
+
+**Change.** Each particle's colour is multiplied by the world's light at its position (getlight, clamped to 1 per
+channel, the light cache off around the loop as for the steam jets).
+
+**Verified.** Rig save 38: a faint haze against Momentum 0024's near-nothing (P1772's was a bright opaque bank); save
+11's outdoor haze unchanged.
+
+## Patch 1802 - Blended props with an alpha mask cast into the shadow maps (engine gl/gl_backend.c)
+
+**Problem.** Lex, 25 Nov, save 33: "r_shadows_worldcast is missing the flat tree alphaed textures" -- Momentum's ground
+there is striped by branch shadows from bhop_canals' 124 tree_deciduous_card_01 props, whose material is a $translucent
+UnlitGeneric. GLBE_BaseEntTextures submits sorts PORTAL..SEETHROUGH only, so the cards (SHADER_SORT_BLEND) never reached
+a shadow map although Patch 1768 gives them a masked depth pass.
+
+**Change.** In the depth pass, a BLEND-sorted prop (mod_alias) batch whose shader carries the plugin's embedded masked
+depth pass (a depthonly override not named "depthonly...") is submitted too; it casts where its alpha reaches the mask.
+Brush entities' blended faces and other blends still cast nothing.
+
+**Verified.** Rig save 33 against Momentum 0018: the branch stripes across the ground, the same layout. Timing saves
+8/6/5 GPU +0.0-0.1 ms.
+
+## Patch 1801 - A batch whose shader has no remap target is skipped (engine gl/gl_backend.c)
+
+**Problem.** r_shadows 2 -> 1 on bhop_canals (looking at save 34's barrels) segfaulted in DrawMeshes in 0.1.64 through
+0.1.67: GLBE_SubmitBatch set curshader = sh->remapto on a shader_t that is all zeroes (no name, uses 0, id 0, no
+generator), and DrawMeshes read its flags. Every shader path in gl_shader.c sets remapto, and a slot in r_shaders cannot
+carry an empty name; the pointer's producer is not found.
+
+**Change.** GLBE_SubmitBatch and GLBE_DrawMesh_List skip such a shader; developer 1 names it once with the batch's
+buildmeshes, flags, model and surface for the next look.
+
+**Verified.** The same steps crash the unguarded build every time and pass twice guarded; nothing visible is missing in
+the frame after the switch.
+
+## Patch 1800 - A static prop whose fade distances are inverted draws (plugin hl2/mod_vbsp.c)
+
+**Problem.** Lex, 25 Nov, save 33: "Missing log props, not rendering" -- driftwood static props with FadeMinDist 2500 >
+FadeMaxDist 2000 (STATIC_PROP_FLAG_FADES set). The fade fraction (d - min) / (max - min) went past 1 and the prop drew
+at alpha < 0 at every distance: 64 of bhop_canals' 3,126 (driftwood, rebar, dock cleats, canal caps, ladders, fences).
+
+**Change.** An inverted pair is swapped at load, as Source's UTIL_ComputeEntityFade does.
+
+**Verified.** Rig save 33: the three logs drawn where Momentum 0018 draws them.
+
+**Limits.** Taken from Source's entity fade; if Strata culls such a static prop at the smaller distance without a fade,
+these now stay visible 500 units further.
+
 ## Patch 1799 - Map uploads: zones optional, published zones no longer block a name, Zone editor and Map upload tabs (game surfd/mapupd.py, m_mapupload.qc m_main.qc, cl_zoneedit.qc cl_zoneedit_extra.qc)
 
 **Problem.** Lex, 24 Nov: "Allow uploading without zone, just ask the client 'Are you sure, this doesn't have a zone
@@ -248,7 +332,7 @@ the walls). Momentum's floor under them is as bright as ours (lightmap 0.9-1.4),
 Static props do not block those paths (the fixture is no-shadow); every point/spot light's flag 0x2 is Portal 2's
 cast-entity-shadows bit, also on Portal 2 maps, so it is not the reason.
 
-**Change.** hl2_lt_wlv25 (default 1): on a v25 BSP VBSP_LoadWorldLights keeps no point/spot/surface light for the
+**Change.** hl2_lt_wlv25 (default 1; 0 since Patch 1805, which found Momentum lighting these props): on a v25 BSP VBSP_LoadWorldLights keeps no point/spot/surface light for the
 model light (the sun still comes through hl2_lt_sun). 0 restores Source 2013's light cache rule.
 
 **Verified.** Rig save 28: the barrels and cans dark as in Momentum.
