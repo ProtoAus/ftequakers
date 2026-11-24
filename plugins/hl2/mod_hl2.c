@@ -394,6 +394,8 @@ and every level is immediately correct.  So that is the gate -- LODs are used
 when fixups_count is 0 and the per-LOD vertex counts agree, and any model with
 fixups keeps exactly the LOD-0-only behaviour it has today.  Deriving the
 per-LOD offsets is a bigger job and is left undone rather than half-done.
+[Patch 1810: wrong premise -- with the root LOD at 0 every level indexes level 0's fixed-up array; see the maxlod
+note in the .vvd loader. Levels switch at the VTX switch points (MDLF_SOURCELOD).]
 */
 #define HL2_MAXLOD 8
 
@@ -828,7 +830,7 @@ static qboolean Mod_HL2_LoadVTX(hl2parsecontext_t *ctx, const void *buffer, size
 					/*index data*/
 					if (mmesh->vert_first+mmesh->vert_count > surf->numverts)
 						surf->ofs_indexes = NULL, surf->numindexes = 0;	//erk?
-					else if (!ctx->lod[l].numfixups /*&& mdl->num_bones > sh_config.max_gpu_bones*/)
+					else if (!ctx->lod[0].numfixups /*&& mdl->num_bones > sh_config.max_gpu_bones*/)	//P1810: level 0's table for every level
 					{	//FIXME: fixups make this too screwy, so we can't use this path when they're in use, which means we will probably exceed out gpu bones limit more than we otherwise would (just a perf issue)
 						unsigned int bias = firstvert+mmesh->vert_first;
 						surf->numverts = mmesh->vert_count;
@@ -848,10 +850,10 @@ static qboolean Mod_HL2_LoadVTX(hl2parsecontext_t *ctx, const void *buffer, size
 							surf->ofs_skel_weight += bias;
 						surf->shares_verts = surf-(galiasinfo_t*)ctx->mod->meshinfo;
 
-						surf->ofs_indexes = Mod_HL2_LoadIndexes(ctx, &surf->numindexes, vmesh, l, bias, bias);
+						surf->ofs_indexes = Mod_HL2_LoadIndexes(ctx, &surf->numindexes, vmesh, 0, bias, bias);
 					}
 					else
-						surf->ofs_indexes = Mod_HL2_LoadIndexes(ctx, &surf->numindexes, vmesh, l, firstvert+mmesh->vert_first, 0);
+						surf->ofs_indexes = Mod_HL2_LoadIndexes(ctx, &surf->numindexes, vmesh, 0, firstvert+mmesh->vert_first, 0);
 
 					/*misc data*/
 					surf->geomset = alts ? b : ~0;		//P1440: ~0 is always drawn
@@ -867,8 +869,13 @@ static qboolean Mod_HL2_LoadVTX(hl2parsecontext_t *ctx, const void *buffer, size
 					takes maxdist 0, which the filter reads as "no upper
 					bound" so the coarsest mesh keeps drawing forever.
 					*/
-					surf->mindist = l;
-					surf->maxdist = (l+1 < nlod) ? l+1 : 0;
+					/*FTESurf Patch 1810: Source's switch points instead (MDLF_SOURCELOD): the level is drawn while the
+					  metric (100 / a unit sphere's pixel width) is in [its switch point, the next one's); the last
+					  level has no upper bound, and a NEGATIVE last switch point is Source's shadow-only LOD, never in view.*/
+					surf->mindist = l ? vlod->dist : 0;
+					surf->maxdist = (l+1 < nlod && vlod[1].dist >= 0) ? vlod[1].dist : 0;
+					if (l && vlod->dist < 0)
+						surf->mindist = 1e30f;
 
 					if (surf != ctx->mod->meshinfo)
 						surf[-1].nextsurf = surf;
@@ -990,8 +997,11 @@ static qboolean Mod_HL2_LoadVVD(hl2parsecontext_t *ctx, const void *buffer, size
 	and admitted precisely zero models in the whole library, which is how the
 	prefix arrangement got noticed at all.
 	*/
+	/*FTESurf Patch 1810: fixups no longer stop it. With the root LOD at 0 Source fixes the VVD up ONCE -- the
+	  concatenation of every fixup with lod >= 0 -- and every level's strips index that one array (a level uses a
+	  prefix of each mesh: oak_tree01's highest origMeshVertID per mesh 2573/1865/979/486); per-level compaction is
+	  only for a raised root LOD. So lod[0]'s table serves all levels (Mod_HL2_LoadVTX).*/
 	ctx->maxlod = 1;
-	if (!header->fixups_count)
 	{
 		size_t n = header->lod_count;
 		if (n > countof(ctx->lod))
@@ -1006,9 +1016,7 @@ static qboolean Mod_HL2_LoadVVD(hl2parsecontext_t *ctx, const void *buffer, size
 	{
 		size_t fixups = header->fixups_count, f, v;
 		const hl2vvdfixup_t *fixup = (const hl2vvdfixup_t*)((const qbyte*)header+header->fixups_offset);
-		/*bounded by maxlod, not by countof: with fixups present maxlod is 1, and
-		  building the other seven tables would allocate index arrays nothing reads.*/
-		for (lod = 0; lod < ctx->maxlod && lod < header->lod_count; lod++)
+		for (lod = 0; lod < 1 && lod < header->lod_count; lod++)	//P1810: level 0's table only
 		{
 			size_t numverts;
 			for (numverts=0, f = 0; f < fixups; f++)
@@ -1017,7 +1025,10 @@ static qboolean Mod_HL2_LoadVVD(hl2parsecontext_t *ctx, const void *buffer, size
 					numverts += fixup[f].numverts;
 			}
 			if (numverts != header->lodverts_count[lod])
+			{
+				ctx->maxlod = 1;	//P1810: no usable table, LOD 0 as before (and its indexes unmapped, as before)
 				continue;
+			}
 			ctx->lod[lod].numfixups = numverts;
 			ctx->lod[lod].fixup = plugfuncs->GMalloc(&ctx->mod->memgroup, sizeof(index_t)*numverts);
 			for (numverts=0, f = 0; f < fixups; f++)
@@ -1582,7 +1593,10 @@ qboolean QDECL Mod_LoadHL2Model (model_t *mod, void *buffer, size_t fsize)
 	single-level model, so nothing without real LODs pays the coverage maths.
 	*/
 	if (ctx.usedlod > 1)
+	{
 		mod->maxlod = ctx.usedlod;
+		mod->engineflags |= MDLF_SOURCELOD;	//FTESurf Patch 1810: the surfaces carry VTX switch points
+	}
 
 	/*
 	  FTESurf Build 8.  THE COLLISION TREE IS NOT BUILT FROM THE RENDER MESH

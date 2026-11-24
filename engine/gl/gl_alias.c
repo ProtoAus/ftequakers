@@ -2670,7 +2670,13 @@ void R_GAlias_GenerateBatches(entity_t *e, batch_t **batches)
 			if (r_model_mincoverage.value > 0 && coverage < r_model_mincoverage.value && sizecullable)
 				return;
 
-			if (clmodel->maxlod)
+			if (clmodel->engineflags & MDLF_SOURCELOD)
+			{	//FTESurf Patch 1810: Source's metric, 100 / the pixel width of a unit-diameter sphere at the model
+				//(studio.h LODMetric, ComputePixelWidthOfSphere(origin, 0.5)), against the VTX switch points
+				float px = r_refdef.pxrect.width * 0.5f * r_refdef.m_projection_std[0] / z;
+				lod = (px > 0) ? 100 / px : 0;
+			}
+			else if (clmodel->maxlod)
 			{
 				lod = 1-(coverage*r_lodscale.value);
 				lod = bound(0, lod, 1);	//so lodbias is a little more reliable.
