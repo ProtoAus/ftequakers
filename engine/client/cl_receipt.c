@@ -65,6 +65,7 @@ cannot reach: a small-order key, a non-canonical encoding, and an unreduced s.
 #include <sys/wait.h>
 #include <errno.h>
 #include <signal.h>
+#include <fcntl.h>
 #endif
 
 #ifndef SERVERONLY
@@ -843,8 +844,9 @@ qboolean CL_Receipt_Browse(const char *opener)
   manager -- the TAS menu's Open folder.  Only in a game this client hosts, from the very csprogs it serves (as
   tasrev_sign): a server's or a demo's game code can write files and folders under data/ and rename them, and a file
   in the folder's place would be RUN by its default opener (review 1: a script swapped in after the check).  The path
-  must be data/runs[/...] of plain characters, a real directory, and goes to the opener with a trailing slash, which
-  only a directory satisfies.  pr_csqc.c allows it only while a device's key press is delivered; once a second.*/
+  must be data/runs[/...] of plain characters and a real directory (not a link); xdg-open's own checks get it with a
+  trailing slash, which only a directory satisfies (GLib openers drop it: the gate is the defence).  pr_csqc.c allows
+  it only while a device's key press is delivered; once a second.*/
 qboolean CL_OpenRunFolder(const char *gamepath)
 {
 	static double last;
@@ -877,11 +879,17 @@ qboolean CL_OpenRunFolder(const char *gamepath)
 	if (!FS_SystemPath(gamepath, FS_GAMEONLY, native, sizeof(native) - 1))
 		return false;
 	n = strlen(native);
-	if (n && native[n-1] != '/' && native[n-1] != '\\')
+	while (n > 1 && (native[n-1] == '/' || native[n-1] == '\\'))
+		native[--n] = 0;	/*checked without it (review 2: lstat follows a link named "x/")*/
+#ifndef _WIN32
 	{
-		native[n++] = '/';
-		native[n] = 0;
+		struct stat st;
+		if (lstat(native, &st) || !S_ISDIR(st.st_mode))
+			return false;
 	}
+#endif
+	native[n++] = '/';
+	native[n] = 0;
 	if (COM_CheckParm("-nobrowse"))
 	{
 		Con_Printf("sys_openfolder: %s (-nobrowse: not opened)\n", native);
@@ -906,10 +914,7 @@ qboolean CL_OpenRunFolder(const char *gamepath)
 	}
 #elif defined(__linux__)
 	{
-		struct stat st;
 		pid_t pid;
-		if (lstat(native, &st) || !S_ISDIR(st.st_mode))
-			return false;
 		last = realtime;
 		Con_Printf("sys_openfolder: %s\n", native);
 		/*no shell; the grandchild execs, so nothing is left to reap.  It closes what it inherited (install.lock's
@@ -920,6 +925,12 @@ qboolean CL_OpenRunFolder(const char *gamepath)
 			if (fork() == 0)
 			{
 				long fd, max = sysconf(_SC_OPEN_MAX);
+				int nul = open("/dev/null", O_RDWR);
+				if (nul >= 0)
+				{	/*review 2: not the game's log or terminal, and not killed with that terminal*/
+					dup2(nul, 0); dup2(nul, 1); dup2(nul, 2);
+				}
+				setsid();
 				if (max < 0 || max > 65536)
 					max = 65536;
 				for (fd = 3; fd < max; fd++)

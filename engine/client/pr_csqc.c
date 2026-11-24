@@ -10029,6 +10029,8 @@ static void QCBUILTIN PF_cl_sys_openfolder (pubprogfuncs_t *prinst, struct globa
 	G_FLOAT(OFS_RETURN) = 0;
 	if (!CSQC_RealKey() || csqc_realkey_browses < 1)
 		return;
+	if (prinst->numprogs != 1)
+		CL_Receipt_VMCode(NULL, 0);	/*review 2: one file of code, as acct_sign asks*/
 	if (CL_OpenRunFolder(PR_GetStringOfs(prinst, OFS_PARM0)))
 	{
 		csqc_realkey_browses--;
