@@ -1,5 +1,50 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1811 - Envmaps take the exposure and are masked in linear light (plugin hl2/glsl/vmt lightmapped transition vertexlit)
+
+**Problem.** Lex, 25 Nov, save 36: the barn window "to reflective, and the white mark is a bit to visable" -- Momentum's
+pane is a bright reflection at the top (124 levels there, ours 52) over which the interior and the dirt barely show.
+The window's patched material reflects c21000_8016_-64 (an outside cube, HDR faces 0.27-0.34 linear) through a 0.55 mask.
+Source computes cube * mask * tonemap scale in linear light and encodes; ours added the sRGB-encoded cube times the
+linear mask, unexposed (the auto-exposure reaches a surface only through its lightmap scale).
+
+**Change.** The reflection is computed and added in linear light, as Source orders it: cube (decoded) x mask x tint,
+contrast, saturation, then the tonemap scale (r_autoexposure_sky^2.2, 1 when off), added to the linearised diffuse and
+encoded after. vertexlit's add before the lighting multiply (a non-default hl2_envmap_source) takes the exposure through
+the lighting; its add after it runs only where there is a reflection.
+
+**Verified.** Rig save 36: the pane's top 52 -> 57.5 (reflections off: 17; an intermediate mask^(1/2.2) form gave 64 and
+overshot Source on lit surfaces, review 1); save 16's corrugated ramp within a level.
+
+**Limits.** Momentum's pane is still twice as bright; the remaining factor is not found (the cube, its orientation and
+the mask are as above). Water, refract and UnlitGeneric $envmap (unlitreflect) not changed; $envmaptint stays a factor
+on the linear value; under vid_srgb != 0 (not the default) the cube is already linear and is now decoded twice.
+
+## Patch 1810 - Source models' LODs, with VVD fixups, switched at Source's switch points (plugin hl2/mod_hl2.c; engine gl/gl_alias.c gl_model.h)
+
+**Problem.** Lex, 25 Nov, saves 40/41: "This tree has LOD models we're not using I can see switch between these two
+positions on momentum mod" -- oak_tree01 (4 levels, 2968 -> 881 vertices) drew level 0 at every distance: P201 kept any
+model whose .vvd carries fixups at LOD 0, on the premise that each level's strip indices need per-level offsets.
+
+**Change.** With the root LOD at 0 Source fixes the .vvd up once and every level's strips index that one array (each
+level uses a prefix of each mesh: oak_tree01's highest origMeshVertID per mesh 2573/1865/979/486), so level 0's fixup
+table serves every level. Each level's surfaces carry the VTX switch points and the model MDLF_SOURCELOD; the engine
+picks by Source's metric, 100 / the pixel width of a unit-diameter sphere at the model (LODMetric,
+ComputePixelWidthOfSphere(origin, 0.5)); a negative last switch point (Source's shadow LOD) is never drawn in view;
+every pass takes the level from the camera's depth, fov and the view's pixel width (shadow faces and the orthographic
+cascades cast the level drawn); viewmodels level 0. Switch points follow Source's GetLODForMetric order (a running
+maximum; a level whose range is empty never draws; an empty level 0 keeps mindist 0 for BIH_BuildAlias's LOD-0 key).
+Models without fixups (P201's) switch at their switch points too, not by coverage. Surfaces whose vertex arrays are
+pointer-identical share one vertex buffer (com_mesh.c Mod_MeshVBOTwin): every mesh of every level of a fixup model holds
+the whole array, which had multiplied its VRAM by the level count.
+
+**Verified.** Rig: oak_tree01 at save 41 (1171 units: metric ~166) draws level 1, close by level 0, nothing garbled;
+save 13's distant trees at their lower levels; canals saves 6-32 otherwise as 0.1.68; timing saves 8/6/5 GPU -0.1/0/0 ms.
+Three review rounds (VRAM sharing, zero and falling switch points, the shadow-pass metric, viewmodels).
+
+**Limits.** Raised root LODs and $lod replacematerial are not modelled (LOD meshes draw level 0's materials);
+r_lodscale/r_lodbias no longer affect Source models; no installed map with P201's prefix forests to look at.
+
 ## Patch 1806 - TAS uploads on the boards' TAS tab; tasupd's Steam sign-in kept 30 days (game surfd/tasindex.py, ftesurf-tasindex.service/.timer, tasupd.py)
 
 **Problem.** Lex, 25 Nov: "only rounin has uploaded a record on surf_sandtraps main, and it doesn't appear on the

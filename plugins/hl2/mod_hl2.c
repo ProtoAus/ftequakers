@@ -894,7 +894,7 @@ static qboolean Mod_HL2_LoadVTX(hl2parsecontext_t *ctx, const void *buffer, size
 							if (l)
 								surf->mindist = 1e30f;
 							else
-								surf->maxdist = 1e-6f;
+								surf->maxdist = 1e-3f;	//(level 1 starts at 1e-3)
 						}
 					}
 
