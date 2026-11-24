@@ -7133,6 +7133,7 @@ static void QCBUILTIN PF_ui_native_gamefocus(pubprogfuncs_t *prinst, struct glob
 static void QCBUILTIN PF_cl_acct_sign (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals);
 static void QCBUILTIN PF_cl_acct_random (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals);
 static void QCBUILTIN PF_cl_acct_browse (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals);
+static void QCBUILTIN PF_cl_sys_openfolder (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals);
 static void QCBUILTIN PF_cl_tasrev_sign (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals);
 static void QCBUILTIN PF_cs_movementprofile_switch (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals);
 void CL_Receipt_VM(qboolean made);
@@ -7631,6 +7632,7 @@ static struct {
 	{"acct_sign",				PF_cl_acct_sign,				0},		//FTESurf Patch 625: string(string nonce, float kind)
 	{"acct_random",				PF_cl_acct_random,			0},		//FTESurf Patch 625: string(float bytes)
 	{"acct_browse",				PF_cl_acct_browse,			0},		//FTESurf Patch 625: float(string opener)
+	{"sys_openfolder",			PF_cl_sys_openfolder,		0},		//FTESurf Patch 1797: float(string gamepath)
 	{"tasrev_sign",				PF_cl_tasrev_sign,			0},		//FTESurf P1090: string(string sha, string parent, string mapcrc, float from, float to)
 	{"movementprofile_switch",	PF_cs_movementprofile_switch,	0},		//FTESurf P1598: float(string mode)
 	{"cmdlevel_local",		PF_cs_cmdlevel_local,		0},		//FTESurf P1598: float()
@@ -9904,6 +9906,7 @@ qboolean IN_RealKeyDown(void);
 void IN_RealKeyAbort(void);
 qboolean CL_Receipt_AcctSign(const char *nonce, int kind, qboolean keyed, char *out, size_t outlen);
 qboolean CL_Receipt_Browse(const char *opener);
+qboolean CL_OpenRunFolder(const char *gamepath);
 /*
   ONE PRESS BUYS ONE LINK SIGNATURE AND ONE BROWSER, and a held key's repeats
   buy nothing: the review looped both builtins inside one handler call.  The
@@ -10019,6 +10022,18 @@ static void QCBUILTIN PF_cl_acct_browse (pubprogfuncs_t *prinst, struct globalva
 		return;
 	csqc_realkey_browses--;
 	G_FLOAT(OFS_RETURN) = CL_Receipt_Browse(PR_GetStringOfs(prinst, OFS_PARM0));
+}
+/*float(string gamepath) sys_openfolder: a data/runs folder of this game in the file manager (Patch 1797), on a press.*/
+static void QCBUILTIN PF_cl_sys_openfolder (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
+{
+	G_FLOAT(OFS_RETURN) = 0;
+	if (!CSQC_RealKey() || csqc_realkey_browses < 1)
+		return;
+	if (CL_OpenRunFolder(PR_GetStringOfs(prinst, OFS_PARM0)))
+	{
+		csqc_realkey_browses--;
+		G_FLOAT(OFS_RETURN) = 1;
+	}
 }
 
 qboolean CSQC_KeyPress(int key, int unicode, qboolean down, unsigned int devid)

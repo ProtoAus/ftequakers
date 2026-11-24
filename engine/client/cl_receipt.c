@@ -61,6 +61,9 @@ cannot reach: a small-order key, a non-canonical encoding, and an unreduced s.
 #include <shellapi.h>
 #else
 #include <unistd.h>
+#include <sys/stat.h>
+#include <sys/wait.h>
+#include <errno.h>
 #endif
 
 #ifndef SERVERONLY
@@ -828,6 +831,73 @@ qboolean CL_Receipt_Browse(const char *opener)
 			execlp("xdg-open", "xdg-open", url, (char*)NULL);
 			_exit(127);
 		}
+		return pid > 0;
+	}
+#else
+	return false;
+#endif
+}
+
+/*FTESurf Patch 1797: one of the game's own run folders (data/runs[/...], the writable gamedir) in the system's file
+  manager -- the TAS menu's Open folder.  Game code names only a path under data/runs of plain characters, and it
+  must be a directory (never a file a server's csprogs wrote, which an opener would run or show); pr_csqc.c allows it
+  only while a device's key press is delivered.  Once a second.*/
+qboolean CL_OpenRunFolder(const char *gamepath)
+{
+	static double last;
+	char native[MAX_OSPATH];
+	const char *c;
+
+	if (strncmp(gamepath, "data/runs", 9) || (gamepath[9] && gamepath[9] != '/') || strstr(gamepath, "..")
+		|| strlen(gamepath) > 160)
+		return false;
+	for (c = gamepath; *c; c++)
+		if (!((*c >= 'a' && *c <= 'z') || (*c >= 'A' && *c <= 'Z') || (*c >= '0' && *c <= '9') || *c == '_' || *c == '-'
+			|| *c == '.' || *c == '/'))
+			return false;
+	if (last && realtime - last < 1.0 && realtime >= last)
+		return false;
+	if (!FS_SystemPath(gamepath, FS_GAMEONLY, native, sizeof(native)))
+		return false;
+	if (COM_CheckParm("-nobrowse"))
+	{
+		Con_Printf("sys_openfolder: %s (-nobrowse: not opened)\n", native);
+		last = realtime;
+		return true;
+	}
+#ifdef _WIN32
+	{
+		wchar_t wide[MAX_OSPATH];
+		DWORD attr;
+		if (!MultiByteToWideChar(CP_UTF8, 0, native, -1, wide, countof(wide)))
+			return false;
+		attr = GetFileAttributesW(wide);
+		if (attr == INVALID_FILE_ATTRIBUTES || !(attr & FILE_ATTRIBUTE_DIRECTORY) || (attr & FILE_ATTRIBUTE_REPARSE_POINT))
+			return false;
+		last = realtime;
+		return (INT_PTR)ShellExecuteW(NULL, L"explore", wide, NULL, NULL, SW_SHOWNORMAL) > 32;
+	}
+#elif defined(__linux__)
+	{
+		struct stat st;
+		pid_t pid;
+		if (lstat(native, &st) || !S_ISDIR(st.st_mode))
+			return false;
+		last = realtime;
+		/*no shell; the grandchild execs, so nothing is left for this process to reap*/
+		pid = fork();
+		if (pid == 0)
+		{
+			if (fork() == 0)
+			{
+				execlp("xdg-open", "xdg-open", native, (char*)NULL);
+				_exit(127);
+			}
+			_exit(0);
+		}
+		if (pid > 0)
+			while (waitpid(pid, NULL, 0) < 0 && errno == EINTR)
+				;
 		return pid > 0;
 	}
 #else
