@@ -34,7 +34,7 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "!!cvar3f r_shadows_sunfloor=0 0 0\n"
 "!!cvar3f r_shadows_sunlm=0 0 0\n"
 "!!cvarf r_shadows_worldcast=1\n"
-"!!cvar3f r_shadows_throwdirection=0 0 -1\n"
+"!!cvar3f r_shadows_sundir=0 0 -1\n"
 "!!cvarf gl_overbright\n"
 
 "#ifndef ENVTINT\n"
@@ -139,7 +139,7 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 
 "#ifdef FAKESHADOWS\n"
 "varying vec3 shsunt; //FTESurf Patch 1781: toward the sun in the surface's (s, t, n)\n"
-"uniform vec3 cvar_r_shadows_throwdirection;\n"
+"uniform vec3 cvar_r_shadows_sundir; //the sun VRAD baked with (the plugin's; shadow_control may aim the shadows elsewhere)\n"
 "varying vec4 vtexprojcoord;\n"
 "#ifdef FAKESHADOWS_CASCADE\n"
 "varying vec3 shwpos; //FTESurf Patch 1762: world position for the sun cascades (sys/pcf.h CascadeShadowFilter)\n"
@@ -196,7 +196,7 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "shwpos = (m_model*vec4(v_position.xyz, 1.0)).xyz;\n"
 "#endif\n"
 "{\n"
-"vec3 tosun = -cvar_r_shadows_throwdirection;\n"
+"vec3 tosun = -cvar_r_shadows_sundir;\n"
 "shsunt = vec3(dot(tosun, (m_model*vec4(v_svector, 0.0)).xyz), dot(tosun, (m_model*vec4(v_tvector, 0.0)).xyz),\n"
 "dot(tosun, (m_model*vec4(v_normal, 0.0)).xyz));\n"
 "}\n"
@@ -398,11 +398,14 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "#endif\n"
 "vec3 lml = max(lmv, vec3(0.0)) / shk;\n"
 "lml = mix(lml / 12.92, pow((lml + 0.055) / 1.055, vec3(2.4)), step(0.04045, lml));\n"
-"vec3 sun = cvar_r_shadows_sunlm * (1.0 - texture2D(s_sunvis, lm0).r);\n"
+"vec3 sun = cvar_r_shadows_sunlm * (1.0 - LMSAMPLE(s_sunvis, lm0).r); //filtered as the lightmap is (P1275 bicubic)\n"
 "#if defined(DELUXE) && defined(BUMP)\n"
 "rnmlin = rnm_linear();\n"
 "lml *= rnmlin;\n"
 "sun *= rnmlin;\n"
+"#endif\n"
+"#ifdef FAKESHADOWS\n"
+"sun *= clamp(shlit, 0.0, 1.0); //a shadow takes the baked sun out where the live sun is not drawn (worldcast 0, one map)\n"
 "#endif\n"
 "#ifdef FAKESHADOWS_CASCADE\n"
 "if (cvar_r_shadows_worldcast > 0.0 && l_fakeshadowinfo[0].z > 0.5)\n"
@@ -411,7 +414,7 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "vec3 swe = abs((swc.xyz/swc.w + vec3(1.0)) * 0.5 - vec3(0.5));\n"
 "float sunw = 1.0 - clamp((max(max(swe.x, swe.y), swe.z) - 0.30) / 0.05, 0.0, 1.0);\n"
 "vec3 sunn = sun_normal();\n"
-"float ndl = max(dot(sunn, normalize(shsunt)), 0.0);\n"
+"float ndl = max(dot(sunn, shsunt) * inversesqrt(max(dot(shsunt, shsunt), 1e-8)), 0.0);\n"
 "sun = mix(sun, cvar_r_shadows_sunlm * (0.984 * pow(ndl, 1.4) * clamp(shlit, 0.0, 1.0)), sunw);\n"
 "}\n"
 "#endif\n"
@@ -763,7 +766,7 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "!!cvar3f r_shadows_sunfloor=0 0 0\n"
 "!!cvar3f r_shadows_sunlm=0 0 0\n"
 "!!cvarf r_shadows_worldcast=1\n"
-"!!cvar3f r_shadows_throwdirection=0 0 -1\n"
+"!!cvar3f r_shadows_sundir=0 0 -1\n"
 "!!cvarf gl_overbright\n"
 
 "#include \"sys/defs.h\"\n"
@@ -834,7 +837,7 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 
 "#ifdef FAKESHADOWS\n"
 "varying vec3 shsunt; //FTESurf Patch 1781: toward the sun in the surface's (s, t, n), as lightmapped.glsl\n"
-"uniform vec3 cvar_r_shadows_throwdirection;\n"
+"uniform vec3 cvar_r_shadows_sundir; //the sun VRAD baked with (the plugin's; shadow_control may aim the shadows elsewhere)\n"
 "varying vec4 vtexprojcoord;\n"
 "#ifdef FAKESHADOWS_CASCADE\n"
 "varying vec3 shwpos; //FTESurf Patch 1762: world position for the sun cascades (sys/pcf.h CascadeShadowFilter)\n"
@@ -889,7 +892,7 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "shwpos = (m_model*vec4(v_position.xyz, 1.0)).xyz;\n"
 "#endif\n"
 "{\n"
-"vec3 tosun = -cvar_r_shadows_throwdirection;\n"
+"vec3 tosun = -cvar_r_shadows_sundir;\n"
 "shsunt = vec3(dot(tosun, (m_model*vec4(v_svector, 0.0)).xyz), dot(tosun, (m_model*vec4(v_tvector, 0.0)).xyz),\n"
 "dot(tosun, (m_model*vec4(v_normal, 0.0)).xyz));\n"
 "}\n"
@@ -1074,7 +1077,10 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "#endif\n"
 "vec3 lml = max(lmv, vec3(0.0)) / shk;\n"
 "lml = mix(lml / 12.92, pow((lml + 0.055) / 1.055, vec3(2.4)), step(0.04045, lml));\n"
-"vec3 sun = cvar_r_shadows_sunlm * (1.0 - texture2D(s_sunvis, lm0).r);\n"
+"vec3 sun = cvar_r_shadows_sunlm * (1.0 - LMSAMPLE(s_sunvis, lm0).r); //filtered as the lightmap is (P1275 bicubic)\n"
+"#ifdef FAKESHADOWS\n"
+"sun *= clamp(shlit, 0.0, 1.0); //a shadow takes the baked sun out where the live sun is not drawn (worldcast 0, one map)\n"
+"#endif\n"
 "#ifdef FAKESHADOWS_CASCADE\n"
 "if (cvar_r_shadows_worldcast > 0.0 && l_fakeshadowinfo[0].z > 0.5)\n"
 "{\n"
@@ -1090,7 +1096,7 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "#else\n"
 "vec3 sunn = vec3(0.0, 0.0, 1.0);\n"
 "#endif\n"
-"float ndl = max(dot(sunn, normalize(shsunt)), 0.0);\n"
+"float ndl = max(dot(sunn, shsunt) * inversesqrt(max(dot(shsunt, shsunt), 1e-8)), 0.0);\n"
 "sun = mix(sun, cvar_r_shadows_sunlm * (0.984 * pow(ndl, 1.4) * clamp(shlit, 0.0, 1.0)), sunw);\n"
 "}\n"
 "#endif\n"
@@ -1434,7 +1440,7 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "!!cvar3f r_shadows_sunfloor=0 0 0\n"
 "!!cvar3f r_shadows_vhvsun=0 0 0\n"
 "!!cvar3f r_shadows_sunlm=0 0 0\n"
-"!!cvar3f r_shadows_throwdirection=0 0 -1\n"
+"!!cvar3f r_shadows_sundir=0 0 -1\n"
 "!!cvarf r_shadows_worldcast=1\n"
 
 // envmaps only
@@ -1529,7 +1535,7 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "#define LIVESUN\n"
 "varying vec3 lsun_t; //toward the sun in (s, t, n)\n"
 "varying vec3 lsun_v; //the vertex stage's directional term, which the live sun replaces\n"
-"uniform vec3 cvar_r_shadows_throwdirection;\n"
+"uniform vec3 cvar_r_shadows_sundir;\n"
 "uniform vec3 cvar_r_shadows_sunlm;\n"
 "uniform float cvar_r_shadows_worldcast;\n"
 "#endif\n"
@@ -1630,7 +1636,7 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "light.rgb += dirv;\n"
 "#ifdef LIVESUN\n"
 "{\n"
-"vec3 tosun = -cvar_r_shadows_throwdirection;\n"
+"vec3 tosun = -cvar_r_shadows_sundir;\n"
 "vec3 tm = vec3(dot(m_model[0].xyz, tosun), dot(m_model[1].xyz, tosun), dot(m_model[2].xyz, tosun)); //into model space\n"
 "lsun_t = vec3(dot(tm, s), dot(tm, t), dot(tm, n));\n"
 "lsun_v = dirv;\n"
@@ -2848,6 +2854,9 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 
 "!!samps !UNLIT lightmap\n"
 "!!samps !UNLIT =LIGHTSTYLED lightmap1 lightmap2 lightmap3\n"
+"!!samps !UNLIT sunvis\n"
+"!!cvar3f r_shadows_sunlm=0 0 0\n"
+"!!cvarf gl_overbright\n"
 
 // ftesurf (P195): the AnimatedTexture proxy -- a flipbook whose frames all live
 // in ONE VTF.  3,342 materials across 741 maps drive one, and every one of them
@@ -2959,6 +2968,8 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 
 "#ifdef FRAGMENT_SHADER\n"
 "uniform float cvar_r_autoexposure_sky; //FTESurf Patch 1784: an unlit one (a sprite) takes the exposure as unlit.glsl does\n"
+"uniform vec3 cvar_r_shadows_sunlm;  //FTESurf Patch 1781\n"
+"uniform float cvar_gl_overbright;\n"
 "#include \"sys/fog.h\"\n"
 
 "#ifndef UNLIT\n"
@@ -3049,11 +3060,27 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "#endif\n"
 
 "#ifndef UNLIT\n"
-"diffuse_f.rgb *= lightmap_fragment();\n"
+"{\n"
+"vec3 alm = lightmap_fragment();\n"
+"if (cvar_r_shadows_sunlm.r + cvar_r_shadows_sunlm.g + cvar_r_shadows_sunlm.b > 0.0)\n"
+"{ //FTESurf Patch 1781: style 0 is the indirect light on a Strata page map: the baked sun goes back on, as\n"
+//lightmapped.glsl does with no cascades (an animated face is not drawn with them)
+"#ifdef LIGHTSTYLED\n"
+"vec3 ak = max(e_lmscale[0].rgb / exp2(clamp(floor(cvar_gl_overbright), 0.0, 2.0)), vec3(1e-4));\n"
+"#else\n"
+"vec3 ak = max(e_lmscale.rgb / exp2(clamp(floor(cvar_gl_overbright), 0.0, 2.0)), vec3(1e-4));\n"
+"#endif\n"
+"vec3 al = max(alm, vec3(0.0)) / ak;\n"
+"al = mix(al / 12.92, pow((al + 0.055) / 1.055, vec3(2.4)), step(0.04045, al));\n"
+"al += cvar_r_shadows_sunlm * (1.0 - LMSAMPLE(s_sunvis, lm0).r);\n"
+"alm = ak * mix(al * 12.92, 1.055 * pow(al, vec3(1.0/2.4)) - 0.055, step(0.0031308, al));\n"
+"}\n"
+"diffuse_f.rgb *= alm;\n"
+"}\n"
 "#endif\n"
 "diffuse_f.a *= float(ALPHA) * e_colourident.a; //FTESurf Patch 1218: a fading prop or brush entity, as unlit.glsl\n"
-"#ifdef UNLIT\n"
-"diffuse_f.rgb *= cvar_r_autoexposure_sky; //FTESurf Patch 1784\n"
+"#if defined(UNLIT) && !defined(MODELLIT)\n"
+"diffuse_f.rgb *= cvar_r_autoexposure_sky; //FTESurf Patch 1784 (MODELLIT's light already carries it: BE_ModelExposure)\n"
 "#endif\n"
 
 "#ifdef NOFOG\n"
@@ -3519,6 +3546,14 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "#endif\n"
 
 "diffuse_f.rgb *= e_colourident.rgb * vec3(COLOR);\n"
+"#ifdef ADDITIVE //before the fade below, so a fade stays linear in the light\n"
+//FTESurf Patch 1784: Source adds light in LINEAR light, this renderer adds display values: the source's linear value
+//is the closer stand-in (within 0.6-1.7x of Source's increment over dark to bright backgrounds, where the display
+//value is 1.4-20x over).  bhop_canals' barn shafts (rendercolor 21 18 13) drew a visible fan Momentum does not.
+"diffuse_f.rgb = pow(max(diffuse_f.rgb * cvar_r_autoexposure_sky, vec3(0.0)), vec3(2.2));\n"
+"#else\n"
+"diffuse_f.rgb *= cvar_r_autoexposure_sky; //FTESurf Patch 1784: Source scales its output by the exposure (1 when off)\n"
+"#endif\n"
 
 //THE DISTANCE FADE, and the reason the shield is invisible across the
 //room.  Clamped at both ends: Source's chain can produce a value above
@@ -3566,14 +3601,6 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "diffuse_f.a *= a;\n"
 "#endif\n"
 
-"#ifdef ADDITIVE\n"
-//FTESurf Patch 1784: Source adds light in LINEAR light, this renderer adds display values: the source's linear value
-//is the closer stand-in (within 0.6-1.7x of Source's increment over dark to bright backgrounds, where the display
-//value is 1.4-20x over).  bhop_canals' barn shafts (rendercolor 21 18 13) drew a visible fan Momentum does not.
-"diffuse_f.rgb = pow(max(diffuse_f.rgb * cvar_r_autoexposure_sky, vec3(0.0)), vec3(2.2));\n"
-"#else\n"
-"diffuse_f.rgb *= cvar_r_autoexposure_sky; //FTESurf Patch 1784: Source scales its output by the exposure (1 when off)\n"
-"#endif\n"
 "#ifdef NOFOG\n"
 "gl_FragColor = diffuse_f;\n"
 "#elif defined(ADDITIVE)\n"

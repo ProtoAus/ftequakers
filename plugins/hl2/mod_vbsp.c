@@ -5352,7 +5352,11 @@ static void VBSP_BuildSurfMesh(model_t *mod, msurface_t *surf, builddata_t *bd)
 		if (hl2_dispnormals && hl2_dispnormals->ival && d->width > 0 && d->height > 0 &&
 			mesh->numvertexes == (d->width+1)*(d->height+1))
 		{
-			int w = d->width + 1, x, y;
+			int w = d->width + 1, x, y, vote = 0, pass;
+			float flip;
+			//one orientation for the whole displacement, the grid's winding by majority against the face's (outward) plane:
+			//a vertex on a real fold or overhang faces away from it and must stay so
+			for (pass = 0; pass < 2; pass++)
 			for (i = 0; i < mesh->numvertexes; i++)
 			{
 				vec3_t du, dvv, n;
@@ -5361,10 +5365,16 @@ static void VBSP_BuildSurfMesh(model_t *mod, msurface_t *surf, builddata_t *bd)
 				VectorSubtract(mesh->xyz_array[y*w + min(x+1, w-1)], mesh->xyz_array[y*w + max(x-1, 0)], du);
 				VectorSubtract(mesh->xyz_array[min(y+1, d->height)*w + x], mesh->xyz_array[max(y-1, 0)*w + x], dvv);
 				CrossProduct(du, dvv, n);
+				if (pass == 0)
+				{
+					vote += (DotProduct(n, surf->plane->normal) >= 0) ? 1 : -1;
+					continue;
+				}
+				flip = (vote >= 0) ? 1 : -1;
 				if (VectorNormalize(n) <= 0)
 					VectorCopy(surf->plane->normal, n);
-				if (DotProduct(n, surf->plane->normal) < 0)
-					VectorNegate(n, n);
+				else
+					VectorScale(n, flip, n);
 				VectorCopy(n, mesh->normals_array[i]);
 				miss = -DotProduct(n, mesh->snormals_array[i]);
 				VectorMA(mesh->snormals_array[i], miss, n, mesh->snormals_array[i]);
