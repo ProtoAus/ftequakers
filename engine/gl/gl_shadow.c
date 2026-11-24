@@ -111,6 +111,7 @@ cvar_t r_shadows_bias						= CVARD("r_shadows_bias", "2", "r_shadows 2 shadow de
 //fraction of the ortho depth ([0,1] = 2*r_shadows_distance qu; 0.06 ~= 123 qu at distance 1024).
 //Higher = shadows reach further (more leak); lower = tighter contact-only; 0 disables the fade.
 cvar_t r_shadows_color						= CVARD("r_shadows_color", "0.5 0.5 0.5", "FTESurf Patch 1732: what a fully shadowed pixel is multiplied by under r_shadows 2 on Source surfaces (Source shadow_control's colour; the game sets it per map). 0.5 0.5 0.5 = the classic half.");
+cvar_t r_shadows_vhvsun					= CVARD("r_shadows_vhvsun", "0 0 0", "FTESurf Patch 1780: on a Strata map, the linear sun a static prop's baked vertex light gains per unit of its .vhv alpha (Strata bakes the sun's direct share there for its cascades to shadow), added where the cascades leave it lit. 0 0 0 = none. The game sets it per map (vbsp_vhvsun x light_environment's sun).");
 cvar_t r_shadows_sunfloor					= CVARD("r_shadows_sunfloor", "0 0 0", "FTESurf Patch 1732: on a map whose lightmap already holds the sun's shadows (Strata env_cascade_light), the lightmap level (sRGB) a dynamic shadow brings a sunlit texel down to -- the sky's ambient share; baked shade below it is left alone. 0 0 0 = off: shadows multiply by r_shadows_color. The game sets it per map.");
 cvar_t r_shadows_throwfade					= CVARD("r_shadows_throwfade", "0.06", "r_shadows 2 contact-shadow gap fade: fraction of the ortho shadow depth beyond which a caster stops shadowing (stops shadows leaking through floors). Higher = longer reach; 0 = off.");
 //nettest Phase-0 (caster sun-visibility gate) -------------------------------------------------------
@@ -7042,6 +7043,7 @@ void Sh_RegisterCvars(void)
 	Cvar_Register (&r_shadows_throwfade,				REALTIMELIGHTING);
 	Cvar_Register (&r_shadows_color,					REALTIMELIGHTING);	//FTESurf Patch 1732
 	Cvar_Register (&r_shadows_sunfloor,					REALTIMELIGHTING);	//FTESurf Patch 1732
+	Cvar_Register (&r_shadows_vhvsun,					REALTIMELIGHTING);	//FTESurf Patch 1780
 	Cvar_Register (&r_shadows_worldcast,				REALTIMELIGHTING);	//FTESurf Patch 1765
 	Cvar_Register (&r_shadows_propselfshadow,			REALTIMELIGHTING);
 	Cvar_Register (&r_shadows_cascade_res,				REALTIMELIGHTING);

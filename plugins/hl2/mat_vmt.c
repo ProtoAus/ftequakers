@@ -4586,6 +4586,9 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 		} else {
 			Q_strlcatfz(script, &offset, sizeof(script),"\t\tblendFunc gl_dst_color gl_one_minus_src_alpha\n");
 		}
+		//FTESurf Patch 1776: a multiply of what is already drawn takes no exposure -- rgbgen identity is the
+		//exposure-scaled identity in the opaque sorts (x1.37 at auto-exposure 2.0), so blood brightened its floor
+		Q_strlcatfz(script, &offset, sizeof(script),	"\t\trgbGen const ( 1 1 1 )\n");
 
 		Q_strlcatfz(script, &offset, sizeof(script),	"\t}\n");
 		st->decal = 0;
@@ -4610,8 +4613,8 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 		//are its lighting, so surf_voyager's combine balls (comball_glow1, grey under $mod2x) drew black squares in space.
 		if (st->vertexcolor_on || st->vertexalpha_on)
 			Q_strlcatfz(script, &offset, sizeof(script),	"\trgbGen vertex\n");
-		else
-			Q_strlcatfz(script, &offset, sizeof(script),	"\trgbGen identity\n");
+		else	//FTESurf Patch 1776: constant 1, not the exposure-scaled identity (see DecalModulate)
+			Q_strlcatfz(script, &offset, sizeof(script),	"\trgbGen const ( 1 1 1 )\n");
 
 		Q_strlcatfz(script, &offset, sizeof(script),	"\t}\n");
 		st->translucent = 0;

@@ -1309,6 +1309,7 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "!!samps =FAKESHADOWS shadowmap\n"
 "!!cvar3f r_shadows_color=0.5 0.5 0.5\n"
 "!!cvar3f r_shadows_sunfloor=0 0 0\n"
+"!!cvar3f r_shadows_vhvsun=0 0 0\n"
 
 // envmaps only
 "!!samps =REFLECTCUBEMASK reflectmask reflectcube\n"
@@ -1379,7 +1380,10 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 
 "varying vec2 tex_c;\n"
 "varying vec3 norm;\n"
-"varying vec4 light;\n"
+"varying vec4 light; //.a: FTESurf Patch 1780, Strata's baked direct sun share (the .vhv alpha), 0 without\n"
+"#ifdef VC\n"
+"uniform vec3 cvar_r_shadows_vhvsun; //FTESurf Patch 1780: linear sun per unit of it, set by the game on a cascade map\n"
+"#endif\n"
 
 //FTESurf Patch 1763: a bumped prop takes its directional light per PIXEL through the normal map, as Source's
 //VertexLitGeneric does (its local lights, the sun among them); the vertex stage hands over the light's direction in
@@ -1516,11 +1520,17 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 //these files is either // or a /* */ that opens and closes on one line.
 "#ifdef VC\n"
 "#ifdef INSTANCED\n"
-//the attribute's own fetch: index value plus where this prop's surface starts
-"light.rgb *= texelFetch(s_instvc, int(instfetch(7).w) + gl_VertexID).rgb;\n"
+"{ //the attribute's own fetch: index value plus where this prop's surface starts\n"
+"vec4 vhv = texelFetch(s_instvc, int(instfetch(7).w) + gl_VertexID);\n"
+"light.rgb *= vhv.rgb;\n"
+"light.a = vhv.a; //FTESurf Patch 1780\n"
+"}\n"
 "#else\n"
 "light.rgb *= v_colour.rgb;\n"
+"light.a = v_colour.a; //FTESurf Patch 1780\n"
 "#endif\n"
+"#else\n"
+"light.a = 0.0;\n"
 "#endif\n"
 
 /* CUBEMAPS ONLY */
@@ -1768,6 +1778,7 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "#endif\n"
 "}\n"
 "#endif\n"
+"float shsun = 1.0; //FTESurf Patch 1780: how much of the baked sun share lands (the cascade's lit fraction)\n"
 "#ifdef FAKESHADOWS\n"
 "if (e_noshadowrecv < 0.5)\n"
 "{ //FTESurf Patch 1732: as lightmapped.glsl -- a baked prop on a cascade map loses only the sun\n"
@@ -1776,6 +1787,7 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "#else\n"
 "float shlit = 2.0*ShadowmapFilter(s_shadowmap, vtexprojcoord) - 1.0;\n"
 "#endif\n"
+"shsun = clamp(shlit, 0.0, 1.0);\n"
 "vec3 shfloor = cvar_r_shadows_sunfloor * e_lmscale.rgb;\n"
 "if (shfloor.r + shfloor.g + shfloor.b > 0.0)\n"
 "{ //FTESurf Patch 1774: as lightmapped.glsl -- down to the floor's level, hue kept part-way\n"
@@ -1790,6 +1802,14 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "}\n"
 "else\n"
 "lightrgb *= mix(cvar_r_shadows_color, vec3(1.0), shlit);\n"
+"}\n"
+"#endif\n"
+"#ifdef VC\n"
+"if (light.a > 0.0)\n"
+"{ //FTESurf Patch 1780: Strata's baked direct sun, added in linear light where the cascades let it land\n"
+"vec3 vsun = cvar_r_shadows_vhvsun * (light.a * shsun);\n"
+"if (vsun.r + vsun.g + vsun.b > 0.0)\n"
+"lightrgb = pow(pow(max(lightrgb, vec3(0.0)), vec3(2.2)) + vsun * pow(e_lmscale.rgb, vec3(2.2)), vec3(1.0/2.2));\n"
 "}\n"
 "#endif\n"
 "diffuse_f.rgb *= lightrgb * e_colourident.rgb;\n"

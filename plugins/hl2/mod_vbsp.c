@@ -625,6 +625,7 @@ typedef struct vbspinfo_s
 	//contains VRAD's direct light.  Set around the HL2_CalcModelLighting call in
 	//the prop loop, never anywhere else.  See the essay there.
 	qboolean	wl_suppress;
+	int			bspversion;	//FTESurf Patch 1780: the header's (25: Strata, whose .vhv alpha is the direct sun)
 	/*
 	FTESurf Patch 304: enabled for exactly one population -- static props, which
 	are the only models guaranteed to render through plugins/hl2/glsl/vmt/
@@ -5997,18 +5998,22 @@ static qboolean VBSP_LoadPropBakedLight(model_t *mod, struct staticprop_s *sent,
 						//the multiplier and the mean it is normalised against are
 						//derived from one quantity and cannot drift apart.
 						float e = 0;
-						unsigned int q;
+						unsigned int q, sa = 0;
 						int b;
 						for (q = 0; q < ncol; q++)
 						{
 							const qbyte *p = c + q*4;
 							e += p[2]*0.299f + p[1]*0.587f + p[0]*0.114f;
+							sa += p[3];
 						}
 						b = (int)((e/ncol) * inv + 0.5f);
 						if (b < 0) b = 0;
 						if (b > 255) b = 255;
 						out[0] = out[1] = out[2] = (qbyte)b;
-						out[3] = 255;
+						//FTESurf Patch 1780: Strata's bake leaves the sun out of the colour and writes its direct share in
+						//the alpha (zero on every vertex turned from the sun), for its cascades to shadow; vertexlit.glsl
+						//adds r_shadows_vhvsun x alpha under the cascade shadow.  Other compilers' alpha is not that: 0.
+						out[3] = (((vbspinfo_t*)mod->meshinfo)->bspversion >= 25) ? (qbyte)((sa + ncol/2) / ncol) : 0;
 					}
 				}
 			}
@@ -8549,6 +8554,7 @@ static void VBSP_LightPointValuesCube(struct model_s *model, const vec3_t point,
 //Read at LOAD, inside VBSP_LoadWorldLights, so an A/B needs a map change or a
 //second process -- there is no live arm and the description says so.
 static cvar_t *hl2_lt_wl21;
+static cvar_t *hl2_lt_wlv25;	//FTESurf Patch 1777
 /*
 FTESurf Patch 304: how the cube is folded into the shader's two slots.
 
@@ -11316,7 +11322,7 @@ static void VBSP_PropSolveLight(model_t *mod, vbspinfo_t *prv, struct staticprop
 				for (k = 0; k < nv; k++)
 				{
 					out[k*4+0] = out[k*4+1] = out[k*4+2] = (qbyte)meanb;
-					out[k*4+3] = 255;
+					out[k*4+3] = 0;	//FTESurf Patch 1780: no baked sun on a vertex the file does not cover
 				}
 				if (nm > sent->vcrawverts)
 					nm = sent->vcrawverts;	//a shorter file colours what it can
@@ -11328,6 +11334,7 @@ static void VBSP_PropSolveLight(model_t *mod, vbspinfo_t *prv, struct staticprop
 					out[d*4+0] = sent->vcraw[k*4+0];
 					out[d*4+1] = sent->vcraw[k*4+1];
 					out[d*4+2] = sent->vcraw[k*4+2];
+					out[d*4+3] = sent->vcraw[k*4+3];	//FTESurf Patch 1780
 				}
 				sent->vc = out;
 				sent->vcverts = nv;
@@ -12709,14 +12716,16 @@ static const vec3_t vbsp_boxdirections[6] =
 	{ 0, 1, 0}, { 0,-1, 0},
 	{ 0, 0, 1}, { 0, 0,-1}
 };
-static void VBSP_LoadWorldLights (model_t *mod, qbyte *mod_base, vlump_t *hdr, vlump_t *ldr, qboolean usehdr)
+static void VBSP_LoadWorldLights (model_t *mod, qbyte *mod_base, vlump_t *hdr, vlump_t *ldr, qboolean usehdr, int bspversion)
 {
 	vbspinfo_t	*prv = (vbspinfo_t*)mod->meshinfo;
 	vlump_t		*l;
 	dworldlight_t *in;
 	size_t		i, count, kept = 0, stride;
-	size_t		drop_sky = 0, drop_style = 0, drop_cube = 0, drop_cluster = 0;
+	size_t		drop_sky = 0, drop_style = 0, drop_cube = 0, drop_cluster = 0, drop_v25 = 0;
 	qboolean	v21;
+	//FTESurf Patch 1777: Strata (BSP v25) keeps a map's local lights off unbaked models -- see hl2_lt_wlv25
+	qboolean	v25drop = bspversion >= 25 && hl2_lt_wlv25 && hl2_lt_wlv25->ival;
 
 	prv->wl_pvscluster = -2;	//GMalloc zeroes prv, and 0 is a real cluster number.
 
@@ -12804,6 +12813,8 @@ static void VBSP_LoadWorldLights (model_t *mod, qbyte *mod_base, vlump_t *hdr, v
 			{ drop_cube++; continue; }
 		if (cluster < 0)
 			{ drop_cluster++; continue; }
+		if (v25drop)
+			{ drop_v25++; continue; }
 
 		out = &prv->worldlights[kept++];
 		for (j = 0; j < 3; j++)
@@ -12830,11 +12841,11 @@ static void VBSP_LoadWorldLights (model_t *mod, qbyte *mod_base, vlump_t *hdr, v
 	//FTESurf Patch 308 adds the layout to it, because "v21 accepted" and "v21
 	//still refused" were previously distinguishable only by the ABSENCE of this
 	//line, and an absent line reads as "the map has no worldlights".
-	Con_DPrintf("%s: worldlights %s v%i (%u-byte%s), %u of %u usable (%u sky, %u styled, %u already in cube, %u clusterless)%s\n",
+	Con_DPrintf("%s: worldlights %s v%i (%u-byte%s), %u of %u usable (%u sky, %u styled, %u already in cube, %u clusterless, %u Strata v25 hl2_lt_wlv25)%s\n",
 		mod->name, (l == hdr) ? "HDR" : "LDR", l->version,
 		(unsigned)stride, v21 ? ", Strata" : "",
 		(unsigned)kept, (unsigned)count, (unsigned)drop_sky, (unsigned)drop_style,
-		(unsigned)drop_cube, (unsigned)drop_cluster,
+		(unsigned)drop_cube, (unsigned)drop_cluster, (unsigned)drop_v25,
 		kept ? "" : CON_WARNING" -- hl2_lt_worldlight can do nothing on this map");
 }
 
@@ -14665,7 +14676,7 @@ static qboolean VBSP_LoadModel(model_t *mod, qbyte *mod_base, size_t filelen, ch
 		//VBSP_LoadGameLump below, which is what parses the static props.  Called
 		//bare, like its two neighbours: a missing or malformed optional lighting
 		//lump must leave props on bounce-only light, never fail the map load.
-		VBSP_LoadWorldLights						(mod, mod_base, &header.lumps[VLUMP_WORLDLIGHTS_HDR], &header.lumps[VLUMP_WORLDLIGHTS_LDR], usehdr);
+		VBSP_LoadWorldLights						(mod, mod_base, &header.lumps[VLUMP_WORLDLIGHTS_HDR], &header.lumps[VLUMP_WORLDLIGHTS_LDR], usehdr, header.version);
 
 		//after LoadFaces (needs surfaces + surfedges) and LoadDisplacements
 		//(needs surfdisp), before the batch builder reads surf->envmap.
@@ -14761,6 +14772,7 @@ static qboolean VBSP_LoadMap (model_t *mod, void *filein, size_t filelen)
 	header = *(dvbspheader_t *)(buf);
 	header.magic = LittleLong(header.magic);
 	header.version = LittleLong(header.version);
+	prv->bspversion = header.version;	//FTESurf Patch 1780
 
 	ClearBounds(mod->mins, mod->maxs);
 
@@ -15722,6 +15734,7 @@ qboolean VBSP_Init(void)
 		//FTESurf Patch 308.  Registered here, beside the term it feeds, and NOT
 		//latched: VBSP_LoadWorldLights reads it once per map load, so changing it
 		//needs a map change to take effect and the description has to say so.
+		hl2_lt_wlv25 = cvarfuncs->GetNVFDG("hl2_lt_wlv25", "1", 0, "FTESurf Patch 1777: on a Strata (BSP v25) map, light models that have no VRAD bake from the leaf ambient cube and the sun only, not the map's point/spot/surface lights.\n1: default. Measured on bhop_canals (save 28): Momentum lights the floor under the barrels, jerry cans and crates with the room's fluorescent and an outdoor spot (lightmap 0.9-1.4 linear) but draws those prop_dynamics at roughly the leaf cube alone; adding the two lights drew them 2-18x too bright beside the walls.\n0: add them as Source 2013's light cache does.\nRead at map load.", MAPOPTIONS);
 		hl2_lt_wl21 = cvarfuncs->GetNVFDG("hl2_lt_wl21", "1", 0, "Read the worldlights lump of a v21 (Strata) map, whose record is 100 bytes rather than 88.\n0: refuse it, the pre-308 behaviour. 123 of the 1314 installed maps ship this lump version, so hl2_lt_worldlight -- and with it Patch 304's fold -- silently did nothing on any of them, including surf_fantasy.\n1: default. The layout is a single 12-byte insertion after `normal` (Strata's shadow_cast_offset, zero on all 39,641 lights measured), derived by pairing the CS:S and Momentum builds of surf_fantasy light-for-light rather than guessed: every field that must survive a recompile agrees on 777 of 777, and across all 123 maps every light yields a valid type, a valid style and a unit normal.\nRead at map load -- an A/B needs a map change or a second process.", MAPOPTIONS);
 
 		/*
