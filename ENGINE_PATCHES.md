@@ -1,5 +1,42 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1820 - map and zone downloads; one site menu; the admin and TAS upload pages in the site's look; admin runs explained and ~10x faster (game src/release/site, surfd/web, surfd/admin.py + templates, surfd/tasupd.py, tools/sitenav.py)
+
+**Problem.** Lex, 25 Nov: "it would be cool if people could download any map on the leaderboard with a button, also same
+with the zones on the zones tab"; "sometimes a bot will add a tab and it won't appear on all the pages"; "can the backend
+look a little more like the site"; runs "refused with weird notes I don't quite understand" ('a cold rewind (`pause
+retry|load`): the move before it has no stated duration', 'counts unavailable (no stored observation)'); "the tabs on the
+runs pages also loads quite slow"; "a hover tooltip explaining the refused badge or any other badge". The map/zone URLs
+302 into R2 objects named by their hash, so a plain link saves `<sha>.bsp`. Every page carried its own copy of the tabs:
+the TAS uploads page lacked Download and Log in and linked /ftesurf/, the 3D viewer had none, and the live Reports page
+still lacks P1697's Top 10. The admin runs list took 0.6-2.6 s a tab: the stage-evidence EXISTS took runs_board's leg
+range (4.1M of 4.17M runs have replay_id 0) and the first-key tables scanned all 85k replays before 2.5k receipts.
+
+**Change.** src/release/site/dl.js fetches the .bsp / .json (both hops send Access-Control-Allow-Origin: *) and saves it
+under the map's name with progress in the button; the zoning page has Map on every row and Zones on zoned rows and the
+recent list; get.html?map=&get= is the board's target (its CSP keeps connect-src 'self'), with the map's size and "not on
+the servers" / "no zones yet". tools/sitenav.py generates every header, footer link row, admin menu and tasupd's SITE_NAV
+between marker comments; --check fails on a stale page or on a page with a menu and no block. tasupd and the admin take
+the site's palette, header and pill buttons; the wordmark is inline SVG (their CSPs load no fonts or images). admin.py
+explain_verdict(): a heading, a sentence and a look level per pm_verify reason (HOLD 2; REFUSE at most 1, the checker's
+"cannot say"); the runs list gets a Why column, human tab names and a tooltip on every tab and badge, the run page an
+explainer box and plain mouse-count lines. SQL: `+r.leg`/`+r.replay_id` keep the EXISTS on runs_run (map, track, player,
+runid); CROSS JOIN drives the key tables from receipts.
+
+**Verified.** On the Pi's surfd.db.bak-pre1710 (read-only, immutable), 88 state/search/page combinations give identical
+counts and rows to the live gen1745 admin.py; worst tab 2.55 s -> 0.19 s; key_for 0.55 -> 0.07 s on the live DB
+(read-only). Every reason in the live store maps to a specific explanation (1149 PASS, 238 retry/save, 178 kept/sampled
+clock, 21 viewing clock, 17 parked, 11 parked-wall, 4 frozen, 2 ERROR, 1 partial). Headless Chromium over CDP in real
+time: get.html saved bhop_bobop.bsp (3,632,591 bytes = the object's Content-Length) and surf_kartune.json; the admin
+pages and the reportd page load without a script exception (review fix: the Reports tab keeps #navunseen). Suites:
+test_admin, test_admin_explain, test_reportd, test_tasupd (447), test_board, test_web, test_sitenav (with the add-a-tab
+mutation) pass; two review rounds (round 1: the Reports badge, a mis-indented marker eating page content, verdict
+misfiles, the zoning Zones button moving between lists -- all fixed with falsifiers; round 2 clean). Game main cbefd439.
+LIVE 24 Nov UTC: site 19:08Z (sitepage.ps1 into releases/0.1.68, read back byte for byte; 0.1.69 is cut after it), board
+19:09Z (publish_board.py --commit e0905e56, cut from gen1745's source_ref c2cbe46f), reportd templates 19:09Z (HUP).
+tasupd: re-staged at cbefd439 for Lex's one root upgrade (with P1806). The admin half waits for the next surfd generation
+(tools/backend-pending.md).
+
 ## Patch 1811 - Envmaps take the exposure and are masked in linear light (plugin hl2/glsl/vmt lightmapped transition vertexlit)
 
 **Problem.** Lex, 25 Nov, save 36: the barn window "to reflective, and the white mark is a bit to visable" -- Momentum's
