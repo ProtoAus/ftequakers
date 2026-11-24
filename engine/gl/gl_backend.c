@@ -6986,6 +6986,8 @@ static void BE_GenTempMeshVBO(vbo_t **vbo, mesh_t *m)
 
 void GLBE_DrawMesh_List(shader_t *shader, int nummeshes, mesh_t **meshlist, vbo_t *vbo, texnums_t *texnums, unsigned int beflags)
 {
+	if (!shader->remapto)
+		return;	//FTESurf Patch 1801: as GLBE_SubmitBatch
 	shaderstate.curbatch = &shaderstate.dummybatch;
 	shaderstate.curshader = shader->remapto;
 
@@ -7063,10 +7065,13 @@ void GLBE_SubmitBatch(batch_t *batch)
 	if (!sh)	//nettest: the portal/depthmask loops call GLBE_SubmitBatch directly (bypassing the !bs guard on the sortlist path), so a still-NULL shader (e.g. a frame-1 unparsed Source water material) would fault on sh->remapto
 		return;
 	if (!sh->remapto)
-	{	//FTESurf Patch 1801: r_shadows 2 -> 1 on bhop_canals (0.1.64-0.1.67) faulted in DrawMeshes on such a shader
+	{	//FTESurf Patch 1801: r_shadows 2 -> 1 on bhop_canals (0.1.64-0.1.67) faulted in DrawMeshes on such a shader (all
+		//zeroes: no name, uses 0, id 0); the cause is not found -- this names the batch's producer for the next look
 		static const shader_t *said;
 		if (said != sh)
-			Con_DPrintf(CON_WARNING "shader %s (uses %i id %i gen %p) has no remap target: batch skipped\n", sh->name, sh->uses, sh->id, (void*)sh->generator);
+			Con_DPrintf(CON_WARNING "shader %s (uses %i id %i) has no remap target: batch skipped (build %p flags %#x model %s surface %i)\n",
+				sh->name, sh->uses, sh->id, (void*)batch->buildmeshes, batch->flags,
+				(batch->ent && batch->ent->model) ? batch->ent->model->name : "-", batch->user.poly.surface);
 		said = sh;
 		return;
 	}
@@ -11468,15 +11473,16 @@ void GLBE_BaseEntTextures(const qbyte *worldpvs, const int *worldareas)
 	BE_GenModelBatches(batches, shaderstate.curdlight, shaderstate.mode, worldpvs, worldareas);
 	GLBE_SubmitMeshes(NULL, SHADER_SORT_PORTAL, SHADER_SORT_SEETHROUGH+1);
 	if (shaderstate.mode == BEM_DEPTHONLY)
-	{	//FTESurf Patch 1802: a blended model material with the hl2 plugin's masked depth pass (Patch 1768's ALPHASHADOW)
-		//casts through its alpha, as Strata's cascades draw bhop_canals' $translucent tree cards (save 33's branch shadows);
-		//other blended batches (glass) still cast nothing
+	{	//FTESurf Patch 1802: a blended PROP material with the hl2 plugin's masked depth pass (Patch 1768's ALPHASHADOW)
+		//casts through its alpha (texels at or over the mask), as Strata's cascades draw bhop_canals' $translucent tree
+		//cards (save 33's branch shadows); brush entities' blended faces (func_brush windows) and other blends still don't
 		batch_t *b, *n, *keep = NULL, **tail = &keep;
 		for (b = batches[SHADER_SORT_BLEND]; b; b = n)
 		{
 			n = b->next;
 			if (b->shader && b->shader->bemoverrides[bemoverride_depthonly] &&	//the plugin's embedded "<material>_mode<n>";
-				strncmp(b->shader->bemoverrides[bemoverride_depthonly]->name, "depthonly", 9))	//the engine's own do not mask
+				strncmp(b->shader->bemoverrides[bemoverride_depthonly]->name, "depthonly", 9) &&	//the engine's own do not mask
+				b->ent && b->ent->model && b->ent->model->type == mod_alias)
 			{
 				*tail = b;
 				tail = &b->next;
