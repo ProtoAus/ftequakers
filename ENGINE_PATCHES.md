@@ -1,5 +1,41 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1806 - TAS uploads on the boards' TAS tab; tasupd's Steam sign-in kept 30 days (game surfd/tasindex.py, ftesurf-tasindex.service/.timer, tasupd.py)
+
+**Problem.** Lex, 25 Nov: "only rounin has uploaded a record on surf_sandtraps main, and it doesn't appear on the
+leaderboard ... do they actually automatically apply to the leaderboard like they should?" -- they did not: the TAS tab
+(web board, game boards) is surfd's community/tas rows, and tasupd's uploads (Rounin's surf_sandtrap2 main, 48.165 s,
+approved) lived only in tasupd's store and /tasup/board. And a player: "Website doesn't save your steam login" --
+tasupd's session cookie lasted 12 h.
+
+**Change.** surfd/tasindex.py, every 5 minutes from a proto user timer (not crontab: the generation kits hash it), files
+each player's best shown upload per course as a community/tas row: node `tasup`, runid `tasup-<id>`, TF_TAS, rep 0
+(surfd serves no tasupd file), the linked account's name, 66.6667 Hz. Only into an empty slot: a player with any TAS row
+of their own on the course (live, or set aside by surfd), or an unrejected lobby recording of it, keeps it. Review 1 found the first design's displace-and-
+restore of a slower lobby row unsafe (a separately committed snapshot; restored past a reject, over a better lobby run).
+A row whose upload stops being shown (removed, rejected, beaten by the player's own better upload) is deleted and the
+slot refilled from the player's best unrejected lobby replay, surfd.restand's rule. Accounts tasupd's board would not
+show (unknown) are not filed; banned ones are left to accounts.ban_rows (read again under the lock); an upload row surfd set aside is not filed
+again. No state file: the courses looked at are every (map, track, player) tasupd's store has held (it never deletes
+run rows), read by primary key; planned with plain reads, planned again under BEGIN IMMEDIATE only for courses that
+change. Ours = node `tasup` + runid `tasup-N` + rep 0. `--full` also scans for strays (before the lock), `--withdraw`
+takes every upload row off (a banned player's too). surfd is not imported (its connect() migrates the schema). tasupd: cookie
+`sid.gen.auth.iat.key.mac` -- 30 days from issue, at most 90 from the Steam sign-in; a GET page (200, text/html) read a
+day after issue sets a fresh cookie for a known unbanned account, with the same key, from which the CSRF token comes (open
+tabs keep working); Sign out bumps the account's gen (meta `session <steamid>`), refusing every older cookie in any
+browser. Cookies from before the upgrade are refused (one more Steam sign-in each).
+
+**Verified.** test_tasindex 18 through surfd's own /api/board (17 mutants killed, an unmutated control passing);
+test_tasupd 447 on the Pi's Flask/Werkzeug 2.2.2 and on Werkzeug 3 here (15 session mutants killed; left untested: the
+GET-only and clock-step guards, which no response or a stepped clock alone reaches). Live: a pass 18 ms, surfd's write
+lock ~6 ms, the replay check one replays_player probe; the dry run files Rounin's sandtrap2 main (3211 ticks) and
+Proto's bonus 4 (522). Three review rounds per half (integrity; sessions). A cookie with non-ASCII text no longer
+answers 500 (older than this patch).
+
+**Limits.** No replay on an upload row (rep 0) until surfd serves a `tasup` replay kind (a generation); a player's own
+lobby row on the course wins over a faster upload; the web row does not link to /tasup/run. Up to 5 minutes from publish
+to board. BACKLOG "P1806".
+
 ## Patch 1805 - Strata maps light unbaked props with the map's local lights again (plugin hl2/mod_vbsp.c)
 
 **Problem.** Lex, 25 Nov, save 38/39: "Models don't seem to have the 'vertex light glow' like in momentum" -- the barrels
