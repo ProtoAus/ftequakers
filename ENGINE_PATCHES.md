@@ -8,16 +8,19 @@ writes its direct share in each vertex's alpha (zero on every vertex turned from
 lamp), for its cascades to shadow. We forced the alpha to 255 and read only the colour, so every baked static prop on
 a Strata map had no direct sun.
 
-**Change.** On a v25 BSP (new prv->bspversion) the per-vertex bake keeps the file's alpha (averaged like the colour;
-0 on other compilers' files and on vertices the file does not cover). vertexlit.glsl's VC path carries it in
-light.a and adds r_shadows_vhvsun x alpha in linear light, times the cascades' lit fraction where the prop receives
-them. New engine cvar r_shadows_vhvsun (0 0 0 = none); the game sets it on an env_cascade_light map to
-light_environment's sun as VRAD reads it (Sun_Direct: _lightHDR/_light x _lightscaleHDR) x vbsp_vhvsun (3).
+**Change.** On a v25 BSP (new prv->bspversion, published as hl2_bspversion) the per-vertex bake keeps the file's
+alpha (averaged like the colour; 0 on vertices the file does not cover); elsewhere it stays 255, as before (unlit and
+animated $vertexalpha surfaces of a baked prop read it). vertexlit.glsl's VC path carries it in light.a and adds
+r_shadows_vhvsun x alpha in linear light, times the cascades' lit fraction where the prop receives them; with it on,
+a baked prop's shadow takes no floor/colour step (the bake holds no sun). New engine cvar r_shadows_vhvsun (0 0 0 =
+none); the game sets it on an env_cascade_light map with hl2_bspversion >= 25 to light_environment's sun as VRAD
+reads it (Sun_Direct: _lightHDR/_light x _lightscaleHDR) x vbsp_vhvsun (3).
 
 **Verified.** Rig, a close view of the save-31 lamp: lit/shaded across the pole 3.56/3.00/2.47 (R/G/B) at
 vbsp_vhvsun 3 against Momentum's 3.5/2.9/2.3 (5 gave 4.5/3.8/3.1, 8 saturated). Saves 5-21 otherwise as 0.1.65.
 
-**Limits.** One calibration point. The scale relation to VRAD's own units is not derived.
+**Limits.** One calibration point; the scale's relation to VRAD's units is not derived. On a v25 map a baked prop's
+$vertexalpha unlit/animated surface reads the sun share as its alpha (the bake is bound to every surface).
 
 ## Patch 1779 - A Source material gets no guessed _luma/_glow texture (engine gl/gl_shader.c shader.h; plugin hl2/mat_vmt.c)
 
@@ -80,7 +83,7 @@ Source's HDR frame lets a small skylight outshine the rest; our clamped frame he
 bright share plus mat_tonemap_min_avglum's floor drove dark views to the maximum.
 
 **Change.** r_autoexposure_bright 0.005 (was 0.02), r_autoexposure_minavg 0 (was 0.03), new r_autoexposure_hdrsat 1:
-a measured pixel at full scale counts at least that bright.
+a measured colour channel at full scale counts at least that bright on its own (a saturated red sign is not white).
 
 **Verified.** Rig: barn (save 30) 2.0 -> ~1.0, save 29's shade 2.0 -> 1.2, save 7 outdoors 0.78 -> 0.70.
 
@@ -103,8 +106,9 @@ fully 'gone' it snaps back in sharper". GLBE_LightCullModel culled a model whose
 for an ortho cascade that is the box's half-width across the sun, while its depth runs r_shadow_orthodepth, so a
 caster sunward of the camera dropped out of the tight cascades while its shadow fell inside them.
 
-**Change.** An ortho light culls only a caster wholly past its far face (along lightdir, depth r_shadow_orthodepth,
-radius doubled as a margin); the frustum's sides cull the rest.
+**Change.** In the depth pass an ortho light culls only a caster wholly past its far face (along lightdir, depth
+r_shadow_orthodepth, radius doubled as a margin); Sh_GenShadowFace's four-plane frustum culls the rest. Lighting and
+stencil passes keep the old test.
 
 **Verified.** Rig, the 16-step descent onto the log: shadow area steady (9.5k-12.5k px, mean 18-20 levels) where it
 faded over steps 5-11 and snapped at 12. Interleaved timing: saves 8/6/5 +0.1-0.3 ms (shadows +0.15).
