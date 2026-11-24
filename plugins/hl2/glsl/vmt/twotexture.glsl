@@ -2,6 +2,7 @@
 !!permu FOG
 !!permu NOFOG
 !!cvarf hl2_twoframes
+!!cvarf r_autoexposure_sky
 !!samps !FRAMES diffuse upper
 !!samps =FRAMES shield:2DArray=0
 
@@ -162,6 +163,7 @@ varying float eyedist;
 #endif
 
 #ifdef FRAGMENT_SHADER
+uniform float cvar_r_autoexposure_sky;	//FTESurf Patch 1784: Source scales its output by the exposure, additive included (1 when off)
 	#include "sys/fog.h"
 
 	//from !!cvarf at the top -- live, re-read every frame.  Declared
@@ -274,6 +276,14 @@ varying float eyedist;
 		diffuse_f.a *= a;
 	#endif
 
+	#ifdef ADDITIVE
+		//FTESurf Patch 1784: Source adds light in LINEAR light, this renderer adds display values: the source's linear value
+		//is the closer stand-in (within 0.6-1.7x of Source's increment over dark to bright backgrounds, where the display
+		//value is 1.4-20x over).  bhop_canals' barn shafts (rendercolor 21 18 13) drew a visible fan Momentum does not.
+		diffuse_f.rgb = pow(max(diffuse_f.rgb * cvar_r_autoexposure_sky, vec3(0.0)), vec3(2.2));
+	#else
+		diffuse_f.rgb *= cvar_r_autoexposure_sky;	//FTESurf Patch 1784: Source scales its output by the exposure (1 when off)
+	#endif
 	#ifdef NOFOG
 		gl_FragColor = diffuse_f;
 	#elif defined(ADDITIVE)

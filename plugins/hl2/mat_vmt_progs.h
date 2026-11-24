@@ -2842,6 +2842,7 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "!!permu NOFOG\n"
 "!!permu VC   // FTESurf Patch 1218: MODELLIT's VRAD bake, as vertexlit.glsl's\n"
 "!!cvardf hl2_lt_fold=1\n"
+"!!cvarf r_autoexposure_sky\n"
 "!!cvardf r_lightmap_bicubic_world=0\n"
 "!!samps anim:2DArray=0\n"
 
@@ -2957,6 +2958,7 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "#endif\n"
 
 "#ifdef FRAGMENT_SHADER\n"
+"uniform float cvar_r_autoexposure_sky; //FTESurf Patch 1784: an unlit one (a sprite) takes the exposure as unlit.glsl does\n"
 "#include \"sys/fog.h\"\n"
 
 "#ifndef UNLIT\n"
@@ -3050,6 +3052,9 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "diffuse_f.rgb *= lightmap_fragment();\n"
 "#endif\n"
 "diffuse_f.a *= float(ALPHA) * e_colourident.a; //FTESurf Patch 1218: a fading prop or brush entity, as unlit.glsl\n"
+"#ifdef UNLIT\n"
+"diffuse_f.rgb *= cvar_r_autoexposure_sky; //FTESurf Patch 1784\n"
+"#endif\n"
 
 "#ifdef NOFOG\n"
 "gl_FragColor = diffuse_f;\n"
@@ -3287,6 +3292,7 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "!!permu FOG\n"
 "!!permu NOFOG\n"
 "!!cvarf hl2_twoframes\n"
+"!!cvarf r_autoexposure_sky\n"
 "!!samps !FRAMES diffuse upper\n"
 "!!samps =FRAMES shield:2DArray=0\n"
 
@@ -3447,6 +3453,7 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "#endif\n"
 
 "#ifdef FRAGMENT_SHADER\n"
+"uniform float cvar_r_autoexposure_sky; //FTESurf Patch 1784: Source scales its output by the exposure, additive included (1 when off)\n"
 "#include \"sys/fog.h\"\n"
 
 //from !!cvarf at the top -- live, re-read every frame.  Declared
@@ -3559,6 +3566,14 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "diffuse_f.a *= a;\n"
 "#endif\n"
 
+"#ifdef ADDITIVE\n"
+//FTESurf Patch 1784: Source adds light in LINEAR light, this renderer adds display values: the source's linear value
+//is the closer stand-in (within 0.6-1.7x of Source's increment over dark to bright backgrounds, where the display
+//value is 1.4-20x over).  bhop_canals' barn shafts (rendercolor 21 18 13) drew a visible fan Momentum does not.
+"diffuse_f.rgb = pow(max(diffuse_f.rgb * cvar_r_autoexposure_sky, vec3(0.0)), vec3(2.2));\n"
+"#else\n"
+"diffuse_f.rgb *= cvar_r_autoexposure_sky; //FTESurf Patch 1784: Source scales its output by the exposure (1 when off)\n"
+"#endif\n"
 "#ifdef NOFOG\n"
 "gl_FragColor = diffuse_f;\n"
 "#elif defined(ADDITIVE)\n"

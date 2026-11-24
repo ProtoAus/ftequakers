@@ -4,6 +4,7 @@
 !!permu NOFOG
 !!permu VC			// FTESurf Patch 1218: MODELLIT's VRAD bake, as vertexlit.glsl's
 !!cvardf hl2_lt_fold=1
+!!cvarf r_autoexposure_sky
 !!cvardf r_lightmap_bicubic_world=0
 !!samps anim:2DArray=0
 
@@ -119,6 +120,7 @@ varying vec2 lm1, lm2, lm3;
 #endif
 
 #ifdef FRAGMENT_SHADER
+uniform float cvar_r_autoexposure_sky;	//FTESurf Patch 1784: an unlit one (a sprite) takes the exposure as unlit.glsl does
 	#include "sys/fog.h"
 
 	#ifndef UNLIT
@@ -212,6 +214,9 @@ varying vec2 lm1, lm2, lm3;
 		diffuse_f.rgb *= lightmap_fragment();
 	#endif
 		diffuse_f.a *= float(ALPHA) * e_colourident.a;	//FTESurf Patch 1218: a fading prop or brush entity, as unlit.glsl
+	#ifdef UNLIT
+		diffuse_f.rgb *= cvar_r_autoexposure_sky;	//FTESurf Patch 1784
+	#endif
 
 	#ifdef NOFOG
 		gl_FragColor = diffuse_f;

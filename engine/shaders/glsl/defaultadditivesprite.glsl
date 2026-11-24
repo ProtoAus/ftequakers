@@ -1,4 +1,5 @@
 !!permu FOG
+!!cvarf r_autoexposure_sky
 !!samps 1
 
 //meant to be used for additive stuff. presumably particles and sprites. though actually its only flashblend effects that use this at the time of writing.
@@ -21,8 +22,9 @@ void main ()
 varying vec2 tc;
 varying vec4 vc;
 uniform vec4 e_colourident;
+uniform float cvar_r_autoexposure_sky;	//FTESurf Patch 1784: the auto-exposure (1 when off)
 void main ()
 {
-	gl_FragColor = fog4additive(texture2D(s_t0, tc) * vc * e_colourident);
+	gl_FragColor = fog4additive(texture2D(s_t0, tc) * vc * e_colourident * vec4(vec3(cvar_r_autoexposure_sky), 1.0));
 }
 #endif

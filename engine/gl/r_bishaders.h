@@ -2338,6 +2338,7 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 #ifdef GLQUAKE
 {QR_OPENGL, 110, "defaultadditivesprite",
 "!!permu FOG\n"
+"!!cvarf r_autoexposure_sky\n"
 "!!samps 1\n"
 
 //meant to be used for additive stuff. presumably particles and sprites. though actually its only flashblend effects that use this at the time of writing.
@@ -2360,9 +2361,10 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "varying vec2 tc;\n"
 "varying vec4 vc;\n"
 "uniform vec4 e_colourident;\n"
+"uniform float cvar_r_autoexposure_sky;\n"
 "void main ()\n"
 "{\n"
-"gl_FragColor = fog4additive(texture2D(s_t0, tc) * vc * e_colourident);\n"
+"gl_FragColor = fog4additive(texture2D(s_t0, tc) * vc * e_colourident * vec4(vec3(cvar_r_autoexposure_sky), 1.0));\n"
 "}\n"
 "#endif\n"
 },
@@ -4657,6 +4659,7 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 #ifdef GLQUAKE
 {QR_OPENGL, 110, "defaultsprite",
 "!!permu FOG\n"
+"!!cvarf r_autoexposure_sky\n"
 "!!samps 1\n"
 //used by both particles and sprites.
 //note the fog blending mode is all that differs from defaultadditivesprite
@@ -4675,6 +4678,7 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "#endif\n"
 "#ifdef FRAGMENT_SHADER\n"
 "uniform vec4 e_vlscale;\n"
+"uniform float cvar_r_autoexposure_sky;\n"
 "void main ()\n"
 "{\n"
 "vec4 col = texture2D(s_t0, tc);\n"
@@ -4683,6 +4687,7 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "discard;\n"
 "#endif\n"
 "col = fog4blend(col * vc * e_colourident * e_vlscale);\n"
+"col.rgb *= cvar_r_autoexposure_sky;\n"
 //FTESurf Patch 658: see glsl/defaultsprite.glsl
 "#ifdef TWICE\n"
 "col.a = clamp(col.a, 0.0, 1.0);\n"
