@@ -5673,6 +5673,7 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 		Q_strlcatfz(script, &offset, sizeof(script),	"\tfte_wireframe\n");	//FTESurf Patch 780
 	if (st->nofog)
 		Q_strlcatfz(script, &offset, sizeof(script), "\tfte_materialnofog\n");
+	Q_strlcatfz(script, &offset, sizeof(script), "\tfte_nonameguess\n");	//FTESurf Patch 1779: a VMT names its textures; no <base>_glow guess
 
 	if (*st->fullbrightmap)
 		Q_strlcatfz(script, &offset, sizeof(script), "\tfullbrightmap \"%s%s.vtf\"\n", strcmp(st->fullbrightmap, "materials/")?"materials/":"", st->fullbrightmap);

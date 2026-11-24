@@ -5560,7 +5560,11 @@ qboolean GLBE_LightCullModel(vec3_t org, model_t *model)
 		//that sat sunward of the camera from the tighter cascades while its shadow fell inside them: a log's shadow faded
 		//as the player came closer and snapped back once it was deep inside the next cascade.
 		if (shaderstate.lightmode & LSHADER_ORTHO)
-			return false;
+		{	//only past its far face (away from the sun) can nothing it holds be shadowed -- depth clamp keeps the sunward side
+			float zr = (r_shadow_orthodepth > 0) ? r_shadow_orthodepth : shaderstate.lightradius;
+			VectorSubtract(org, shaderstate.lightorg, disp);
+			return DotProduct(disp, shaderstate.lightdir) - model->radius*2 > zr;
+		}
 		if (model->type == mod_alias)
 		{
 			VectorSubtract(org, shaderstate.lightorg, disp);

@@ -1986,6 +1986,11 @@ static void Shader_MaterialNoFog (parsestate_t *ps, const char **ptr)
 	ps->s->materialnofog = true;
 }
 
+static void Shader_NoNameGuess (parsestate_t *ps, const char **ptr)
+{	//FTESurf Patch 1779
+	ps->s->nonameguess = true;
+}
+
 #if defined(GLQUAKE) || defined(D3DQUAKE)
 static qboolean Shader_ParseProgramCvar(char *script, char **cvarnames, int *cvartypes, int cvartype)
 {
@@ -3961,6 +3966,7 @@ static shaderkey_t shaderkeys[] =
 	{"reflectnoentities",	Shader_ReflectNoEntities,	"fte"},	//FTESurf Patch 868: fte_reflectnoentities
 	{"waterlod",			Shader_WaterLod,			"fte"},	//FTESurf Patch 1729: fte_waterlod
 	{"materialnofog",		Shader_MaterialNoFog,		"fte"},
+	{"nonameguess",			Shader_NoNameGuess,			"fte"},	//FTESurf Patch 1779
 
 	{"bemode",				Shader_BEMode,				"fte"},
 
@@ -7811,7 +7817,9 @@ void QDECL R_BuildDefaultTexnums(texnums_t *src, shader_t *shader, unsigned int 
 		if (!TEXVALID(tex->fullbright))
 		{
 			extern cvar_t r_fb_bmodels;
-			if ((shader->flags & SHADER_HASFULLBRIGHT) && r_fb_bmodels.value && gl_load24bit.value)
+			//FTESurf Patch 1779: not for a material that names its own textures -- HL2's lamppost03a_glow (the lens's
+			//own material) was found for lamppost03a's pole and added its white disc over the pole's UVs.
+			if ((shader->flags & SHADER_HASFULLBRIGHT) && r_fb_bmodels.value && gl_load24bit.value && !shader->nonameguess)
 			{
 				if (!TEXVALID(tex->fullbright) && *mapname)
 					tex->fullbright = R_LoadHiResTexture(va("%s_luma:%s_glow", mapname, mapname), NULL, imageflags);

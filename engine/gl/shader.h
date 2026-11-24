@@ -749,6 +749,7 @@ struct shader_s
 	float depthpush;		//FTESurf Patch 1251: `depthpush N` -- N depth steps away from the eye, negative toward it (BE_PolyOffset). Appended.
 	float decalsize[2];		//FTESurf Patch 1721: `decalsize W H` -- a Source decal material's world size (texture x $decalscale). Appended.
 	float waterlodend;		//FTESurf Patch 1729: `fte_waterlod <start> <end>` (stored max(start,end)) or `fte_waterlod map` (-1: r_cheapwaterstart/end); 0 none. GLBE_WaterLodCheap. Appended.
+	qboolean nonameguess;	//FTESurf Patch 1779: `fte_nonameguess` -- the material names every texture it uses: R_BuildDefaultTexnums does not look for <name>_luma/_glow. Appended.
 
 	//arranged as a series of vec4s
 /*	struct
