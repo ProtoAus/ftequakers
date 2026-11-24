@@ -189,7 +189,7 @@ extern cvar_t *hl2_dither_force;	//FTESurf Patch 174, likewise
 cvar_t *hl2_texdiag;	//FTESurf build 11: the engine's r_texdiag, borrowed -- see VBSP_GenerateMaterials.
 							//Patch 239 dropped `static`: img_vtf.c reports the per-file image format under it.
 static cvar_t *hl2_propdist;	//FTESurf Patch 193: default draw distance for props that declare no fade -- see VBSP_PrepareFrame.
-static cvar_t *vbsp_r_shadows, *vbsp_r_shadows_distance, *vbsp_r_shadows_cascades, *vbsp_r_shadows_cascade_dist, *vbsp_r_shadows_slots;	//FTESurf Patch 1760/1762: the engine's
+static cvar_t *vbsp_r_shadows, *vbsp_r_shadows_distance, *vbsp_r_shadows_cascades, *vbsp_r_shadows_cascade_dist, *vbsp_r_shadows_slots, *vbsp_r_shadows_sunfloor;	//FTESurf Patch 1760/1762: the engine's
 static cvar_t *hl2_detail;	//FTESurf Patch 1038: detail props (grass) -- see VBSP_DetailBuild.
 cvar_t *hl2_rigidprops;			//FTESurf Patch 230: read by Mod_LoadHL2Model in mod_hl2.c, registered here with the rest.
 
@@ -10097,6 +10097,13 @@ static qboolean VBSP_CullBox (vec3_t mins, vec3_t maxs)
 //r_shadows_distance centred a third of it ahead of the eye (Sh_OrthoAlignToFrustum); with its edge fade and the throw
 //fade, 4/3 of it about the eye holds every caster whose shadow shows.  Patch 1762: with cascades (camera-centred,
 //the outermost r_shadows_cascade_dist) that reach instead.
+//FTESurf Patch 1766: a Strata cascade map (the game sets r_shadows_sunfloor from its env_cascade_light), where a caster
+//out of the view's PVS still shadows what is in it -- elsewhere the lightmap holds the world's shadows and such a
+//caster would shadow through floors and ceilings.  Valid after VBSP_ShadowCasterInReach has looked the cvars up.
+static qboolean VBSP_CascadeMap (void)
+{
+	return vbsp_r_shadows_sunfloor && vbsp_r_shadows_sunfloor->vec4[0] + vbsp_r_shadows_sunfloor->vec4[1] + vbsp_r_shadows_sunfloor->vec4[2] > 0;
+}
 static qboolean VBSP_ShadowCasterInReach (const entity_t *e, float radius)
 {
 	vec3_t d;
@@ -10110,6 +10117,7 @@ static qboolean VBSP_ShadowCasterInReach (const entity_t *e, float radius)
 		vbsp_r_shadows_cascades = cvarfuncs->GetNVFDG("r_shadows_cascades", NULL, 0, NULL, NULL);
 		vbsp_r_shadows_cascade_dist = cvarfuncs->GetNVFDG("r_shadows_cascade_dist", NULL, 0, NULL, NULL);
 		vbsp_r_shadows_slots = cvarfuncs->GetNVFDG("r_shadows_slots", NULL, 0, NULL, NULL);
+		vbsp_r_shadows_sunfloor = cvarfuncs->GetNVFDG("r_shadows_sunfloor", NULL, 0, NULL, NULL);
 	}
 	if (!vbsp_r_shadows || vbsp_r_shadows->ival != 2 || !vbsp_r_shadows_distance)
 		return false;
@@ -12013,7 +12021,7 @@ static void VBSP_PrepareFrame(model_t *mod, refdef_t *r_refdef, int area, int cl
 			if (surfvis && !VBSP_PVSMemoTest(memo, i, mod, sent->numpvsclusters ? sent->pvsclusters : NULL, sent->numpvsclusters, &src->pvscache, surfvis, areas))
 			{
 				sent->lastpvswhy = vbsp_pvs_why;	//FTESurf Patch 257: set by the call above
-				if (!VBSP_ShadowCasterInReach(src, src->model->radius * (src->scale > 0 ? src->scale : 1)))
+				if (!VBSP_ShadowCasterInReach(src, src->model->radius * (src->scale > 0 ? src->scale : 1)) || !VBSP_CascadeMap())
 				{
 					PROP_VERDICT(PROPV_PVS);
 					continue;	//prop's leaves aren't in the view PVS and its area can't be reached: not visible.
@@ -12023,7 +12031,7 @@ static void VBSP_PrepareFrame(model_t *mod, refdef_t *r_refdef, int area, int cl
 			if (!shadowonly && unvisedareas && !VBSP_UnvisedPairVisible(prv, r_refdef->areabits, &src->pvscache, -1))
 			{
 				sent->lastpvswhy = VBSP_PVSWHY_AREA;	//Patch 1271
-				if (!VBSP_ShadowCasterInReach(src, src->model->radius * (src->scale > 0 ? src->scale : 1)))
+				if (!VBSP_ShadowCasterInReach(src, src->model->radius * (src->scale > 0 ? src->scale : 1)) || !VBSP_CascadeMap())
 				{
 					PROP_VERDICT(PROPV_PVS);
 					continue;
@@ -12068,6 +12076,20 @@ static void VBSP_PrepareFrame(model_t *mod, refdef_t *r_refdef, int area, int cl
 			{
 				ent->shaderRGBAf[3] *= 1-d;
 				ent->flags |= RF_TRANSLUCENT;
+				//FTESurf Patch 1766: a translucent entity casts nothing (the depth passes skip it), so a prop that began
+				//to fade lost its shadow at a line in front of the player; an opaque shadow-only twin keeps it until
+				//the prop is gone
+				if (!shadowonly && !(src->flags & RF_NOSHADOW) && VBSP_ShadowCasterInReach(src, src->model->radius * (src->scale > 0 ? src->scale : 1)))
+				{
+					entity_t *twin = modfuncs->NewSceneEntity();
+					if (twin)
+					{
+						*twin = *src;
+						twin->flags |= RF_EXTERNALMODEL;
+						twin->framestate.g[FS_REG].frametime[0] = refdef->time;
+						twin->framestate.g[FS_REG].frametime[1] = refdef->time;
+					}
+				}
 			}
 			//FTESurf Patch 259: counted at the point of submission, so it is what
 			//the frame actually did rather than what the map loaded.
@@ -14295,16 +14317,15 @@ done:
 //Patch 1559: only a float cube (RGBA16161616F, Patch 887 encodes it) replaces a black LDR one; an
 //integer or packed HDR cube would load as 0..1 data from a wider range.
 qboolean VBSP_CubeIsFloat (const char *name)
-{
-	qbyte *f;
-	size_t len = 0;
-	qboolean yes;
-
-	f = filefuncs->LoadFile(name, &len);
-	if (!f)
+{	//FTESurf Patch 1771: the header only (a float cube is megabytes; the format sits at byte 52)
+	qbyte f[56];
+	vfsfile_t *vf = filefuncs->OpenVFS(name, "rb", FS_GAME);
+	qboolean yes = false;
+	if (!vf)
 		return false;
-	yes = len >= 56 && !memcmp(f, "VTF\0", 4) && (f[52] | (f[53]<<8) | (f[54]<<16) | ((unsigned int)f[55]<<24)) == 24;
-	plugfuncs->Free(f);
+	if (VFS_READ(vf, f, sizeof(f)) == sizeof(f))
+		yes = !memcmp(f, "VTF\0", 4) && (f[52] | (f[53]<<8) | (f[54]<<16) | ((unsigned int)f[55]<<24)) == 24;
+	VFS_CLOSE(vf);
 	return yes;
 }
 

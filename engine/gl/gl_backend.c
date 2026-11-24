@@ -56,6 +56,7 @@ static float BE_ModelExposure(void)
 //1 = this entity must not receive the r_shadows 2 shadow map: RF_NOSHADOWRECV, the viewmodel, and (Patch 1732) a Source
 //model that casts -- Source never lays a prop's shadow on itself, and a depth map cannot tell itself apart.  Static
 //props (RF_NOSHADOW: they do not cast) and the world still receive.
+static qboolean BE_CascadesLive(void);	//FTESurf Patch 1765
 static float BE_NoShadowRecv(const entity_t *e)
 {
 	extern cvar_t r_shadows_viewmodel;
@@ -68,7 +69,8 @@ static float BE_NoShadowRecv(const entity_t *e)
 		//included -- a lit face meets the caster's back face in the depth map (front faces are culled), and in shadow
 		//the light only comes down to the floor, as the world's does
 		extern cvar_t r_shadows_sunfloor, r_shadows_propselfshadow;
-		if (r_shadows_propselfshadow.ival && r_shadows_sunfloor.vec4[0] + r_shadows_sunfloor.vec4[1] + r_shadows_sunfloor.vec4[2] > 0)
+		if (r_shadows_propselfshadow.ival && r_shadows_sunfloor.vec4[0] + r_shadows_sunfloor.vec4[1] + r_shadows_sunfloor.vec4[2] > 0 &&
+			BE_CascadesLive())	//live cascades: the single map's texels are too coarse to meet itself
 			return 0;
 		return 1;
 	}
@@ -1387,6 +1389,10 @@ void GLBE_SetFakeShadowCount(int count)
 		shaderstate.fakeshadowinfo[0][2] = 0;	//FTESurf Patch 1762: no live cascades; the receivers read the single map
 }
 float r_shadow_orthodepth;	//FTESurf Patch 1762: >0 = the depth half-range of the ortho light being selected (a sun cascade)
+static qboolean BE_CascadesLive(void)
+{
+	return shaderstate.fakeshadowinfo[0][2] > 0.5;
+}
 void GLBE_ClearFakeShadowLive(void)
 {	//FTESurf Patch 1762: the cascade pass sets it again when it draws; an early return or another generator must not leave it
 	shaderstate.fakeshadowinfo[0][2] = 0;

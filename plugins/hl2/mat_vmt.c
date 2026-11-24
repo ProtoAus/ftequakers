@@ -109,6 +109,31 @@ int vmt_stat_imposter;	//FTESurf Patch 263
 int vmt_stat_flowwater;	//Patch 990: Water materials drawn with their $flowmap
 qboolean VBSP_CubeIsBlack (const char *name);	//FTESurf Patch 1771, mod_vbsp.c
 qboolean VBSP_CubeIsFloat (const char *name);
+//FTESurf Patch 1771: the black-LDR / float-HDR answer per cube, once: hundreds of materials name the same few cubes,
+//and VBSP_CubeIsBlack reads the whole file.  Names carry the map's own path, so one table serves every map.
+static struct vmtcubeans_s { char name[MAX_QPATH]; qboolean usehdr; } *vmt_cubeans;	//(materials are generated on the main thread)
+static size_t vmt_numcubeans, vmt_maxcubeans;
+static qboolean VMT_CubeUseHDR(const char *ldr, const char *hdr)
+{
+	size_t i;
+	qboolean ans;
+	for (i = 0; i < vmt_numcubeans; i++)
+		if (!strcmp(vmt_cubeans[i].name, ldr))
+			return vmt_cubeans[i].usehdr;
+	ans = VBSP_CubeIsBlack(ldr) && VBSP_CubeIsFloat(hdr);
+	if (vmt_numcubeans == vmt_maxcubeans)
+	{
+		struct vmtcubeans_s *n = plugfuncs->Realloc(vmt_cubeans, sizeof(*vmt_cubeans) * (vmt_maxcubeans ? vmt_maxcubeans * 2 : 256));
+		if (!n)
+			return ans;
+		vmt_cubeans = n;
+		vmt_maxcubeans = vmt_maxcubeans ? vmt_maxcubeans * 2 : 256;
+	}
+	Q_strlcpy(vmt_cubeans[vmt_numcubeans].name, ldr, sizeof(vmt_cubeans[vmt_numcubeans].name));
+	vmt_cubeans[vmt_numcubeans].usehdr = ans;
+	vmt_numcubeans++;
+	return ans;
+}
 int vmt_stat_hdrenvmap;	//FTESurf Patch 264, $envmap resolved via the .hdr.vtf fallback
 int vmt_stat_ignorez;	//FTESurf Patch 290, $ignorez materials that could not be honoured
 int vmt_stat_addprog;	//FTESurf Patch 300, additive materials moved from a pass onto vmt/unlit
@@ -5698,16 +5723,13 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 		char cube[MAX_QPATH], hdr[MAX_QPATH];
 		const char *pfx = strcmp(st->envmap, "materials/")?"materials/":"";
 		Q_snprintfz(cube, sizeof(cube), "%s%s.vtf", pfx, st->envmap);
-		if (fsfuncs->LocateFile(cube, FSLF_IFFOUND, NULL) && VBSP_CubeIsBlack(cube))
+		Q_snprintfz(hdr, sizeof(hdr), "%s%s.hdr.vtf", pfx, st->envmap);
+		if (fsfuncs->LocateFile(cube, FSLF_IFFOUND, NULL) && VMT_CubeUseHDR(cube, hdr))
 		{	//FTESurf Patch 1771: a map's named cubemap whose LDR file is VBSP's black placeholder and whose .hdr.vtf holds the
 			//bake (bhop_canals: all 412 .vtf black) -- Patch 1559's rule for the nearest cubemap, here for the 830 patched
 			//materials that name theirs, so the windows reflect the sky
-			Q_snprintfz(hdr, sizeof(hdr), "%s%s.hdr.vtf", pfx, st->envmap);
-			if (VBSP_CubeIsFloat(hdr))
-			{
-				vmt_stat_hdrenvmap++;
-				Q_strlcpy(cube, hdr, sizeof(cube));
-			}
+			vmt_stat_hdrenvmap++;
+			Q_strlcpy(cube, hdr, sizeof(cube));
 		}
 		else if (!fsfuncs->LocateFile(cube, FSLF_IFFOUND, NULL))
 		{
@@ -5791,11 +5813,11 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 	//holes, as Source's depth passes alpha-test -- its depth-only pass is the built-in depthonly with #MASK and its
 	//base texture (the generic one drew the whole card: a solid quad of shadow under every bush).
 	if (*st->tex[0].name && !st->nobasetex && !st->additive && !st->animpass &&
-		(st->alphatest || (st->translucent_vmt && VMT_TextureHasAlpha(st->tex[0].name))))
-	{
+		(st->alphatest || (st->translucent_vmt && !st->envfrombase && !st->selfillum && VMT_TextureHasAlpha(st->tex[0].name))))
+	{	//(a translucent material's base alpha is its opacity only when no envmap or self-illum mask rides on it)
 		float mask = (st->alphatest && st->alphatestref > 0.0f) ? st->alphatestref : 0.5f;
 		mask = bound(0.01f, mask, 0.99f);
-		Q_strlcatfz(script, &offset, sizeof(script), "\tbemode depthonly\n\t{\n\t\tprogram \"depthonly#MASK=%f\"\n\t\tdiffusemap \"%s\"\n\t}\n", mask, VMT_BaseImage(st));
+		Q_strlcatfz(script, &offset, sizeof(script), "\tbemode depthonly\n\t{\n\t\tprogram \"depthonly#ALPHASHADOW#MASK=%f#MASKLT\"\n\t\tdiffusemap \"%s\"\n\t}\n", mask, VMT_BaseImage(st));
 	}
 	//FTESurf Patch 188: a top-level `rgbGen const` used to be emitted here.  It
 	//was a no-op at the top level and it passed the value through with its

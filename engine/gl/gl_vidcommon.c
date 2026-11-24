@@ -2252,6 +2252,7 @@ static const char *glsl_hdrs[] =
 					"#endif\n"
 					"float CascadeShadowFilter(sampler2DShadow smap, vec4 cubeproj, vec3 wpos)\n"
 					"{\n"
+						"float sprev = -1.0, wprev = 0.0;\n"	//FTESurf Patch 1766: the cascade before, while blending into this one
 						"if (l_fakeshadowinfo[0].z < 0.5)\n"
 							"return ShadowmapFilter(smap, cubeproj);\n"
 						"for (int i = 0; i < FAKESHADOWS_SUNCELLS; i++)\n"
@@ -2271,9 +2272,21 @@ static const char *glsl_hdrs[] =
 								"#endif\n"
 								"if (r_shadows_throwfade > 0.0 && l_fakeshadowinfo[i].y > 0.0)\n"	//FTESurf Patch 1765: y 0 = no fade (cascade maps)
 									"s = mix(1.0, s, cascnear(sc.z - r_shadows_throwfade*l_fakeshadowinfo[i].y));\n"
+								//FTESurf Patch 1766: the outer band of a cascade fades into the next one rather than switching at a
+								//line -- a thin caster (a pole, a plank) below the coarser cascade's texel otherwise vanished there
+								"if (sprev >= 0.0)\n"
+									"return mix(sprev, s, wprev)*0.5+0.5;\n"
+								"if (i < FAKESHADOWS_SUNCELLS-1 && e > 0.40)\n"
+								"{\n"
+									"sprev = s;\n"
+									"wprev = (e-0.40)/0.07;\n"
+									"continue;\n"
+								"}\n"
 								"return s*0.5+0.5;\n"
 							"}\n"
 						"}\n"
+						"if (sprev >= 0.0)\n"
+							"return sprev*0.5+0.5;\n"
 						"return 1.0;\n"
 					"}\n"
 				"#else\n"

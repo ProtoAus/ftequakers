@@ -1768,7 +1768,7 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "!!permu TESS\n"
 "!!permu FRAMEBLEND\n"
 "!!permu SKELETAL\n"
-"!!samps =MASK diffuse\n"	//FTESurf Patch 1768: an alpha-tested caster (#MASK=ref) leaves its holes out of the depth map
+"!!samps =ALPHASHADOW diffuse\n"	//FTESurf Patch 1768: an alpha-tested caster (#ALPHASHADOW#MASK=ref[#MASKLT]) leaves its holes out of the depth map
 "!!cvardf r_tessellation_level=5\n"
 
 "#include \"sys/defs.h\"\n"
@@ -1780,7 +1780,7 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 
 "#ifdef VERTEX_SHADER\n"
 "#include \"sys/skeletal.h\"\n"
-"#ifdef MASK\n"
+"#if defined(ALPHASHADOW) && !defined(TESS)\n"
 "varying vec2 tc;\n"
 "#endif\n"
 "#ifdef TESS\n"
@@ -1794,7 +1794,7 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "vertex = v_position;\n"
 "#else\n"
 "gl_Position = skeletaltransform();\n"
-"#ifdef MASK\n"
+"#ifdef ALPHASHADOW\n"
 "tc = v_texcoord;\n"
 "#endif\n"
 "#endif\n"
@@ -1861,13 +1861,17 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 
 
 "#ifdef FRAGMENT_SHADER\n"
-"#ifdef MASK\n"
+"#if defined(ALPHASHADOW) && !defined(TESS)\n"
 "varying vec2 tc;\n"
 "#endif\n"
 "void main ()\n"
 "{\n"
-"#ifdef MASK\n"
+"#if defined(ALPHASHADOW) && !defined(TESS) && defined(MASK)\n"
+"#ifdef MASKLT\n"
 "if (texture2D(s_diffuse, tc).a < float(MASK))\n"
+"#else\n"
+"if (texture2D(s_diffuse, tc).a >= float(MASK))\n"
+"#endif\n"
 "discard;\n"
 "#endif\n"
 //must always draw something, supposedly. It might as well be black.
