@@ -2524,6 +2524,16 @@ void R_GAlias_DrawBatch(batch_t *batch)
 	return;
 }
 
+/*FTESurf Patch 1810: Source's LOD metric for a model at view depth z: 100 / the pixel width of a unit-diameter sphere
+  (studio.h LODMetric, ComputePixelWidthOfSphere(origin, 0.5)), from the camera's fov and the view's own pixel width --
+  which a shadow pass keeps (it swaps only pxrect and the projection). 0 (level 0) nearer than the camera.*/
+static float R_SourceLODMetric(float z)
+{
+	float t = (r_refdef.fov_x > 0 && r_refdef.fov_x < 179) ? tan(r_refdef.fov_x * (M_PI / 360)) : 1;
+	float w = (vid.width > 0) ? r_refdef.vrect.width * (float)vid.pixelwidth / vid.width : vid.pixelwidth;
+	float px = (z > 0) ? w * 0.5f / (t * z) : 0;
+	return (px > 0) ? 100 / px : 0;
+}
 void R_GAlias_GenerateBatches(entity_t *e, batch_t **batches)
 {
 	galiasinfo_t *inf;
@@ -2675,9 +2685,7 @@ void R_GAlias_GenerateBatches(entity_t *e, batch_t **batches)
 				//(studio.h LODMetric, ComputePixelWidthOfSphere(origin, 0.5)), against the VTX switch points -- from the
 				//camera's fov and the window's width, which a perspective shadow face keeps (it swaps only pxrect and the
 				//projection), so a caster casts the level it draws; a viewmodel always takes level 0
-				float t = (r_refdef.fov_x > 0 && r_refdef.fov_x < 179) ? tan(r_refdef.fov_x * (M_PI / 360)) : 1;
-				float px = vid.pixelwidth * 0.5f / (t * z);
-				lod = ((e->flags & RF_WEAPONMODEL) || px <= 0) ? 0 : 100 / px;
+				lod = (e->flags & RF_WEAPONMODEL) ? 0 : R_SourceLODMetric(z);
 			}
 			else if (clmodel->maxlod)
 			{
@@ -2690,6 +2698,13 @@ void R_GAlias_GenerateBatches(entity_t *e, batch_t **batches)
 			else
 				lod = 0;
 		}
+	}
+	else if ((clmodel->engineflags & MDLF_SOURCELOD) && !(e->flags & RF_WEAPONMODEL))
+	{	//FTESurf Patch 1810: an orthographic pass (the sun cascades) keeps the camera's vieworg/vpn, so a caster casts the
+		//level it is drawn at here too
+		vec3_t v;
+		VectorSubtract(e->origin, r_refdef.vieworg, v);
+		lod = R_SourceLODMetric(DotProduct(v, vpn));
 	}
 	else
 		lod = 0;

@@ -877,17 +877,25 @@ static qboolean Mod_HL2_LoadVTX(hl2parsecontext_t *ctx, const void *buffer, size
 						//takes mindist 0 as LOD 0 for render-mesh collision)
 						const hl2vtxlod_t *vl0 = (const void*)((const qbyte*)vsurf + vsurf->lod_ofs);
 						float lo = 0, hi = 0;
+						qboolean bounded = (l+1 < nlod && vl0[l+1].dist >= 0);	//(maxdist 0 means unbounded, so a bound of 0 needs this)
 						size_t k;
 						for (k = 1; k <= l; k++)
 							lo = max(lo, vl0[k].dist);
-						if (l+1 < nlod && vl0[l+1].dist >= 0)
+						if (bounded)
 							hi = max(lo, vl0[l+1].dist);
 						if (l)
 							lo = max(lo, 1e-3f);
 						surf->mindist = lo;
 						surf->maxdist = hi;
-						if ((l && vlod->dist < 0) || (hi && hi <= lo))
-							surf->mindist = 1e30f;	//Source's shadow LOD, or an empty range
+						if (l && vlod->dist < 0)
+							surf->mindist = 1e30f;	//Source's shadow LOD
+						else if (bounded && hi <= lo)
+						{	//an empty range: never drawn -- level 0 keeps mindist 0 (BIH_BuildAlias's LOD-0 key) and a vanishing range
+							if (l)
+								surf->mindist = 1e30f;
+							else
+								surf->maxdist = 1e-6f;
+						}
 					}
 
 					if (surf != ctx->mod->meshinfo)
