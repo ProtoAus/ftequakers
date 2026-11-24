@@ -163,7 +163,7 @@ static cvar_t r_shadows_slots_debug			= CVARD("r_shadows_slots_debug", "0", "Pri
 //apply only at slots == 1.  cascades == 1 is the legacy single map, bit-identical.
 //CVAR_SHADERSYSTEM for the same reason as r_shadows_slots: it sets FAKESHADOWS_COUNT (array sizes).
 #define SH_MAX_CASCADES 4	/*the sun-cascade cell grid (Sh_CascadeCellRect) is 2x2 = four cells*/
-cvar_t r_shadows_cascades					= CVARFD("r_shadows_cascades", "1", CVAR_SHADERSYSTEM, "r_shadows 2 sun cascade count (only when r_shadows_slots is 1). 1 = classic single map. 2-4 = sharp near shadows AND long range; the near cascade packs many more texels per qu than the single map. Ignored while r_shadows_slots > 1.");
+cvar_t r_shadows_cascades					= CVARFD("r_shadows_cascades", "4", CVAR_SHADERSYSTEM, "r_shadows 2 sun cascade count (only when r_shadows_slots is 1; FTESurf Patch 1762: default 4, and on a Source map the only atlas that runs). 1 = classic single map. 2-4 = sharp near shadows AND long range; the near cascade packs many more texels per qu than the single map. Ignored while r_shadows_slots > 1.");
 static cvar_t r_shadows_cascade_dist		= CVARD("r_shadows_cascade_dist", "2048", "Radius (qu) of the OUTERMOST sun cascade around the camera. Inner cascades are r_shadows_cascade_ratio smaller each; bigger = longer shadow range but each cascade covers more ground (less dense).");
 static cvar_t r_shadows_cascade_ratio		= CVARD("r_shadows_cascade_ratio", "3", "Size step between adjacent sun cascades: each inner cascade is 1/this the radius of the next one out. Higher = a tighter/denser near cascade but a bigger jump in resolution between cascades.");
 static cvar_t r_shadows_cascade_debug		= CVARD("r_shadows_cascade_debug", "0", "Print each sun cascade's radius and texel density (texels/qu) once per second. Use it to confirm the near cascade is actually denser than the single map.");
@@ -3783,6 +3783,11 @@ static void Sh_GenerateCascadeAtlas(dlight_t *l, int cascades, int txsize)
 		if (!BE_SelectDLight(l, vec3_origin, l->axis, LSHADER_SMAP|LSHADER_ORTHO))
 			continue;
 		GLBE_CaptureFakeShadowSlot(s, cell);
+		{	//FTESurf Patch 1762: z = a live cascade (sys/pcf.h CascadeShadowFilter); y scales r_shadows_throwfade, which is in
+			//units of the single map's depth range, to this cascade's (2*radius).
+			vec4_t info = {0, r_shadows_distance.value / radius, 1, 0};
+			GLBE_SetFakeShadowSlotInfo(s, info);
+		}
 
 		//fs_curslot intentionally left at -1: Sh_FakeShadowFilter passes ALL casters into this cascade.
 		RQuantAdd(RQUANT_SHADOWSIDES, 1);
@@ -5146,6 +5151,7 @@ void Sh_GenerateFakeShadows(void)	//generates shadowmaps and selects the dlight,
 	int smsize;
 	int texwidth, texheight;
 	qboolean atlas = true;	//FTESurf Patch 1760
+	qboolean srccascades = false;	//FTESurf Patch 1762
 
 	if (*r_shadows_throwdirection.string)
 		VectorCopy(r_shadows_throwdirection.vec4, l->axis[0]);
@@ -5224,11 +5230,13 @@ void Sh_GenerateFakeShadows(void)	//generates shadowmaps and selects the dlight,
 
 	//FTESurf Patch 1760: Source surfaces (plugins/hl2 vmt/*.glsl) read only the single sun map (l_cubematrix), so on
 	//a VBSP world the atlases below left them sampling a stale matrix: bhop_canals' point lights turned the default
-	//r_shadows_propshadows 1 into its atlas, and no prop shadow landed, at a third of the fps.
+	//r_shadows_propshadows 1 into its atlas, and no prop shadow landed, at a third of the fps.  Patch 1762: they read
+	//the sun cascades now (sys/pcf.h CascadeShadowFilter), so those run there; the direction and lamp atlases do not.
 	if (r_worldentity.model && (r_worldentity.model->engineflags & MDLF_SOURCEBSP))
 	{
 		fs_slotcount = 1;
 		atlas = false;
+		srccascades = true;
 	}
 
 	//nettest P110: more than one cast direction this frame -> render the atlas instead of the single map.
@@ -5253,7 +5261,7 @@ void Sh_GenerateFakeShadows(void)	//generates shadowmaps and selects the dlight,
 	//nettest P114: single cast direction -> optionally split the SUN into view-depth cascades.  Mutually
 	//exclusive with slots (which already claimed the cells above); fs_slotcount is 1 here so the caster
 	//filter passes everything into every cascade.
-	if (atlas && qrenderer == QR_OPENGL)
+	if (srccascades && qrenderer == QR_OPENGL)	//FTESurf Patch 1762: only a Source map's receivers read them
 	{
 		int cascades = bound(1, r_shadows_cascades.ival, SH_MAX_CASCADES);
 		if (cascades > 1)

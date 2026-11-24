@@ -120,8 +120,11 @@ void R_UpdateHDR(vec3_t org)
 		r_refdef.hdr_value = 1;
 	{	//FTESurf Patch 1732: a fixed exposure on top (linear; the lightmap is sRGB, so its 1/2.2 power)
 		extern cvar_t r_exposure;
-		if (r_exposure.value > 0 && r_exposure.value != 1)
-			r_refdef.hdr_value *= pow(r_exposure.value, 1/2.2);
+		extern float r_autoexposure_value;	//FTESurf Patch 1764
+		float e = (r_exposure.value > 0) ? r_exposure.value : 1;
+		e *= r_autoexposure_value;
+		if (e != 1)
+			r_refdef.hdr_value *= pow(e, 1/2.2);
 	}
 }
 

@@ -2077,6 +2077,7 @@ static const char *glsl_hdrs[] =
 			//!!cvardf r_glsl_pcf
 			"#if !defined(PCF) && !defined(FAKESHADOWS)\n"
 				"#define ShadowmapFilter(smap,proj) 1.0\n"	//s_shadowmap generally. returns a scaler to say how much light should be used for this pixel.
+				"#define CascadeShadowFilter(smap,proj,wpos) 1.0\n"	//FTESurf Patch 1762
 			"#else\n"
 				"#ifndef r_glsl_pcf\n"
 					"#define r_glsl_pcf 9\n"
@@ -2228,6 +2229,56 @@ static const char *glsl_hdrs[] =
 					"#endif\n"
 #endif
 				"}\n"
+				//FTESurf Patch 1762: the sun cascades for a receiver that passes its WORLD position (the hl2 plugin's vmt
+				//shaders).  Sh_GenerateCascadeAtlas draws nested camera-centred cascades into the cells of one depth
+				//texture; the tightest cascade holding the pixel (with a margin for the PCF) is sampled like the single
+				//map, its edge fade only on the outermost, the contact fade scaled to the cascade's depth range
+				//(l_fakeshadowinfo[i].y).  l_fakeshadowinfo[0].z is 0 when the engine drew the single map instead.
+				"#if defined(FAKESHADOWS) && defined(FAKESHADOWS_CASCADE) && FAKESHADOWS_COUNT > 1\n"
+					"#ifdef FAKESHADOWS_PERSP_FIRST\n"
+						"#define FAKESHADOWS_SUNCELLS FAKESHADOWS_PERSP_FIRST\n"
+					"#else\n"
+						"#define FAKESHADOWS_SUNCELLS FAKESHADOWS_COUNT\n"
+					"#endif\n"
+					"uniform mat4 l_fakeshadowworld[FAKESHADOWS_COUNT];\n"
+					"uniform vec4 l_fakeshadowcell[FAKESHADOWS_COUNT];\n"
+					"uniform vec4 l_fakeshadowinfo[FAKESHADOWS_COUNT];\n"
+					"#ifdef USE_ARB_SHADOW\n"
+						"#define cascsamp(x,y) float(shadow2D(smap, sc + vec3(x,y,0.0)*l_shadowmapscale.xyx))\n"
+						"#define cascnear(z) float(shadow2D(smap, vec3(sc.xy, z)))\n"
+					"#else\n"
+						"#define cascsamp(x,y) float(texture2D(smap, sc.xy + vec2(x,y)*l_shadowmapscale.xy).r >= sc.z)\n"
+						"#define cascnear(z) float(texture2D(smap, sc.xy).r >= z)\n"
+					"#endif\n"
+					"float CascadeShadowFilter(sampler2DShadow smap, vec4 cubeproj, vec3 wpos)\n"
+					"{\n"
+						"if (l_fakeshadowinfo[0].z < 0.5)\n"
+							"return ShadowmapFilter(smap, cubeproj);\n"
+						"for (int i = 0; i < FAKESHADOWS_SUNCELLS; i++)\n"
+						"{\n"
+							"vec4 cp = l_fakeshadowworld[i] * vec4(wpos, 1.0);\n"
+							"vec3 c = (cp.xyz/cp.w + vec3(1.0)) * 0.5;\n"
+							"float e = max(max(abs(c.x-0.5), abs(c.y-0.5)), abs(c.z-0.5));\n"
+							"if (e < 0.47 || (i == FAKESHADOWS_SUNCELLS-1 && e < 0.5))\n"
+							"{\n"
+								"vec3 sc = vec3(l_fakeshadowcell[i].xy + c.xy*l_fakeshadowcell[i].zw, c.z);\n"
+								"float s = (cascsamp(-1.0,-1.0) + cascsamp(-1.0,0.0) + cascsamp(-1.0,1.0) + cascsamp(0.0,-1.0) + cascsamp(0.0,0.0)"
+									" + cascsamp(0.0,1.0) + cascsamp(1.0,-1.0) + cascsamp(1.0,0.0) + cascsamp(1.0,1.0)) / 9.0;\n"
+								"if (i == FAKESHADOWS_SUNCELLS-1 && e > 0.35)\n"
+									"s = mix(s, 1.0, min(1.0, (e-0.35)/0.15));\n"
+								"#ifndef r_shadows_throwfade\n"
+									"#define r_shadows_throwfade 0.06\n"
+								"#endif\n"
+								"if (r_shadows_throwfade > 0.0)\n"
+									"s = mix(1.0, s, cascnear(sc.z - r_shadows_throwfade*l_fakeshadowinfo[i].y));\n"
+								"return s*0.5+0.5;\n"
+							"}\n"
+						"}\n"
+						"return 1.0;\n"
+					"}\n"
+				"#else\n"
+					"#define CascadeShadowFilter(smap,proj,wpos) ShadowmapFilter(smap,proj)\n"
+				"#endif\n"
 			"#endif\n"
 		,
 	NULL

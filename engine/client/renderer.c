@@ -351,6 +351,17 @@ cvar_t r_lightmap_scale						= CVARFD ("r_shadow_realtime_nonworld_lightmaps", "
 cvar_t r_hdr_framebuffer					= CVARFCD("r_hdr_framebuffer", "0", CVAR_ARCHIVE, R_HDR_FramebufferFormat_Changed, "If enabled, the map will be rendered into a high-precision image framebuffer. This avoids issues with shaders that contribute more than 1 in any single pass (like overbrights). Can also be set to the name of an image format, to force rendering to that format first - interesting formats are L8, RGB565, B10G11R11F, and others.");
 cvar_t r_hdr_irisadaptation					= CVARF	("r_hdr_irisadaptation", "0", CVAR_ARCHIVE);
 cvar_t r_exposure							= CVARD	("r_exposure", "1", "FTESurf Patch 1732 (test): a fixed exposure, Source's linear tonemap scale -- lightmaps, model light, dynamic lights, scripted particles and sprites are multiplied by its 1/2.2 power (as Source's scale reaches them); the sky and classic particles are not. 1 = off. The game sets it from the map's env_tonemap_controller when vbsp_exposure is 1.");
+//FTESurf Patch 1764: Source's auto-exposure, measured from the drawn frame (gl_rmain.c GLR_AutoExposureFrame)
+cvar_t r_autoexposure						= CVARD	("r_autoexposure", "0", "FTESurf Patch 1764: Source's HDR auto-exposure. The brightest pixels of the 3D view (r_autoexposure_bright of them) are brought to r_autoexposure_target of full scale, within r_autoexposure_min..max, easing at r_autoexposure_rate; the result multiplies r_exposure. The game turns it on for a Source map lit in HDR (vbsp_autoexposure). The sky is not scaled. 0 = off.");
+cvar_t r_autoexposure_min					= CVARD	("r_autoexposure_min", "0.5", "FTESurf Patch 1764: the lowest auto-exposure (Source's mat_autoexposure_min; env_tonemap_controller SetAutoExposureMin).");
+cvar_t r_autoexposure_max					= CVARD	("r_autoexposure_max", "2", "FTESurf Patch 1764: the highest auto-exposure (mat_autoexposure_max; SetAutoExposureMax).");
+cvar_t r_autoexposure_rate					= CVARD	("r_autoexposure_rate", "1", "FTESurf Patch 1764: how fast the exposure eases toward its target, per second (Source's tonemap rate).");
+cvar_t r_autoexposure_target				= CVARD	("r_autoexposure_target", "0.75", "FTESurf Patch 1764: the linear level the brightest pixels are brought to (Source's mat_tonemap_percent_target is 60; 0.75 matches Momentum's frame at bhop_canals within a few levels).");
+cvar_t r_autoexposure_bright				= CVARD	("r_autoexposure_bright", "0.02", "FTESurf Patch 1764: the share of pixels counted as the brightest (mat_tonemap_percent_bright_pixels 2).");
+cvar_t r_autoexposure_minavg				= CVARD	("r_autoexposure_minavg", "0.03", "FTESurf Patch 1764: the exposure rises until the average pixel reaches at least this linear level (mat_tonemap_min_avglum 3).");
+cvar_t r_autoexposure_current				= CVARFD	("r_autoexposure_current", "1", CVAR_NOSET|CVAR_NOSAVE, "FTESurf Patch 1764 (read-only): the auto-exposure in use and its target, updated with each measurement.");
+cvar_t r_autoexposure_sky					= CVARFD	("r_autoexposure_sky", "1", CVAR_NOSET|CVAR_NOSAVE, "FTESurf Patch 1764 (internal): what the skybox is multiplied by -- the exposure's 1/2.2 power.");
+float r_autoexposure_value = 1;			//FTESurf Patch 1764: the eased exposure in use (linear)
 cvar_t r_hdr_irisadaptation_multiplier		= CVAR	("r_hdr_irisadaptation_multiplier", "2");
 cvar_t r_hdr_irisadaptation_minvalue		= CVAR	("r_hdr_irisadaptation_minvalue", "0.5");
 cvar_t r_hdr_irisadaptation_maxvalue		= CVAR	("r_hdr_irisadaptation_maxvalue", "4");
@@ -1585,6 +1596,15 @@ void Renderer_Init(void)
 	Cvar_Register(&r_hdr_framebuffer, GRAPHICALNICETIES);
 	Cvar_Register(&r_hdr_irisadaptation, GRAPHICALNICETIES);
 	Cvar_Register(&r_exposure, GRAPHICALNICETIES);	//FTESurf Patch 1732
+	Cvar_Register(&r_autoexposure, GRAPHICALNICETIES);	//FTESurf Patch 1764
+	Cvar_Register(&r_autoexposure_min, GRAPHICALNICETIES);
+	Cvar_Register(&r_autoexposure_max, GRAPHICALNICETIES);
+	Cvar_Register(&r_autoexposure_rate, GRAPHICALNICETIES);
+	Cvar_Register(&r_autoexposure_target, GRAPHICALNICETIES);
+	Cvar_Register(&r_autoexposure_bright, GRAPHICALNICETIES);
+	Cvar_Register(&r_autoexposure_minavg, GRAPHICALNICETIES);
+	Cvar_Register(&r_autoexposure_current, GRAPHICALNICETIES);
+	Cvar_Register(&r_autoexposure_sky, GRAPHICALNICETIES);
 	Cvar_Register(&r_hdr_irisadaptation_multiplier, GRAPHICALNICETIES);
 	Cvar_Register(&r_hdr_irisadaptation_minvalue, GRAPHICALNICETIES);
 	Cvar_Register(&r_hdr_irisadaptation_maxvalue, GRAPHICALNICETIES);

@@ -49,7 +49,9 @@ static qboolean be_instdraw;		//the program BE_RenderMeshProgram just bound is t
 static float BE_ModelExposure(void)
 {
 	extern cvar_t r_exposure;
-	return (r_exposure.value > 0 && r_exposure.value != 1) ? pow(r_exposure.value, 1/2.2) : 1;
+	extern float r_autoexposure_value;	//FTESurf Patch 1764
+	float e = ((r_exposure.value > 0) ? r_exposure.value : 1) * r_autoexposure_value;
+	return (e != 1) ? pow(e, 1/2.2) : 1;
 }
 //1 = this entity must not receive the r_shadows 2 shadow map: RF_NOSHADOWRECV, the viewmodel, and (Patch 1732) a Source
 //model that casts -- Source never lays a prop's shadow on itself, and a depth map cannot tell itself apart.  Static
@@ -1374,6 +1376,8 @@ void GLBE_SetupForShadowMap(dlight_t *dl, int texwidth, int texheight, float sha
 void GLBE_SetFakeShadowCount(int count)
 {
 	shaderstate.fakeshadowcount = bound(1, count, MAX_FAKESHADOW_SLOTS);
+	if (shaderstate.fakeshadowcount <= 1)
+		shaderstate.fakeshadowinfo[0][2] = 0;	//FTESurf Patch 1762: no live cascades; the receivers read the single map
 }
 
 //nettest P114b: force the NEXT GLBE_SelectEntity to re-copy r_refdef.m_projection_std into the cached
@@ -5178,6 +5182,9 @@ static void BE_Program_Set_Attributes(const program_t *prog, struct programpermu
 			break;
 		case SP_FAKESHADOWCELL:
 			qglUniform4fvARB(ph, MAX_FAKESHADOW_SLOTS, (GLfloat*)shaderstate.fakeshadowcell);
+			break;
+		case SP_FAKESHADOWWORLD:	//FTESurf Patch 1762: world space, for receivers that pass a world position (instanced props)
+			qglUniformMatrix4fvARB(ph, MAX_FAKESHADOW_SLOTS, false, (GLfloat*)shaderstate.fakeshadowmatrix);
 			break;
 		case SP_FAKESHADOWINFO:
 			qglUniform4fvARB(ph, MAX_FAKESHADOW_SLOTS, (GLfloat*)shaderstate.fakeshadowinfo);

@@ -70,6 +70,7 @@ extern cvar_t	r_underwateroverlay;	//FTESurf Patch 1013
 static qboolean r_uwnowarp;	//FTESurf Patch 1013: a Source volume with no overlay draws neither warp
 static shader_t *cc_warned;			//Patch 290: last grade shader we complained about
 extern cvar_t	r_hdr_framebuffer;
+extern cvar_t	r_exposure, r_autoexposure_sky, r_autoexposure_current, r_autoexposure, r_autoexposure_min, r_autoexposure_max, r_autoexposure_rate, r_autoexposure_target, r_autoexposure_bright, r_autoexposure_minavg;	//FTESurf Patch 1764
 
 extern cvar_t	gl_screenangle;
 
@@ -136,8 +137,10 @@ static void GL_InitSceneProcessingShaders_WaterWarp (void)
 	}
 }
 
+static void GLR_AutoExposureShutdown(void);
 void GL_ShutdownPostProcessing(void)
 {
+	GLR_AutoExposureShutdown();	//FTESurf Patch 1764
 	GLBE_FBO_Destroy(&fbo_vr);
 	GLBE_FBO_Destroy(&fbo_gameview);
 	GLBE_FBO_Destroy(&fbo_postproc);
@@ -2831,6 +2834,148 @@ R_RenderView
 r_refdef must be set before the first call
 ================
 */
+/*FTESurf Patch 1764: Source's auto-exposure from the drawn frame.  A few times a second, 32 rows of the finished 3D view
+  are read into a pixel buffer behind a fence (asynchronous: no stall); when the fence has passed, 64 samples a row
+  give the scene's linear luminance with the exposure that drew it divided out.  Source's tonemap (mat_tonemap_algorithm
+  1) brings the brightest r_autoexposure_bright of the pixels to r_autoexposure_target, raises a dark frame until its
+  average reaches r_autoexposure_minavg, and clamps to the band; the value eases there at r_autoexposure_rate and
+  multiplies r_exposure on lightmaps and model light (R_UpdateHDR, BE_ModelExposure).*/
+#define AE_ROWS 32
+#ifndef GL_ALREADY_SIGNALED
+#define GL_ALREADY_SIGNALED 0x911A
+#endif
+#ifndef GL_CONDITION_SATISFIED
+#define GL_CONDITION_SATISFIED 0x911C
+#endif
+#define AE_COLS 64
+static GLuint ae_pbo;
+static size_t ae_pbosize;
+static GLsync ae_fence;
+static int ae_pending, ae_rowbytes, ae_framesout;
+static float ae_readexp = 1, ae_target = 1;
+static double ae_lastread, ae_lastframe;
+static const model_t *ae_world;
+static void GLR_AutoExposureShutdown(void)
+{
+	if (ae_fence && qglDeleteSync)
+		qglDeleteSync(ae_fence);
+	ae_fence = NULL;
+	if (ae_pbo && qglDeleteBuffersARB)
+		qglDeleteBuffersARB(1, &ae_pbo);
+	ae_pbo = 0;
+	ae_pbosize = 0;
+	ae_pending = false;
+}
+static int GLR_AutoExposureCmp(const void *a, const void *b)
+{
+	float x = *(const float*)a, y = *(const float*)b;
+	return (x > y) - (x < y);
+}
+static void GLR_AutoExposureRead(void)
+{
+	static float lin[256];
+	static float samp[AE_ROWS*AE_COLS];
+	const qbyte *px;
+	int r, c, n = 0, w = ae_rowbytes / 4;
+	double sum = 0;
+	float bright, target;
+	if (!lin[255])
+		for (r = 0; r < 256; r++)
+			lin[r] = pow(r / 255.0, 2.2);
+	qglBindBufferARB(GL_PIXEL_PACK_BUFFER_ARB, ae_pbo);
+	px = qglMapBufferRange ? qglMapBufferRange(GL_PIXEL_PACK_BUFFER_ARB, 0, ae_pbosize, GL_MAP_READ_BIT) : qglMapBufferARB(GL_PIXEL_PACK_BUFFER_ARB, GL_READ_ONLY_ARB);
+	if (px)
+	{
+		for (r = 0; r < AE_ROWS; r++)
+			for (c = 0; c < AE_COLS; c++)
+			{
+				const qbyte *p = px + r*ae_rowbytes + ((c*2+1) * w / (AE_COLS*2)) * 4;
+				float l = (0.2126f*lin[p[0]] + 0.7152f*lin[p[1]] + 0.0722f*lin[p[2]]) / ae_readexp;
+				samp[n++] = l;
+				sum += l;
+			}
+		qglUnmapBufferARB(GL_PIXEL_PACK_BUFFER_ARB);
+	}
+	qglBindBufferARB(GL_PIXEL_PACK_BUFFER_ARB, 0);
+	if (!n)
+		return;
+	qsort(samp, n, sizeof(*samp), GLR_AutoExposureCmp);
+	bright = samp[(int)bound(0, (1 - r_autoexposure_bright.value) * (n-1), n-1)];
+	target = r_autoexposure_target.value / max(bright, 1e-4f);
+	if ((sum / n) * target < r_autoexposure_minavg.value)
+		target = r_autoexposure_minavg.value / max(sum / n, 1e-5);
+	ae_target = bound(r_autoexposure_min.value, target, r_autoexposure_max.value);
+	{
+		extern float r_autoexposure_value;
+		Cvar_ForceSet(&r_autoexposure_current, va("%.3f %.3f (bright %.3f, average %.3f)", r_autoexposure_value, ae_target, bright, sum / n));
+	}
+}
+static void GLR_AutoExposureFrame(void)
+{
+	extern float r_autoexposure_value;
+	double now = Sys_DoubleTime(), dt;
+	int x, y, w, h, r;
+	if (!r_autoexposure.ival || !qglFenceSync || !qglClientWaitSync || !qglGenBuffersARB || !(qglMapBufferRange || qglMapBufferARB))
+	{
+		r_autoexposure_value = 1;
+		ae_target = 1;
+		r_autoexposure_sky.value = 1;
+		return;
+	}
+	if (r_worldentity.model != ae_world)
+	{	//a new map starts at 1, as Source's does
+		ae_world = r_worldentity.model;
+		r_autoexposure_value = ae_target = 1;
+	}
+	//the main view only: once a frame, a world in it, most of the screen
+	if (now == ae_lastframe || (r_refdef.flags & RDF_NOWORLDMODEL) || r_refdef.vrect.width < vid.width/2 || r_refdef.vrect.height < vid.height/2)
+		return;
+	dt = bound(0, now - ae_lastframe, 0.25);
+	ae_lastframe = now;
+	if (ae_pending)
+	{
+		GLenum st = qglClientWaitSync(ae_fence, 0, 0);
+		if (st == GL_ALREADY_SIGNALED || st == GL_CONDITION_SATISFIED || ++ae_framesout > 8)
+		{
+			GLR_AutoExposureRead();
+			if (qglDeleteSync)
+				qglDeleteSync(ae_fence);
+			ae_fence = NULL;
+			ae_pending = false;
+		}
+	}
+	if (!ae_pending && now - ae_lastread >= 0.1)
+	{
+		x = r_refdef.vrect.x * vid.fbpwidth / vid.width;
+		w = r_refdef.vrect.width * vid.fbpwidth / vid.width;
+		h = r_refdef.vrect.height * vid.fbpheight / vid.height;
+		y = vid.fbpheight - (r_refdef.vrect.y * vid.fbpheight / vid.height + h);
+		if (w >= AE_COLS && h >= AE_ROWS)
+		{
+			ae_rowbytes = w * 4;
+			if (!ae_pbo)
+				qglGenBuffersARB(1, &ae_pbo);
+			qglBindBufferARB(GL_PIXEL_PACK_BUFFER_ARB, ae_pbo);
+			if (ae_pbosize != (size_t)ae_rowbytes * AE_ROWS)
+			{
+				ae_pbosize = (size_t)ae_rowbytes * AE_ROWS;
+				qglBufferDataARB(GL_PIXEL_PACK_BUFFER_ARB, ae_pbosize, NULL, GL_STREAM_READ_ARB);
+			}
+			for (r = 0; r < AE_ROWS; r++)
+				qglReadPixels(x, y + (r*2+1) * h / (AE_ROWS*2), w, 1, GL_RGBA, GL_UNSIGNED_BYTE, (void*)(size_t)(r * ae_rowbytes));
+			qglBindBufferARB(GL_PIXEL_PACK_BUFFER_ARB, 0);
+			ae_fence = qglFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
+			ae_pending = !!ae_fence;
+			ae_framesout = 0;
+			ae_readexp = max(r_autoexposure_value * ((r_exposure.value > 0) ? r_exposure.value : 1), 0.01f);
+			ae_lastread = now;
+		}
+	}
+	r_autoexposure_value += (ae_target - r_autoexposure_value) * (1 - exp(-max(0, r_autoexposure_rate.value) * dt));
+	//the sky too, as Source's: the value only (the program reads it at draw time); its string stays "1"
+	r_autoexposure_sky.value = pow(r_autoexposure_value * ((r_exposure.value > 0) ? r_exposure.value : 1), 1/2.2);
+}
+
 void GLR_RenderView (void)
 {
 	int dofbo = *r_refdef.rt_destcolour[0].texname || *r_refdef.rt_depth.texname;
@@ -3367,6 +3512,7 @@ void GLR_RenderView (void)
 
 	RSpeedEnd(RSPEED_POSTPROC);
 	}
+	GLR_AutoExposureFrame();	//FTESurf Patch 1764: the finished view, before CSQC draws its HUD over it
 
 	checkglerror();
 }

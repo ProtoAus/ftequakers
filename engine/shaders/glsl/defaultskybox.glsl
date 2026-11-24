@@ -1,6 +1,7 @@
 !!permu FOG
 !!samps reflectcube
 !!cvardf r_skyfog=0.5
+!!cvarf r_autoexposure_sky	//FTESurf Patch 1764: the exposure, as Source scales its sky (r_bishaders.h is what compiles)
 !!cvard4 r_glsl_skybox_orientation=0 0 0 0
 !!cvardf r_glsl_skybox_autorotate=1
 #include "sys/defs.h"
@@ -35,6 +36,7 @@ void main ()
 }
 #endif
 #ifdef FRAGMENT_SHADER
+uniform float cvar_r_autoexposure_sky;
 void main ()
 {
 	vec4 skybox = textureCube(s_reflectcube, pos);
@@ -47,6 +49,6 @@ void main ()
 		skybox.rgb = mix(skybox.rgb, fog3(skybox.rgb), float(r_skyfog));		//fog in terms of actual geometry distance
 	#endif
 #endif
-	gl_FragColor = skybox;
+	gl_FragColor = vec4(skybox.rgb * cvar_r_autoexposure_sky, skybox.a);
 }
 #endif

@@ -1632,7 +1632,9 @@ static void GL_DrawSkyBox (texid_t *texnums, const float *tscale, batch_t *s)
 	vecV_t skyface_vertex[4];
 	vec2_t skyface_texcoord[4];
 	index_t skyface_index[6] = {0, 1, 2, 0, 2, 3};
-	vec4_t skyface_colours[4] = {{1,1,1,1},{1,1,1,1},{1,1,1,1},{1,1,1,1}};
+	extern cvar_t r_autoexposure_sky;	//FTESurf Patch 1764: the exposure, as Source scales its sky
+	float ex = r_autoexposure_sky.value;
+	vec4_t skyface_colours[4] = {{ex,ex,ex,1},{ex,ex,ex,1},{ex,ex,ex,1},{ex,ex,ex,1}};
 	mesh_t skyfacemesh = {0};
 
 	if (cl.skyrotate)
@@ -1719,7 +1721,9 @@ static void GL_DrawSkyBoxFull (batch_t *s, texid_t *texnums, const float *tscale
 	vecV_t v[4];
 	vec2_t tc[4];
 	index_t idx[6] = {0, 1, 2, 0, 2, 3};
-	vec4_t col[4] = {{1,1,1,1},{1,1,1,1},{1,1,1,1},{1,1,1,1}};
+	extern cvar_t r_autoexposure_sky;	//FTESurf Patch 1764
+	float ex = r_autoexposure_sky.value;
+	vec4_t col[4] = {{ex,ex,ex,1},{ex,ex,ex,1},{ex,ex,ex,1},{ex,ex,ex,1}};
 	mesh_t m = {0};
 
 	for (i = 0; i < 6; i++)

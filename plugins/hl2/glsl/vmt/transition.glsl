@@ -105,6 +105,9 @@ varying vec2 lm1, lm2, lm3;
 
 #ifdef FAKESHADOWS
 	varying vec4 vtexprojcoord;
+	#ifdef FAKESHADOWS_CASCADE
+	varying vec3 shwpos;	//FTESurf Patch 1762: world position for the sun cascades (sys/pcf.h CascadeShadowFilter)
+	#endif
 #endif
 
 /* CUBEMAPS ONLY */
@@ -151,6 +154,9 @@ varying vec2 lm1, lm2, lm3;
 
 	#ifdef FAKESHADOWS
 		vtexprojcoord = (l_cubematrix*vec4(v_position.xyz, 1.0));
+		#ifdef FAKESHADOWS_CASCADE
+		shwpos = (m_model*vec4(v_position.xyz, 1.0)).xyz;
+		#endif
 	#endif
 	}
 #endif
@@ -310,7 +316,11 @@ varying vec2 lm1, lm2, lm3;
 		//FTESurf Patch 1732: shlit 0 shadowed .. 1 lit (the filter's 0.5..1).  Over a lightmap that already holds the
 		//sun's shadows (r_shadows_sunfloor, Strata maps) a shadow only takes the sun out: down to the sky's share,
 		//never below the baked shade.  Elsewhere it is shadow_control's colour (r_shadows_color), as Source's RTT.
+		#ifdef FAKESHADOWS_CASCADE
+		float shlit = 2.0*CascadeShadowFilter(s_shadowmap, vtexprojcoord, shwpos) - 1.0;	//FTESurf Patch 1762
+		#else
 		float shlit = 2.0*ShadowmapFilter(s_shadowmap, vtexprojcoord) - 1.0;
+		#endif
 		//the floor is a displayed level; the world's e_lmscale also carries 2^gl_overbright (its texels are stored that much
 		//smaller, Surf_LightmapShift -- MDLF_NEEDOVERBRIGHT), which a prop's light does not
 		float shob = exp2(clamp(floor(cvar_gl_overbright), 0.0, 2.0));

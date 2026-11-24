@@ -135,6 +135,9 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 
 "#ifdef FAKESHADOWS\n"
 "varying vec4 vtexprojcoord;\n"
+"#ifdef FAKESHADOWS_CASCADE\n"
+"varying vec3 shwpos; //FTESurf Patch 1762: world position for the sun cascades (sys/pcf.h CascadeShadowFilter)\n"
+"#endif\n"
 "#endif\n"
 
 /* CUBEMAPS ONLY */
@@ -183,6 +186,9 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 
 "#ifdef FAKESHADOWS\n"
 "vtexprojcoord = (l_cubematrix*vec4(v_position.xyz, 1.0));\n"
+"#ifdef FAKESHADOWS_CASCADE\n"
+"shwpos = (m_model*vec4(v_position.xyz, 1.0)).xyz;\n"
+"#endif\n"
 "#endif\n"
 "}\n"
 "#endif\n"
@@ -338,7 +344,11 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 //FTESurf Patch 1732: shlit 0 shadowed .. 1 lit (the filter's 0.5..1).  Over a lightmap that already holds the
 //sun's shadows (r_shadows_sunfloor, Strata maps) a shadow only takes the sun out: down to the sky's share,
 //never below the baked shade.  Elsewhere it is shadow_control's colour (r_shadows_color), as Source's RTT.
+"#ifdef FAKESHADOWS_CASCADE\n"
+"float shlit = 2.0*CascadeShadowFilter(s_shadowmap, vtexprojcoord, shwpos) - 1.0; //FTESurf Patch 1762\n"
+"#else\n"
 "float shlit = 2.0*ShadowmapFilter(s_shadowmap, vtexprojcoord) - 1.0;\n"
+"#endif\n"
 //the floor is a displayed level; the world's e_lmscale also carries 2^gl_overbright (its texels are stored that much
 //smaller, Surf_LightmapShift -- MDLF_NEEDOVERBRIGHT), which a prop's light does not
 "float shob = exp2(clamp(floor(cvar_gl_overbright), 0.0, 2.0));\n"
@@ -739,6 +749,9 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 
 "#ifdef FAKESHADOWS\n"
 "varying vec4 vtexprojcoord;\n"
+"#ifdef FAKESHADOWS_CASCADE\n"
+"varying vec3 shwpos; //FTESurf Patch 1762: world position for the sun cascades (sys/pcf.h CascadeShadowFilter)\n"
+"#endif\n"
 "#endif\n"
 
 /* CUBEMAPS ONLY */
@@ -785,6 +798,9 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 
 "#ifdef FAKESHADOWS\n"
 "vtexprojcoord = (l_cubematrix*vec4(v_position.xyz, 1.0));\n"
+"#ifdef FAKESHADOWS_CASCADE\n"
+"shwpos = (m_model*vec4(v_position.xyz, 1.0)).xyz;\n"
+"#endif\n"
 "#endif\n"
 "}\n"
 "#endif\n"
@@ -944,7 +960,11 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 //FTESurf Patch 1732: shlit 0 shadowed .. 1 lit (the filter's 0.5..1).  Over a lightmap that already holds the
 //sun's shadows (r_shadows_sunfloor, Strata maps) a shadow only takes the sun out: down to the sky's share,
 //never below the baked shade.  Elsewhere it is shadow_control's colour (r_shadows_color), as Source's RTT.
+"#ifdef FAKESHADOWS_CASCADE\n"
+"float shlit = 2.0*CascadeShadowFilter(s_shadowmap, vtexprojcoord, shwpos) - 1.0; //FTESurf Patch 1762\n"
+"#else\n"
 "float shlit = 2.0*ShadowmapFilter(s_shadowmap, vtexprojcoord) - 1.0;\n"
+"#endif\n"
 //the floor is a displayed level; the world's e_lmscale also carries 2^gl_overbright (its texels are stored that much
 //smaller, Surf_LightmapShift -- MDLF_NEEDOVERBRIGHT), which a prop's light does not
 "float shob = exp2(clamp(floor(cvar_gl_overbright), 0.0, 2.0));\n"
@@ -1339,6 +1359,17 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "varying vec3 norm;\n"
 "varying vec4 light;\n"
 
+//FTESurf Patch 1763: a bumped prop takes its directional light per PIXEL through the normal map, as Source's
+//VertexLitGeneric does (its local lights, the sun among them); the vertex stage hands over the light's direction in
+//tangent space, its colour and its own per-vertex term, which the pixel replaces.  Not on a VRAD-baked prop (VC: the
+//directional half is zero there) nor under #AMBIENTCUBE (no directional term).
+"#if defined(BUMP) && !defined(VC) && !defined(AMBIENTCUBE)\n"
+"#define BUMPSUN\n"
+"varying vec3 sun_t;\n"
+"varying vec3 sun_rgb;\n"
+"varying vec3 sun_v;\n"
+"#endif\n"
+
 /* CUBEMAPS ONLY */
 "#ifdef REFLECTCUBEMASK\n"
 "varying vec3 eyevector;\n"
@@ -1369,6 +1400,9 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 
 "#ifdef FAKESHADOWS\n"
 "varying vec4 vtexprojcoord;\n"
+"#ifdef FAKESHADOWS_CASCADE\n"
+"varying vec3 shwpos; //FTESurf Patch 1762: world position for the sun cascades (sys/pcf.h CascadeShadowFilter)\n"
+"#endif\n"
 "uniform vec3 cvar_r_shadows_color; //FTESurf Patch 1732\n"
 "uniform vec3 cvar_r_shadows_sunfloor;\n"
 "#ifdef INSTANCED\n"
@@ -1425,9 +1459,15 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 //same reason.  An undefined hl2_lt_fold evaluates to 0 here, which is the
 //legacy pair, so a missing define degrades to today rather than to a mix.
 "#if defined(HALFLAMBERT) || hl2_lt_fold\n"
-"light.rgb += max(0.0,halflambert(n,e_light_dir)) * e_light_mul;\n"
+"vec3 dirv = max(0.0,halflambert(n,e_light_dir)) * e_light_mul;\n"
 "#else\n"
-"light.rgb += max(0.0,dot(n,e_light_dir)) * e_light_mul;\n"
+"vec3 dirv = max(0.0,dot(n,e_light_dir)) * e_light_mul;\n"
+"#endif\n"
+"light.rgb += dirv;\n"
+"#ifdef BUMPSUN\n"
+"sun_v = dirv;\n"
+"sun_t = vec3(dot(e_light_dir, s), dot(e_light_dir, t), dot(e_light_dir, n));\n"
+"sun_rgb = e_light_mul;\n"
 "#endif\n"
 "#endif\n"
 
@@ -1477,8 +1517,14 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "#ifdef FAKESHADOWS\n"
 "#ifdef INSTANCED\n"
 "vtexprojcoord = l_cubeworld * vec4((m_model * vec4(w.xyz, 0.0)).xyz + inst_origin, 1.0); //FTESurf Patch 1732\n"
+"#ifdef FAKESHADOWS_CASCADE\n"
+"shwpos = (m_model * vec4(w.xyz, 0.0)).xyz + inst_origin;\n"
+"#endif\n"
 "#else\n"
 "vtexprojcoord = (l_cubematrix*vec4(w.xyz, 1.0));\n"
+"#ifdef FAKESHADOWS_CASCADE\n"
+"shwpos = (m_model*vec4(w.xyz, 1.0)).xyz;\n"
+"#endif\n"
 "#endif\n"
 "#endif\n"
 "}\n"
@@ -1663,6 +1709,9 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 //cube carries -- so off changes nothing to the bit.  Clamped, so a face the cube calls
 //black cannot divide the ratio into a blow-out.
 "vec3 lightrgb = light.rgb;\n"
+"#ifdef BUMPSUN\n"
+"lightrgb = max(lightrgb - sun_v, vec3(0.0)); //FTESurf Patch 1763: the ambient part; the directional comes per pixel below\n"
+"#endif\n"
 "#if defined(BUMPCUBE) && defined(BUMP)\n"
 "#ifndef CUBEEPS\n"
 "#define CUBEEPS 0.0005\n"
@@ -1680,10 +1729,25 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "ng2.z * ((ng.z < 0.0) ? e_light_ambientcube[5] : e_light_ambientcube[4]);\n"
 "lightrgb *= clamp(pow((cb + vec3(CUBEEPS)) / (cg + vec3(CUBEEPS)), vec3(1.0/2.2)), 0.0, 4.0);\n"
 "#endif\n"
+"#ifdef BUMPSUN\n"
+"if (dot(sun_t, sun_t) > 1e-8)\n"
+"{ //FTESurf Patch 1763: the same ramp as the vertex stage, from the bumped normal (tangent space)\n"
+"float ndl = dot(normal_f, normalize(sun_t));\n"
+"#if defined(HALFLAMBERT) || hl2_lt_fold\n"
+"lightrgb += max(0.0, ndl*0.5 + 0.5) * sun_rgb;\n"
+"#else\n"
+"lightrgb += max(0.0, ndl) * sun_rgb;\n"
+"#endif\n"
+"}\n"
+"#endif\n"
 "#ifdef FAKESHADOWS\n"
 "if (e_noshadowrecv < 0.5)\n"
 "{ //FTESurf Patch 1732: as lightmapped.glsl -- a baked prop on a cascade map loses only the sun\n"
+"#ifdef FAKESHADOWS_CASCADE\n"
+"float shlit = 2.0*CascadeShadowFilter(s_shadowmap, vtexprojcoord, shwpos) - 1.0; //FTESurf Patch 1762\n"
+"#else\n"
 "float shlit = 2.0*ShadowmapFilter(s_shadowmap, vtexprojcoord) - 1.0;\n"
+"#endif\n"
 "vec3 shfloor = cvar_r_shadows_sunfloor * e_lmscale.rgb;\n"
 "if (shfloor.r + shfloor.g + shfloor.b > 0.0)\n"
 "lightrgb = mix(min(lightrgb, shfloor), lightrgb, shlit);\n"

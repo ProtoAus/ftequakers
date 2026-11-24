@@ -3319,6 +3319,8 @@ struct shader_field_names_s shader_unif_names[] =
 /**/{"l_fakeshadowmatrix",		SP_FAKESHADOWMATRIX},
 /**/{"l_fakeshadowcell[0]",		SP_FAKESHADOWCELL},
 /**/{"l_fakeshadowcell",		SP_FAKESHADOWCELL},
+/**/{"l_fakeshadowworld[0]",	SP_FAKESHADOWWORLD},	//FTESurf Patch 1762
+/**/{"l_fakeshadowworld",		SP_FAKESHADOWWORLD},
 /**/{"l_fakeshadowinfo[0]",		SP_FAKESHADOWINFO},
 /**/{"l_fakeshadowinfo",		SP_FAKESHADOWINFO},
 /**/{"e_uppercolour",			SP_E_TOPCOLOURS},	//q1 player colours
