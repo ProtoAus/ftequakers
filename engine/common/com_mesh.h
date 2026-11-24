@@ -250,6 +250,8 @@ typedef struct galiasinfo_s
 	vboarray_t vborgba;	//yeah, just you try reading THAT as an actual word.
 	void *vbomem;
 	void *ebomem;
+	vboarray_t vbosharedpad;	//FTESurf Patch 1810: with vbosharedverts, the 4-byte vertex buffer this surface owns
+	qboolean vbosharedverts;	//its vertex vboarrays are an earlier surface's (identical arrays): only the indexes are its own
 
 //these exist only in the root mesh.
 #ifdef MD3MODELS

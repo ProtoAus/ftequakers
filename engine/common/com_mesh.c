@@ -4576,7 +4576,10 @@ void Mod_DestroyMesh(galiasinfo_t *galias)
 		return;
 	while(galias)
 	{
-		BE_VBO_Destroy(&galias->vbotexcoords, galias->vbomem);
+		if (galias->vbosharedverts)	//FTESurf Patch 1810: the vertex buffer is the twin's; free only our pad
+			BE_VBO_Destroy(&galias->vbosharedpad, galias->vbomem);
+		else
+			BE_VBO_Destroy(&galias->vbotexcoords, galias->vbomem);
 		BE_VBO_Destroy(&galias->vboindicies, galias->ebomem);
 		galias = galias->nextsurf;
 	}
@@ -4584,6 +4587,59 @@ void Mod_DestroyMesh(galiasinfo_t *galias)
 }
 
 #ifndef SERVERONLY
+/*FTESurf Patch 1810: an earlier surface whose vertex arrays are exactly this one's. A Source model with VVD fixups gives
+  every mesh of every LOD the whole model array (mod_hl2.c), and uploading a copy per surface multiplied its VRAM by the
+  LOD count. Not for morph poses or a per-surface GPU bone remap, which are per surface.*/
+static galiasinfo_t *Mod_MeshVBOTwin(model_t *mod, galiasinfo_t *galias)
+{
+	galiasinfo_t *s;
+	int i;
+#ifdef SKELETALMODELS
+	if (!galias->ofs_skel_xyz || (galias->ofs_skel_idx && galias->numbones > sh_config.max_gpu_bones && sh_config.max_gpu_bones))
+		return NULL;
+#else
+	return NULL;
+#endif
+	for (i = 0; i < galias->numanimations; i++)
+		if (galias->ofsanimations && galias->ofsanimations[i].poseofs)
+			return NULL;
+	for (s = mod->meshinfo; s && s != galias; s = s->nextsurf)
+	{
+		if (s->vbosharedverts || s->mappedbones || s->numverts != galias->numverts)
+			continue;
+		if (s->ofs_st_array != galias->ofs_st_array || s->ofs_lmst_array != galias->ofs_lmst_array ||
+			s->ofs_rgbaf != galias->ofs_rgbaf || s->ofs_rgbaub != galias->ofs_rgbaub)
+			continue;
+#ifdef SKELETALMODELS
+		if (s->ofs_skel_xyz != galias->ofs_skel_xyz || s->ofs_skel_norm != galias->ofs_skel_norm ||
+			s->ofs_skel_svect != galias->ofs_skel_svect || s->ofs_skel_tvect != galias->ofs_skel_tvect ||
+			s->ofs_skel_idx != galias->ofs_skel_idx || s->ofs_skel_weight != galias->ofs_skel_weight)
+			continue;
+#endif
+		return s;
+	}
+	return NULL;
+}
+static void Mod_GenerateMeshIndexVBO(galiasinfo_t *galias, galiasinfo_t *twin)
+{
+	vbobctx_t vboctx;
+	int pad = 0;
+	BE_VBO_Begin(&vboctx, sizeof(pad));
+	BE_VBO_Data(&vboctx, &pad, sizeof(pad), &galias->vbosharedpad);
+	BE_VBO_Finish(&vboctx, galias->ofs_indexes, sizeof(*galias->ofs_indexes) * galias->numindexes, &galias->vboindicies, &galias->vbomem, &galias->ebomem);
+	galias->vbotexcoords = twin->vbotexcoords;
+	galias->vbolmtexcoords = twin->vbolmtexcoords;
+	galias->vborgba = twin->vborgba;
+#ifdef SKELETALMODELS
+	galias->vbo_skel_verts = twin->vbo_skel_verts;
+	galias->vbo_skel_normals = twin->vbo_skel_normals;
+	galias->vbo_skel_svector = twin->vbo_skel_svector;
+	galias->vbo_skel_tvector = twin->vbo_skel_tvector;
+	galias->vbo_skel_bonenum = twin->vbo_skel_bonenum;
+	galias->vbo_skel_bweight = twin->vbo_skel_bweight;
+#endif
+	galias->vbosharedverts = true;
+}
 static void Mod_GenerateMeshVBO(model_t *mod, galiasinfo_t *galias)
 //vec3_t *vc, vec2_t *tc, vec3_t *nv, vec3_t *sv, vec3_t *tv, index_t *idx, int numidx, int numverts)
 {
@@ -4862,9 +4918,14 @@ void Mod_LoadAliasShaders(model_t *mod)
 
 	for (ai = mod->meshinfo, numskins = 0; ai; ai = ai->nextsurf)
 	{
+		galiasinfo_t *twin;
 		if (numskins < ai->numskins)
 			numskins = ai->numskins;
-		Mod_GenerateMeshVBO(mod, ai);	//FIXME: shares verts
+		twin = (BE_VBO_Begin && ai->numverts) ? Mod_MeshVBOTwin(mod, ai) : NULL;
+		if (twin)
+			Mod_GenerateMeshIndexVBO(ai, twin);	//FTESurf Patch 1810
+		else
+			Mod_GenerateMeshVBO(mod, ai);
 	}
 	for (i = 0; i < numskins; i++)
 	{

@@ -872,10 +872,23 @@ static qboolean Mod_HL2_LoadVTX(hl2parsecontext_t *ctx, const void *buffer, size
 					/*FTESurf Patch 1810: Source's switch points instead (MDLF_SOURCELOD): the level is drawn while the
 					  metric (100 / a unit sphere's pixel width) is in [its switch point, the next one's); the last
 					  level has no upper bound, and a NEGATIVE last switch point is Source's shadow-only LOD, never in view.*/
-					surf->mindist = l ? vlod->dist : 0;
-					surf->maxdist = (l+1 < nlod && vlod[1].dist >= 0) ? vlod[1].dist : 0;
-					if (l && vlod->dist < 0)
-						surf->mindist = 1e30f;
+					{	//GetLODForMetric's order: a level's switch point is the running maximum (falling or zero ones never
+						//pick it), a level whose range is empty is never drawn, and a level > 0 never starts at 0 (BIH_BuildAlias
+						//takes mindist 0 as LOD 0 for render-mesh collision)
+						const hl2vtxlod_t *vl0 = (const void*)((const qbyte*)vsurf + vsurf->lod_ofs);
+						float lo = 0, hi = 0;
+						size_t k;
+						for (k = 1; k <= l; k++)
+							lo = max(lo, vl0[k].dist);
+						if (l+1 < nlod && vl0[l+1].dist >= 0)
+							hi = max(lo, vl0[l+1].dist);
+						if (l)
+							lo = max(lo, 1e-3f);
+						surf->mindist = lo;
+						surf->maxdist = hi;
+						if ((l && vlod->dist < 0) || (hi && hi <= lo))
+							surf->mindist = 1e30f;	//Source's shadow LOD, or an empty range
+					}
 
 					if (surf != ctx->mod->meshinfo)
 						surf[-1].nextsurf = surf;
@@ -980,6 +993,7 @@ static qboolean Mod_HL2_LoadVVD(hl2parsecontext_t *ctx, const void *buffer, size
 
 	Fixups mean compacted per-LOD vertex arrays, and the index arithmetic in
 	Mod_HL2_LoadVTX is LOD-0-relative -- see the essay at the top of the file.
+	[Patch 1810: not so with the root LOD at 0 -- see the note below; fixups no longer stop it.]
 	No fixups means no compaction happened: every level indexes the one full
 	vertex array, and Mod_HL2_LoadIndexes' `else` branch is already correct for
 	all of them.

@@ -2672,9 +2672,12 @@ void R_GAlias_GenerateBatches(entity_t *e, batch_t **batches)
 
 			if (clmodel->engineflags & MDLF_SOURCELOD)
 			{	//FTESurf Patch 1810: Source's metric, 100 / the pixel width of a unit-diameter sphere at the model
-				//(studio.h LODMetric, ComputePixelWidthOfSphere(origin, 0.5)), against the VTX switch points
-				float px = r_refdef.pxrect.width * 0.5f * r_refdef.m_projection_std[0] / z;
-				lod = (px > 0) ? 100 / px : 0;
+				//(studio.h LODMetric, ComputePixelWidthOfSphere(origin, 0.5)), against the VTX switch points -- from the
+				//camera's fov and the window's width, which a perspective shadow face keeps (it swaps only pxrect and the
+				//projection), so a caster casts the level it draws; a viewmodel always takes level 0
+				float t = (r_refdef.fov_x > 0 && r_refdef.fov_x < 179) ? tan(r_refdef.fov_x * (M_PI / 360)) : 1;
+				float px = vid.pixelwidth * 0.5f / (t * z);
+				lod = ((e->flags & RF_WEAPONMODEL) || px <= 0) ? 0 : 100 / px;
 			}
 			else if (clmodel->maxlod)
 			{
