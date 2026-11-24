@@ -1792,7 +1792,8 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "#ifdef VC\n"
 //FTESurf Patch 1780: Strata's bake holds no sun (it is in light.a, gated by shsun below): no floor for it
 "if (cvar_r_shadows_vhvsun.r + cvar_r_shadows_vhvsun.g + cvar_r_shadows_vhvsun.b > 0.0)\n"
-"shfloor = vec3(-1.0);\n"
+"{\n"
+"}\n"
 "else\n"
 "#endif\n"
 "if (shfloor.r + shfloor.g + shfloor.b > 0.0)\n"
@@ -1806,7 +1807,7 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "}\n"
 "lightrgb = mix(shdark, lightrgb, shlit);\n"
 "}\n"
-"else if (shfloor.r >= 0.0)\n"
+"else\n"
 "lightrgb *= mix(cvar_r_shadows_color, vec3(1.0), shlit);\n"
 "}\n"
 "#endif\n"

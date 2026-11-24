@@ -507,7 +507,8 @@ varying vec4 light;	//.a: FTESurf Patch 1780, Strata's baked direct sun share (t
 		#ifdef VC
 			//FTESurf Patch 1780: Strata's bake holds no sun (it is in light.a, gated by shsun below): no floor for it
 			if (cvar_r_shadows_vhvsun.r + cvar_r_shadows_vhvsun.g + cvar_r_shadows_vhvsun.b > 0.0)
-				shfloor = vec3(-1.0);
+			{
+			}
 			else
 		#endif
 			if (shfloor.r + shfloor.g + shfloor.b > 0.0)
@@ -521,7 +522,7 @@ varying vec4 light;	//.a: FTESurf Patch 1780, Strata's baked direct sun share (t
 				}
 				lightrgb = mix(shdark, lightrgb, shlit);
 			}
-			else if (shfloor.r >= 0.0)
+			else
 				lightrgb *= mix(cvar_r_shadows_color, vec3(1.0), shlit);
 		}
 	#endif
