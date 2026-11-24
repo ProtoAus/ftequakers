@@ -1,5 +1,121 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1771 - A map's named cubemap uses its HDR bake when the LDR file is VBSP's black placeholder (plugin hl2/mat_vmt.c, mod_vbsp.c)
+
+**Problem.** Lex, 24 Nov, bhop_canals save 18: "glass window not reflective". The window's material is one of the map
+compiler's patches (830 of the pakfile's 841 VMTs), which names its cubemap: `$envmap maps/bhop_canals/c17344_-7296_256`.
+All 412 of the map's LDR cubemaps (`.vtf`) are byte-identical black placeholders; the bake is in the `.hdr.vtf`. Patch
+1559 swapped in the HDR file for the nearest-cubemap path only, so every patched material reflected black.
+
+**Change.** The named-envmap path takes the `.hdr.vtf` when the `.vtf` is black (VBSP_CubeIsBlack) and the HDR file is
+float data (VBSP_CubeIsFloat, header only) -- Patch 1559's rule, both helpers now shared with mat_vmt.c and the answer
+cached per cube.
+
+**Verified.** Rig save 18: the building's tall windows show their panes and the sky's light, as in Momentum's shot.
+
+**Limits.** The reflection strength (hl2_envmap_source 7 squares sRGB values; Source squares linear) is unmeasured.
+
+## Patch 1770 - $selfillum 0 is off (plugin hl2/mat_vmt.c)
+
+**Problem.** Lex, 24 Nov, save 13: "These tree models are oddly whitely bright". HL2's oak_tree01 trunk material says
+`$selfillum 0`; the parser set self-illumination on for the key's presence, emitted the base texture as the
+fullbright map, and the DXT1 texture's alpha (1 everywhere) added the whole unlit bark over the lit trunk -- trunks at
+92-103 where Momentum's are 16-23. About 190 prop instances on canals use such materials (bridge railings, cattails,
+row houses, the crane).
+
+**Change.** `$selfillum`, `$halflambert`, `$basealphaenvmapmask` and `$normalmapalphaenvmapmask` read their values.
+
+**Verified.** Rig save 13: the oaks are dark bark like the trees beside them and Momentum's.
+
+**Limits.** canals' oak_tree01 still resolves to CS:S's model (mount order), so its HL2 vertex bake is dropped as
+another model's; Source blends self-illum (lerp) where we add it.
+
+## Patch 1769 - The barn light shafts: additive fog to black, and their exact tint (plugin hl2/glsl/vmt/twotexture.glsl; game cl_sun.qc)
+
+**Problem.** Lex, 24 Nov, saves 14/15: "The light shafts are very bright far away and start to dim to the correct
+level-ish then turn weirdly red". UnlitTwoTexture fogged toward the fog colour although the material is additive, so
+from 2000+ units every quad of the shafts added the fog's grey (a white column over the barn roof) until inside the
+fog's 512-unit start. The red: the wire carries colormod in 1/32 steps, so P1759 sent 21 18 13 as 24 16 16.
+
+**Change.** twotexture.glsl's #ADDITIVE fogs with fog4additive (to black, Patch 300's rule). The client reads every
+prop_* with a non-white rendercolor from the entity lump and draws it with that exact colour (deltalisten, colormod as
+a float).
+
+**Verified.** Rig: no column over the barn at save 14; at save 15 the shafts are faint amber, close to Momentum's.
+
+## Patch 1768 - Alpha-tested casters leave their holes out of the shadow (engine gl/r_bishaders.h, shaders/glsl/depthonly.glsl; plugin hl2/mat_vmt.c)
+
+**Problem.** Lex, 24 Nov, save 12: "The bushes in my game seem to shadow the whole face, and not the fine branches on
+the texture surface". The depth pass drew every caster with the generic depthonly program, which has no alpha test, so
+each foliage card shadowed as a solid quad.
+
+**Change.** depthonly gains #ALPHASHADOW (with MASK/MASKLT: discard by the diffuse alpha; the engine's own #MASK
+overrides are unchanged); an alpha-tested material, or a $translucent one whose base alpha is its opacity, carries
+`bemode depthonly { program depthonly#ALPHASHADOW#MASK=ref#MASKLT; diffusemap base }`.
+Such world faces (fences) join the sun's world mesh with it.
+
+**Verified.** Rig save 12: the bushes throw branch shadows, as in Momentum.
+
+## Patch 1767 - vbsp_autoexposure takes effect at once (game cl_sun.qc, cl_main.qc; engine gl/gl_rmain.c)
+
+**Problem.** Lex, 24 Nov: '"vbsp_autoexposure 0" doesn't seem to turn off the iris open/close effect at all? it stays
+on.' The game read it only when a map's lighting was set up.
+
+**Change.** Each frame the client compares vbsp_autoexposure with what it applied and sets r_autoexposure (with the
+map's band) or clears it. r_autoexposure_current reads "1 (off)" when off.
+
+**Verified.** Rig: vbsp_autoexposure 0 -> r_autoexposure 0 the next frame, 1 -> 1.
+
+**Limits.** Indoors (the barn) our exposure opens to the band's 2.0 where Momentum's stays darker: its HDR sky and
+sunlit patches are brighter than our clamped frame can measure. Not changed here.
+
+## Patch 1766 - Shadows no longer switch off at a line in front of the player (engine gl/gl_vidcommon.c gl_shadow.c; plugin hl2/mod_vbsp.c)
+
+**Problem.** Lex, 24 Nov: "some shadows blink in and out of existence as you move around ... it will have like a
+distance cull line or turn off in front of you". Three causes. The four camera-centred cascades (bhop_canals: 148,
+444, 1333 and 4000 units) switched at a hard edge, and at r_shadows_res 2048 each had ~1000 texels -- 2.7 units a
+texel in the third, 8 in the fourth -- so a pole, rail or plank thinner than that lost its shadow at the line where it
+crossed into the next cascade. A static prop inside its own fade range is drawn translucent, and the depth passes skip
+translucent entities, so its shadow went out at its fade distance. And a static prop out of the view's PVS was dropped
+before the shadow-reach test.
+
+**Change.** A cascade's outer band (0.40-0.47 of its half-width) blends into the next one (CascadeShadowFilter). The
+Source cascade atlas is r_shadows_cascade_res (4096: ~2000 texels a cascade) or r_shadows_res, the larger. A fading
+static prop keeps an opaque shadow-only twin (new RF_SHADOWONLY: drawn by the shadow passes and no view, mirror or
+portal), and on a cascade map a prop out of the view's PVS or off screen but within r_shadows 2's reach goes in
+shadow-only, opaque. The atlas is clamped to the GPU's texture limit.
+
+**Verified.** Rig: uncapped frame at saves 8/6/5 the same with the 4096 atlas as with 2048 (7.2-7.6 / 5.4-5.7 /
+3.5-3.6 ms); saves 8, 11, 12, 16, 17 render as before with the blend; surf_shady identical to 0.1.64.
+
+**Limits.** Prop entities (prop_dynamic) outside the PVS are not sent by the server at all; their shadows can still pop.
+The blink was not reproduced on video in the rig.
+
+## Patch 1765 - On a cascade map the world casts the sun's shadow, sharply, and props shadow themselves (engine gl/gl_shadow.c gl_backend.c gl_vidcommon.c gl_rmain.c)
+
+**Problem.** Lex, 24 Nov: "the shadows for props don't seem to self cast", "the shadow colour is not quite correct",
+save 16 "The shadow darkness and colour on the texture is way to bright", save 17 "Strata Source ... has an ability to
+make these very tight lightmaps ... much sharper then our own". bhop_canals' lightmaps are 64 units a luxel: the world's
+baked sun shadows (the concrete pillars at save 17, the canal walls at save 11) are a blur; the sharp ones in Momentum
+are Strata's cascades, which draw the world. r_shadows 2 drew models only, faded every shadow thrown further than ~123
+units (r_shadows_throwfade, meant for lightmaps that hold the shadow), and a casting prop never received.
+
+**Change.** On a Source map with Strata's env_cascade_light (r_shadows_sunfloor set by the game from
+light_environment's ambient) the sun cascades draw the world's opaque faces too: built once per map as Morton-sorted
+chunks of surfaces (~1024 triangles each, with bounds), each cascade draws the chunks inside its box (unbounded toward
+the sun) through the casters' own depth programs, the faces turned away from the sun only (r_shadows_worldcull 1).
+There the throw fade is off (a shadow only brings a sunlit texel down to the floor, so it cannot darken twice), and a
+casting Source prop receives the cascades, its own shadow included (r_shadows_propselfshadow). r_shadows_worldcast 0 is
+models only. Other maps are untouched (their lightmaps hold the world's shadows).
+
+**Verified.** Rig: save 17 shows the pillars' sharp shadow wedges and the lit strip between, save 11 the canal walls'
+shadows, save 8 the building's, matching Momentum's shots; surf_shady (no cascade light) pixel-identical to 0.1.64.
+Uncapped frame at saves 8/6/5: 6.1/3.9/2.2 -> 7.2-7.6/5.4-5.7/3.5-3.7 ms (r_shadows_worldcast 0 returns most of it).
+
+**Limits.** The shadow in shade is the floor (light_environment's ambient) for every texel; the ramp's corrugation
+still reads softer than Momentum's; func_smokevolume (save 11's haze) and the white/black street lamp (save 20: its
+bake's alpha holds the direct sun, unread) are not addressed.
+
 ## Patch 1764 - Source's HDR auto-exposure, measured from the drawn frame (engine client/renderer.c, gl/gl_rmain.c gl_rlight.c gl_backend.c gl_warp.c gl_model.h, defaultskybox; plugin hl2/mod_vbsp.c, glsl/vmt/unlit.glsl; game cl_sun.qc cl_emit.qc)
 
 **Problem.** Lex, 24 Nov: "is there HDR exposure in the map we don't do?" -- yes: bhop_canals is lit only in HDR (its
