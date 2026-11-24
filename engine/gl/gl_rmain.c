@@ -2902,9 +2902,14 @@ static void GLR_AutoExposureRead(void)
 			for (c = 0; c < AE_COLS; c++)
 			{
 				const qbyte *p = px + r*ae_rowbytes + ((c*2+1) * w / (AE_COLS*2)) * 4;
-				float l = (0.2126f*lin[p[0]] + 0.7152f*lin[p[1]] + 0.0722f*lin[p[2]]) / ae_readexp;
-				if (max(p[0], max(p[1], p[2])) >= 250 && l < r_autoexposure_hdrsat.value)
-					l = r_autoexposure_hdrsat.value;	//FTESurf Patch 1775: clamped, so at least this bright
+				//FTESurf Patch 1775: a clamped channel counts at least r_autoexposure_hdrsat on its own -- a saturated red sign
+				//is not a white one
+				float cr = lin[p[0]] / ae_readexp, cg = lin[p[1]] / ae_readexp, cb = lin[p[2]] / ae_readexp;
+				float l;
+				if (p[0] >= 250 && cr < r_autoexposure_hdrsat.value) cr = r_autoexposure_hdrsat.value;
+				if (p[1] >= 250 && cg < r_autoexposure_hdrsat.value) cg = r_autoexposure_hdrsat.value;
+				if (p[2] >= 250 && cb < r_autoexposure_hdrsat.value) cb = r_autoexposure_hdrsat.value;
+				l = 0.2126f*cr + 0.7152f*cg + 0.0722f*cb;
 				samp[n++] = l;
 				sum += l;
 			}

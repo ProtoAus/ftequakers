@@ -5559,7 +5559,7 @@ qboolean GLBE_LightCullModel(vec3_t org, model_t *model)
 		//runs further (r_shadow_orthodepth) and the frustum's four sides already cull.  The sphere test dropped a caster
 		//that sat sunward of the camera from the tighter cascades while its shadow fell inside them: a log's shadow faded
 		//as the player came closer and snapped back once it was deep inside the next cascade.
-		if (shaderstate.lightmode & LSHADER_ORTHO)
+		if ((shaderstate.lightmode & LSHADER_ORTHO) && shaderstate.mode == BEM_DEPTHONLY)
 		{	//only past its far face (away from the sun) can nothing it holds be shadowed -- depth clamp keeps the sunward side
 			float zr = (r_shadow_orthodepth > 0) ? r_shadow_orthodepth : shaderstate.lightradius;
 			VectorSubtract(org, shaderstate.lightorg, disp);

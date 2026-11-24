@@ -6012,8 +6012,9 @@ static qboolean VBSP_LoadPropBakedLight(model_t *mod, struct staticprop_s *sent,
 						out[0] = out[1] = out[2] = (qbyte)b;
 						//FTESurf Patch 1780: Strata's bake leaves the sun out of the colour and writes its direct share in
 						//the alpha (zero on every vertex turned from the sun), for its cascades to shadow; vertexlit.glsl
-						//adds r_shadows_vhvsun x alpha under the cascade shadow.  Other compilers' alpha is not that: 0.
-						out[3] = (((vbspinfo_t*)mod->meshinfo)->bspversion >= 25) ? (qbyte)((sa + ncol/2) / ncol) : 0;
+						//adds r_shadows_vhvsun x alpha under the cascade shadow (the game sets it only on a v25 cascade map).
+						//Other compilers' alpha is not that: 255, as before (unlit/animated $vertexalpha surfaces of a baked prop read it).
+						out[3] = (((vbspinfo_t*)mod->meshinfo)->bspversion >= 25) ? (qbyte)((sa + ncol/2) / ncol) : 255;
 					}
 				}
 			}
@@ -11322,7 +11323,7 @@ static void VBSP_PropSolveLight(model_t *mod, vbspinfo_t *prv, struct staticprop
 				for (k = 0; k < nv; k++)
 				{
 					out[k*4+0] = out[k*4+1] = out[k*4+2] = (qbyte)meanb;
-					out[k*4+3] = 0;	//FTESurf Patch 1780: no baked sun on a vertex the file does not cover
+					out[k*4+3] = (((vbspinfo_t*)mod->meshinfo)->bspversion >= 25) ? 0 : 255;	//FTESurf Patch 1780: no baked sun on a vertex the file does not cover
 				}
 				if (nm > sent->vcrawverts)
 					nm = sent->vcrawverts;	//a shorter file colours what it can
@@ -12846,7 +12847,7 @@ static void VBSP_LoadWorldLights (model_t *mod, qbyte *mod_base, vlump_t *hdr, v
 		(unsigned)stride, v21 ? ", Strata" : "",
 		(unsigned)kept, (unsigned)count, (unsigned)drop_sky, (unsigned)drop_style,
 		(unsigned)drop_cube, (unsigned)drop_cluster, (unsigned)drop_v25,
-		kept ? "" : CON_WARNING" -- hl2_lt_worldlight can do nothing on this map");
+		(kept || drop_v25) ? "" : CON_WARNING" -- hl2_lt_worldlight can do nothing on this map");
 }
 
 /*
@@ -14773,6 +14774,7 @@ static qboolean VBSP_LoadMap (model_t *mod, void *filein, size_t filelen)
 	header.magic = LittleLong(header.magic);
 	header.version = LittleLong(header.version);
 	prv->bspversion = header.version;	//FTESurf Patch 1780
+	cvarfuncs->SetFloat("hl2_bspversion", header.version);	//and for the game: r_shadows_vhvsun only on a v25 map
 
 	ClearBounds(mod->mins, mod->maxs);
 
@@ -15734,6 +15736,7 @@ qboolean VBSP_Init(void)
 		//FTESurf Patch 308.  Registered here, beside the term it feeds, and NOT
 		//latched: VBSP_LoadWorldLights reads it once per map load, so changing it
 		//needs a map change to take effect and the description has to say so.
+		cvarfuncs->GetNVFDG("hl2_bspversion", "0", 0, "FTESurf Patch 1780: set at each Source map load to its BSP version (25: Strata). Read by the game; setting it does nothing.", MAPOPTIONS);
 		hl2_lt_wlv25 = cvarfuncs->GetNVFDG("hl2_lt_wlv25", "1", 0, "FTESurf Patch 1777: on a Strata (BSP v25) map, light models that have no VRAD bake from the leaf ambient cube and the sun only, not the map's point/spot/surface lights.\n1: default. Measured on bhop_canals (save 28): Momentum lights the floor under the barrels, jerry cans and crates with the room's fluorescent and an outdoor spot (lightmap 0.9-1.4 linear) but draws those prop_dynamics at roughly the leaf cube alone; adding the two lights drew them 2-18x too bright beside the walls.\n0: add them as Source 2013's light cache does.\nRead at map load.", MAPOPTIONS);
 		hl2_lt_wl21 = cvarfuncs->GetNVFDG("hl2_lt_wl21", "1", 0, "Read the worldlights lump of a v21 (Strata) map, whose record is 100 bytes rather than 88.\n0: refuse it, the pre-308 behaviour. 123 of the 1314 installed maps ship this lump version, so hl2_lt_worldlight -- and with it Patch 304's fold -- silently did nothing on any of them, including surf_fantasy.\n1: default. The layout is a single 12-byte insertion after `normal` (Strata's shadow_cast_offset, zero on all 39,641 lights measured), derived by pairing the CS:S and Momentum builds of surf_fantasy light-for-light rather than guessed: every field that must survive a recompile agrees on 777 of 777, and across all 123 maps every light yields a valid type, a valid style and a unit normal.\nRead at map load -- an A/B needs a map change or a second process.", MAPOPTIONS);
 
