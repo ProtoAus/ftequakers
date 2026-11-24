@@ -25,6 +25,9 @@
 !!cvar3f r_shadows_color=0.5 0.5 0.5
 !!cvar3f r_shadows_sunfloor=0 0 0
 !!cvar3f r_shadows_vhvsun=0 0 0
+!!cvar3f r_shadows_sunlm=0 0 0
+!!cvar3f r_shadows_throwdirection=0 0 -1
+!!cvarf r_shadows_worldcast=1
 
 // envmaps only
 !!samps =REFLECTCUBEMASK reflectmask reflectcube
@@ -109,6 +112,18 @@ varying vec4 light;	//.a: FTESurf Patch 1780, Strata's baked direct sun share (t
 	varying vec3 sun_t;
 	varying vec3 sun_rgb;
 	varying vec3 sun_v;
+#endif
+//FTESurf Patch 1783: on a Strata map with the cascades live (r_shadows_sunlm, as the world: lightmapped.glsl), a prop
+//with no VRAD bake takes the true sun per pixel -- lambert, as VertexLitGeneric lights it, shadowed by the cascades --
+//in place of the light fold's directional term (a cube from one trace at its origin, on a half-lambert ramp: the
+//corrugated ramp drew flat where Momentum's grooves go dark).
+#if defined(FAKESHADOWS) && !defined(VC) && !defined(AMBIENTCUBE)
+	#define LIVESUN
+	varying vec3 lsun_t;	//toward the sun in (s, t, n)
+	varying vec3 lsun_v;	//the vertex stage's directional term, which the live sun replaces
+	uniform vec3 cvar_r_shadows_throwdirection;
+	uniform vec3 cvar_r_shadows_sunlm;
+	uniform float cvar_r_shadows_worldcast;
 #endif
 
 /* CUBEMAPS ONLY */
@@ -205,6 +220,14 @@ varying vec4 light;	//.a: FTESurf Patch 1780, Strata's baked direct sun share (t
 			vec3 dirv = max(0.0,dot(n,e_light_dir)) * e_light_mul;
 		#endif
 		light.rgb += dirv;
+		#ifdef LIVESUN
+		{
+			vec3 tosun = -cvar_r_shadows_throwdirection;
+			vec3 tm = vec3(dot(m_model[0].xyz, tosun), dot(m_model[1].xyz, tosun), dot(m_model[2].xyz, tosun));	//into model space
+			lsun_t = vec3(dot(tm, s), dot(tm, t), dot(tm, n));
+			lsun_v = dirv;
+		}
+		#endif
 		#ifdef BUMPSUN
 			sun_v = dirv;
 			sun_t = vec3(dot(e_light_dir, s), dot(e_light_dir, t), dot(e_light_dir, n));
@@ -456,9 +479,22 @@ varying vec4 light;	//.a: FTESurf Patch 1780, Strata's baked direct sun share (t
 	//cube carries -- so off changes nothing to the bit.  Clamped, so a face the cube calls
 	//black cannot divide the ratio into a blow-out.
 		vec3 lightrgb = light.rgb;
-	#ifdef BUMPSUN
-		lightrgb = max(lightrgb - sun_v, vec3(0.0));	//FTESurf Patch 1763: the ambient part; the directional comes per pixel below
+		float lsunlive = 0.0, lshlit = 1.0;
+	#if defined(LIVESUN) && defined(FAKESHADOWS_CASCADE)
+		if (cvar_r_shadows_sunlm.r + cvar_r_shadows_sunlm.g + cvar_r_shadows_sunlm.b > 0.0 && cvar_r_shadows_worldcast > 0.0 &&
+			l_fakeshadowinfo[0].z > 0.5 && e_noshadowrecv < 0.5)
+		{	//FTESurf Patch 1783
+			lsunlive = 1.0;
+			lshlit = clamp(2.0*CascadeShadowFilter(s_shadowmap, vtexprojcoord, shwpos) - 1.0, 0.0, 1.0);
+			lightrgb = max(lightrgb - lsun_v, vec3(0.0));	//the ambient part
+		}
+		else
 	#endif
+		{
+	#ifdef BUMPSUN
+			lightrgb = max(lightrgb - sun_v, vec3(0.0));	//FTESurf Patch 1763: the ambient part; the directional comes per pixel below
+	#endif
+		}
 	#if defined(BUMPCUBE) && defined(BUMP)
 		#ifndef CUBEEPS
 		#define CUBEEPS 0.0005
@@ -476,6 +512,24 @@ varying vec4 light;	//.a: FTESurf Patch 1780, Strata's baked direct sun share (t
 		          ng2.z * ((ng.z < 0.0) ? e_light_ambientcube[5] : e_light_ambientcube[4]);
 		lightrgb *= clamp(pow((cb + vec3(CUBEEPS)) / (cg + vec3(CUBEEPS)), vec3(1.0/2.2)), 0.0, 4.0);
 	#endif
+	#ifdef LIVESUN
+		if (lsunlive > 0.5)
+		{	//FTESurf Patch 1783: the sun in linear light over the ambient part (lightrgb holds the exposure: e_lmscale)
+		#ifdef BUMP
+			#ifdef BUMPGREENFIX
+			vec3 lsn = normal_f;
+			#else
+			vec3 lsn = vec3(normal_f.x, -normal_f.y, normal_f.z);
+			#endif
+		#else
+			vec3 lsn = vec3(0.0, 0.0, 1.0);
+		#endif
+			float lndl = max(dot(lsn, lsun_t) * inversesqrt(max(dot(lsun_t, lsun_t), 1e-8)), 0.0);
+			lightrgb = pow(pow(lightrgb, vec3(2.2)) + cvar_r_shadows_sunlm * pow(e_lmscale.rgb, vec3(2.2)) * (lndl * lshlit), vec3(1.0/2.2));
+		}
+		else
+	#endif
+		{
 	#ifdef BUMPSUN
 		{	//FTESurf Patch 1763: the same ramp as the vertex stage, from the bumped normal (tangent space).  Its green as
 			//Source reads it (Patch 268 C: the default flip above mirrors the relief along V); a zero light direction
@@ -493,9 +547,10 @@ varying vec4 light;	//.a: FTESurf Patch 1780, Strata's baked direct sun share (t
 		#endif
 		}
 	#endif
+		}
 		float shsun = 1.0;	//FTESurf Patch 1780: how much of the baked sun share lands (the cascade's lit fraction)
 	#ifdef FAKESHADOWS
-		if (e_noshadowrecv < 0.5)
+		if (e_noshadowrecv < 0.5 && lsunlive < 0.5)
 		{	//FTESurf Patch 1732: as lightmapped.glsl -- a baked prop on a cascade map loses only the sun
 			#ifdef FAKESHADOWS_CASCADE
 			float shlit = 2.0*CascadeShadowFilter(s_shadowmap, vtexprojcoord, shwpos) - 1.0;	//FTESurf Patch 1762
