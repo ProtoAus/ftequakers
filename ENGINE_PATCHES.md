@@ -101,6 +101,97 @@ mark both jump and duck for that key, rewind and spectate treat it as movement.
 **Verified.** fteqcc 0 warnings; m-rel builds; review: no lapse miscounted in any press path (keys, repeat,
 wheel, gamepad, console, smartjump swim/fly), +jumpduck cannot launder another command.
 
+## Patch 1785 - No banding by default: a float scene and a still dither on every frame (engine client/renderer.c, gl/gl_rmain.c, shaders/glsl/defaultgammacb.glsl, gl/r_bishaders.h)
+
+**Problem.** Lex, 24 Nov: "I just love full contrast and no colour banding, and want to ensure/force it default for
+players." The 3D view rendered into 8 bits (vid_srgb 0, r_hdr_framebuffer 0) and every post pass quantised again; the
+scene-gamma pass already wrote a sub-step interleaved-gradient noise, but only when gamma/contrast were moved off 1.
+
+**Change.** r_dither (default 1) turns the scene-gamma pass on for every 3D view -- with it the scene renders into
+RGBA16F (the existing rule) -- and its noise is written whatever the gamma (cvar_r_dither): half a step, still (keyed on
+the pixel, no shimmer), none under 2/255 so blacks stay black. Where the hardware ramp does the gamma the pass uses
+identity colours. Contrast and brightness defaults are unchanged (1, 0: full range).
+
+**Verified.** Rig save 13: same mean (154.9/157.1/148.2 against 155.0/157.3/148.4), a sky gradient's columns hold 54
+distinct greens against 42 (the steps broken up); the sky texture's own DXT blocks remain (in the texture). Cost, alternated
+runs of one build: saves 8/6/5 GPU 3.9-4.5/3.6/1.9 ms against 3.8-3.9/3.5/1.9 with r_dither 0, post-processing 0.05 ms CPU
+either way.
+
+**Limits.** vid_srgb 0 still blends in display values (linear-light blending is a separate, larger change).
+
+## Patch 1784 - Shafts, sprites and particles take the auto-exposure; UnlitTwoTexture adds in linear light (plugin hl2/glsl/vmt/twotexture.glsl animated.glsl; engine shaders/glsl/defaultsprite.glsl defaultadditivesprite.glsl, gl/r_bishaders.h)
+
+**Problem.** Lex, 24 Nov, save 30: the barn shafts face the right way now (P1778) but still drew a visible fan where
+Momentum shows none, brighter still once the barn auto-exposes to 2. P1764 left UnlitTwoTexture, unlit sprites and the
+engine's particle/sprite programs unscaled; and Source adds light in LINEAR light where this renderer adds display
+values -- for the shafts (rendercolor 21 18 13, ~0.025 a layer) that is ~0.3 levels over the dark barn in Source and 6
+a layer here.
+
+**Change.** UnlitTwoTexture, an unlit vmt/animated (sprites; not MODELLIT, whose light already carries it) and
+defaultadditivesprite multiply by r_autoexposure_sky (the exposure's display scale, 1 when off). UnlitTwoTexture's
+additive path adds the source's linear value (display ^ 2.2) before its fade, within 0.6-1.7x of Source's increment
+over dark to bright backgrounds where the display value is 1.4-20x over.
+
+**Verified.** Rig saves 30 and 6: no shaft fan, as Momentum's 0016/0009; the barn otherwise unchanged.
+
+**Limits.** Other additive materials still add display values; alpha-blended particles (defaultsprite) are not
+exposure-scaled: its blends include colour-factor ones (subtract, modulate) a colour scale would get wrong.
+
+## Patch 1783 - On a Strata map a prop with no bake takes the true sun per pixel under the cascades (plugin hl2/glsl/vmt/vertexlit.glsl)
+
+**Problem.** Lex, 24 Nov: "idk if we ever matched the coregated ramp texture to be the same shadow strength as momentum
+mod?" -- it had not: the ramp (prop_dynamic_override metal_panel01a, no .vhv) drew flat pale grey where Momentum's
+grooves go dark. Its sun came from the light fold: a cube from one trace at the prop's origin, on a half-lambert ramp.
+
+**Change.** With r_shadows_sunlm set (P1781), world casting on and the cascades live, a non-VC vertexlit prop that
+receives the cascades takes its ambient part (light minus the vertex stage's directional term) plus
+r_shadows_sunlm x lambert(N.L) x the cascade's lit fraction, in linear light, N.L from the normal map per pixel
+(BUMP) or the vertex normal; otherwise P1763's path.
+
+**Verified.** Rig save 16 against Momentum 0010: crest/groove 196/76 and 204/46 against 179/51 and 187/60; save 28's
+barrels and cans stay dark (the cascades shade them indoors); save 8's pipe unchanged.
+
+**Limits.** A baked (VC) prop's sun (P1780) is still vertex-level, no normal-map relief.
+
+## Patch 1782 - hl2_cubelight 1 by default (plugin hl2/mod_vbsp.c)
+
+**Problem.** Lex, 24 Nov: "make hl2_cubelight 1 default". Its ratio (the leaf cube through the bumped normal over the
+geometric one) is 1 for a flat normal and scale-invariant, so it cannot double a bake; it was left off out of caution.
+
+**Change.** Default 1.
+
+## Patch 1781 - Strata's world sun: the lightmap's baked direct-sun page, swapped for the sun under the cascades (plugin hl2/mod_vbsp.c, glsl/vmt/lightmapped.glsl transition.glsl; engine client/r_surf.c gl/gl_shadow.c)
+
+**Problem.** Lex, 24 Nov, save 32: world-cast shadows "sharp but then cuts off and is soft"; save 29: "get it to look
+the same as momentum mod". The soft part is the lightmap's own baked shadow (64-unit luxels, a 5-degree sun spread)
+where the cascades say sunlit, and save 29's wall is baked shade Strata draws sunlit: a shadow pass can only darken.
+Strata's lighting lump (version 1, the 2/5 layout) ends every style with one more luxel set whose red byte is VRAD's
+baked direct sun, its shadowing included, in units of the sun's intensity -- the lightmap is indirect + sun * R/255
+(linear across a penumbra: R 0/32/115 at 0.215/0.441/1.02 green with sun 1.80; full sun ~0.984 N.L^1.4, rms 0.02 over
+1535 faces).
+
+**Change.** VBSP_BuildSunPage keeps the page as SUNVIS (mod->sunvisdata, 1 byte a luxel at style 0) when every lit face
+carries it; VBSP_SunPageToIndirect (once the sun is known) rewrites style 0 as the indirect light, per luxel in linear
+light (a bumped face's basis mean scaled by mean/flat), the page holding exactly what came out; r_shadows_sunlm (new
+engine cvar) is set to the map's sun. lightmapped.glsl/transition.glsl add the sun back: the bake (sunlm x page), or
+under live cascades with the world in them the sun at the pixel's N.L (normal map, green as transition's cubemap path)
+times VRAD's 0.984 N.L^1.4 shape and the cascade's lit fraction, the bake again by 0.35 of the outer cascade; off the
+live path (worldcast 0, one map) a shadow still takes the baked sun out. The sun's direction is the plugin's
+(r_shadows_sundir, VRAD's), not shadow_control's. The page is sampled as the lightmap is (bicubic), the SUNVIS texture
+gets the lightmap's one-texel block border and is uploaded only when it changes (r_surf.c), reads as no sun where a
+Source batch has none; vmt/animated's lightmapped faces put the bake back too. Displacements take their own
+per-vertex normals and projected, normalised texture directions (hl2_dispnormals): the plane normal and raw texinfo
+vectors put N.L off by the texture scale. r_shadows_sunlm clears on a non-Source world. hl2_sunpage 0 keeps the bake.
+
+**Verified.** Rig: save 32's wall shadow one sharp edge, no soft cut-off; save 29's ground and table sunlit and the
+overhang's shadow edge where Momentum's is (row profile 44/0/0/7 against Momentum 44/6/4/2); save 17's shadow colour
+22 26 24 / 46 54 53 against Momentum 24 29 26 / 50 59 58 (0.1.66: 39 45 41 / 72 84 83); barn floor patches sharp with
+the window bars, no ring (a shader-side subtraction left a teal ring: the lightmap filters in sRGB, the page
+linearly); r_shadows 0 rebuilds the bake. surf_shady and bhop_ancientcanals unchanged.
+
+**Limits.** Faces of a lighting lump without the page (other Strata maps' layout 2) keep P1774's floor. Glass and other
+translucent faces are not in the cascades, so the sun passes them where VRAD stopped it (the barn's side window).
+
 ## Patch 1780 - Strata's baked prop sun: the .vhv alpha, added under the cascades (plugin hl2/mod_vbsp.c, glsl/vmt/vertexlit.glsl; engine gl/gl_shadow.c; game cl_sun.qc cl_emit.qc)
 
 **Problem.** Lex, 24 Nov, save 31 (after P1779 removed the lamp's white disc): Momentum's street lamp has a warm
@@ -213,6 +304,19 @@ stencil passes keep the old test.
 
 **Verified.** Rig, the 16-step descent onto the log: shadow area steady (9.5k-12.5k px, mean 18-20 levels) where it
 faded over steps 5-11 and snapped at 12. Interleaved timing: saves 8/6/5 +0.1-0.3 ms (shadows +0.15).
+
+## Patch 1772 - func_smokevolume as Source draws it (game cl_emit.qc cl_sprites.qc)
+
+**Problem.** Lex, 24 Nov, save 11 (pass 2): the basin smoke missing. The particle emitter for it was opt-in
+(vbsp_emit_smoke 0) and is not Source's look.
+
+**Change.** vbsp_smokevol 1 (default): a still grid of billboards one ParticleSpacingDistance apart across the brush,
+ParticleDrawWidth wide, turning at RotationSpeed, coloured between Color1 and Color2, alpha the density, faded inside a
+particle's own radius, drawn far to near from Sprite_Draw with the material (particle/particle_smokegrenade). A volume
+with no density waits for its SetDensity input (not wired).
+
+**Verified.** Rig save 11: the far end of the canal hazed and the sun veiled as Momentum's 0002/0003; 235 particles on
+canals.
 
 ## Patch 1771 - A map's named cubemap uses its HDR bake when the LDR file is VBSP's black placeholder (plugin hl2/mat_vmt.c, mod_vbsp.c)
 
