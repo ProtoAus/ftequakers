@@ -1024,6 +1024,8 @@ void GLBE_SetupForShadowMap(dlight_t *dl, int texwidth, int texheight, float sha
 //quarter-size cells).  The engine clamp and the shader's FAKESHADOWS_COUNT both derive from this, so they
 //cannot disagree about how many cells exist.
 #define MAX_FAKESHADOW_SLOTS 16	/*renderer-internal (NOT plugin abi): atlas cells, glsl uniform/varying arrays scale with this*/
+void GLBE_ClearFakeShadowLive(void);	//FTESurf Patch 1762
+extern float r_shadow_orthodepth;	//FTESurf Patch 1762
 void GLBE_SetFakeShadowCount(int count);						//0/1 = legacy single path
 void GLBE_CaptureFakeShadowSlot(int slot, const vec4_t cell);	//snapshot the CURRENT lightprojmatrix (set by GLBE_SelectDLight) as this slot's consumption matrix
 void GLBE_CaptureFakeShadowSlotMatrix(int slot, const float *matrix, const vec4_t cell);	//nettest Phase-1: snapshot an EXPLICIT matrix (proj*m_view actually rendered) -- for PERSPECTIVE prop cells where GLBE_SelectDLight's spot matrix would mismatch the face-4 render convention

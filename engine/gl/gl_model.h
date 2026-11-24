@@ -1231,6 +1231,7 @@ typedef struct model_s
 #define MDLF_RECALCULATERAIN 0x1000 // particles changed, recalculate any sky polys
 #define MDLF_SOURCEBSP      0x2000 // Patch 538: VBSP-only water appearance (fg_new also includes CoD/Doom).
 #define MDLF_SOURCEPITCH    0x4000 // Patch 1027: a Source studio model, drawn with Source's pitch (cl_ents.c)
+#define MDLF_SOURCEHDR      0x10000 // Patch 1764: a Source map drawn with its HDR lighting (r_autoexposure applies only here)
 #define MDLF_LMPADDED       0x8000 // Patch 1275: its lightmap blocks have the border bicubic sampling needs (Surf_NewMap tells the shaders)
 
 //============================================================================

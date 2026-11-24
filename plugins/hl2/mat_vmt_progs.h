@@ -1135,6 +1135,7 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "!!ver 110\n"
 "!!permu FOG\n"
 "!!samps diffuse\n"
+"!!cvarf r_autoexposure_sky\n"
 
 "#include \"sys/defs.h\"\n"
 
@@ -1195,10 +1196,11 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "#endif\n"
 
 "#ifdef FRAGMENT_SHADER\n"
+"uniform float cvar_r_autoexposure_sky; //FTESurf Patch 1764: Source scales UnlitGeneric by its exposure too (gamma space; 1 when off)\n"
 "void main ()\n"
 "{\n"
 "vec4 diffuse_f = texture2D( s_diffuse, tex_c );\n"
-"diffuse_f.rgb *= e_colourident.rgb * vec3(COLOR); //FTESurf Patch 1250: a brush entity's rendercolor, as lightmapped.glsl\n"
+"diffuse_f.rgb *= e_colourident.rgb * vec3(COLOR) * cvar_r_autoexposure_sky; //FTESurf Patch 1250: a brush entity's rendercolor, as lightmapped.glsl\n"
 
 "#ifdef MASKLT\n"
 "#ifdef FTE_ALPHACOVERAGE // FTESurf Patch 1262: under MSAA the test's edge is a pixel of coverage, not a cut\n"
@@ -1730,9 +1732,15 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "lightrgb *= clamp(pow((cb + vec3(CUBEEPS)) / (cg + vec3(CUBEEPS)), vec3(1.0/2.2)), 0.0, 4.0);\n"
 "#endif\n"
 "#ifdef BUMPSUN\n"
-"if (dot(sun_t, sun_t) > 1e-8)\n"
-"{ //FTESurf Patch 1763: the same ramp as the vertex stage, from the bumped normal (tangent space)\n"
-"float ndl = dot(normal_f, normalize(sun_t));\n"
+"{ //FTESurf Patch 1763: the same ramp as the vertex stage, from the bumped normal (tangent space).  Its green as\n"
+//Source reads it (Patch 268 C: the default flip above mirrors the relief along V); a zero light direction
+//gives the vertex stage's flat 0.5 back.
+"#ifdef BUMPGREENFIX\n"
+"vec3 sunn = normal_f;\n"
+"#else\n"
+"vec3 sunn = vec3(normal_f.x, -normal_f.y, normal_f.z);\n"
+"#endif\n"
+"float ndl = dot(sunn, sun_t) * inversesqrt(max(dot(sun_t, sun_t), 1e-8));\n"
 "#if defined(HALFLAMBERT) || hl2_lt_fold\n"
 "lightrgb += max(0.0, ndl*0.5 + 0.5) * sun_rgb;\n"
 "#else\n"

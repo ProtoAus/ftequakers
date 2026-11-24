@@ -3768,7 +3768,11 @@ static void Sh_GenerateCascadeAtlas(dlight_t *l, int cascades, int txsize)
 		//2*radius/smsize (this CELL's extent), so it MUST use smsize not txsize.
 		Sh_OrthoAlignToPoint(l, r_origin, smsize);
 
-		Matrix4x4_CM_Orthographic(r_refdef.m_projection_std, -l->radius, l->radius, l->radius, -l->radius, -l->radius, l->radius);
+		//FTESurf Patch 1762: the depth range is at least the single map's (r_shadows_distance), so an occluder far above a
+		//receiver is not pancaked onto it in the tight cascades and r_shadows_throwfade can fade its long throw there too;
+		//GLBE_SelectDLight builds the receiver's matrix from the same r_shadow_orthodepth.
+		r_shadow_orthodepth = max(radius, r_shadows_distance.value);
+		Matrix4x4_CM_Orthographic(r_refdef.m_projection_std, -l->radius, l->radius, l->radius, -l->radius, -r_shadow_orthodepth, r_shadow_orthodepth);
 		memcpy(r_refdef.m_projection_view, r_refdef.m_projection_std, sizeof(r_refdef.m_projection_view));
 
 		sh_fakecell_active = true;
@@ -3784,8 +3788,8 @@ static void Sh_GenerateCascadeAtlas(dlight_t *l, int cascades, int txsize)
 			continue;
 		GLBE_CaptureFakeShadowSlot(s, cell);
 		{	//FTESurf Patch 1762: z = a live cascade (sys/pcf.h CascadeShadowFilter); y scales r_shadows_throwfade, which is in
-			//units of the single map's depth range, to this cascade's (2*radius).
-			vec4_t info = {0, r_shadows_distance.value / radius, 1, 0};
+			//units of the single map's depth range, to this cascade's (2*r_shadow_orthodepth).
+			vec4_t info = {0, r_shadows_distance.value / r_shadow_orthodepth, 1, 0};
 			GLBE_SetFakeShadowSlotInfo(s, info);
 		}
 
@@ -3802,6 +3806,7 @@ static void Sh_GenerateCascadeAtlas(dlight_t *l, int cascades, int txsize)
 				s, radius, smsize/(2.0f*radius));
 	}
 	sh_fakecell_active = false;
+	r_shadow_orthodepth = 0;	//Patch 1762: every other ortho light (the epilogue's sun slot below) is a cube of its radius
 
 	//neutralise unused cells so the shader's fixed loop never projects into a stale cascade.
 	for (s = cascades; s < MAX_FAKESHADOW_SLOTS; s++)
@@ -4569,6 +4574,7 @@ static void Sh_GeneratePropShadowsAtlas(dlight_t *l, int fulltexsize)
 	//nc = number of SUN cells = cascades (Phase-2: cascades now COEXIST with prop cells).  The prop-cell
 	//budget must match the atlas layout AND gl_shader.c's FAKESHADOWS_COUNT / FAKESHADOWS_PERSP_FIRST=nc.
 	nc = bound(1, r_shadows_cascades.ival, SH_MAX_CASCADES);
+	nc = 1;	//FTESurf Patch 1762: the default is 4 for Source maps, which never reach here; nothing here reads more than one sun cell
 	{
 		//geometric capacity: each free quadrant packs up to 16 eighth-size subcells (the layout keeps the
 		//roomier quarter/L cells while the live count allows), bounded by the slot arrays.  The
@@ -5153,6 +5159,7 @@ void Sh_GenerateFakeShadows(void)	//generates shadowmaps and selects the dlight,
 	qboolean atlas = true;	//FTESurf Patch 1760
 	qboolean srccascades = false;	//FTESurf Patch 1762
 
+	GLBE_ClearFakeShadowLive();	//Patch 1762: no cascades until the cascade pass below draws them this frame
 	if (*r_shadows_throwdirection.string)
 		VectorCopy(r_shadows_throwdirection.vec4, l->axis[0]);
 	else
@@ -5236,7 +5243,7 @@ void Sh_GenerateFakeShadows(void)	//generates shadowmaps and selects the dlight,
 	{
 		fs_slotcount = 1;
 		atlas = false;
-		srccascades = true;
+		srccascades = r_shadows_slots.ival <= 1;	//gl_shader.c compiles FAKESHADOWS_CASCADE only then
 	}
 
 	//nettest P110: more than one cast direction this frame -> render the atlas instead of the single map.

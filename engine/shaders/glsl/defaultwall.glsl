@@ -60,6 +60,9 @@
 
 	#ifdef FAKESHADOWS	
 		varying vec4 vtexprojcoord;
+		#ifdef FAKESHADOWS_CASCADE
+		varying vec3 shwpos;	//FTESurf Patch 1762: world position for the sun cascades on a Source map (sys/pcf.h CascadeShadowFilter)
+		#endif
 	#endif
 #endif
 
@@ -109,6 +112,9 @@ void main ()
 #ifdef FAKESHADOWS	
 	gl_Position = ftetransform();
 	vtexprojcoord = (l_cubematrix*vec4(v_position.xyz, 1.0));
+	#ifdef FAKESHADOWS_CASCADE
+	shwpos = (m_model*vec4(v_position.xyz, 1.0)).xyz;
+	#endif
 #else
 	gl_Position = ftetransform();
 #endif
@@ -435,7 +441,7 @@ void main ()
 
 #ifdef FAKESHADOWS
 	/*filter the light by the shadowmap. logically a boolean, but we allow fractions for softer shadows*/
-	col.rgb *= ShadowmapFilter(s_shadowmap, vtexprojcoord);
+	col.rgb *= CascadeShadowFilter(s_shadowmap, vtexprojcoord, shwpos);	//FTESurf Patch 1762: the single map unless cascades are live
 	//col.g = ShadowmapFilter(s_shadowmap, vtexprojcoord);
 #endif
 

@@ -189,7 +189,7 @@ extern cvar_t *hl2_dither_force;	//FTESurf Patch 174, likewise
 cvar_t *hl2_texdiag;	//FTESurf build 11: the engine's r_texdiag, borrowed -- see VBSP_GenerateMaterials.
 							//Patch 239 dropped `static`: img_vtf.c reports the per-file image format under it.
 static cvar_t *hl2_propdist;	//FTESurf Patch 193: default draw distance for props that declare no fade -- see VBSP_PrepareFrame.
-static cvar_t *vbsp_r_shadows, *vbsp_r_shadows_distance, *vbsp_r_shadows_cascades, *vbsp_r_shadows_cascade_dist;	//FTESurf Patch 1760/1762: the engine's
+static cvar_t *vbsp_r_shadows, *vbsp_r_shadows_distance, *vbsp_r_shadows_cascades, *vbsp_r_shadows_cascade_dist, *vbsp_r_shadows_slots;	//FTESurf Patch 1760/1762: the engine's
 static cvar_t *hl2_detail;	//FTESurf Patch 1038: detail props (grass) -- see VBSP_DetailBuild.
 cvar_t *hl2_rigidprops;			//FTESurf Patch 230: read by Mod_LoadHL2Model in mod_hl2.c, registered here with the rest.
 
@@ -10109,10 +10109,11 @@ static qboolean VBSP_ShadowCasterInReach (const entity_t *e, float radius)
 		vbsp_r_shadows_distance = cvarfuncs->GetNVFDG("r_shadows_distance", NULL, 0, NULL, NULL);
 		vbsp_r_shadows_cascades = cvarfuncs->GetNVFDG("r_shadows_cascades", NULL, 0, NULL, NULL);
 		vbsp_r_shadows_cascade_dist = cvarfuncs->GetNVFDG("r_shadows_cascade_dist", NULL, 0, NULL, NULL);
+		vbsp_r_shadows_slots = cvarfuncs->GetNVFDG("r_shadows_slots", NULL, 0, NULL, NULL);
 	}
 	if (!vbsp_r_shadows || vbsp_r_shadows->ival != 2 || !vbsp_r_shadows_distance)
 		return false;
-	if (vbsp_r_shadows_cascades && vbsp_r_shadows_cascades->ival > 1 && vbsp_r_shadows_cascade_dist)
+	if (vbsp_r_shadows_cascades && vbsp_r_shadows_cascades->ival > 1 && vbsp_r_shadows_cascade_dist && !(vbsp_r_shadows_slots && vbsp_r_shadows_slots->ival > 1))
 		reach = vbsp_r_shadows_cascade_dist->value + radius;
 	else
 		reach = vbsp_r_shadows_distance->value * (4.0f/3) + radius;
@@ -14494,6 +14495,8 @@ static qboolean VBSP_LoadModel(model_t *mod, qbyte *mod_base, size_t filelen, ch
 
 		//VBSP_LoadLighting's own choice, verbatim, and the one the leaf ambient cube must agree with.
 		usehdr = lit_hdr && !(hl2_favour_ldr->ival && lit_ldr);
+		if (usehdr)
+			mod->engineflags |= MDLF_SOURCEHDR;	//FTESurf Patch 1764: Source runs its auto-exposure on this lighting
 		//VBSP_LoadLeafLight's FIRST branch, verbatim.  Only when this is true is the LDR half dead.
 		ambhdr = usehdr && ami_hdr && amv_hdr;
 

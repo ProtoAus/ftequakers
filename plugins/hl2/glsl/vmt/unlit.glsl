@@ -1,6 +1,7 @@
 !!ver 110
 !!permu FOG
 !!samps diffuse
+!!cvarf r_autoexposure_sky
 
 #include "sys/defs.h"
 
@@ -61,10 +62,11 @@ void main ()
 #endif
 
 #ifdef FRAGMENT_SHADER
+uniform float cvar_r_autoexposure_sky;	//FTESurf Patch 1764: Source scales UnlitGeneric by its exposure too (gamma space; 1 when off)
 void main ()
 {
 	vec4 diffuse_f = texture2D( s_diffuse, tex_c );
-	diffuse_f.rgb *= e_colourident.rgb * vec3(COLOR);	//FTESurf Patch 1250: a brush entity's rendercolor, as lightmapped.glsl
+	diffuse_f.rgb *= e_colourident.rgb * vec3(COLOR) * cvar_r_autoexposure_sky;	//FTESurf Patch 1250: a brush entity's rendercolor, as lightmapped.glsl
 
 #ifdef MASKLT
 	#ifdef FTE_ALPHACOVERAGE	// FTESurf Patch 1262: under MSAA the test's edge is a pixel of coverage, not a cut

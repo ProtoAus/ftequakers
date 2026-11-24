@@ -122,7 +122,8 @@ void R_UpdateHDR(vec3_t org)
 		extern cvar_t r_exposure;
 		extern float r_autoexposure_value;	//FTESurf Patch 1764
 		float e = (r_exposure.value > 0) ? r_exposure.value : 1;
-		e *= r_autoexposure_value;
+		if (!(r_refdef.flags & RDF_NOWORLDMODEL))
+			e *= r_autoexposure_value;	//not on a model preview without the world
 		if (e != 1)
 			r_refdef.hdr_value *= pow(e, 1/2.2);
 	}

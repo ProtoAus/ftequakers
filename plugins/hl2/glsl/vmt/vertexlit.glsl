@@ -467,9 +467,15 @@ varying vec4 light;
 		lightrgb *= clamp(pow((cb + vec3(CUBEEPS)) / (cg + vec3(CUBEEPS)), vec3(1.0/2.2)), 0.0, 4.0);
 	#endif
 	#ifdef BUMPSUN
-		if (dot(sun_t, sun_t) > 1e-8)
-		{	//FTESurf Patch 1763: the same ramp as the vertex stage, from the bumped normal (tangent space)
-			float ndl = dot(normal_f, normalize(sun_t));
+		{	//FTESurf Patch 1763: the same ramp as the vertex stage, from the bumped normal (tangent space).  Its green as
+			//Source reads it (Patch 268 C: the default flip above mirrors the relief along V); a zero light direction
+			//gives the vertex stage's flat 0.5 back.
+		#ifdef BUMPGREENFIX
+			vec3 sunn = normal_f;
+		#else
+			vec3 sunn = vec3(normal_f.x, -normal_f.y, normal_f.z);
+		#endif
+			float ndl = dot(sunn, sun_t) * inversesqrt(max(dot(sun_t, sun_t), 1e-8));
 		#if defined(HALFLAMBERT) || hl2_lt_fold
 			lightrgb += max(0.0, ndl*0.5 + 0.5) * sun_rgb;
 		#else

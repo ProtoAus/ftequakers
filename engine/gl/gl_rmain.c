@@ -2854,17 +2854,29 @@ static GLsync ae_fence;
 static int ae_pending, ae_rowbytes, ae_framesout;
 static float ae_readexp = 1, ae_target = 1;
 static double ae_lastread, ae_lastframe;
+static int ae_framecount = -1;
 static const model_t *ae_world;
-static void GLR_AutoExposureShutdown(void)
-{
+static void GLR_AutoExposureDrop(void)
+{	//forget a read in flight (a new map, off, or the context going away)
 	if (ae_fence && qglDeleteSync)
 		qglDeleteSync(ae_fence);
 	ae_fence = NULL;
+	ae_pending = false;
+}
+static void GLR_AutoExposureReset(void)
+{
+	extern float r_autoexposure_value;
+	GLR_AutoExposureDrop();
+	r_autoexposure_value = ae_target = 1;
+	r_autoexposure_sky.value = 1;
+}
+static void GLR_AutoExposureShutdown(void)
+{
+	GLR_AutoExposureReset();	//another renderer shares R_UpdateHDR: leave it at 1
 	if (ae_pbo && qglDeleteBuffersARB)
 		qglDeleteBuffersARB(1, &ae_pbo);
 	ae_pbo = 0;
 	ae_pbosize = 0;
-	ae_pending = false;
 }
 static int GLR_AutoExposureCmp(const void *a, const void *b)
 {
@@ -2904,32 +2916,39 @@ static void GLR_AutoExposureRead(void)
 	target = r_autoexposure_target.value / max(bright, 1e-4f);
 	if ((sum / n) * target < r_autoexposure_minavg.value)
 		target = r_autoexposure_minavg.value / max(sum / n, 1e-5);
-	ae_target = bound(r_autoexposure_min.value, target, r_autoexposure_max.value);
+	{
+		float lo = max(r_autoexposure_min.value, 0.01f);
+		ae_target = bound(lo, target, max(r_autoexposure_max.value, lo));
+	}
 	{
 		extern float r_autoexposure_value;
 		Cvar_ForceSet(&r_autoexposure_current, va("%.3f %.3f (bright %.3f, average %.3f)", r_autoexposure_value, ae_target, bright, sum / n));
 	}
 }
-static void GLR_AutoExposureFrame(void)
+static void GLR_AutoExposureFrame(qboolean rtview)
 {
 	extern float r_autoexposure_value;
 	double now = Sys_DoubleTime(), dt;
 	int x, y, w, h, r;
-	if (!r_autoexposure.ival || !qglFenceSync || !qglClientWaitSync || !qglGenBuffersARB || !(qglMapBufferRange || qglMapBufferARB))
+	//only a Source map drawn with its HDR lighting (the plugin's MDLF_SOURCEHDR): the cvar outlives the csprogs that set it
+	if (!r_autoexposure.ival || !cl.worldmodel || !(cl.worldmodel->engineflags & MDLF_SOURCEHDR) ||
+		!qglFenceSync || !qglClientWaitSync || !qglGenBuffersARB || !(qglMapBufferRange || qglMapBufferARB))
 	{
-		r_autoexposure_value = 1;
-		ae_target = 1;
-		r_autoexposure_sky.value = 1;
+		if (ae_pending || r_autoexposure_value != 1)
+			GLR_AutoExposureReset();
+		ae_world = NULL;
 		return;
 	}
-	if (r_worldentity.model != ae_world)
-	{	//a new map starts at 1, as Source's does
-		ae_world = r_worldentity.model;
-		r_autoexposure_value = ae_target = 1;
+	if (cl.worldmodel != ae_world)
+	{	//a new map starts at 1, as Source's does, and a read of the old one is dropped
+		ae_world = cl.worldmodel;
+		GLR_AutoExposureReset();
 	}
-	//the main view only: once a frame, a world in it, most of the screen
-	if (now == ae_lastframe || (r_refdef.flags & RDF_NOWORLDMODEL) || r_refdef.vrect.width < vid.width/2 || r_refdef.vrect.height < vid.height/2)
+	//the main view only: once a frame, a world in it, most of the screen, not a render target
+	if (host_framecount == ae_framecount || (r_refdef.flags & RDF_NOWORLDMODEL) || rtview ||
+		r_refdef.vrect.width < vid.width/2 || r_refdef.vrect.height < vid.height/2)
 		return;
+	ae_framecount = host_framecount;
 	dt = bound(0, now - ae_lastframe, 0.25);
 	ae_lastframe = now;
 	if (ae_pending)
@@ -2968,6 +2987,8 @@ static void GLR_AutoExposureFrame(void)
 			ae_pending = !!ae_fence;
 			ae_framesout = 0;
 			ae_readexp = max(r_autoexposure_value * ((r_exposure.value > 0) ? r_exposure.value : 1), 0.01f);
+			if (vid.flags & VID_SRGBAWARE)	//linear shading: the 1/2.2 power R_UpdateHDR applies is a linear scale here
+				ae_readexp = pow(ae_readexp, 1/2.2);
 			ae_lastread = now;
 		}
 	}
@@ -3512,7 +3533,7 @@ void GLR_RenderView (void)
 
 	RSpeedEnd(RSPEED_POSTPROC);
 	}
-	GLR_AutoExposureFrame();	//FTESurf Patch 1764: the finished view, before CSQC draws its HUD over it
+	GLR_AutoExposureFrame(rtview);	//FTESurf Patch 1764: the finished view, before CSQC draws its HUD over it
 
 	checkglerror();
 }

@@ -50,7 +50,7 @@ static float BE_ModelExposure(void)
 {
 	extern cvar_t r_exposure;
 	extern float r_autoexposure_value;	//FTESurf Patch 1764
-	float e = ((r_exposure.value > 0) ? r_exposure.value : 1) * r_autoexposure_value;
+	float e = ((r_exposure.value > 0) ? r_exposure.value : 1) * ((r_refdef.flags & RDF_NOWORLDMODEL) ? 1 : r_autoexposure_value);	//a model preview keeps the fixed one
 	return (e != 1) ? pow(e, 1/2.2) : 1;
 }
 //1 = this entity must not receive the r_shadows 2 shadow map: RF_NOSHADOWRECV, the viewmodel, and (Patch 1732) a Source
@@ -1378,6 +1378,11 @@ void GLBE_SetFakeShadowCount(int count)
 	shaderstate.fakeshadowcount = bound(1, count, MAX_FAKESHADOW_SLOTS);
 	if (shaderstate.fakeshadowcount <= 1)
 		shaderstate.fakeshadowinfo[0][2] = 0;	//FTESurf Patch 1762: no live cascades; the receivers read the single map
+}
+float r_shadow_orthodepth;	//FTESurf Patch 1762: >0 = the depth half-range of the ortho light being selected (a sun cascade)
+void GLBE_ClearFakeShadowLive(void)
+{	//FTESurf Patch 1762: the cascade pass sets it again when it draws; an early return or another generator must not leave it
+	shaderstate.fakeshadowinfo[0][2] = 0;
 }
 
 //nettest P114b: force the NEXT GLBE_SelectEntity to re-copy r_refdef.m_projection_std into the cached
@@ -5833,10 +5838,11 @@ qboolean GLBE_SelectDLight(dlight_t *dl, vec3_t colour, vec3_t axis[3], unsigned
 		float proj[16];
 		float xmin = -dl->radius;
 		float ymin = -dl->radius;
-		float znear = -dl->radius;
+		float zr = (r_shadow_orthodepth > 0) ? r_shadow_orthodepth : dl->radius;	//FTESurf Patch 1762: a sun cascade's deeper range
+		float znear = -zr;
 		float xmax = dl->radius;
 		float ymax = dl->radius;
-		float zfar = dl->radius;
+		float zfar = zr;
 		Matrix4x4_CM_Orthographic(proj, xmin, xmax, ymax, ymin, znear, zfar);
 		Matrix4x4_CM_ModelViewMatrixFromAxis(view, axis[0], axis[2], axis[1], dl->origin);
 		Matrix4_Multiply(proj, view, shaderstate.lightprojmatrix);
@@ -5846,7 +5852,7 @@ qboolean GLBE_SelectDLight(dlight_t *dl, vec3_t colour, vec3_t axis[3], unsigned
 			//SCALED 0.015 NDC bias (removed there), which grew to ~15qu at distance
 			//1024 and cut shadows off well before their caster touched the ground.
 			extern cvar_t r_shadows_bias;
-			shaderstate.lightprojmatrix[14] -= r_shadows_bias.value / max(1, dl->radius);
+			shaderstate.lightprojmatrix[14] -= r_shadows_bias.value / max(1, zr);
 		}
 	}
 	else if (shaderstate.lightmode & LSHADER_SPOT)
