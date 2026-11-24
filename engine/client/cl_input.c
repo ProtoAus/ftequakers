@@ -1165,8 +1165,10 @@ static void IN_JumpDown (void)
 	*/
 	if (flying)
 	{
-		keydown_unjudged = keydown_judged;	//Patch 1646: the same press, if it was judged for in_up (review 2)
+		qboolean judged = keydown_judged;
+		keydown_unjudged = judged;	//Patch 1646: the same press, if it was judged for in_up (review 2)
 		KeyDown(&in_jump, NULL);
+		keydown_judged = judged;	//Patch 1796: still this press's, for +jumpduck's duck
 	}
 }
 static void IN_JumpUp (void)
@@ -1174,6 +1176,19 @@ static void IN_JumpUp (void)
 	if (cl_smartjump.ival)
 		KeyUp(&in_up);
 	KeyUp(&in_jump);
+}
+//FTESurf Patch 1796: one key jumps and holds duck (Lex, 24 Nov 2026: players crouch-jump at a run's first jump). A
+//command the game offers, so one key press judged once (Patch 1646), not an alias chain; both buttons track the key.
+static void IN_JumpDuckDown (void)
+{
+	IN_JumpDown();
+	keydown_unjudged = keydown_judged;
+	KeyDown(&in_duck, NULL);
+}
+static void IN_JumpDuckUp (void)
+{
+	IN_JumpUp();
+	KeyUp(&in_duck);
 }
 
 static void IN_ButtonNDown(void) {KeyDown(&in_button[atoi(Cmd_Argv(0)+7)], NULL);}
@@ -3912,6 +3927,8 @@ void CL_InitInput (void)
 	Cmd_AddCommand ("-attack2",		IN_Attack2Up);
 	Cmd_AddCommand ("+jump",		IN_JumpDown);
 	Cmd_AddCommand ("-jump",		IN_JumpUp);
+	Cmd_AddCommandD("+jumpduck",	IN_JumpDuckDown, "Jump and hold duck on one key (+jump and +duck together).");
+	Cmd_AddCommand ("-jumpduck",	IN_JumpDuckUp);
 	Cmd_AddCommandD("impulse",		IN_Impulse, "Sends an impulse number to the server (read: weapon change).");
 	Cmd_AddCommand ("+klook",		IN_KLookDown);
 	Cmd_AddCommand ("-klook",		IN_KLookUp);

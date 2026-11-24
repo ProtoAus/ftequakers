@@ -830,6 +830,7 @@ bindnames_t qwbindnames[] =
 {"+moveup",			"swim up       "},
 {"+movedown",		"swim down     "},
 {"+duck",			"duck          "},	//FTESurf: Source-style crouch, usercmd bit 3
+{"+jumpduck",		"jump + duck   "},	//FTESurf Patch 1796
 #ifdef VOICECHAT
 {"+voip",			"voice chat    "},
 #endif
