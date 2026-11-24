@@ -1,5 +1,114 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1780 - Strata's baked prop sun: the .vhv alpha, added under the cascades (plugin hl2/mod_vbsp.c, glsl/vmt/vertexlit.glsl; engine gl/gl_shadow.c; game cl_sun.qc cl_emit.qc)
+
+**Problem.** Lex, 24 Nov, save 31 (after P1779 removed the lamp's white disc): Momentum's street lamp has a warm
+sunlit side, ours was the shaded level all round. Strata's VRAD leaves the sun out of a static prop's vertex bake and
+writes its direct share in each vertex's alpha (zero on every vertex turned from the sun, about 55 x N.L on the
+lamp), for its cascades to shadow. We forced the alpha to 255 and read only the colour, so every baked static prop on
+a Strata map had no direct sun.
+
+**Change.** On a v25 BSP (new prv->bspversion) the per-vertex bake keeps the file's alpha (averaged like the colour;
+0 on other compilers' files and on vertices the file does not cover). vertexlit.glsl's VC path carries it in
+light.a and adds r_shadows_vhvsun x alpha in linear light, times the cascades' lit fraction where the prop receives
+them. New engine cvar r_shadows_vhvsun (0 0 0 = none); the game sets it on an env_cascade_light map to
+light_environment's sun as VRAD reads it (Sun_Direct: _lightHDR/_light x _lightscaleHDR) x vbsp_vhvsun (3).
+
+**Verified.** Rig, a close view of the save-31 lamp: lit/shaded across the pole 3.56/3.00/2.47 (R/G/B) at
+vbsp_vhvsun 3 against Momentum's 3.5/2.9/2.3 (5 gave 4.5/3.8/3.1, 8 saturated). Saves 5-21 otherwise as 0.1.65.
+
+**Limits.** One calibration point. The scale relation to VRAD's own units is not derived.
+
+## Patch 1779 - A Source material gets no guessed _luma/_glow texture (engine gl/gl_shader.c shader.h; plugin hl2/mat_vmt.c)
+
+**Problem.** Lex, 24 Nov, save 31: "The lamp post, just looks like a bad texture map, or mapping?" -- white with black
+patches and stripes. R_BuildDefaultTexnums guesses a fullbright texture as `<name>_luma` then `<name>_glow`, and
+vertexlit.glsl declares the slot; HL2 ships materials/models/props_c17/lamppost03a_glow.vtf (the lens's own
+material, a white disc), so the pole drew it over its own UVs. The vertex bake itself lands on the right vertices
+(584 VTX strip vertices name 0-699 of the VVD's 700; the other 116 are LOD1's).
+
+**Change.** New shader keyword `fte_nonameguess` (shader_t.nonameguess, appended) skips the fullbright guess; every
+VMT-generated shader carries it.
+
+**Verified.** Rig save 31 and save 20: a uniform grey pole.
+
+## Patch 1778 - The barn light shafts point at the sun patches again (game cl_sun.qc)
+
+**Problem.** Lex, 24 Nov, save 30: the shafts "face the wrong direction". P1769 draws the map's tinted props from
+CSQC (deltalisten), whose draw path flips a mesh's pitch (r_meshpitch -1) where the engine's own exempts Source
+models (Patch 1027): the beams (angles -35 104 0) leant south into the windows, not north toward the floor patches.
+
+**Change.** Tint_Delta multiplies pitch and roll by r_meshpitch/r_meshroll, cancelling the flip.
+
+**Verified.** Rig saves 6 and 30: the fans run from the skylights toward the floor's sun patches.
+
+**Limits.** UnlitTwoTexture is not scaled by auto-exposure (P1764): the shafts read brighter than Momentum's.
+
+## Patch 1777 - On a Strata map the local lights stay off unbaked models (plugin hl2/mod_vbsp.c)
+
+**Problem.** Lex, 24 Nov, save 28: "Our game draws models substantually brighter then momentum mod." The barrels,
+jerry cans and crates there are prop_dynamics with no bake, lit from the leaf cube plus the map's lights: the room's
+fluorescent and an outdoor spot with constant attenuation took them to 1.0-1.7 linear, 2-18x Momentum's (relative to
+the walls). Momentum's floor under them is as bright as ours (lightmap 0.9-1.4), its props sit at about the leaf cube.
+Static props do not block those paths (the fixture is no-shadow); every point/spot light's flag 0x2 is Portal 2's
+cast-entity-shadows bit, also on Portal 2 maps, so it is not the reason.
+
+**Change.** hl2_lt_wlv25 (default 1): on a v25 BSP VBSP_LoadWorldLights keeps no point/spot/surface light for the
+model light (the sun still comes through hl2_lt_sun). 0 restores Source 2013's light cache rule.
+
+**Verified.** Rig save 28: the barrels and cans dark as in Momentum.
+
+**Limits.** An empirical rule from one room; Strata's actual model lighting is unknown.
+
+## Patch 1776 - Blood decals no longer brighten what they cover; a named infodecal waits for its input (plugin hl2/mat_vmt.c; game cl_decals.qc)
+
+**Problem.** Lex, 24 Nov, save 27: blood decals "seem to 'eat' the lightmap ... like light squares where the decal
+goes". DecalModulate (and Modulate) passes used rgbGen identity, which in the opaque sorts is the exposure-scaled
+identity: at auto-exposure 2.0 the 2x multiply drew 1.37x the surface (measured 1.24-1.43x). And these three decals
+(arlene_blood_decals) are named infodecals nothing fires; Source paints a named one only on Activate, so Momentum
+shows no blood there.
+
+**Change.** Both multiply passes are rgbGen const ( 1 1 1 ). cl_decals.qc skips an infodecal with a targetname.
+
+**Verified.** Rig save 26: no blood, no squares, as Momentum.
+
+## Patch 1775 - Auto-exposure counts small bright areas and clipped pixels; no minimum-average boost (engine client/renderer.c gl/gl_rmain.c)
+
+**Problem.** Lex, 24 Nov, saves 27-29: our game darker than Momentum "slightly, which is fine", but shade and the
+barn opened to the band's 2.0 where Momentum's sits near 0.5 (its barn surfaces measure 0.15-0.25x ours in linear).
+Source's HDR frame lets a small skylight outshine the rest; our clamped frame held it at full scale, and the 2%
+bright share plus mat_tonemap_min_avglum's floor drove dark views to the maximum.
+
+**Change.** r_autoexposure_bright 0.005 (was 0.02), r_autoexposure_minavg 0 (was 0.03), new r_autoexposure_hdrsat 1:
+a measured pixel at full scale counts at least that bright.
+
+**Verified.** Rig: barn (save 30) 2.0 -> ~1.0, save 29's shade 2.0 -> 1.2, save 7 outdoors 0.78 -> 0.70.
+
+**Limits.** A room with nothing bright in view still opens to 2.0.
+
+## Patch 1774 - Cascade-map shadows keep the surface's colour (plugin hl2/glsl/vmt lightmapped/transition/vertexlit)
+
+**Problem.** Lex, 24 Nov, saves 21 and 29: world-cast shadows "with blueish green artifacts", "incorrectly coloured,
+to bright". A shadowed texel went to min(lightmap, floor) per channel with a teal sky-ambient floor: on warm walls the
+red/green channels dropped and blue stayed.
+
+**Change.** A shadowed texel comes down to the floor's luminance, its hue taken half-way toward the floor's.
+
+**Verified.** Rig save 21: dark neutral shadow, no teal; save 17 darker shade.
+
+## Patch 1773 - Sun cascades do not sphere-cull their casters (engine gl/gl_backend.c)
+
+**Problem.** Lex, 24 Nov, saves 22-25: a log's shadow "fade[s] out as you get closer to it, and then once almost
+fully 'gone' it snaps back in sharper". GLBE_LightCullModel culled a model whose sphere missed lightorg +/- lightradius;
+for an ortho cascade that is the box's half-width across the sun, while its depth runs r_shadow_orthodepth, so a
+caster sunward of the camera dropped out of the tight cascades while its shadow fell inside them.
+
+**Change.** An ortho light culls only a caster wholly past its far face (along lightdir, depth r_shadow_orthodepth,
+radius doubled as a margin); the frustum's sides cull the rest.
+
+**Verified.** Rig, the 16-step descent onto the log: shadow area steady (9.5k-12.5k px, mean 18-20 levels) where it
+faded over steps 5-11 and snapped at 12. Interleaved timing: saves 8/6/5 +0.1-0.3 ms (shadows +0.15).
+
 ## Patch 1771 - A map's named cubemap uses its HDR bake when the LDR file is VBSP's black placeholder (plugin hl2/mat_vmt.c, mod_vbsp.c)
 
 **Problem.** Lex, 24 Nov, bhop_canals save 18: "glass window not reflective". The window's material is one of the map
