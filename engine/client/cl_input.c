@@ -1168,7 +1168,7 @@ static void IN_JumpDown (void)
 		qboolean judged = keydown_judged;
 		keydown_unjudged = judged;	//Patch 1646: the same press, if it was judged for in_up (review 2)
 		KeyDown(&in_jump, NULL);
-		keydown_judged = judged;	//Patch 1796: still this press's, for +jumpduck's duck
+		keydown_judged = keydown_judged || judged;	//Patch 1796: still this press's, for +jumpduck's duck
 	}
 }
 static void IN_JumpUp (void)

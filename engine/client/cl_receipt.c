@@ -64,6 +64,7 @@ cannot reach: a small-order key, a non-canonical encoding, and an unreduced s.
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <errno.h>
+#include <signal.h>
 #endif
 
 #ifndef SERVERONLY
@@ -839,17 +840,33 @@ qboolean CL_Receipt_Browse(const char *opener)
 }
 
 /*FTESurf Patch 1797: one of the game's own run folders (data/runs[/...], the writable gamedir) in the system's file
-  manager -- the TAS menu's Open folder.  Game code names only a path under data/runs of plain characters, and it
-  must be a directory (never a file a server's csprogs wrote, which an opener would run or show); pr_csqc.c allows it
-  only while a device's key press is delivered.  Once a second.*/
+  manager -- the TAS menu's Open folder.  Only in a game this client hosts, from the very csprogs it serves (as
+  tasrev_sign): a server's or a demo's game code can write files and folders under data/ and rename them, and a file
+  in the folder's place would be RUN by its default opener (review 1: a script swapped in after the check).  The path
+  must be data/runs[/...] of plain characters, a real directory, and goes to the opener with a trailing slash, which
+  only a directory satisfies.  pr_csqc.c allows it only while a device's key press is delivered; once a second.*/
 qboolean CL_OpenRunFolder(const char *gamepath)
 {
 	static double last;
 	char native[MAX_OSPATH];
 	const char *c;
+	size_t n;
 
+	if (cls.demoplayback || cls.state < ca_connected || cls.netchan.remote_address.type != NA_LOOPBACK
+		|| !acct_vm_live || !NET_CompareAdr(&acct_vm_adr, &cls.netchan.remote_address) || strlen(acct_vm_code) != 64
+		|| acct_vm_mixed)
+		return false;
+#ifndef CLIENTONLY
+	{
+		extern char sv_csqc_sha256[65];
+		if (!sv.state || strlen(sv_csqc_sha256) != 64 || strcmp(sv_csqc_sha256, acct_vm_code))
+			return false;
+	}
+#else
+	return false;
+#endif
 	if (strncmp(gamepath, "data/runs", 9) || (gamepath[9] && gamepath[9] != '/') || strstr(gamepath, "..")
-		|| strlen(gamepath) > 160)
+		|| strlen(gamepath) > 120)
 		return false;
 	for (c = gamepath; *c; c++)
 		if (!((*c >= 'a' && *c <= 'z') || (*c >= 'A' && *c <= 'Z') || (*c >= '0' && *c <= '9') || *c == '_' || *c == '-'
@@ -857,8 +874,14 @@ qboolean CL_OpenRunFolder(const char *gamepath)
 			return false;
 	if (last && realtime - last < 1.0 && realtime >= last)
 		return false;
-	if (!FS_SystemPath(gamepath, FS_GAMEONLY, native, sizeof(native)))
+	if (!FS_SystemPath(gamepath, FS_GAMEONLY, native, sizeof(native) - 1))
 		return false;
+	n = strlen(native);
+	if (n && native[n-1] != '/' && native[n-1] != '\\')
+	{
+		native[n++] = '/';
+		native[n] = 0;
+	}
 	if (COM_CheckParm("-nobrowse"))
 	{
 		Con_Printf("sys_openfolder: %s (-nobrowse: not opened)\n", native);
@@ -869,8 +892,12 @@ qboolean CL_OpenRunFolder(const char *gamepath)
 	{
 		wchar_t wide[MAX_OSPATH];
 		DWORD attr;
+		int i;
 		if (!MultiByteToWideChar(CP_UTF8, 0, native, -1, wide, countof(wide)))
 			return false;
+		for (i = 0; wide[i]; i++)
+			if (wide[i] == L'/')
+				wide[i] = L'\\';	/*review 1: the shell's explore wants one kind of slash*/
 		attr = GetFileAttributesW(wide);
 		if (attr == INVALID_FILE_ATTRIBUTES || !(attr & FILE_ATTRIBUTE_DIRECTORY) || (attr & FILE_ATTRIBUTE_REPARSE_POINT))
 			return false;
@@ -884,12 +911,23 @@ qboolean CL_OpenRunFolder(const char *gamepath)
 		if (lstat(native, &st) || !S_ISDIR(st.st_mode))
 			return false;
 		last = realtime;
-		/*no shell; the grandchild execs, so nothing is left for this process to reap*/
+		Con_Printf("sys_openfolder: %s\n", native);
+		/*no shell; the grandchild execs, so nothing is left to reap.  It closes what it inherited (install.lock's
+		  flock, sockets, logs: review 1) and takes back the default signal handling the game changed.*/
 		pid = fork();
 		if (pid == 0)
 		{
 			if (fork() == 0)
 			{
+				long fd, max = sysconf(_SC_OPEN_MAX);
+				if (max < 0 || max > 65536)
+					max = 65536;
+				for (fd = 3; fd < max; fd++)
+					close((int)fd);
+				signal(SIGPIPE, SIG_DFL);
+				signal(SIGFPE, SIG_DFL);
+				signal(SIGTTIN, SIG_DFL);
+				signal(SIGCHLD, SIG_DFL);
 				execlp("xdg-open", "xdg-open", native, (char*)NULL);
 				_exit(127);
 			}
