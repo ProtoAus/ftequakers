@@ -37,6 +37,39 @@ LIVE 24 Nov UTC: site 19:08Z (sitepage.ps1 into releases/0.1.68, read back byte 
 tasupd: re-staged at cbefd439 for Lex's one root upgrade (with P1806). The admin half waits for the next surfd generation
 (tools/backend-pending.md).
 
+## Patch 1812 - Mover 17: a solid Source prop collides through its .phy pieces as brushes (engine common/pmove.h pm_source.c com_bih.c com_bih_ts.h pmovetst.c com_mesh.h plugin.c, server/sv_user.c sv_phys.c; plugin hl2/mod_vbsp.c mod_hl2.c)
+
+**Problem.** Lex, 24 Nov, bhop_canals save 5: a ramp you walk through -- the metal_panel01a pair (prop_dynamic_override
+solid 6, angles -70 90 -180). A STATIC prop's .phy has been swept as its convex pieces since mover 7 (Patch 764); an
+entity prop still met the hull's triangles, each a prism with a 4-unit back slab, and this hull is 3 units thick: P1761
+measured the box sinking 7.5 units at the high edge and passing under the low half. A walk from y 6480 stopped dead at
+(22031, 6378, -445.6) -- inside the panel, where Lex's save 5 sits -- and drops onto it came to rest on a flat shelf at
+-430.5 (the slabs) or sank to -449.
+
+**Change.** Version 17. The hl2 plugin gives a Source model with a usable .phy (hl2_propcollision 1) a vphysalt: its
+convex pieces (mover 9's reading) as brushes, model space, margin 0 -- the static props' shapes -- in a BIH tree
+(VBSP_MDLVPhysAlt), only on an exe that answers FTESurfModelTail/1812. bih_vphysmdl (sourceversion >= 17) lets a box
+sweep meet a MODEL's vphysalt (BIH_Trace, BIH_TraceUncached, PM_TransformedHullCheck; the trace cache keys on it); the
+box turns into model space as for Patch 1713's turning brush entities; a model's twin is taken before Patch 888's (whose
+zeroed twin has none). Brush entities (mover 15) are unchanged. Version 17 pins 17 on every map, as 15 did: a first cut
+pinned 16 where no solid entity carried such a model, read from live entities with a cache -- review 1 showed
+Enable/Disable, point_template spawns and lazy loads could make a run's pin differ from its replay's. The verifier notes
+an exact replay pinned below 17 on a map whose prop models have twins (not a verdict).
+
+**Verified.** Local gate (installed 0.1.69 server vs this): Lex's canals save recordings exact on both, pm_dettest on
+bhop_canals/surf_classics/surf_mesa identical; pm_sourceversion 16 -> 17. Two review rounds through two lenses each
+(control flow; recorded evidence and cheating): mover <= 16 resolves as before; no route to a false pass (a wrong shape
+ends in a HOLD). Rig, P1761's script at save 5: the walk goes
+up the panel (z -419 at y 6354), over it and down the other side to y 5978; drops land on its slope and slide down it
+(z -423 .. -448 along y) instead of resting on the slabs or sinking.
+
+**Limits.** Margin 0 as the static props (Patch 1713 measured vphysics' half unit on brush entities; props are not
+calibrated against Momentum demos). A turned prop's pieces carry bevels along its own axes, so near an edge it reaches a
+little past its shape (as at 16; static props, built in world space, are exact); the mover ignores a prop's scale (as at
+16). Jointed .phy files (ragdolls), and a model one of whose pieces the builder refuses, keep the triangle path. A 17 pin
+does not record whether the twins existed: a new exe with a stale plugin records 17 on triangle collision, and its prop
+contacts HOLD on the verifier. The lobby engine and plugin (surfd's verifier) and the client ship together.
+
 ## Patch 1811 - Envmaps take the exposure and are masked in linear light (plugin hl2/glsl/vmt lightmapped transition vertexlit)
 
 **Problem.** Lex, 25 Nov, save 36: the barn window "to reflective, and the white mark is a bit to visable" -- Momentum's
