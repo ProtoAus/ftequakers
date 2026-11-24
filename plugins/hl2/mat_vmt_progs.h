@@ -36,6 +36,7 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "!!cvarf r_shadows_worldcast=1\n"
 "!!cvar3f r_shadows_sundir=0 0 -1\n"
 "!!cvarf gl_overbright\n"
+"!!cvarf r_autoexposure_sky=1\n"
 
 "#ifndef ENVTINT\n"
 "#define ENVTINT 1.0,1.0,1.0\n"
@@ -249,6 +250,7 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "uniform vec3 cvar_r_shadows_sunlm;  //FTESurf Patch 1781\n"
 "uniform float cvar_r_shadows_worldcast; //the live sun needs the world in the cascades\n"
 "uniform float cvar_gl_overbright;\n"
+"uniform float cvar_r_autoexposure_sky; //FTESurf Patch 1811: Source exposes the envmap with the rest of the pixel\n"
 "vec3 lightmap_fragment()\n"
 "{\n"
 "vec3 lightmaps;\n"
@@ -547,19 +549,21 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 //(:244), which is where Source adds it too.
 //`refl` is a macro that may expand to `1.0 - diffuse_f.a`, so it is always
 //spelled vec3(refl,refl,refl) here and never used as a bare factor.
+//FTESurf Patch 1811: and taken to the 1/2.2 power: Source masks the LINEAR cube (cube * mask * tonemap scale, then
+//encoded); this cube is already encoded, so the linear mask and the exposure enter as (mask * exposure)^(1/2.2).
 "#ifdef ENVSRCSPEC\n"
-"vec3 spec = textureCube(s_reflectcube, cube_c).rgb * vec3(refl,refl,refl);\n"
+"vec3 spec = textureCube(s_reflectcube, cube_c).rgb * vec3(pow(max(refl, 0.0), 1.0/2.2)) * cvar_r_autoexposure_sky;\n"
 "spec *= cube_tint;\n"
 "spec = mix(spec, spec*spec, float(ENVCONTRAST));\n"
 "spec = mix(vec3(dot(spec, vec3(0.299,0.587,0.114))), spec, cube_sat.r);\n"
 "diffuse_f.rgb += spec;\n"
 //FTESurf Patch 268 B: without #ENVSRCSPEC, today's term, verbatim.
 "#else\n"
-"vec3 cube_t = env_saturation(textureCube(s_reflectcube, cube_c).rgb, cube_sat.r);\n"
+"vec3 cube_t = env_saturation(textureCube(s_reflectcube, cube_c).rgb * cvar_r_autoexposure_sky, cube_sat.r);\n"
 "cube_t.r *= cube_tint.r;\n"
 "cube_t.g *= cube_tint.g;\n"
 "cube_t.b *= cube_tint.b;\n"
-"diffuse_f.rgb += (cube_t * vec3(refl,refl,refl));\n"
+"diffuse_f.rgb += (cube_t * vec3(pow(max(refl, 0.0), 1.0/2.2)));\n"
 //FTESurf Patch 268 B: end of the ENVSRCSPEC wrapper.
 "#endif\n"
 "#endif\n"
@@ -772,6 +776,7 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "!!cvarf r_shadows_worldcast=1\n"
 "!!cvar3f r_shadows_sundir=0 0 -1\n"
 "!!cvarf gl_overbright\n"
+"!!cvarf r_autoexposure_sky=1\n"
 
 "#include \"sys/defs.h\"\n"
 
@@ -960,6 +965,7 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "uniform vec3 cvar_r_shadows_sunlm;  //FTESurf Patch 1781\n"
 "uniform float cvar_r_shadows_worldcast; //the live sun needs the world in the cascades\n"
 "uniform float cvar_gl_overbright;\n"
+"uniform float cvar_r_autoexposure_sky; //FTESurf Patch 1811: Source exposes the envmap with the rest of the pixel\n"
 "vec3 lightmap_fragment()\n"
 "{\n"
 "vec3 lightmaps;\n"
@@ -1244,17 +1250,19 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 //(:263), which is where Source adds it too.
 //`refl` is a macro that may expand to `1.0 - diffuse_f.a`, so it is always
 //spelled vec3(refl,refl,refl) here and never used as a bare factor.
+//FTESurf Patch 1811: and taken to the 1/2.2 power: Source masks the LINEAR cube (cube * mask * tonemap scale, then
+//encoded); this cube is already encoded, so the linear mask and the exposure enter as (mask * exposure)^(1/2.2).
 "#ifdef ENVSRCSPEC\n"
 "vec3 cube_tint = vec3(ENVTINT);\n"
 "vec3 cube_sat = vec3(ENVSAT);\n"
-"vec3 spec = textureCube(s_reflectcube, cube_c).rgb * vec3(refl,refl,refl);\n"
+"vec3 spec = textureCube(s_reflectcube, cube_c).rgb * vec3(pow(max(refl, 0.0), 1.0/2.2)) * cvar_r_autoexposure_sky;\n"
 "spec *= cube_tint;\n"
 "spec = mix(spec, spec*spec, float(ENVCONTRAST));\n"
 "spec = mix(vec3(dot(spec, vec3(0.299,0.587,0.114))), spec, cube_sat.r);\n"
 "diffuse_f.rgb += spec;\n"
 //FTESurf Patch 268 B: without #ENVSRCSPEC, today's line, verbatim.
 "#else\n"
-"diffuse_f.rgb += (textureCube(s_reflectcube, cube_c).rgb * vec3(refl,refl,refl));\n"
+"diffuse_f.rgb += (textureCube(s_reflectcube, cube_c).rgb * vec3(pow(max(refl, 0.0), 1.0/2.2)) * cvar_r_autoexposure_sky);\n"
 //FTESurf Patch 268 B: end of the ENVSRCSPEC wrapper.
 "#endif\n"
 "#endif\n"
@@ -1450,6 +1458,7 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "!!cvar3f r_shadows_sunlm=0 0 0\n"
 "!!cvar3f r_shadows_sundir=0 0 -1\n"
 "!!cvarf r_shadows_worldcast=1\n"
+"!!cvarf r_autoexposure_sky=1\n"
 
 // envmaps only
 "!!samps =REFLECTCUBEMASK reflectmask reflectcube\n"
@@ -1539,6 +1548,7 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 //with no VRAD bake takes the true sun per pixel -- lambert, as VertexLitGeneric lights it, shadowed by the cascades --
 //in place of the light fold's directional term (a cube from one trace at its origin, on a half-lambert ramp: the
 //corrugated ramp drew flat where Momentum's grooves go dark).
+"uniform float cvar_r_autoexposure_sky; //FTESurf Patch 1811: Source exposes the envmap with the rest of the pixel\n"
 "#if defined(FAKESHADOWS) && !defined(VC) && !defined(AMBIENTCUBE)\n"
 "#define LIVESUN\n"
 "varying vec3 lsun_t; //toward the sun in (s, t, n)\n"
@@ -1844,6 +1854,8 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 //no contrast at all.  The rtenvsphere sample takes the same post-processing.
 //`refl` is a macro that may expand to `1.0 - diffuse_f.a`, so it is always
 //spelled vec3(refl,refl,refl) here and never used as a bare factor.
+//FTESurf Patch 1811: and taken to the 1/2.2 power: Source masks the LINEAR cube (cube * mask * tonemap scale, then
+//encoded); this cube is already encoded, so the linear mask and the exposure enter as (mask * exposure)^(1/2.2).
 "#ifdef ENVSRCSPEC\n"
 "#if r_glsl_rtenvsphere == 1\n"
 "vec3 r = reflect(normalize(-eyevector), normal_f.rgb);\n"
@@ -1853,9 +1865,9 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "vec3 cube_c = reflect(-eyevector, normal_f.rgb);\n"
 "cube_c = cube_c.x * invsurface[0] + cube_c.y * invsurface[1] + cube_c.z * invsurface[2];\n"
 "cube_c = (m_model * vec4(cube_c.xyz, 0.0)).xyz;\n"
-"spec = textureCube(s_reflectcube, cube_c).rgb;\n"
+"spec = textureCube(s_reflectcube, cube_c).rgb * cvar_r_autoexposure_sky;\n"
 "#endif\n"
-"spec *= vec3(refl,refl,refl);\n"
+"spec *= vec3(pow(max(refl, 0.0), 1.0/2.2));\n"
 "spec *= cube_tint;\n"
 "spec = mix(spec, spec*spec, float(ENVCONTRAST));\n"
 "spec = mix(vec3(dot(spec, vec3(0.299,0.587,0.114))), spec, cube_sat.r);\n"
@@ -1870,14 +1882,14 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "vec3 cube_c = reflect(-eyevector, normal_f.rgb);\n"
 "cube_c = cube_c.x * invsurface[0] + cube_c.y * invsurface[1] + cube_c.z * invsurface[2];\n"
 "cube_c = (m_model * vec4(cube_c.xyz, 0.0)).xyz;\n"
-"vec3 cube_t = env_saturation(textureCube(s_reflectcube, cube_c).rgb, cube_sat.r);\n"
+"vec3 cube_t = env_saturation(textureCube(s_reflectcube, cube_c).rgb * cvar_r_autoexposure_sky, cube_sat.r);\n"
 "#endif\n"
 
 "cube_t.r *= cube_tint.r;\n"
 "cube_t.g *= cube_tint.g;\n"
 "cube_t.b *= cube_tint.b;\n"
 
-"spec = cube_t * vec3(refl,refl,refl);\n"
+"spec = cube_t * vec3(pow(max(refl, 0.0), 1.0/2.2));\n"
 
 //FTESurf Patch 268 B: end of the ENVSRCSPEC wrapper.
 "#endif\n"

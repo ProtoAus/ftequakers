@@ -28,6 +28,7 @@
 !!cvar3f r_shadows_sunlm=0 0 0
 !!cvar3f r_shadows_sundir=0 0 -1
 !!cvarf r_shadows_worldcast=1
+!!cvarf r_autoexposure_sky=1
 
 // envmaps only
 !!samps =REFLECTCUBEMASK reflectmask reflectcube
@@ -117,6 +118,7 @@ varying vec4 light;	//.a: FTESurf Patch 1780, Strata's baked direct sun share (t
 //with no VRAD bake takes the true sun per pixel -- lambert, as VertexLitGeneric lights it, shadowed by the cascades --
 //in place of the light fold's directional term (a cube from one trace at its origin, on a half-lambert ramp: the
 //corrugated ramp drew flat where Momentum's grooves go dark).
+uniform float cvar_r_autoexposure_sky;	//FTESurf Patch 1811: Source exposes the envmap with the rest of the pixel
 #if defined(FAKESHADOWS) && !defined(VC) && !defined(AMBIENTCUBE)
 	#define LIVESUN
 	varying vec3 lsun_t;	//toward the sun in (s, t, n)
@@ -422,6 +424,8 @@ varying vec4 light;	//.a: FTESurf Patch 1780, Strata's baked direct sun share (t
 	//no contrast at all.  The rtenvsphere sample takes the same post-processing.
 	//`refl` is a macro that may expand to `1.0 - diffuse_f.a`, so it is always
 	//spelled vec3(refl,refl,refl) here and never used as a bare factor.
+	//FTESurf Patch 1811: and taken to the 1/2.2 power: Source masks the LINEAR cube (cube * mask * tonemap scale, then
+	//encoded); this cube is already encoded, so the linear mask and the exposure enter as (mask * exposure)^(1/2.2).
 	#ifdef ENVSRCSPEC
 		#if r_glsl_rtenvsphere == 1
 		vec3 r = reflect(normalize(-eyevector), normal_f.rgb);
@@ -431,9 +435,9 @@ varying vec4 light;	//.a: FTESurf Patch 1780, Strata's baked direct sun share (t
 		vec3 cube_c = reflect(-eyevector, normal_f.rgb);
 		cube_c = cube_c.x * invsurface[0] + cube_c.y * invsurface[1] + cube_c.z * invsurface[2];
 		cube_c = (m_model * vec4(cube_c.xyz, 0.0)).xyz;
-		spec = textureCube(s_reflectcube, cube_c).rgb;
+		spec = textureCube(s_reflectcube, cube_c).rgb * cvar_r_autoexposure_sky;
 		#endif
-		spec *= vec3(refl,refl,refl);
+		spec *= vec3(pow(max(refl, 0.0), 1.0/2.2));
 		spec *= cube_tint;
 		spec = mix(spec, spec*spec, float(ENVCONTRAST));
 		spec = mix(vec3(dot(spec, vec3(0.299,0.587,0.114))), spec, cube_sat.r);
@@ -448,14 +452,14 @@ varying vec4 light;	//.a: FTESurf Patch 1780, Strata's baked direct sun share (t
 		vec3 cube_c = reflect(-eyevector, normal_f.rgb);
 		cube_c = cube_c.x * invsurface[0] + cube_c.y * invsurface[1] + cube_c.z * invsurface[2];
 		cube_c = (m_model * vec4(cube_c.xyz, 0.0)).xyz;
-		vec3 cube_t = env_saturation(textureCube(s_reflectcube, cube_c).rgb, cube_sat.r);
+		vec3 cube_t = env_saturation(textureCube(s_reflectcube, cube_c).rgb * cvar_r_autoexposure_sky, cube_sat.r);
 	#endif
 
 		cube_t.r *= cube_tint.r;
 		cube_t.g *= cube_tint.g;
 		cube_t.b *= cube_tint.b;
 		
-		spec = cube_t * vec3(refl,refl,refl);
+		spec = cube_t * vec3(pow(max(refl, 0.0), 1.0/2.2));
 
 	//FTESurf Patch 268 B: end of the ENVSRCSPEC wrapper.
 	#endif
