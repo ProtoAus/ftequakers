@@ -12014,8 +12014,7 @@ static void VBSP_PrepareFrame(model_t *mod, refdef_t *r_refdef, int area, int cl
 			//Only valid when we actually have view PVS: surfvis==NULL means portal-recursion / novis / no model vis, where everything must draw.
 			//src->pvscache.leafnums hold CLUSTERS, and surfvis is the cluster-PVS from VBSP_MarkLeaves, so this is index-consistent (same as displacements).
 			//FTESurf Patch 1766: a caster the view cannot see (out of its PVS, or off screen) still throws its shadow into
-			//view: it goes in as a shadow-only entity (RF_EXTERNALMODEL -- drawn by the shadow passes, which are
-			//externalview, never by the view).  The PVS used to drop it first, so a prop round a corner lost its
+			//view: it goes in as a shadow-only entity (RF_SHADOWONLY -- drawn by the shadow passes and no view).  The PVS used to drop it first, so a prop round a corner lost its
 			//shadow and the shadow blinked in and out as the view's leaves changed.
 			shadowonly = false;
 			if (surfvis && !VBSP_PVSMemoTest(memo, i, mod, sent->numpvsclusters ? sent->pvsclusters : NULL, sent->numpvsclusters, &src->pvscache, surfvis, areas))
@@ -12069,10 +12068,10 @@ static void VBSP_PrepareFrame(model_t *mod, refdef_t *r_refdef, int area, int cl
 				return;		//scene entity budget spent; the rest stay PROPV_UNVISITED, which is what happened
 			*ent = *src;
 			if (shadowonly)
-				ent->flags |= RF_EXTERNALMODEL;	//Patch 1766
+				ent->flags |= RF_SHADOWONLY;	//Patch 1766: the shadow passes alone
 			ent->framestate.g[FS_REG].frametime[0] = refdef->time;
 			ent->framestate.g[FS_REG].frametime[1] = refdef->time;
-			if (d)
+			if (d && !shadowonly)	//(a shadow-only prop stays opaque: the depth passes skip translucent ones)
 			{
 				ent->shaderRGBAf[3] *= 1-d;
 				ent->flags |= RF_TRANSLUCENT;
@@ -12085,7 +12084,7 @@ static void VBSP_PrepareFrame(model_t *mod, refdef_t *r_refdef, int area, int cl
 					if (twin)
 					{
 						*twin = *src;
-						twin->flags |= RF_EXTERNALMODEL;
+						twin->flags |= RF_SHADOWONLY;
 						twin->framestate.g[FS_REG].frametime[0] = refdef->time;
 						twin->framestate.g[FS_REG].frametime[1] = refdef->time;
 					}

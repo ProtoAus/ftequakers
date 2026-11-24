@@ -1707,6 +1707,7 @@ typedef struct q1usercmd_s
 //#define Q2EXRF_BLOB_SHADOW		(1u<<23)	//
 #define RF_FPFADE				(1u<<24)	//nettest: first-person body — dither this model away above a height band (cl_fpbody_fade_start/_end) so the owner's own head cannot clip the camera. Internal render flag (never networked), set from CSQCRF_FPFADE; read in gl_backend.c to drive the e_fpfade uniform. 1<<24 = the retired Q2EXRF_LOW_PRIORITY slot (unused), same as RF_NOSHADOWRECV took 1<<23.
 //#define Q2EXRF_NO_LOD				(1u<<25)	//
+#define RF_SHADOWONLY			(1u<<25)	//FTESurf Patch 1766: a caster drawn by the shadow passes (BEM_DEPTHONLY/BEM_STENCIL) and nothing else -- the hl2 plugin's off-view and fading static props. Internal render flag (never networked), the retired Q2EXRF_NO_LOD slot.
 //#define Q2EXRF_STAIRSTEP			(1u<<26)	//
 
 #define RF_ADDITIVE				(1u<<27)	//forces shader sort order and BEF_FORCEADDITIVE

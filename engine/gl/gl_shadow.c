@@ -3797,8 +3797,10 @@ static qboolean Sh_SunWorldMesh(void)
 		sh = surf->texinfo->texture->shader;
 		if (!sh || (sh->flags & (SHADER_NODRAW|SHADER_SKY|SHADER_NOSHADOWS)))
 			continue;
-		if (sh->sort > SHADER_SORT_OPAQUE && !(sh->sort == SHADER_SORT_SEETHROUGH && sh->bemoverrides[bemoverride_depthonly]))
-			continue;	//an alpha-tested face casts only with its own masked depth pass (Patch 1768)
+		if (sh->sort > SHADER_SORT_OPAQUE && !(sh->sort == SHADER_SORT_SEETHROUGH && sh->bemoverrides[bemoverride_depthonly] &&
+			strncmp(sh->bemoverrides[bemoverride_depthonly]->name, "depthonly", 9)))
+			continue;	//an alpha-tested face casts only with its own masked depth pass (Patch 1768: the plugin's embedded
+						//"<material>_mode<n>"; the engine's "depthonly#MASK..." overrides do not discard)
 		for (k = 0; k < 3; k++)
 		{
 			float f = (ext[k] > 0) ? (surf->mesh->xyz_array[0][k] - wm->mins[k]) / ext[k] : 0;
@@ -5506,7 +5508,10 @@ void Sh_GenerateFakeShadows(void)	//generates shadowmaps and selects the dlight,
 		if (cascades > 1)
 		{	//FTESurf Patch 1766: the 2x2 atlas gives each cascade a quarter -- at 2048 the outer one was 8 units a texel and a
 			//pole's shadow vanished crossing into it; r_shadows_cascade_res (4096) costs nothing measurable at canals
-			Sh_GenerateCascadeAtlas(l, cascades, max(smsize, bound(256, r_shadows_cascade_res.ival, 8192)));
+			int csize = max(smsize, bound(256, r_shadows_cascade_res.ival, 8192));
+			if (sh_config.texture2d_maxsize && csize > (int)sh_config.texture2d_maxsize)
+				csize = sh_config.texture2d_maxsize;	//the GPU's limit (a 2048-only card keeps working)
+			Sh_GenerateCascadeAtlas(l, cascades, csize);
 			fs_sunpass = false;
 			return;
 		}

@@ -4014,6 +4014,8 @@ void BE_GenModelBatches(batch_t **batches, const dlight_t *dl, unsigned int bemo
 			continue;
 		if (!r_refdef.externalview && (ent->flags & RF_EXTERNALMODEL) && !chase_active.ival)
 			continue;
+		if ((ent->flags & RF_SHADOWONLY) && bemode != BEM_DEPTHONLY && bemode != BEM_STENCIL)
+			continue;	//FTESurf Patch 1766: a shadow caster only, in no view, mirror or portal
 
 #ifdef RTLIGHTS
 		if (bemode == BEM_STENCIL || bemode == BEM_DEPTHONLY)
