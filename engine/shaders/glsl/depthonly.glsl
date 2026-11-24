@@ -2,6 +2,7 @@
 !!permu TESS
 !!permu FRAMEBLEND
 !!permu SKELETAL
+!!samps =MASK diffuse
 !!cvardf r_tessellation_level=5
 
 #include "sys/defs.h"
@@ -13,6 +14,9 @@
 
 #ifdef VERTEX_SHADER
 #include "sys/skeletal.h"
+#ifdef MASK
+varying vec2 tc;	//FTESurf Patch 1768: an alpha-tested caster leaves its holes out of the depth map
+#endif
 #ifdef TESS
 varying vec3 vertex;
 varying vec3 normal;
@@ -24,6 +28,9 @@ void main ()
 	vertex = v_position;
 #else
 	gl_Position = skeletaltransform();
+#ifdef MASK
+	tc = v_texcoord;
+#endif
 #endif
 }
 #endif
@@ -88,8 +95,15 @@ void main()
 
 
 #ifdef FRAGMENT_SHADER
+#ifdef MASK
+varying vec2 tc;
+#endif
 void main ()
 {
+#ifdef MASK
+	if (texture2D(s_diffuse, tc).a < float(MASK))
+		discard;
+#endif
 	//must always draw something, supposedly. It might as well be black.
 	gl_FragColor = vec4(0, 0, 0, 1);
 }

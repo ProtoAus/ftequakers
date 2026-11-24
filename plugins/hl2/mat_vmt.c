@@ -107,6 +107,8 @@ cvar_t *hl2_unlitprogram;	//FTESurf Patch 1213, the rest of UnlitGeneric onto a 
 int vmt_stat_water, vmt_stat_refract, vmt_stat_translucent;
 int vmt_stat_imposter;	//FTESurf Patch 263
 int vmt_stat_flowwater;	//Patch 990: Water materials drawn with their $flowmap
+qboolean VBSP_CubeIsBlack (const char *name);	//FTESurf Patch 1771, mod_vbsp.c
+qboolean VBSP_CubeIsFloat (const char *name);
 int vmt_stat_hdrenvmap;	//FTESurf Patch 264, $envmap resolved via the .hdr.vtf fallback
 int vmt_stat_ignorez;	//FTESurf Patch 290, $ignorez materials that could not be honoured
 int vmt_stat_addprog;	//FTESurf Patch 300, additive materials moved from a pass onto vmt/unlit
@@ -2606,7 +2608,7 @@ static char *VMT_ParseBlock(const char *fname, vmtstate_t *st, char *line)
 			;	//nettest: recognised-but-ignored Source key; silenced (was per-field developer-1 spam)
 		}
 		else if (!Q_strcasecmp(key, "$halflambert"))
-			st->halflambert = 1;
+			st->halflambert = atof(value) != 0;	//FTESurf Patch 1770: "$halflambert 0" is off
 		/*
 		FTESurf: the tool materials.
 
@@ -2720,13 +2722,14 @@ static char *VMT_ParseBlock(const char *fname, vmtstate_t *st, char *line)
 			st->envmapsat_set = 1;		//Patch 237: ditto -- $envmapsaturation 0 is a real request
 		}
 		else if (!Q_strcasecmp(key, "$basealphaenvmapmask"))
-			st->envfrombase=1;
+			st->envfrombase = atof(value) != 0;	//FTESurf Patch 1770: the value, not the key's presence
 		else if (!Q_strcasecmp(key, "$normalmapalphaenvmapmask"))
-			st->envfromnorm=1;
+			st->envfromnorm = atof(value) != 0;
 		else if (!Q_strcasecmp(key, "$crackmaterial"))
 			;	//nettest: recognised-but-ignored Source key; silenced (was per-field developer-1 spam)
 		else if (!Q_strcasecmp(key, "$selfillum"))
-			st->selfillum = 1;
+			st->selfillum = atof(value) != 0;	//FTESurf Patch 1770: "$selfillum 0" (HL2's oak_tree01, the canal railings) is off --
+											//it added the unlit base texture over the lit one, pale white trunks
 		else if (!Q_strcasecmp(key, "$selfillummask"))
 			Q_strlcpy(st->fullbrightmap, value, sizeof(st->fullbrightmap));
 		else if (!Q_strcasecmp(key, "$selfillumtint"))
@@ -5695,7 +5698,18 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 		char cube[MAX_QPATH], hdr[MAX_QPATH];
 		const char *pfx = strcmp(st->envmap, "materials/")?"materials/":"";
 		Q_snprintfz(cube, sizeof(cube), "%s%s.vtf", pfx, st->envmap);
-		if (!fsfuncs->LocateFile(cube, FSLF_IFFOUND, NULL))
+		if (fsfuncs->LocateFile(cube, FSLF_IFFOUND, NULL) && VBSP_CubeIsBlack(cube))
+		{	//FTESurf Patch 1771: a map's named cubemap whose LDR file is VBSP's black placeholder and whose .hdr.vtf holds the
+			//bake (bhop_canals: all 412 .vtf black) -- Patch 1559's rule for the nearest cubemap, here for the 830 patched
+			//materials that name theirs, so the windows reflect the sky
+			Q_snprintfz(hdr, sizeof(hdr), "%s%s.hdr.vtf", pfx, st->envmap);
+			if (VBSP_CubeIsFloat(hdr))
+			{
+				vmt_stat_hdrenvmap++;
+				Q_strlcpy(cube, hdr, sizeof(cube));
+			}
+		}
+		else if (!fsfuncs->LocateFile(cube, FSLF_IFFOUND, NULL))
 		{
 			Q_snprintfz(hdr, sizeof(hdr), "%s%s.hdr.vtf", pfx, st->envmap);
 			if (fsfuncs->LocateFile(hdr, FSLF_IFFOUND, NULL))
@@ -5773,6 +5787,16 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 	//blendfunc on a material that already has the right one.
 	if (st->blendfunc && !st->animpass)
 		Q_strlcatfz(script, &offset, sizeof(script), "\tprogblendfunc %s\n", st->blendfunc);
+	//FTESurf Patch 1768: an alpha-tested or alpha-blended material (bushes, fences) throws the sun's shadow through its
+	//holes, as Source's depth passes alpha-test -- its depth-only pass is the built-in depthonly with #MASK and its
+	//base texture (the generic one drew the whole card: a solid quad of shadow under every bush).
+	if (*st->tex[0].name && !st->nobasetex && !st->additive && !st->animpass &&
+		(st->alphatest || (st->translucent_vmt && VMT_TextureHasAlpha(st->tex[0].name))))
+	{
+		float mask = (st->alphatest && st->alphatestref > 0.0f) ? st->alphatestref : 0.5f;
+		mask = bound(0.01f, mask, 0.99f);
+		Q_strlcatfz(script, &offset, sizeof(script), "\tbemode depthonly\n\t{\n\t\tprogram \"depthonly#MASK=%f\"\n\t\tdiffusemap \"%s\"\n\t}\n", mask, VMT_BaseImage(st));
+	}
 	//FTESurf Patch 188: a top-level `rgbGen const` used to be emitted here.  It
 	//was a no-op at the top level and it passed the value through with its
 	//brackets still on, so it could not have worked even in a pass.  $color and

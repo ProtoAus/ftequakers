@@ -2935,7 +2935,10 @@ static void GLR_AutoExposureFrame(qboolean rtview)
 		!qglFenceSync || !qglClientWaitSync || !qglGenBuffersARB || !(qglMapBufferRange || qglMapBufferARB))
 	{
 		if (ae_pending || r_autoexposure_value != 1 || ae_skyvalue != 1)
+		{
 			GLR_AutoExposureReset();
+			Cvar_ForceSet(&r_autoexposure_current, "1 (off)");	//FTESurf Patch 1767: not the last measurement
+		}
 		ae_world = NULL;
 		return;
 	}

@@ -64,7 +64,14 @@ static float BE_NoShadowRecv(const entity_t *e)
 	if ((e->flags & RF_WEAPONMODEL) && !r_shadows_viewmodel.ival)
 		return 1;
 	if (e->model && (e->model->engineflags & MDLF_SOURCEPITCH) && !(e->flags & RF_NOSHADOW))
+	{	//FTESurf Patch 1765: on a cascade map (r_shadows_sunfloor) Strata's props do take the cascades, their own shadow
+		//included -- a lit face meets the caster's back face in the depth map (front faces are culled), and in shadow
+		//the light only comes down to the floor, as the world's does
+		extern cvar_t r_shadows_sunfloor, r_shadows_propselfshadow;
+		if (r_shadows_propselfshadow.ival && r_shadows_sunfloor.vec4[0] + r_shadows_sunfloor.vec4[1] + r_shadows_sunfloor.vec4[2] > 0)
+			return 0;
 		return 1;
+	}
 	return 0;
 }
 static void GLBE_BindInstanceData(const struct programpermu_s *permu);

@@ -11651,6 +11651,7 @@ static void VBSP_PrepareFrame(model_t *mod, refdef_t *r_refdef, int area, int cl
 		struct staticprop_s *sent;
 		entity_t *src, *ent;
 		float d;
+		qboolean shadowonly;	//FTESurf Patch 1766
 		size_t i;
 		vec3_t disp;
 
@@ -12004,29 +12005,46 @@ static void VBSP_PrepareFrame(model_t *mod, refdef_t *r_refdef, int area, int cl
 			//PVS/area cull, exactly like the displacement loop above (VBSP_EdictInFatPVS at ~3587).
 			//Only valid when we actually have view PVS: surfvis==NULL means portal-recursion / novis / no model vis, where everything must draw.
 			//src->pvscache.leafnums hold CLUSTERS, and surfvis is the cluster-PVS from VBSP_MarkLeaves, so this is index-consistent (same as displacements).
+			//FTESurf Patch 1766: a caster the view cannot see (out of its PVS, or off screen) still throws its shadow into
+			//view: it goes in as a shadow-only entity (RF_EXTERNALMODEL -- drawn by the shadow passes, which are
+			//externalview, never by the view).  The PVS used to drop it first, so a prop round a corner lost its
+			//shadow and the shadow blinked in and out as the view's leaves changed.
+			shadowonly = false;
 			if (surfvis && !VBSP_PVSMemoTest(memo, i, mod, sent->numpvsclusters ? sent->pvsclusters : NULL, sent->numpvsclusters, &src->pvscache, surfvis, areas))
 			{
 				sent->lastpvswhy = vbsp_pvs_why;	//FTESurf Patch 257: set by the call above
-				PROP_VERDICT(PROPV_PVS);
-				continue;	//prop's leaves aren't in the view PVS and its area can't be reached — not visible.
+				if (!VBSP_ShadowCasterInReach(src, src->model->radius * (src->scale > 0 ? src->scale : 1)))
+				{
+					PROP_VERDICT(PROPV_PVS);
+					continue;	//prop's leaves aren't in the view PVS and its area can't be reached: not visible.
+				}
+				shadowonly = true;
 			}
-			if (unvisedareas && !VBSP_UnvisedPairVisible(prv, r_refdef->areabits, &src->pvscache, -1))
+			if (!shadowonly && unvisedareas && !VBSP_UnvisedPairVisible(prv, r_refdef->areabits, &src->pvscache, -1))
 			{
 				sent->lastpvswhy = VBSP_PVSWHY_AREA;	//Patch 1271
-				PROP_VERDICT(PROPV_PVS);
-				continue;
+				if (!VBSP_ShadowCasterInReach(src, src->model->radius * (src->scale > 0 ? src->scale : 1)))
+				{
+					PROP_VERDICT(PROPV_PVS);
+					continue;
+				}
+				shadowonly = true;
 			}
 
-			//cheap frustum cull on the model's radius box (props through the portal still pass PVS above, so this only drops what's off-screen).
+			if (!shadowonly)
 			{
 				vec3_t cmin, cmax;
 				float r = src->model->radius * (src->scale > 0 ? src->scale : 1);	//Patch 1559: a scale-10 logo was culled at a tenth of its size
 				VectorSet(cmin, src->origin[0]-r, src->origin[1]-r, src->origin[2]-r);
 				VectorSet(cmax, src->origin[0]+r, src->origin[1]+r, src->origin[2]+r);
-				if (VBSP_CullBox(cmin, cmax) && !VBSP_ShadowCasterInReach(src, r))
+				if (VBSP_CullBox(cmin, cmax))
 				{
-					PROP_VERDICT(PROPV_FRUSTUM);
-					continue;
+					if (!VBSP_ShadowCasterInReach(src, r))
+					{
+						PROP_VERDICT(PROPV_FRUSTUM);
+						continue;
+					}
+					shadowonly = true;	//Patch 1766: off screen, in reach -- the shadow passes only
 				}
 			}
 
@@ -12042,6 +12060,8 @@ static void VBSP_PrepareFrame(model_t *mod, refdef_t *r_refdef, int area, int cl
 			if (!ent)
 				return;		//scene entity budget spent; the rest stay PROPV_UNVISITED, which is what happened
 			*ent = *src;
+			if (shadowonly)
+				ent->flags |= RF_EXTERNALMODEL;	//Patch 1766
 			ent->framestate.g[FS_REG].frametime[0] = refdef->time;
 			ent->framestate.g[FS_REG].frametime[1] = refdef->time;
 			if (d)
@@ -14220,7 +14240,7 @@ even on a map that never built any.
 //0x0001 on surf_beyond2) beside good .hdr.vtf copies -- 38 of 151 sampled maps; beyond2's floor lost
 //its reflection.  Judges DXT1/DXT5 only, over the whole high-res image block, any endpoint more than
 //one 565 step above black is "not black"; any other format is "not black".
-static qboolean VBSP_CubeIsBlack (const char *name)
+qboolean VBSP_CubeIsBlack (const char *name)	//FTESurf Patch 1771: mat_vmt.c reads it too
 {
 	qbyte *f;
 	size_t len = 0, ofs, p, bs;
@@ -14274,7 +14294,7 @@ done:
 
 //Patch 1559: only a float cube (RGBA16161616F, Patch 887 encodes it) replaces a black LDR one; an
 //integer or packed HDR cube would load as 0..1 data from a wider range.
-static qboolean VBSP_CubeIsFloat (const char *name)
+qboolean VBSP_CubeIsFloat (const char *name)
 {
 	qbyte *f;
 	size_t len = 0;

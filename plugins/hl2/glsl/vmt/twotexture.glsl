@@ -276,6 +276,11 @@ varying float eyedist;
 
 	#ifdef NOFOG
 		gl_FragColor = diffuse_f;
+	#elif defined(ADDITIVE)
+		//FTESurf Patch 1769: additive light fades to BLACK in fog (Patch 300's rule, missed here) -- toward the fog colour
+		//every quad of bhop_canals' barn shafts added the fog's grey wherever it covered the screen, a white column seen
+		//from 2000 units away that dimmed inside 512 (the fog's start).
+		gl_FragColor = fog4additive(diffuse_f);
 	#else
 		//FTESurf Patch 299: fog the colour, leave the alpha to the blender.
 		//fog4() multiplies by regularcolour.a, which on a Source material is a

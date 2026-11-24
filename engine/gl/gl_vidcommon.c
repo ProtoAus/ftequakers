@@ -2269,7 +2269,7 @@ static const char *glsl_hdrs[] =
 								"#ifndef r_shadows_throwfade\n"
 									"#define r_shadows_throwfade 0.06\n"
 								"#endif\n"
-								"if (r_shadows_throwfade > 0.0)\n"
+								"if (r_shadows_throwfade > 0.0 && l_fakeshadowinfo[i].y > 0.0)\n"	//FTESurf Patch 1765: y 0 = no fade (cascade maps)
 									"s = mix(1.0, s, cascnear(sc.z - r_shadows_throwfade*l_fakeshadowinfo[i].y));\n"
 								"return s*0.5+0.5;\n"
 							"}\n"

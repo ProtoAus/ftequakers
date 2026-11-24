@@ -249,8 +249,10 @@ void Sh_Reset(void)
 #endif
 }
 static void Sh_FlushMapLights(void);
+static void Sh_SunWorldMeshFree(void);
 void Sh_Shutdown(void)
 {
+	Sh_SunWorldMeshFree();	//FTESurf Patch 1765
 	Sh_Reset();
 	Sh_FlushMapLights();
 	SHM_Shutdown();
@@ -2532,6 +2534,8 @@ static void Sh_LightFrustumPlanes(dlight_t *l, vec3_t axis[3], vec4_t *planes, i
 static qboolean sh_fakecell_active;
 static int sh_fakecell_x, sh_fakecell_y;
 
+static void Sh_DrawSunWorldChunks(dlight_t *l);	//FTESurf Patch 1765
+static qboolean sh_drawsunworld;
 static void Sh_GenShadowFace(dlight_t *l, vec3_t axis[3], int lighttype, shadowmesh_t *smesh, int face, int smsize, int txsize, float proj[16], const qbyte *lightpvs)
 {
 	vec3_t t1,t2,t3;
@@ -2651,6 +2655,8 @@ static void Sh_GenShadowFace(dlight_t *l, vec3_t axis[3], int lighttype, shadowm
 		if (lighttype & LSHADER_ORTHO)
 			qglEnable(GL_DEPTH_CLAMP_ARB);
 		GL_CullFace(SHADER_CULL_FRONT);
+		if (sh_drawsunworld && (lighttype & LSHADER_FAKESHADOWS))
+			Sh_DrawSunWorldChunks(l);	//FTESurf Patch 1765: the world into a sun cascade, culled to it
 		if (smesh)
 			GLBE_RenderShadowBuffer(smesh->numverts, smesh->vefbo[0], smesh->verts, smesh->numindicies, smesh->vefbo[1], smesh->indicies);
 		break;
@@ -3693,8 +3699,215 @@ static void Sh_CascadeCellRect(int idx, int n, int txsize, int *ox, int *oy, int
 //fix is to centre every cascade on the camera POSITION with geometrically growing radii.  Rotating no longer
 //moves anything (r_origin is rotation-independent); only walking does, and the whole-texel snap keeps that
 //shimmer-free.  The near box is small = dense; each outer box is `ratio`x bigger, out to r_shadows_cascade_dist.
+//FTESurf Patch 1765: Strata's cascades draw the world as well as models.  On bhop_canals the concrete pillars, canal
+//walls and buildings throw the sharp sun shadows Momentum shows, where the lightmap holds only a blur of them (64 units a
+//luxel).  r_shadows 2 drew entities alone (a world's shadows are baked), so on a Source map the cascades now draw every
+//opaque world face too: one shadow mesh of the whole world, built once per map and kept on a private dlight (the
+//cascades move with the camera; the GPU clips the mesh to each cell).  Sky, water, alpha-tested, blended and nodraw
+//faces do not cast.
+cvar_t r_shadows_propselfshadow = CVARD("r_shadows_propselfshadow", "1", "FTESurf Patch 1765: on a Strata cascade map (r_shadows_sunfloor set) a Source prop that casts the sun's shadow also receives the cascades, its own shadow included, as Strata's do. 0 = it does not (Patch 1732's rule, kept off cascade maps).");
+cvar_t r_shadows_worldcull = CVARD("r_shadows_worldcull", "1", "FTESurf Patch 1765: which faces of the world the sun cascades draw (r_shadows_worldcast). 1 = those turned away from the sun (default: a sunlit face never meets itself in the map), 0 = those facing it, 2 = both.");
+static cvar_t r_shadows_worldcast = CVARD("r_shadows_worldcast", "1", "FTESurf Patch 1765: on a Source map the r_shadows 2 sun cascades draw the world's opaque faces as well as models, as Strata's do (the lightmap holds only a coarse blur of the world's sun shadows). 0 = models only (cheaper).");
+static const model_t *sh_sunworldmodel;
+static qboolean sh_sunworldbuilt;
+typedef struct
+{
+	vec3_t mins, maxs;
+	unsigned int firstsurf, numsurfs;
+} sunchunk_t;
+static sunchunk_t *sh_sunchunks;
+static unsigned int sh_numsunchunks;
+static msurface_t **sh_sunsurfs;	//the casting faces, Morton-sorted; a chunk is a run of them
+typedef struct
+{
+	unsigned int count, max;
+	mesh_t **meshes;
+} sunbatch_t;
+static sunbatch_t *sh_sunbatches;	//per cl.worldmodel shadowbatch, refilled for each cascade
+static unsigned int sh_numsunbatches;
+static void Sh_SunWorldMeshFree(void)
+{
+	unsigned int i;
+	for (i = 0; i < sh_numsunbatches; i++)
+		BZ_Free(sh_sunbatches[i].meshes);
+	Z_Free(sh_sunbatches);
+	sh_sunbatches = NULL;
+	sh_numsunbatches = 0;
+	BZ_Free(sh_sunchunks);
+	sh_sunchunks = NULL;
+	sh_numsunchunks = 0;
+	BZ_Free(sh_sunsurfs);
+	sh_sunsurfs = NULL;
+	sh_sunworldmodel = NULL;
+	sh_sunworldbuilt = false;
+}
+typedef struct
+{
+	unsigned int key;
+	msurface_t *surf;
+} sunsurfsort_t;
+static int Sh_SunSurfCmp(const void *a, const void *b)
+{
+	unsigned int x = ((const sunsurfsort_t*)a)->key, y = ((const sunsurfsort_t*)b)->key;
+	return (x > y) - (x < y);
+}
+static unsigned int Sh_Morton10(unsigned int v)
+{	//spread the low 10 bits three apart
+	v &= 1023;
+	v = (v | (v << 16)) & 0x030000FF;
+	v = (v | (v << 8)) & 0x0300F00F;
+	v = (v | (v << 4)) & 0x030C30C3;
+	v = (v | (v << 2)) & 0x09249249;
+	return v;
+}
+static qboolean Sh_SunWorldMesh(void)
+{
+	model_t *wm = cl.worldmodel;
+	unsigned int i, e, n = 0, c, tris = 0;
+	sunsurfsort_t *list;
+	vec3_t ext;
+	if (!r_shadows_worldcast.ival || !wm || wm->loadstate != MLS_LOADED || !(wm->engineflags & MDLF_SOURCEBSP) || !wm->surfaces)
+		return false;
+	if (sh_sunworldmodel == wm && sh_sunworldbuilt)
+		return sh_numsunchunks > 0;
+	Sh_SunWorldMeshFree();
+	if (!wm->numshadowbatches)
+		SH_CalcShadowBatches(wm);
+	VectorSubtract(wm->maxs, wm->mins, ext);
+
+	//the casting faces, sorted along a Morton curve so that a run of them is a compact region
+	list = BZ_Malloc(sizeof(*list) * max(1, wm->nummodelsurfaces));
+	for (i = wm->firstmodelsurface, e = i + wm->nummodelsurfaces; i < e && i < wm->numsurfaces; i++)
+	{
+		msurface_t *surf = wm->surfaces + i;
+		shader_t *sh;
+		int k;
+		unsigned int q[3];
+		if (!surf->mesh || !surf->mesh->xyz_array || !surf->mesh->numindexes || !surf->sbatch || !surf->texinfo || !surf->texinfo->texture)
+			continue;
+		if (surf->sbatch->user.bmodel.shadowbatch < 0 || surf->sbatch->user.bmodel.shadowbatch >= wm->numshadowbatches)
+			continue;
+		if (surf->flags & (SURF_DRAWSKY|SURF_DRAWSKYBOX|SURF_DRAWTURB|SURF_DRAWALPHA|SURF_NODRAW))
+			continue;
+		sh = surf->texinfo->texture->shader;
+		if (!sh || (sh->flags & (SHADER_NODRAW|SHADER_SKY|SHADER_NOSHADOWS)))
+			continue;
+		if (sh->sort > SHADER_SORT_OPAQUE && !(sh->sort == SHADER_SORT_SEETHROUGH && sh->bemoverrides[bemoverride_depthonly]))
+			continue;	//an alpha-tested face casts only with its own masked depth pass (Patch 1768)
+		for (k = 0; k < 3; k++)
+		{
+			float f = (ext[k] > 0) ? (surf->mesh->xyz_array[0][k] - wm->mins[k]) / ext[k] : 0;
+			q[k] = (unsigned int)bound(0, f * 1023, 1023);
+		}
+		list[n].key = Sh_Morton10(q[0]) | (Sh_Morton10(q[1]) << 1) | (Sh_Morton10(q[2]) << 2);
+		list[n].surf = surf;
+		n++;
+	}
+	qsort(list, n, sizeof(*list), Sh_SunSurfCmp);
+
+	sh_sunsurfs = BZ_Malloc(sizeof(*sh_sunsurfs) * max(1, n));
+	sh_sunchunks = BZ_Malloc(sizeof(*sh_sunchunks) * max(1, n));
+	for (i = 0, c = 0; i < n; i++)
+	{
+		msurface_t *surf = list[i].surf;
+		sunchunk_t *ch;
+		int v;
+		sh_sunsurfs[i] = surf;
+		if (!sh_numsunchunks || tris >= 1024)
+		{
+			c = sh_numsunchunks++;
+			ch = &sh_sunchunks[c];
+			ch->firstsurf = i;
+			ch->numsurfs = 0;
+			ClearBounds(ch->mins, ch->maxs);
+			tris = 0;
+		}
+		ch = &sh_sunchunks[c];
+		ch->numsurfs++;
+		tris += surf->mesh->numindexes / 3;
+		for (v = 0; v < surf->mesh->numvertexes; v++)
+			AddPointToBounds(surf->mesh->xyz_array[v], ch->mins, ch->maxs);
+	}
+	BZ_Free(list);
+	sh_numsunbatches = wm->numshadowbatches;
+	sh_sunbatches = Z_Malloc(sizeof(*sh_sunbatches) * max(1, sh_numsunbatches));	//zeroed: count/max/meshes start empty
+	sh_sunworldmodel = wm;
+	sh_sunworldbuilt = true;
+	return sh_numsunchunks > 0;
+}
+//the world faces that can shadow anything in this cascade: chunks inside its four sides and not wholly past its far
+//face (away from the sun); toward the sun it is unbounded (depth clamp), as any caster up there shadows it.  Drawn
+//through the casters' own depth programs (the world's batches and vbos), the faces turned away from the sun only
+//(flipped cull), so a sunlit face never meets itself in the map.
+static void Sh_DrawSunWorldChunks(dlight_t *l)
+{
+	extern cvar_t r_shadows_worldcull;
+	model_t *wm = cl.worldmodel;
+	unsigned int i, j, b, ofl = r_refdef.flipcull, dbgsurfs = 0, dbgbatches = 0;
+	float d1 = DotProduct(l->origin, l->axis[1]), d2 = DotProduct(l->origin, l->axis[2]), d0 = DotProduct(l->origin, l->axis[0]);
+	float far0 = d0 + r_shadow_orthodepth, r = l->radius;
+	if (!sh_sunworldbuilt || wm != sh_sunworldmodel || sh_numsunbatches != (unsigned int)wm->numshadowbatches || !wm->shadowbatches)
+		return;
+	for (b = 0; b < sh_numsunbatches; b++)
+		sh_sunbatches[b].count = 0;
+	for (i = 0; i < sh_numsunchunks; i++)
+	{
+		const sunchunk_t *ch = &sh_sunchunks[i];
+		vec3_t mid, half;
+		float c, h;
+		VectorAvg(ch->mins, ch->maxs, mid);
+		VectorSubtract(ch->maxs, mid, half);
+		c = DotProduct(mid, l->axis[1]) - d1;	//the box's extent along each axis: |half| . |axis|
+		h = half[0]*fabs(l->axis[1][0]) + half[1]*fabs(l->axis[1][1]) + half[2]*fabs(l->axis[1][2]);
+		if (c - h > r || c + h < -r)
+			continue;
+		c = DotProduct(mid, l->axis[2]) - d2;
+		h = half[0]*fabs(l->axis[2][0]) + half[1]*fabs(l->axis[2][1]) + half[2]*fabs(l->axis[2][2]);
+		if (c - h > r || c + h < -r)
+			continue;
+		c = DotProduct(mid, l->axis[0]);
+		h = half[0]*fabs(l->axis[0][0]) + half[1]*fabs(l->axis[0][1]) + half[2]*fabs(l->axis[0][2]);
+		if (c - h > far0)
+			continue;
+		for (j = ch->firstsurf; j < ch->firstsurf + ch->numsurfs; j++)
+		{
+			msurface_t *surf = sh_sunsurfs[j];
+			sunbatch_t *sb;
+			int bi = surf->sbatch ? surf->sbatch->user.bmodel.shadowbatch : -1;
+			if (bi < 0 || (unsigned int)bi >= sh_numsunbatches || !surf->mesh)
+				continue;
+			sb = &sh_sunbatches[bi];
+			if (sb->count == sb->max)
+			{
+				sb->max = sb->max ? sb->max * 2 : 64;
+				sb->meshes = BZ_Realloc(sb->meshes, sizeof(*sb->meshes) * sb->max);
+			}
+			sb->meshes[sb->count++] = surf->mesh;
+			dbgsurfs++;
+		}
+	}
+	if (r_shadows_worldcull.ival == 1)
+		r_refdef.flipcull ^= SHADER_CULL_FLIP;
+	for (b = 0; b < sh_numsunbatches; b++)
+	{
+		texture_t *tex;
+		if (!sh_sunbatches[b].count)
+			continue;
+		tex = wm->shadowbatches[b].tex;
+		if (!tex || !tex->shader || !wm->shadowbatches[b].vbo)
+			continue;
+		BE_DrawMesh_List(tex->shader, sh_sunbatches[b].count, sh_sunbatches[b].meshes, wm->shadowbatches[b].vbo, NULL, 0);
+		dbgbatches++;
+	}
+	r_refdef.flipcull = ofl;
+	if (r_shadows_cascade_debug.ival)
+		Con_Printf("^5sunworld: r %.0f  %u surfaces in %u batches\n", r, dbgsurfs, dbgbatches);
+}
+
 static void Sh_GenerateCascadeAtlas(dlight_t *l, int cascades, int txsize)
 {
+	qboolean worldcast = Sh_SunWorldMesh();	//FTESurf Patch 1765
+	qboolean nothrowfade = (r_shadows_sunfloor.vec4[0] + r_shadows_sunfloor.vec4[1] + r_shadows_sunfloor.vec4[2] > 0);
 	int inset = 16;	/*same proven margin as the direction atlas: wider than the PCF tap radius so cells can't bleed*/
 	int s, restorefbo = 0;
 	int cx, cy, csize, smsize;
@@ -3789,7 +4002,9 @@ static void Sh_GenerateCascadeAtlas(dlight_t *l, int cascades, int txsize)
 		GLBE_CaptureFakeShadowSlot(s, cell);
 		{	//FTESurf Patch 1762: z = a live cascade (sys/pcf.h CascadeShadowFilter); y scales r_shadows_throwfade, which is in
 			//units of the single map's depth range, to this cascade's (2*r_shadow_orthodepth).
-			vec4_t info = {0, r_shadows_distance.value / r_shadow_orthodepth, 1, 0};
+			//Patch 1765: none on a map whose lightmap holds the sun's shadows (r_shadows_sunfloor): a shadow there only
+			//brings a sunlit texel down to the floor, so it cannot darken twice, and Strata fades no long throw.
+			vec4_t info = {0, nothrowfade ? 0 : r_shadows_distance.value / r_shadow_orthodepth, 1, 0};
 			GLBE_SetFakeShadowSlotInfo(s, info);
 		}
 
@@ -3799,7 +4014,9 @@ static void Sh_GenerateCascadeAtlas(dlight_t *l, int cascades, int txsize)
 		//1+ render caster depth with cascade 0's projection while sampling with their own -> a single caster
 		//casts 3 shadows magnified by radius(s)/radius(0) (the "3 copies at 3 sizes" bug).
 		GLBE_FlushProjection();
+		sh_drawsunworld = worldcast;
 		Sh_GenShadowFace(l, l->axis, LSHADER_SMAP|LSHADER_ORTHO|LSHADER_FAKESHADOWS, NULL, 4, smsize, txsize, r_refdef.m_projection_std, NULL);
+		sh_drawsunworld = false;
 
 		if (dbg)
 			Con_Printf("^5cascade %i: radius %.0f qu (concentric)  %.2f texels/qu\n",
@@ -6804,6 +7021,9 @@ void Sh_RegisterCvars(void)
 	Cvar_Register (&r_shadows_throwfade,				REALTIMELIGHTING);
 	Cvar_Register (&r_shadows_color,					REALTIMELIGHTING);	//FTESurf Patch 1732
 	Cvar_Register (&r_shadows_sunfloor,					REALTIMELIGHTING);	//FTESurf Patch 1732
+	Cvar_Register (&r_shadows_worldcast,				REALTIMELIGHTING);	//FTESurf Patch 1765
+	Cvar_Register (&r_shadows_propselfshadow,			REALTIMELIGHTING);
+	Cvar_Register (&r_shadows_worldcull,				REALTIMELIGHTING);
 	Cvar_Register (&r_shadows_caster_sunvis,			REALTIMELIGHTING);
 	Cvar_Register (&r_shadows_throwdirection,			REALTIMELIGHTING);
 	Cvar_Register (&r_shadows_focus,					REALTIMELIGHTING);
