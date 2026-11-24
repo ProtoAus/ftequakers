@@ -4574,7 +4574,9 @@ static void Sh_GeneratePropShadowsAtlas(dlight_t *l, int fulltexsize)
 	//nc = number of SUN cells = cascades (Phase-2: cascades now COEXIST with prop cells).  The prop-cell
 	//budget must match the atlas layout AND gl_shader.c's FAKESHADOWS_COUNT / FAKESHADOWS_PERSP_FIRST=nc.
 	nc = bound(1, r_shadows_cascades.ival, SH_MAX_CASCADES);
-	nc = 1;	//FTESurf Patch 1762: the default is 4 for Source maps, which never reach here; nothing here reads more than one sun cell
+	nc = 1;	//FTESurf Patch 1762: the default is 4 for Source maps, which never reach here. This no longer matches gl_shader.c's
+			//FAKESHADOWS_PERSP_FIRST (still r_shadows_cascades): harmless while no GL receiver reads the lamp cells and the
+			//cascade lookup is off (live flag clear) everywhere but a Source world. Read them, and this must agree again.
 	{
 		//geometric capacity: each free quadrant packs up to 16 eighth-size subcells (the layout keeps the
 		//roomier quarter/L cells while the live count allows), bounded by the slot arrays.  The

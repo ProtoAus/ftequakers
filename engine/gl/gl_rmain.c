@@ -2852,7 +2852,7 @@ static GLuint ae_pbo;
 static size_t ae_pbosize;
 static GLsync ae_fence;
 static int ae_pending, ae_rowbytes, ae_framesout;
-static float ae_readexp = 1, ae_target = 1;
+static float ae_readexp = 1, ae_target = 1, ae_skyvalue = 1;
 static double ae_lastread, ae_lastframe;
 static int ae_framecount = -1;
 static const model_t *ae_world;
@@ -2868,7 +2868,7 @@ static void GLR_AutoExposureReset(void)
 	extern float r_autoexposure_value;
 	GLR_AutoExposureDrop();
 	r_autoexposure_value = ae_target = 1;
-	r_autoexposure_sky.value = 1;
+	r_autoexposure_sky.value = ae_skyvalue = 1;
 }
 static void GLR_AutoExposureShutdown(void)
 {
@@ -2934,7 +2934,7 @@ static void GLR_AutoExposureFrame(qboolean rtview)
 	if (!r_autoexposure.ival || !cl.worldmodel || !(cl.worldmodel->engineflags & MDLF_SOURCEHDR) ||
 		!qglFenceSync || !qglClientWaitSync || !qglGenBuffersARB || !(qglMapBufferRange || qglMapBufferARB))
 	{
-		if (ae_pending || r_autoexposure_value != 1)
+		if (ae_pending || r_autoexposure_value != 1 || ae_skyvalue != 1)
 			GLR_AutoExposureReset();
 		ae_world = NULL;
 		return;
@@ -2994,7 +2994,7 @@ static void GLR_AutoExposureFrame(qboolean rtview)
 	}
 	r_autoexposure_value += (ae_target - r_autoexposure_value) * (1 - exp(-max(0, r_autoexposure_rate.value) * dt));
 	//the sky too, as Source's: the value only (the program reads it at draw time); its string stays "1"
-	r_autoexposure_sky.value = pow(r_autoexposure_value * ((r_exposure.value > 0) ? r_exposure.value : 1), 1/2.2);
+	r_autoexposure_sky.value = ae_skyvalue = pow(r_autoexposure_value * ((r_exposure.value > 0) ? r_exposure.value : 1), 1/2.2);
 }
 
 void GLR_RenderView (void)
@@ -3039,6 +3039,9 @@ void GLR_RenderView (void)
 		}
 //		Sys_Error ("R_RenderView: NULL worldmodel");
 	}
+
+	//FTESurf Patch 1764: the sky and UnlitGeneric follow the auto-exposure in a world view only, as model light does
+	r_autoexposure_sky.value = (r_refdef.flags & RDF_NOWORLDMODEL) ? 1 : ae_skyvalue;
 
 	//check if we're underwater (this also limits damage from stereo wallhacks).
 	Surf_SetupFrame();
