@@ -1494,16 +1494,25 @@ static void Surf_BuildLightMap (model_t *model, msurface_t *surf, int map, int s
 				//failure mode - sampler unbound, texture never created, format unsupported -
 				//land on the OLD behaviour instead of silently deleting every shadow in the game.
 				qbyte *svblock = svdst;
+				qboolean svchanged = false;
 				for (svrow = 0; svrow < tmax; svrow++)
 				{
 					for (svcol = 0; svcol < smax; svcol++)
-						svdst[svcol] = 255 - svsrc[svcol];
+					{
+						qbyte v = 255 - svsrc[svcol];
+						svchanged |= (svdst[svcol] != v);
+						svdst[svcol] = v;
+					}
 					svsrc += smax;
 					svdst += lm->width;
 				}
-				if (pad)	//FTESurf Patch 1781: the lightmap's one-texel border (Patch 1275), or a face's edge filters in its atlas neighbour's sun
-					Surf_PadLightmapBlock(svblock, smax, tmax, lm->width, 1);
-				lm->sunvis_modified = true;
+				//static data: a dlight's or a style's rebuild of the same face must not re-upload the page (FTESurf Patch 1781)
+				if (svchanged)
+				{
+					if (pad)	//FTESurf Patch 1781: the lightmap's one-texel border (Patch 1275), or a face's edge filters in its atlas neighbour's sun
+						Surf_PadLightmapBlock(svblock, smax, tmax, lm->width, 1);
+					lm->sunvis_modified = true;
+				}
 			}
 		}
 	}

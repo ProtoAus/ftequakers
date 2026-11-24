@@ -38,7 +38,7 @@
 !!cvar3f r_shadows_sunfloor=0 0 0
 !!cvar3f r_shadows_sunlm=0 0 0
 !!cvarf r_shadows_worldcast=1
-!!cvar3f r_shadows_throwdirection=0 0 -1
+!!cvar3f r_shadows_sundir=0 0 -1
 !!cvarf gl_overbright
 
 #include "sys/defs.h"
@@ -109,7 +109,7 @@ varying vec2 lm1, lm2, lm3;
 
 #ifdef FAKESHADOWS
 	varying vec3 shsunt;	//FTESurf Patch 1781: toward the sun in the surface's (s, t, n), as lightmapped.glsl
-	uniform vec3 cvar_r_shadows_throwdirection;
+	uniform vec3 cvar_r_shadows_sundir;	//the sun VRAD baked with (the plugin's; shadow_control may aim the shadows elsewhere)
 	varying vec4 vtexprojcoord;
 	#ifdef FAKESHADOWS_CASCADE
 	varying vec3 shwpos;	//FTESurf Patch 1762: world position for the sun cascades (sys/pcf.h CascadeShadowFilter)
@@ -164,7 +164,7 @@ varying vec2 lm1, lm2, lm3;
 		shwpos = (m_model*vec4(v_position.xyz, 1.0)).xyz;
 		#endif
 		{
-			vec3 tosun = -cvar_r_shadows_throwdirection;
+			vec3 tosun = -cvar_r_shadows_sundir;
 			shsunt = vec3(dot(tosun, (m_model*vec4(v_svector, 0.0)).xyz), dot(tosun, (m_model*vec4(v_tvector, 0.0)).xyz),
 				dot(tosun, (m_model*vec4(v_normal, 0.0)).xyz));
 		}
@@ -349,7 +349,10 @@ varying vec2 lm1, lm2, lm3;
 		#endif
 			vec3 lml = max(lmv, vec3(0.0)) / shk;
 			lml = mix(lml / 12.92, pow((lml + 0.055) / 1.055, vec3(2.4)), step(0.04045, lml));
-			vec3 sun = cvar_r_shadows_sunlm * (1.0 - texture2D(s_sunvis, lm0).r);
+			vec3 sun = cvar_r_shadows_sunlm * (1.0 - LMSAMPLE(s_sunvis, lm0).r);	//filtered as the lightmap is (P1275 bicubic)
+		#ifdef FAKESHADOWS
+			sun *= clamp(shlit, 0.0, 1.0);	//a shadow takes the baked sun out where the live sun is not drawn (worldcast 0, one map)
+		#endif
 		#ifdef FAKESHADOWS_CASCADE
 			if (cvar_r_shadows_worldcast > 0.0 && l_fakeshadowinfo[0].z > 0.5)
 			{
@@ -365,7 +368,7 @@ varying vec2 lm1, lm2, lm3;
 			#else
 				vec3 sunn = vec3(0.0, 0.0, 1.0);
 			#endif
-				float ndl = max(dot(sunn, normalize(shsunt)), 0.0);
+				float ndl = max(dot(sunn, shsunt) * inversesqrt(max(dot(shsunt, shsunt), 1e-8)), 0.0);
 				sun = mix(sun, cvar_r_shadows_sunlm * (0.984 * pow(ndl, 1.4) * clamp(shlit, 0.0, 1.0)), sunw);
 			}
 		#endif

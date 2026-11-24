@@ -26,7 +26,7 @@
 !!cvar3f r_shadows_sunfloor=0 0 0
 !!cvar3f r_shadows_vhvsun=0 0 0
 !!cvar3f r_shadows_sunlm=0 0 0
-!!cvar3f r_shadows_throwdirection=0 0 -1
+!!cvar3f r_shadows_sundir=0 0 -1
 !!cvarf r_shadows_worldcast=1
 
 // envmaps only
@@ -121,7 +121,7 @@ varying vec4 light;	//.a: FTESurf Patch 1780, Strata's baked direct sun share (t
 	#define LIVESUN
 	varying vec3 lsun_t;	//toward the sun in (s, t, n)
 	varying vec3 lsun_v;	//the vertex stage's directional term, which the live sun replaces
-	uniform vec3 cvar_r_shadows_throwdirection;
+	uniform vec3 cvar_r_shadows_sundir;
 	uniform vec3 cvar_r_shadows_sunlm;
 	uniform float cvar_r_shadows_worldcast;
 #endif
@@ -222,7 +222,7 @@ varying vec4 light;	//.a: FTESurf Patch 1780, Strata's baked direct sun share (t
 		light.rgb += dirv;
 		#ifdef LIVESUN
 		{
-			vec3 tosun = -cvar_r_shadows_throwdirection;
+			vec3 tosun = -cvar_r_shadows_sundir;
 			vec3 tm = vec3(dot(m_model[0].xyz, tosun), dot(m_model[1].xyz, tosun), dot(m_model[2].xyz, tosun));	//into model space
 			lsun_t = vec3(dot(tm, s), dot(tm, t), dot(tm, n));
 			lsun_v = dirv;

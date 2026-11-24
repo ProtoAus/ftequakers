@@ -10,6 +10,9 @@
 
 !!samps !UNLIT lightmap
 !!samps !UNLIT =LIGHTSTYLED lightmap1 lightmap2 lightmap3
+!!samps !UNLIT sunvis
+!!cvar3f r_shadows_sunlm=0 0 0
+!!cvarf gl_overbright
 
 // ftesurf (P195): the AnimatedTexture proxy -- a flipbook whose frames all live
 // in ONE VTF.  3,342 materials across 741 maps drive one, and every one of them
@@ -121,6 +124,8 @@ varying vec2 lm1, lm2, lm3;
 
 #ifdef FRAGMENT_SHADER
 uniform float cvar_r_autoexposure_sky;	//FTESurf Patch 1784: an unlit one (a sprite) takes the exposure as unlit.glsl does
+uniform vec3 cvar_r_shadows_sunlm;		//FTESurf Patch 1781
+uniform float cvar_gl_overbright;
 	#include "sys/fog.h"
 
 	#ifndef UNLIT
@@ -211,11 +216,27 @@ uniform float cvar_r_autoexposure_sky;	//FTESurf Patch 1784: an unlit one (a spr
 #endif
 
 	#ifndef UNLIT
-		diffuse_f.rgb *= lightmap_fragment();
+		{
+			vec3 alm = lightmap_fragment();
+			if (cvar_r_shadows_sunlm.r + cvar_r_shadows_sunlm.g + cvar_r_shadows_sunlm.b > 0.0)
+			{	//FTESurf Patch 1781: style 0 is the indirect light on a Strata page map: the baked sun goes back on, as
+				//lightmapped.glsl does with no cascades (an animated face is not drawn with them)
+			#ifdef LIGHTSTYLED
+				vec3 ak = max(e_lmscale[0].rgb / exp2(clamp(floor(cvar_gl_overbright), 0.0, 2.0)), vec3(1e-4));
+			#else
+				vec3 ak = max(e_lmscale.rgb / exp2(clamp(floor(cvar_gl_overbright), 0.0, 2.0)), vec3(1e-4));
+			#endif
+				vec3 al = max(alm, vec3(0.0)) / ak;
+				al = mix(al / 12.92, pow((al + 0.055) / 1.055, vec3(2.4)), step(0.04045, al));
+				al += cvar_r_shadows_sunlm * (1.0 - LMSAMPLE(s_sunvis, lm0).r);
+				alm = ak * mix(al * 12.92, 1.055 * pow(al, vec3(1.0/2.4)) - 0.055, step(0.0031308, al));
+			}
+			diffuse_f.rgb *= alm;
+		}
 	#endif
 		diffuse_f.a *= float(ALPHA) * e_colourident.a;	//FTESurf Patch 1218: a fading prop or brush entity, as unlit.glsl
-	#ifdef UNLIT
-		diffuse_f.rgb *= cvar_r_autoexposure_sky;	//FTESurf Patch 1784
+	#if defined(UNLIT) && !defined(MODELLIT)
+		diffuse_f.rgb *= cvar_r_autoexposure_sky;	//FTESurf Patch 1784 (MODELLIT's light already carries it: BE_ModelExposure)
 	#endif
 
 	#ifdef NOFOG

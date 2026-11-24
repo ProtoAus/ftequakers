@@ -103,6 +103,7 @@ static cvar_t *hl2_lightmap_repack;	//FTESurf Patch 281: see VBSP_RepackLighting
 static cvar_t *hl2_bumpstride;	//FTESurf Patch 268 D1: tag surfaces with their per-style luxel-set stride, see VBSP_ProbeLightmapStride
 static cvar_t *hl2_rnm;	//FTESurf Patch 1264: bumped faces lit by their basis maps, see VBSP_BuildRNM
 static cvar_t *hl2_sunpage;	//FTESurf Patch 1781: Strata's baked direct-sun page, see VBSP_BuildSunPage
+static cvar_t *hl2_dispnormals;	//FTESurf Patch 1781: displacement normals/tangents from the displaced grid, see VBSP_BuildSurfMesh
 static cvar_t *map_noareas;
 static cvar_t *map_autoopenportals;
 static cvar_t *hl2_areaportals;		//FTESurf Build 8
@@ -5153,11 +5154,13 @@ static void VBSP_SunPageToIndirect(model_t *mod)
 			lcur = 0.2126f*cur[0] + 0.7152f*cur[1] + 0.0722f*cur[2];
 			if (lflat > 0 && lcur > 0)
 				q = lcur / lflat;	//1 on a flat face (style 0 is the file's set); mean/flat on a basis-lit one
+			if (sv[i] * q > 255)
+				k = 255 / (sv[i] * q);	//what comes out must fit back in the page's byte
 			for (c = 0; c < 3; c++)
 			{
 				d[c] = prv->sun_intensity[c] * sv[i] * (1.0f/255) * q;
-				if (d[c] > cur[c])
-					k = min(k, cur[c] / d[c]);	//never more than the luxel holds, in the sun's own hue
+				if (d[c] * k > cur[c])
+					k = cur[c] / d[c];	//never more than the luxel holds, in the sun's own hue
 			}
 			for (c = 0; c < 3; c++)
 				cur[c] = (cur[c] - d[c]*k) * 255.0f;
@@ -5341,6 +5344,34 @@ static void VBSP_BuildSurfMesh(model_t *mod, msurface_t *surf, builddata_t *bd)
 				mesh->colors4f_array[sty][i][1] = 1;
 				mesh->colors4f_array[sty][i][2] = 1;
 				mesh->colors4f_array[sty][i][3] = ((int)dv->alpha&255)/255.0;
+			}
+		}
+		/*FTESurf Patch 1781: the displaced surface's own normal (central differences over the grid, on the face's side)
+		  and texture directions projected onto it and normalised, as a brush face's are below: the plane normal and the
+		  raw texinfo vectors (their length is texels per unit) put the live sun's N.L off by the texture scale.*/
+		if (hl2_dispnormals && hl2_dispnormals->ival && d->width > 0 && d->height > 0 &&
+			mesh->numvertexes == (d->width+1)*(d->height+1))
+		{
+			int w = d->width + 1, x, y;
+			for (i = 0; i < mesh->numvertexes; i++)
+			{
+				vec3_t du, dvv, n;
+				x = i % w;
+				y = i / w;
+				VectorSubtract(mesh->xyz_array[y*w + min(x+1, w-1)], mesh->xyz_array[y*w + max(x-1, 0)], du);
+				VectorSubtract(mesh->xyz_array[min(y+1, d->height)*w + x], mesh->xyz_array[max(y-1, 0)*w + x], dvv);
+				CrossProduct(du, dvv, n);
+				if (VectorNormalize(n) <= 0)
+					VectorCopy(surf->plane->normal, n);
+				if (DotProduct(n, surf->plane->normal) < 0)
+					VectorNegate(n, n);
+				VectorCopy(n, mesh->normals_array[i]);
+				miss = -DotProduct(n, mesh->snormals_array[i]);
+				VectorMA(mesh->snormals_array[i], miss, n, mesh->snormals_array[i]);
+				miss = -DotProduct(n, mesh->tnormals_array[i]);
+				VectorMA(mesh->tnormals_array[i], miss, n, mesh->tnormals_array[i]);
+				VectorNormalize(mesh->snormals_array[i]);
+				VectorNormalize(mesh->tnormals_array[i]);
 			}
 		}
 		return;
@@ -14800,13 +14831,17 @@ static qboolean VBSP_LoadModel(model_t *mod, qbyte *mod_base, size_t filelen, ch
 		//lump must leave props on bounce-only light, never fail the map load.
 		VBSP_LoadWorldLights						(mod, mod_base, &header.lumps[VLUMP_WORLDLIGHTS_HDR], &header.lumps[VLUMP_WORLDLIGHTS_LDR], usehdr, header.version);
 		{	//FTESurf Patch 1781: the sun the sun page is in units of (lightmapped.glsl); 0 = the shaders keep the bake
-			char sunlm[96] = "0 0 0";
+			char sunlm[96] = "0 0 0", sundir[96] = "0 0 -1";
 #ifdef HAVE_CLIENT
 			VBSP_SunPageToIndirect(mod);
 #endif
 			if (mod->sunvisdata && prv->sun_have)
+			{
 				Q_snprintfz(sunlm, sizeof(sunlm), "%g %g %g", prv->sun_intensity[0], prv->sun_intensity[1], prv->sun_intensity[2]);
+				Q_snprintfz(sundir, sizeof(sundir), "%g %g %g", prv->sun_normal[0], prv->sun_normal[1], prv->sun_normal[2]);
+			}
 			cvarfuncs->ForceSetString("r_shadows_sunlm", sunlm);
+			cvarfuncs->ForceSetString("r_shadows_sundir", sundir);	//the direction the light travels, as VRAD baked it
 		}
 
 		//after LoadFaces (needs surfaces + surfedges) and LoadDisplacements
@@ -15493,6 +15528,7 @@ qboolean VBSP_Init(void)
 		which walk was used either way.  MAPLATCH: the tags are written while the BSP is
 		read, so a map reload is when a change takes effect.
 		*/
+		hl2_dispnormals = cvarfuncs->GetNVFDG("hl2_dispnormals", "1", CVAR_MAPLATCH, "FTESurf Patch 1781: a displacement's vertices take the displaced surface's own normal and texture directions projected onto it and normalised (as brush faces' are). 0: the face's plane normal and the raw texture vectors. Takes effect on a map reload.", MAPOPTIONS);
 		hl2_sunpage = cvarfuncs->GetNVFDG("hl2_sunpage", "1", CVAR_MAPLATCH, "FTESurf Patch 1781: on a Strata (v25) map, keep its lightmap's baked direct-sun page so that, with the sun cascades on, the world takes the sun live (sharp, per pixel, through its normal maps) as Strata does, the bake beyond their reach. 0: the bake as it is. Takes effect on a map reload.", MAPOPTIONS);
 		hl2_rnm = cvarfuncs->GetNVFDG("hl2_rnm", "1", CVAR_MAPLATCH, "Light bumped Source brush faces as Source does (radiosity normal mapping): the three basis lightmaps VRAD stores for a $bumpmap face, weighted by the normal map or $ssbump; needs r_deluxemapping. 0 shows the flat lightmap and no bump lighting (an $ssbump material still reflects off its own normal). Takes effect on a map reload.", MAPOPTIONS);
 		hl2_bumpstride = cvarfuncs->GetNVFDG("hl2_bumpstride", "1", CVAR_MAPLATCH, "Walk a Source map's lightstyles at the stride VRAD wrote them: a $bumpmap face stores four luxel sets per style (flat plus three radiosity-normal-map basis maps), and 150 library maps add a non-lightmap record after every style's sets.\n0: the old walk, which summed a basis map in as the next lightstyle at full brightness and never read the real one, on ~67,000 faces across 153 library maps.\n1: probe the layout per map and skip the extra sets (default). Faces then show their real second style -- brighter where it is a bright switchable light, darker where it is dim. Maps whose layout cannot be proven from the lighting lump size fall back to 0 and say so in the console.", MAPOPTIONS);

@@ -5536,8 +5536,11 @@ static void BE_RenderMeshProgram(const shader_t *shader, const shaderpass_t *pas
 		//r_blackimage, not r_whiteimage: the texture holds sun OCCLUSION, so black = fully lit =
 		//shadow at full strength = the pre-SUNVIS behaviour. See the polarity note in
 		//defaultwall.glsl - getting this backwards deletes every shadow in the game.
+		//FTESurf Patch 1781: on a Source world the page is the baked sun the vmt shaders ADD back (1 - texel): no page must
+		//read as none, so white there
 		GL_LazyBind(i++, (svlm >= 0 && svlm < numlightmaps && TEXVALID(lightmap[svlm]->sunvis_texture))
-						? lightmap[svlm]->sunvis_texture : r_blackimage);
+						? lightmap[svlm]->sunvis_texture :
+						(cl.worldmodel && (cl.worldmodel->engineflags & MDLF_SOURCEBSP)) ? r_whiteimage : r_blackimage);
 	}
 	while (shaderstate.lastpasstmus > i)
 		GL_LazyBind(--shaderstate.lastpasstmus, r_nulltex);

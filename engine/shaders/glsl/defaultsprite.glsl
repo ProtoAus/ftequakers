@@ -1,5 +1,4 @@
 !!permu FOG
-!!cvarf r_autoexposure_sky
 !!samps 1
 //used by both particles and sprites.
 //note the fog blending mode is all that differs from defaultadditivesprite
@@ -18,7 +17,6 @@ void main ()
 #endif
 #ifdef FRAGMENT_SHADER
 uniform vec4 e_vlscale;
-uniform float cvar_r_autoexposure_sky;	//FTESurf Patch 1784: particles and sprites take the auto-exposure (1 when off)
 void main ()
 {
 	vec4 col = texture2D(s_t0, tc);
@@ -27,7 +25,6 @@ void main ()
 		discard;
 #endif
 	col = fog4blend(col * vc * e_colourident * e_vlscale);
-col.rgb *= cvar_r_autoexposure_sky;
 //FTESurf Patch 658: the GL renderer drew the unlitdecal bucket twice a frame, and every effect
 //in it was tuned by eye over that.  Drawn once, these write what two blends at col left:
 //a*(2-a) is exact for an alpha factor, c*(2-c) for a colour one.

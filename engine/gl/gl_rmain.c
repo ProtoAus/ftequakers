@@ -3075,6 +3075,12 @@ void GLR_RenderView (void)
 		else
 			r_refdef.flags &= ~RDF_UNDERWATER;
 	}
+	{	//FTESurf Patch 1781: the hl2 plugin sets the Strata sun at a Source map's load; nothing else clears it
+		extern cvar_t r_shadows_sunlm;
+		if (cl.worldmodel && !(cl.worldmodel->engineflags & MDLF_SOURCEBSP) &&
+			r_shadows_sunlm.vec4[0] + r_shadows_sunlm.vec4[1] + r_shadows_sunlm.vec4[2] != 0)
+			Cvar_ForceSet(&r_shadows_sunlm, "0 0 0");
+	}
 	if (r_refdef.flags & RDF_UNDERWATER)
 	{
 		extern cvar_t r_projection;
