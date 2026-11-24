@@ -1,5 +1,85 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1764 - Source's HDR auto-exposure, measured from the drawn frame (engine client/renderer.c, gl/gl_rmain.c gl_rlight.c gl_backend.c gl_warp.c gl_model.h, defaultskybox; plugin hl2/mod_vbsp.c, glsl/vmt/unlit.glsl; game cl_sun.qc cl_emit.qc)
+
+**Problem.** Lex, 24 Nov: "is there HDR exposure in the map we don't do?" -- yes: bhop_canals is lit only in HDR (its
+LDR lighting lump is empty) and carries an env_tonemap_controller at defaults, so Source/Momentum run auto-exposure in
+the 0.5-2.0 band (the dark barn brightens, a bright sky view darkens). We drew at exposure 1 (P1732's r_exposure is a
+fixed value; vbsp_exposure clamped the band round 1).
+
+**Change.** r_autoexposure: a few times a second GLR_AutoExposureFrame reads 32 rows of the finished 3D view (before the
+CSQC HUD; never a render target) into a pixel buffer behind a fence -- no stall -- and when the fence has passed takes 64
+samples a row, linear luminance divided by the exposure that drew it (its linear scale under vid_srgb). As Source's
+tonemap (mat_tonemap_algorithm 1) the brightest r_autoexposure_bright (2%) go to r_autoexposure_target, a dark frame
+rises until its average reaches r_autoexposure_minavg, the band clamps it, and the value eases at r_autoexposure_rate.
+It multiplies r_exposure on lightmaps, model light and -- as Source scales them -- the sky (the six-face box's vertex
+colours, the cube box's r_autoexposure_sky uniform) and UnlitGeneric surfaces; a model preview drawn without the world
+keeps the fixed exposure. It applies only on a Source map drawn with its HDR lighting (the plugin's own choice, new
+MDLF_SOURCEHDR), so the cvar left on by one map's csprogs does nothing on a Quake, GoldSrc or LDR map; a new map, turning
+it off or vid_restart drops a read in flight and starts again at 1. r_autoexposure_current shows the value, target and
+the two measured levels. The game turns it on when vbsp_autoexposure is 1 (new, archived, default 1), with the band from
+env_tonemap_controller's SetAutoExposureMin/Max at map spawn; it replaces vbsp_exposure's fixed value there.
+
+**Verified.** Rig, bhop_canals: barn (save 6) 2.0 (5.1 unclamped), the bright view at save 7 0.787, save 8 1.22, the ramp
+(save 5) 2.0. The target was calibrated on save 7 against Momentum's own screenshot: 0.6 left the frame darker (sky 118
+vs 130), 0.75 matches it within a few levels (ground 70 62 33 / Momentum 73 66 31, sky 131 135 131 / 130 137 135).
+Without the sky scaled the loop ran away to the minimum (the unscaled sky read brighter as the exposure fell); scaled,
+it is stable. A GoldSrc map with the cvar on draws at 1.
+
+**Limits.** Additive sprites, particles and UnlitTwoTexture (the light shafts) are not scaled. Measured after the scene
+gamma pass, so a player's v_gamma/v_contrast moves where it settles. One calibration point (Source's own constants
+give 0.6). Off-screen VR eyes are not measured.
+
+## Patch 1763 - A bumped prop is lit by its directional light per pixel (plugin hl2 glsl/vmt/vertexlit.glsl)
+
+**Problem.** Lex, 24 Nov, bhop_canals save 5's metal ramp: "no shadow mapping/bump mapping to the texture aswell, it's
+extremely flat and not based on the sun". vertexlit.glsl lit a model per vertex: ambient plus the light fold's
+directional term (the sun is in it); the normal map reached only Patch 268's ambient-cube ratio, so a flat corrugated
+panel took one light level across its face.
+
+**Change.** For #BUMP without VC (a VRAD bake has no directional half) or #AMBIENTCUBE, the vertex stage hands over the
+directional term's tangent-space direction, colour and its own value; the fragment stage takes that value off the
+interpolated light, applies the cube ratio to the ambient part only, and adds the directional ramp (the vertex stage's
+half-lambert or lambert) from the bumped normal, its green read as Source reads it (Patch 268 C: the default flip
+mirrors relief along V; hl2_bumpgreenfix still governs the cube ratio and reflections). A flat normal, or a zero light
+direction, reproduces the vertex result.
+
+**Verified.** Rig save 5: the corrugation reads as lit and shaded ridges, where it was a flat grey sheet; the other
+props unchanged in the saves 5-8 shots.
+
+**Limits.** Six more varyings on that permutation (the worst vmt case is 37 floats: inside GLSL 1.50's 64, over a bare
+GL 2 minimum of 32).
+
+## Patch 1762 - Sun shadow cascades on Source maps (engine gl/gl_shadow.c gl_vidcommon.c gl_backend.c gl_shader.c shader.h r_bishaders.h, shaders/glsl/defaultwall.glsl; plugin hl2 glsl/vmt lightmapped/transition/vertexlit, mod_vbsp.c; game cl_sun.qc)
+
+**Problem.** P1760 left Source maps on one sun shadow map, because their receivers read only l_cubematrix: r_shadows 2
+covered r_shadows_distance (1024 units) at r_shadows_res where Momentum's cascades reach env_cascade_light's
+maxshadowdistance (bhop_canals 4000) and are sharp near the camera.
+
+**Change.** sys/pcf.h gains CascadeShadowFilter(smap, proj, worldpos): the tightest sun cascade holding the pixel (a
+margin for the PCF), the atlas cell from l_fakeshadowcell, the same 3x3 PCF, the edge fade on the outermost only, the
+contact fade scaled to the cascade's depth range (l_fakeshadowinfo .y); l_fakeshadowinfo[0].z marks live cascades, is
+cleared at the start of every shadow frame, and without it the function reads the single map. New uniform
+l_fakeshadowworld (the slot matrices without the model matrix) so instanced props can pass a world position. The three
+vmt receivers and defaultwall (missing-material faces, Quake bmodels) pass theirs. On a Source world with
+r_shadows_slots 1 Sh_GenerateFakeShadows runs the cascade path (only there: no other receiver reads it; the prop atlas
+keeps one sun cell); default r_shadows_cascades 4 (the 2x2 atlas' maximum; 3 and 4 cost the same at canals save 8, 4 is
+sharper near). Each cascade's depth half-range is at least r_shadows_distance (r_shadow_orthodepth, read by
+GLBE_SelectDLight for the receiver matrix and bias too), so an occluder far above a receiver is not flattened onto it in
+the tight cascades and r_shadows_throwfade fades its long throw as the single map does. The game sets
+r_shadows_cascade_dist from env_cascade_light's maxshadowdistance (512-8192), else the engine default; off-screen static
+casters reach the outer cascade.
+
+**Verified.** Rig save 8: the pipe's shadow sharper than P1760's single map; uncapped frame 4.7 -> 6.1 ms there (the
+caster passes: shadows "entity draw" 0.14 -> 1.20 ms), 3.3 -> 3.9 at save 6, 2.0 -> 2.2 at save 5 -- still well under
+P1759's 8.3-9.4 / 6.4-7.0 / 5.3. The barn floor under its roof (save 6, looking down) the same with cascades as with
+the single map. A GoldSrc map with r_shadows 2 compiles and draws. r_shadows_cascades 1 is the old single map.
+
+**Limits.** The depth passes are not instanced. Source maps still draw no direction or lamp atlas. Off-screen casters
+near the outer cascade's corners (beyond its radius) are not drawn into it. Under r_tessellation, defaultwall's
+tessellation stage writes no cascade position (it never wrote the shadow coordinate either). The prop atlas' one sun
+cell no longer matches gl_shader.c's FAKESHADOWS_PERSP_FIRST off Source maps; nothing reads the lamp cells yet.
+
 ## Patch 1760 - r_shadows 2 on Source maps: the single sun map, and props cast as Strata's cascades do (engine gl/gl_shadow.c; plugin hl2/mod_vbsp.c; game sv_entities.qc sv_main.qc)
 
 **Problem.** Lex, 24 Nov, bhop_canals save 8 beside Momentum: "shadowmaps in my game are much lower quality then
