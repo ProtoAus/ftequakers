@@ -357,8 +357,9 @@ cvar_t r_autoexposure_min					= CVARD	("r_autoexposure_min", "0.5", "FTESurf Pat
 cvar_t r_autoexposure_max					= CVARD	("r_autoexposure_max", "2", "FTESurf Patch 1764: the highest auto-exposure (mat_autoexposure_max; SetAutoExposureMax).");
 cvar_t r_autoexposure_rate					= CVARD	("r_autoexposure_rate", "1", "FTESurf Patch 1764: how fast the exposure eases toward its target, per second (Source's tonemap rate).");
 cvar_t r_autoexposure_target				= CVARD	("r_autoexposure_target", "0.75", "FTESurf Patch 1764: the linear level the brightest pixels are brought to (Source's mat_tonemap_percent_target is 60; 0.75 matches Momentum's frame at bhop_canals within a few levels).");
-cvar_t r_autoexposure_bright				= CVARD	("r_autoexposure_bright", "0.02", "FTESurf Patch 1764: the share of pixels counted as the brightest (mat_tonemap_percent_bright_pixels 2).");
-cvar_t r_autoexposure_minavg				= CVARD	("r_autoexposure_minavg", "0.03", "FTESurf Patch 1764: the exposure rises until the average pixel reaches at least this linear level (mat_tonemap_min_avglum 3).");
+cvar_t r_autoexposure_bright				= CVARD	("r_autoexposure_bright", "0.005", "FTESurf Patch 1764: the share of pixels counted as the brightest (mat_tonemap_percent_bright_pixels 2). Patch 1775: 0.5% -- our clamped frame holds the sky and sun patches at most at full scale where Source's HDR frame lets a small skylight outshine the rest; at 2% a barn with skylights opened to the band's maximum where Momentum's stays near its minimum.");
+cvar_t r_autoexposure_minavg				= CVARD	("r_autoexposure_minavg", "0", "FTESurf Patch 1764: the exposure rises until the average pixel reaches at least this linear level (mat_tonemap_min_avglum 3). Patch 1775: 0 (off) -- Momentum's dark barn sits near the band's minimum, not its maximum.");
+cvar_t r_autoexposure_hdrsat				= CVARD	("r_autoexposure_hdrsat", "1", "FTESurf Patch 1775: a measured pixel at full scale (a skylight, a sun patch) counts as at least this linear level: our frame clamps what Source's HDR frame keeps, and without it a bright window read dimmer the further the exposure opened.");
 cvar_t r_autoexposure_current				= CVARFD	("r_autoexposure_current", "1", CVAR_NOSET|CVAR_NOSAVE, "FTESurf Patch 1764 (read-only): the auto-exposure in use and its target, updated with each measurement.");
 cvar_t r_autoexposure_sky					= CVARFD	("r_autoexposure_sky", "1", CVAR_NOSET|CVAR_NOSAVE, "FTESurf Patch 1764 (internal): what the skybox is multiplied by -- the exposure's 1/2.2 power.");
 float r_autoexposure_value = 1;			//FTESurf Patch 1764: the eased exposure in use (linear)
@@ -1603,6 +1604,7 @@ void Renderer_Init(void)
 	Cvar_Register(&r_autoexposure_target, GRAPHICALNICETIES);
 	Cvar_Register(&r_autoexposure_bright, GRAPHICALNICETIES);
 	Cvar_Register(&r_autoexposure_minavg, GRAPHICALNICETIES);
+	Cvar_Register(&r_autoexposure_hdrsat, GRAPHICALNICETIES);	//FTESurf Patch 1775
 	Cvar_Register(&r_autoexposure_current, GRAPHICALNICETIES);
 	Cvar_Register(&r_autoexposure_sky, GRAPHICALNICETIES);
 	Cvar_Register(&r_hdr_irisadaptation_multiplier, GRAPHICALNICETIES);

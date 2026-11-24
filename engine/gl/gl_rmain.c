@@ -70,7 +70,7 @@ extern cvar_t	r_underwateroverlay;	//FTESurf Patch 1013
 static qboolean r_uwnowarp;	//FTESurf Patch 1013: a Source volume with no overlay draws neither warp
 static shader_t *cc_warned;			//Patch 290: last grade shader we complained about
 extern cvar_t	r_hdr_framebuffer;
-extern cvar_t	r_exposure, r_autoexposure_sky, r_autoexposure_current, r_autoexposure, r_autoexposure_min, r_autoexposure_max, r_autoexposure_rate, r_autoexposure_target, r_autoexposure_bright, r_autoexposure_minavg;	//FTESurf Patch 1764
+extern cvar_t	r_exposure, r_autoexposure_sky, r_autoexposure_current, r_autoexposure, r_autoexposure_min, r_autoexposure_max, r_autoexposure_rate, r_autoexposure_target, r_autoexposure_bright, r_autoexposure_minavg, r_autoexposure_hdrsat;	//FTESurf Patch 1764/1775
 
 extern cvar_t	gl_screenangle;
 
@@ -2903,6 +2903,8 @@ static void GLR_AutoExposureRead(void)
 			{
 				const qbyte *p = px + r*ae_rowbytes + ((c*2+1) * w / (AE_COLS*2)) * 4;
 				float l = (0.2126f*lin[p[0]] + 0.7152f*lin[p[1]] + 0.0722f*lin[p[2]]) / ae_readexp;
+				if (max(p[0], max(p[1], p[2])) >= 250 && l < r_autoexposure_hdrsat.value)
+					l = r_autoexposure_hdrsat.value;	//FTESurf Patch 1775: clamped, so at least this bright
 				samp[n++] = l;
 				sum += l;
 			}

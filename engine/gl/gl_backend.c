@@ -5555,6 +5555,12 @@ qboolean GLBE_LightCullModel(vec3_t org, model_t *model)
 	{
 		float dist;
 		vec3_t disp;
+		//FTESurf Patch 1773: an ortho (sun) light's radius is its box's half-width across the sun, not a reach -- its depth
+		//runs further (r_shadow_orthodepth) and the frustum's four sides already cull.  The sphere test dropped a caster
+		//that sat sunward of the camera from the tighter cascades while its shadow fell inside them: a log's shadow faded
+		//as the player came closer and snapped back once it was deep inside the next cascade.
+		if (shaderstate.lightmode & LSHADER_ORTHO)
+			return false;
 		if (model->type == mod_alias)
 		{
 			VectorSubtract(org, shaderstate.lightorg, disp);

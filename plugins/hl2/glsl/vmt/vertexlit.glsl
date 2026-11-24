@@ -493,7 +493,16 @@ varying vec4 light;
 			#endif
 			vec3 shfloor = cvar_r_shadows_sunfloor * e_lmscale.rgb;
 			if (shfloor.r + shfloor.g + shfloor.b > 0.0)
-				lightrgb = mix(min(lightrgb, shfloor), lightrgb, shlit);
+			{	//FTESurf Patch 1774: as lightmapped.glsl -- down to the floor's level, hue kept part-way
+				float shll = dot(lightrgb, vec3(0.2126, 0.7152, 0.0722)), shlf = dot(shfloor, vec3(0.2126, 0.7152, 0.0722));
+				vec3 shdark = lightrgb;
+				if (shll > shlf)
+				{
+					float shr = shlf / shll;
+					shdark = mix(lightrgb * shr, shfloor, (1.0 - shr) * 0.5);
+				}
+				lightrgb = mix(shdark, lightrgb, shlit);
+			}
 			else
 				lightrgb *= mix(cvar_r_shadows_color, vec3(1.0), shlit);
 		}

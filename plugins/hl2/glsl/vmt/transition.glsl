@@ -330,7 +330,17 @@ varying vec2 lm1, lm2, lm3;
 		vec3 shfloor = cvar_r_shadows_sunfloor * e_lmscale.rgb / shob;
 	#endif
 		if (shfloor.r + shfloor.g + shfloor.b > 0.0)
-			lmv = mix(min(lmv, shfloor), lmv, shlit);
+			{	//FTESurf Patch 1774: down to the floor's LEVEL, the lightmap's own hue kept part-way -- a per-channel min left
+				//the channels above the floor at the floor and the rest at the lightmap, a teal-green cast on warm walls
+				float shll = dot(lmv, vec3(0.2126, 0.7152, 0.0722)), shlf = dot(shfloor, vec3(0.2126, 0.7152, 0.0722));
+				vec3 shdark = lmv;
+				if (shll > shlf)
+				{
+					float shr = shlf / shll;
+					shdark = mix(lmv * shr, shfloor, (1.0 - shr) * 0.5);
+				}
+				lmv = mix(shdark, lmv, shlit);
+			}
 		else
 			diffuse_f.rgb *= mix(cvar_r_shadows_color, vec3(1.0), shlit);
 #endif
