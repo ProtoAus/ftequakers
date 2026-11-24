@@ -2232,6 +2232,12 @@ static void *QDECL PlugBI_GetEngineInterface(const char *interfacename, size_t s
 		if (structsize == sizeof(tail))
 			return (void*)&tail;
 	}
+	if (!strcmp(interfacename, plugmodeltail1812_name))
+	{	//FTESurf Patch 1812: see com_mesh.h
+		static const int tail = 1812;
+		if (structsize == sizeof(tail))
+			return (void*)&tail;
+	}
 	if (!strcmp(interfacename, plugcorefuncs_name))
 	{
 		if (structsize == sizeof(plugcorefuncs))

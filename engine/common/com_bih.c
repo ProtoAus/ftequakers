@@ -1944,8 +1944,8 @@ static qboolean BIH_Trace(model_t *model, int forcehullnum, const framestate_t *
 {
 	struct bihtracekey_s key;
 	model_t *m = (bih_phyfix && model && model->phyfixed) ? model->phyfixed : model;	//as BIH_TraceUncached resolves it
-	if (bih_vphys && m && m->vphysalt && !VectorEquals(mins, maxs))
-		m = m->vphysalt;	//Patch 1713: likewise
+	if (bih_vphys && m && m->vphysalt && !VectorEquals(mins, maxs) && (m->type != mod_alias || bih_vphysmdl))
+		m = m->vphysalt;	//Patch 1713: likewise (Patch 1812: a model's from mover 17)
 	unsigned int h, k, i, w;
 	qboolean hit;
 
@@ -1957,7 +1957,7 @@ static qboolean BIH_Trace(model_t *model, int forcehullnum, const framestate_t *
 	key.nodes = m->cnodes;
 	key.contents = contents;
 	key.forcehullnum = forcehullnum;
-	key.flags = (capsule?1u:0u) | (axis?2u:0u) | (bih_sourceclip?4u:0u) | (bih_phybrushes?8u:0u) | (bih_phyfix?16u:0u) | (bih_phypick?32u:0u) | (bih_oldwind?64u:0u) | (bih_vphys?128u:0u) | (bih_oldbevel?256u:0u);
+	key.flags = (capsule?1u:0u) | (axis?2u:0u) | (bih_sourceclip?4u:0u) | (bih_phybrushes?8u:0u) | (bih_phyfix?16u:0u) | (bih_phypick?32u:0u) | (bih_oldwind?64u:0u) | (bih_vphys?128u:0u) | (bih_oldbevel?256u:0u) | (bih_vphysmdl?512u:0u);
 	key.bevels = pm_trisoup_bevels.ival;
 	key.rotated = pm_rotatedboxhulls.ival;
 	VectorCopy(start, key.v+0);
@@ -2025,8 +2025,8 @@ static qboolean BIH_TraceUncached(model_t *model, int forcehullnum, const frames
 	   brushes (CEngineTrace::ClipRayToVPhysics, "do ray traces with normal code, but use vphysics to do box
 	   traces").  The hl2 plugin builds vphysalt only for the submodels whose entity Source makes VPHYSICS,
 	   with vphysics' half-unit separation in the shape (mod_vbsp.c VBSP_VPhysAlt). */
-	if (bih_vphys && model->vphysalt && !VectorEquals(mins, maxs))
-	{
+	if (bih_vphys && model->vphysalt && !VectorEquals(mins, maxs) && (model->type != mod_alias || bih_vphysmdl))
+	{	//Patch 1812: a Source prop model's vphysalt (its .phy pieces as brushes) only from mover 17
 		model = model->vphysalt;
 		isvphys = true;	//its leaves are convex pieces: Patch 1248's crease rule, as for a prop's
 	}

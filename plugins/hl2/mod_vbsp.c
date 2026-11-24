@@ -1147,6 +1147,7 @@ demos say faces stand 0.5 proud, so Momentum's sweeps are not that one.
 static qboolean vbsp_tail1717;	//FTESurf Patch 1717: the exe answers plugmodeltail1717_name: model_t has LightPointFold
 static qboolean vbsp_tail1748;	//FTESurf Patch 1748: ...plugmodeltail1748_name: farfixbrushes/farfixknown, BIH_BRUSHPAIR
 static qboolean vbsp_tail1713;	//the exe answers plugmodeltail1713_name: its model_t has vphysalt (com_mesh.h)
+static qboolean vbsp_tail1812;	//FTESurf Patch 1812: ...plugmodeltail1812_name: it sweeps a model's vphysalt only from mover 17
 static unsigned int vbsp_stat_vphysmodels, vbsp_stat_vphysrefused, vbsp_stat_vphyspieces;
 
 typedef struct
@@ -1375,6 +1376,68 @@ static void VBSP_VPhysAlt(model_t *sub, const qbyte *solid, size_t len)
 	}
 	plugfuncs->Free(cont);
 	plugfuncs->Free(data);
+	plugfuncs->Free(pc.xyz);
+	plugfuncs->Free(pc.idx);
+	plugfuncs->Free(pc.ledgestart);
+}
+
+/*FTESurf Patch 1812: a Source prop model's .phy as brushes for mover 17. Mover 7 sweeps a STATIC prop's hull as its
+  convex pieces (Patch 764, world space); an entity prop (prop_dynamic, solid 6) still met the hull's triangle prisms,
+  whose 4-unit back slabs a thin hull cannot hold: bhop_canals' metal_panel01a ramp (3 units thick, turned -70 90 -180)
+  let the box sink through it (Lex save 5; P1761). These are the same pieces (mover 9's reading), model space, margin 0
+  as the static props'; the box is turned into model space by the trace (BIH_TraceUncached's axis path), as for Patch
+  1713's turning brush entities. Only on an exe that gates it at mover 17 (vbsp_tail1812).*/
+float RadiusFromBounds (const vec3_t mins, const vec3_t maxs);	//mod_hl2.c
+void VBSP_MDLVPhysAlt(model_t *mod)
+{
+	struct vbsp_phypieceset_s pc;
+	struct bihtransform_s trn;
+	struct bihleaf_s *leafs;
+	unsigned int *cont, nb = 0, i;
+	q2cbrush_t *brushes = NULL;
+	model_t *twin;
+	qboolean wrapped;
+
+	if (!vbsp_tail1713 || !vbsp_tail1812 || !modfuncs || mod->vphysalt)
+		return;
+	memset(&pc, 0, sizeof(pc));
+	if (!Mod_PHY_ConvexPieces(mod, filefuncs, modfuncs, &pc.xyz, &pc.idx, &pc.ledgestart, &pc.numledges, 1, &wrapped))
+		return;
+	memset(&trn, 0, sizeof(trn));
+	trn.axis[0][0] = trn.axis[1][1] = trn.axis[2][2] = 1;
+	cont = pc.numledges ? plugfuncs->Malloc(sizeof(*cont)*pc.numledges) : NULL;
+	twin = (cont && pc.numledges) ? plugfuncs->GMalloc(&mod->memgroup, sizeof(*twin)) : NULL;
+	if (twin)
+	{
+		for (i = 0; i < pc.numledges; i++)
+			cont[i] = FTECONTENTS_BODY;	//(an array, so the static-prop piece counts stay theirs)
+		memset(twin, 0, sizeof(*twin));
+		Q_strlcpy(twin->name, mod->name, sizeof(twin->name));
+		twin->type = mod->type;
+		twin->loadstate = MLS_LOADED;
+		ClearBounds(twin->mins, twin->maxs);
+		if (VBSP_PhyBrushesT(twin, &trn, &pc, 0, cont, &brushes, &nb) &&
+			(leafs = plugfuncs->Malloc(sizeof(*leafs)*nb)))
+		{
+			for (i = 0; i < nb; i++)
+			{
+				leafs[i].type = BIH_BRUSH;
+				leafs[i].data.brush = &brushes[i];
+				leafs[i].data.contents = brushes[i].contents;
+				VectorCopy(brushes[i].absmins, leafs[i].mins);
+				VectorCopy(brushes[i].absmaxs, leafs[i].maxs);
+				AddPointToBounds(brushes[i].absmins, twin->mins, twin->maxs);
+				AddPointToBounds(brushes[i].absmaxs, twin->mins, twin->maxs);
+			}
+			modfuncs->BIH_Build(twin, leafs, nb);
+			plugfuncs->Free(leafs);
+			twin->radius = RadiusFromBounds(twin->mins, twin->maxs);
+			mod->vphysalt = twin;
+		}
+		else
+			plugfuncs->GFreeAll(&twin->memgroup);
+	}
+	plugfuncs->Free(cont);
 	plugfuncs->Free(pc.xyz);
 	plugfuncs->Free(pc.idx);
 	plugfuncs->Free(pc.ledgestart);
@@ -15461,6 +15524,7 @@ qboolean VBSP_Init(void)
 	vbsp_tail1713 = plugfuncs->GetEngineInterface(plugmodeltail1713_name, sizeof(int)) != NULL;	//FTESurf Patch 1713
 	vbsp_tail1717 = plugfuncs->GetEngineInterface(plugmodeltail1717_name, sizeof(int)) != NULL;	//FTESurf Patch 1717
 	vbsp_tail1748 = plugfuncs->GetEngineInterface(plugmodeltail1748_name, sizeof(int)) != NULL;	//FTESurf Patch 1748
+	vbsp_tail1812 = plugfuncs->GetEngineInterface(plugmodeltail1812_name, sizeof(int)) != NULL;	//FTESurf Patch 1812
 
 	//nettest: a dedicated/headless server has no client Image/renderer interface (the same condition the
 	//"hl2: VTF/VMT/TTH support unavailable" banners report).  Mark qrenderer QR_NONE so the renderer-only

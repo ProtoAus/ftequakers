@@ -541,7 +541,8 @@ static qboolean PM_TransformedHullCheckFull (model_t *model, framestate_t *frame
 		else
 		{
 			//FTESurf Patch 1713: a box the Source mover sweeps meets vphysalt, which stands up to its margin proud
-			const model_t *bm = (bih_vphys && model->vphysalt && !VectorEquals(player_mins, player_maxs)) ? model->vphysalt : model;
+			const model_t *bm = (bih_vphys && model->vphysalt && !VectorEquals(player_mins, player_maxs) &&
+				(model->type != mod_alias || bih_vphysmdl)) ? model->vphysalt : model;	//(Patch 1812: likewise)
 			for (i = 0; i < 3; i++)
 			{
 				if (start_l[i]+player_mins[i] > bm->maxs[i] && end_l[i] + player_mins[i] > bm->maxs[i])

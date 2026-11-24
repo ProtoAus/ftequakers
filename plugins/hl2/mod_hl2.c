@@ -19,6 +19,7 @@ static plugfsfuncs_t *fsfuncs;
 //FTESurf Build 8: the model's COLLISION shape, which is not its render mesh.
 //See mod_phy.c.  hl2_propcollision is registered by VBSP_Init in mod_vbsp.c and
 //selects between the .phy hull, a bounding box and the render mesh.
+void VBSP_MDLVPhysAlt(model_t *mod);	//FTESurf Patch 1812, mod_vbsp.c
 galiasinfo_t *Mod_PHY_CollisionMesh (model_t *mod, int mode, int winding,
                                      plugfsfuncs_t *phy_filefuncs,
                                      plugmodfuncs_t *phy_modfuncs,
@@ -1662,6 +1663,8 @@ qboolean QDECL Mod_LoadHL2Model (model_t *mod, void *buffer, size_t fsize)
 			                                  FTECONTENTS_BODY, &unwrapped);
 
 		modfuncs->BIH_BuildAlias(mod, collision ? collision : mod->meshinfo);
+		if (mode == 1 && collision)
+			VBSP_MDLVPhysAlt(mod);	//FTESurf Patch 1812: its .phy pieces as brushes, for mover 17
 		//FTESurf Patch 888: a hull whose old indices wrapped also gets the tree mover 9
 		//traces (BIH_Trace swaps to it), in a twin freed with this model.
 		mod->phyfixed = NULL;

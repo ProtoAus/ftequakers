@@ -347,6 +347,9 @@ typedef struct modplugfuncs_s
 #define plugmodeltail1717_name "FTESurfModelTail/1717"
 //FTESurf Patch 1748: likewise for model_t.farfixbrushes/farfixknown, and the exe traces BIH_BRUSHPAIR (com_bih.h).
 #define plugmodeltail1748_name "FTESurfModelTail/1748"
+//FTESurf Patch 1812: the exe traces a Source model's vphysalt only from mover 17 (bih_vphysmdl); without it the hl2
+//plugin builds none for models -- an older exe would sweep them at 15 and 16.
+#define plugmodeltail1812_name "FTESurfModelTail/1812"
 } plugmodfuncs_t;
 #define MODPLUGFUNCS_VERSION 6	//FTESurf Patch 764: struct bihtransform_s grew (the plugin fills it, com_bih.c reads it); 888: again, and model_t.phyfixed
 
