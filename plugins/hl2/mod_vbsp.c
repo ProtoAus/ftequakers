@@ -6433,6 +6433,13 @@ static qboolean VBSP_LoadStaticProps(model_t *mod, qbyte *offset, size_t size, i
 		ent->skinnum = LittleLong(*(unsigned int*)prop);				prop += sizeof(unsigned int);
 		sent->fademindist = LittleFloat(*(float*)prop);					prop += sizeof(float);
 		sent->fademaxdist = LittleFloat(*(float*)prop);					prop += sizeof(float);
+		if (sent->fademindist > sent->fademaxdist && sent->fademaxdist > 0)
+		{	//FTESurf Patch 1800: Source swaps an inverted pair (UTIL_ComputeEntityFade); unswapped the fade fraction goes past 1
+			//and the prop is invisible at every distance -- bhop_canals' 64 (save 33's driftwood, rebar, cleats), drawn in Momentum
+			float t = sent->fademindist;
+			sent->fademindist = sent->fademaxdist;
+			sent->fademaxdist = t;
+		}
 		sent->lightorg[0] = LittleFloat(*(float*)prop);					prop += sizeof(float);
 		sent->lightorg[1] = LittleFloat(*(float*)prop);					prop += sizeof(float);
 		sent->lightorg[2] = LittleFloat(*(float*)prop);					prop += sizeof(float);
