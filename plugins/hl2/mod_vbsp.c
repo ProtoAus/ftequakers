@@ -1435,7 +1435,10 @@ void VBSP_MDLVPhysAlt(model_t *mod)
 			mod->vphysalt = twin;
 		}
 		else
+		{	//one rejected piece (flat, not convex) leaves the whole model on its triangles at 17
 			plugfuncs->GFreeAll(&twin->memgroup);
+			Con_DPrintf("%s: .phy pieces refused as brushes; mover 17 keeps its triangle collision\n", mod->name);
+		}
 	}
 	plugfuncs->Free(cont);
 	plugfuncs->Free(pc.xyz);

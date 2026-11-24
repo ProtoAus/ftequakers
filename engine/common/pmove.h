@@ -263,7 +263,7 @@ typedef struct
    Patch 1713: version 15 zeroes vertical speed whenever CategorizePosition sets a ground (Source's SetGroundEntity).
    Patch 1748: version 16 traces a far brush's bevels rebuilt about itself (BIH_BRUSHPAIR); a map with none pins 15.
    Patch 1812: version 17 sweeps a box against a Source prop model's .phy convex pieces as brushes (its vphysalt, as
-   static props since 7), not the hull's triangle prisms; a map with no solid such prop pins 16. */
+   static props since 7), not the hull's triangle prisms (before Patch 888's twin); it pins 17 on every map. */
 #define PMSRC_VERSION 17
 
 typedef struct {

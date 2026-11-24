@@ -6436,6 +6436,17 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify, const
 	if (exact && pinfound && !pinbad && hdrpin[1] == PHYSMODE_SOURCE && SV_PMSrcVer(hdrpin) < 16 && sv.world.worldmodel && sv.world.worldmodel->farfixbrushes)
 		Con_Printf("  ^3mover %g on a map with %u far brushes mover 16 rebuilt: replayed on their pre-1748 collision^7\n",
 		           hdrpin[0], sv.world.worldmodel->farfixbrushes);
+	//FTESurf Patch 1812: likewise -- a run below 17 met any solid prop model here as triangle prisms (review 2)
+	if (exact && pinfound && !pinbad && hdrpin[1] == PHYSMODE_SOURCE && SV_PMSrcVer(hdrpin) < 17)
+	{
+		int mi, n = 0;
+		for (mi = 1; mi < MAX_PRECACHE_MODELS; mi++)
+			if (sv.models[mi] && sv.models[mi]->type == mod_alias && sv.models[mi]->vphysalt)
+				n++;
+		if (n)
+			Con_Printf("  ^3mover %g on a map with %i prop model(s) mover 17 sweeps as .phy pieces: replayed on their"
+			           " pre-1812 triangle collision^7\n", hdrpin[0], n);
+	}
 	if (nlong)
 		Con_Printf("  ^1%i line(s) over %i bytes were truncated^7\n", nlong, (int)sizeof(line)-1);
 

@@ -153,33 +153,6 @@ const char *sv_pmpin_names[SV_PMPIN_COUNT] =
 //a NaN, which no cvar holds and only an edited file can.  A bump that moves
 //runs below 2 as well edits this.  The name check is here so the verifier,
 //which never fills a pin, makes it too.
-//FTESurf Patch 1812: does a solid entity carry a Source model with a vphysalt (its .phy pieces as brushes)? Only such a
-//map moves differently at mover 17. Cached per world and edict count (props spawn with the map).
-static qboolean SV_HasVPhysModels(void)
-{
-	static const model_t *cworld;
-	static int cnum = -1;
-	static qboolean cans;
-	int i, mi;
-	if (!svprogfuncs || !sv.world.worldmodel)
-		return false;
-	if (cworld == sv.world.worldmodel && cnum == sv.world.num_edicts)
-		return cans;
-	cans = false;
-	for (i = 1; i < sv.world.num_edicts && !cans; i++)
-	{
-		edict_t *e = EDICT_NUM_PB(svprogfuncs, i);
-		if (ED_ISFREE(e) || e->v->solid == SOLID_NOT || e->v->solid == SOLID_TRIGGER)
-			continue;
-		mi = (int)e->v->modelindex;
-		if (mi > 0 && mi < MAX_PRECACHE_MODELS && sv.models[mi] && sv.models[mi]->type == mod_alias && sv.models[mi]->vphysalt)
-			cans = true;
-	}
-	cworld = sv.world.worldmodel;
-	cnum = sv.world.num_edicts;
-	return cans;
-}
-
 int SV_PMSrcVer(const float *pin)
 {
 	float f = pin[SV_PMPIN_FIXRAMPBUGS];
@@ -202,12 +175,10 @@ int SV_PMSrcVer(const float *pin)
 	//  Below fixslopes 2 it moves as 13, and pins 13 so an older verifier still replays it.
 	//Patch 1713: v15 zeroes vertical speed on every grounding (Source's SetGroundEntity), at any fixslopes.
 	//Patch 1748: v16 traces far brushes' rebuilt bevels; on a world without any it moves as 15 and pins 15.
-	//Patch 1812: v17 sweeps prop models' .phy pieces as brushes; on a map with no solid such prop it moves as 16 and
-	//  pins 16 (and then as 15 there without far brushes).
+	//Patch 1812: v17 sweeps prop models' .phy pieces as brushes. It pins 17 on every map, as 15 did: a pin read from the
+	//  entities (solid props) could differ between the run and its replay (review 1: Enable/Disable, lazy loads).
 	if (pin[0] == 14 && !(pin[SV_PMPIN_FIXSLOPES] >= 2))
 		return 13;
-	if (pin[0] == 17 && !SV_HasVPhysModels())
-		return (sv.world.worldmodel && sv.world.worldmodel->farfixbrushes) ? 16 : 15;
 	if (pin[0] == 16 && !(sv.world.worldmodel && sv.world.worldmodel->farfixbrushes))
 		return 15;
 	if (pin[0] == 3 || pin[0] == 4 || pin[0] == 5 || pin[0] == 6 || pin[0] == 7 || pin[0] == 8 || pin[0] == 9 || pin[0] == 10 || pin[0] == 11 || pin[0] == 12 || pin[0] == 13 || pin[0] == 14 || pin[0] == 15 || pin[0] == 16 || pin[0] == 17)

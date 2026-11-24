@@ -1943,9 +1943,15 @@ static qboolean BIH_TraceUncached(model_t *model, int forcehullnum, const frames
 static qboolean BIH_Trace(model_t *model, int forcehullnum, const framestate_t *framestate, const vec3_t axis[3], const vec3_t start, const vec3_t end, const vec3_t mins, const vec3_t maxs, qboolean capsule, unsigned int contents, trace_t *out_trace)
 {
 	struct bihtracekey_s key;
-	model_t *m = (bih_phyfix && model && model->phyfixed) ? model->phyfixed : model;	//as BIH_TraceUncached resolves it
-	if (bih_vphys && m && m->vphysalt && !VectorEquals(mins, maxs) && (m->type != mod_alias || bih_vphysmdl))
-		m = m->vphysalt;	//Patch 1713: likewise (Patch 1812: a model's from mover 17)
+	model_t *m;	//as BIH_TraceUncached resolves it
+	if (bih_vphysmdl && bih_vphys && model && model->type == mod_alias && model->vphysalt && !VectorEquals(mins, maxs))
+		m = model->vphysalt;	//Patch 1812: a model's pieces before Patch 888's twin (which has none)
+	else
+	{
+		m = (bih_phyfix && model && model->phyfixed) ? model->phyfixed : model;
+		if (bih_vphys && m && m->vphysalt && !VectorEquals(mins, maxs) && m->type != mod_alias)
+			m = m->vphysalt;	//Patch 1713: likewise
+	}
 	unsigned int h, k, i, w;
 	qboolean hit;
 
@@ -2019,7 +2025,9 @@ static qboolean BIH_TraceUncached(model_t *model, int forcehullnum, const frames
 	struct bihtrace_s tr;
 	qboolean isvphys = false;
 
-	if (bih_phyfix && model->phyfixed)
+	if (bih_vphysmdl && bih_vphys && model->type == mod_alias && model->vphysalt && !VectorEquals(mins, maxs))
+		;	//Patch 1812: a model's vphysalt (below) before Patch 888's twin, which has none
+	else if (bih_phyfix && model->phyfixed)
 		model = model->phyfixed;	//Patch 888
 	/* Patch 1713: Source sweeps a BOX against a SOLID_VPHYSICS brush entity's vcollide and a ray against its
 	   brushes (CEngineTrace::ClipRayToVPhysics, "do ray traces with normal code, but use vphysics to do box
