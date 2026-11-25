@@ -1,5 +1,47 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1842 - narrow ordinary REC14 structural input cadence (reader only)
+
+**Problem.** Per-packet poses can exceed the mover tick frequency while carrying
+truthful consumed-clock timestamps. A physical sample-density fault alone cannot
+separate that chronology from inserted or retimed poses. Native pose selection
+also does not independently validate every visual timestamp.
+
+**Change.** The Python reader may substitute a complete structural input-boundary
+witness only at the unchanged upper-density fault, for otherwise-valid finished
+ordinary REC14 in a fresh counted Source17, fixed-divisor, zero-exclusion subset.
+All poses bind to canonical QC float32 consumed-clock boundaries; every input
+horizon obeys the native RunCmdPart bound. Supported PMS1 endpoints close outgoing
+inputs and derive fine/whole restored origins independently. The outgoing endpoint
+and first resumed pre-input share one owner: a pose after the restored seed before
+that input is prohibited. Optional poses and true zero-duration inputs are distinct
+from positive-duration zero-tick inputs. Fresh writer-shaped P1675 startlag is
+untimed metadata only; it never moves the origin. Every active pin rate is checked.
+The fresh pose's six position/velocity values must restate its seed at writer
+precision; exact replay does not independently compare that pre-input body.
+Known plat/pad finish marks remain non-clock metadata with unchanged diagnostics.
+Unsupported evidence retains the original rate fault; malformed evidence refuses.
+
+No native, movement, QC writer, version/codec, signing, receipt, ranking or engine
+commit-pin change. Structural COMPLETE is not NativePASS or eligibility. The
+public reader contract is `tools/p1842-input-cadence.md` in the QC repository.
+
+**Verified.** Registered pure-Python behavioral suite: 1,196 checks, zero failures.
+Four immutable ordinary recordings received separate revision-bound structural
+grades: three density-only refusals resolve and a sparse control stays unchanged.
+A duplicate at a genuine restored seam with an adjusted sample count refuses for
+lack of a new owner. Earlier fixture mistakes and the initial safe refusal of
+unrecognized startlag remain preserved in private test evidence, not regraded.
+Bootstrap-body mutations refuse and writer-rounded seed restatements pass. A
+paired same-byte comparison of 306 canonical recordings and 34 sidecars against
+the pre-change reader, using unchanged helpers, introduced zero faults; existing
+76 recording and 8 sidecar faults remained unchanged.
+
+**Limits / rollout.** Actual view/fzin/park contexts are explicitly outside this subset. Independent
+diff review, installed-caller/reader closure, root/platform and native operational
+gates remain separate. No build-number bump, live activation or publication is
+claimed. The engine implementation and existing commit pin remain unchanged.
+
 ## Patch 1838 - faster lobby load readiness and scalable filesystem lookup
 
 **Problem.** A 1,024-bucket filename index produced long collision chains with large mounted
