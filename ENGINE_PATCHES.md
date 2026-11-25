@@ -1,5 +1,30 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1843 - preserve shading on unbumped props with invalid tangents
+
+**Problem.** Some unbumped Source models have zero or normal-parallel imported
+UV tangents. The model shader still uses that frame for live sunlight and
+reflections. Normalizing an unusable binormal and projecting through a collapsed
+frame can produce featureless white faces instead of the authored texture.
+
+**Change.** Before normalization, unbumped vertex lighting checks frame lengths
+and relative normal/tangent cross magnitude. Only an unusable frame gets a stable
+orthogonal pair around its existing unit geometric normal. Usable authored frames,
+including mirrored ones, and every bumped-material path are unchanged. Lighting,
+reflections, shadows, exposure, masks and texture coordinates remain enabled and
+unchanged; there is no new setting or model-name exception.
+
+**Verified.** An isolated same-view native ABA reproduced white with the guard
+OFF, restored wood detail with it ON, then reproduced white again when restored
+OFF, with reflections, lighting and shadows held enabled. The temporary test
+control is not part of this change. `tools/test_vertexlit_tangent_frame.py`
+compiles the literal helper as float C++: 240 checks pass at both O0 and O2;
+the modelled old no-guard control fails both. The Linux HL2-only build succeeds,
+and its embedded shader matches the production source with no test control.
+One warning is in an unchanged material-parser comment, not the new helper.
+Native GLSL/installed-byte checks remain distinct from these numerical controls.
+No performance gain or closed-Source parity claim is made.
+
 ## Patch 1842 - narrow ordinary REC14 structural input cadence (reader only)
 
 **Problem.** Per-packet poses can exceed the mover tick frequency while carrying

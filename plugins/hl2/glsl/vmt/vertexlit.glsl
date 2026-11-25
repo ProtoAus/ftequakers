@@ -179,6 +179,25 @@ uniform float cvar_r_autoexposure_sky;	//FTESurf Patch 1811: Source exposes the 
 #ifdef VERTEX_SHADER
 	#include "sys/skeletal.h"
 
+#ifndef BUMP
+	//Unbumped imports may omit a usable UV tangent. Live sun and reflections
+	//still need an orthogonal frame; never normalize its zero binormal.
+	//n is the unit geometric normal. Keep every usable authored frame intact.
+	void VMT_UnbumpedFrame(vec3 n, inout vec3 s, inout vec3 t)
+	{
+		float s2 = dot(s, s);
+		float t2 = dot(t, t);
+		vec3 ns = cross(n, s);
+		if (!(s2 > 1e-20 && s2 < 1e20 && t2 < 1e20 &&
+			  t2 > 1e-12 * s2 && dot(ns, ns) > 1e-8 * s2))
+		{
+			vec3 axis = abs(n.z) < 0.999 ? vec3(0.0, 0.0, 1.0) : vec3(0.0, 1.0, 0.0);
+			s = normalize(cross(axis, n));
+			t = cross(n, s);
+		}
+	}
+#endif
+
 	float lambert(vec3 normal, vec3 dir)
 	{
 		return dot(normal, dir);
@@ -205,6 +224,9 @@ uniform float cvar_r_autoexposure_sky;	//FTESurf Patch 1811: Source exposes the 
 		norm = n = normalize(n);
 	#ifdef MISSPAT
 		mp_pos = w * float(MISSPAT);
+	#endif
+	#ifndef BUMP
+		VMT_UnbumpedFrame(n, s, t);
 	#endif
 		s = normalize(s);
 		t = normalize(t);

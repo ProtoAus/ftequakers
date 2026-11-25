@@ -1684,6 +1684,25 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "#ifdef VERTEX_SHADER\n"
 "#include \"sys/skeletal.h\"\n"
 
+"#ifndef BUMP\n"
+//Unbumped imports may omit a usable UV tangent. Live sun and reflections
+//still need an orthogonal frame; never normalize its zero binormal.
+//n is the unit geometric normal. Keep every usable authored frame intact.
+"void VMT_UnbumpedFrame(vec3 n, inout vec3 s, inout vec3 t)\n"
+"{\n"
+"float s2 = dot(s, s);\n"
+"float t2 = dot(t, t);\n"
+"vec3 ns = cross(n, s);\n"
+"if (!(s2 > 1e-20 && s2 < 1e20 && t2 < 1e20 &&\n"
+"t2 > 1e-12 * s2 && dot(ns, ns) > 1e-8 * s2))\n"
+"{\n"
+"vec3 axis = abs(n.z) < 0.999 ? vec3(0.0, 0.0, 1.0) : vec3(0.0, 1.0, 0.0);\n"
+"s = normalize(cross(axis, n));\n"
+"t = cross(n, s);\n"
+"}\n"
+"}\n"
+"#endif\n"
+
 "float lambert(vec3 normal, vec3 dir)\n"
 "{\n"
 "return dot(normal, dir);\n"
@@ -1710,6 +1729,9 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "norm = n = normalize(n);\n"
 "#ifdef MISSPAT\n"
 "mp_pos = w * float(MISSPAT);\n"
+"#endif\n"
+"#ifndef BUMP\n"
+"VMT_UnbumpedFrame(n, s, t);\n"
 "#endif\n"
 "s = normalize(s);\n"
 "t = normalize(t);\n"
