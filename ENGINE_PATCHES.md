@@ -1,5 +1,89 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1825 - $envmaptint and $envmapsaturation read Source's "{r g b}" form (plugin hl2/mat_vmt.c)
+
+**Problem.** Lex, 25 Nov, surf_thesteve save 18: the graffiti ramps lack Momentum's reflective sheen ("missing
+reflective material/property, and maybe bumpmapping?"). The material is LightmappedGeneric with a $bumpmap, an
+$envmapmask, a per-face patched cubemap and `$envmaptint "{69 69 69}"`. The two tint keys parsed "[r g b]" or one number;
+the curly 0-255 form went to atof("{69 69 69}") = 0, so the program compiled ENVTINT=0,0,0 and drew no reflection at all
+(shader_here). 5 of the 56 maps in the dev install carry the form (cat_brick*, cat_lava1, wall_1, carbon).
+
+**Change.** VMT_ParseTint: brackets or braces through VMT_ParseVec3 (braces divided by 255, not clamped), a bare number
+into all three as before.
+
+**Verified.** Rig, the save 18 pose at 1680x1050: ENVTINT 0,0,0 before, 0.270588 after; the ramp shows the masked
+cubemap sheen with the normal map through it, close to Lex's Momentum shot of the same ramp. The bump was already drawn
+(normalmap in the shader); it reads as flat without the reflection.
+
+## Patch 1823 - An entity too big for its leaf record is culled by the leaves it touches (engine client/renderer.c cl_ents.c cl_parse.c r_surf.c pr_csqc.c render.h, gl/gl_alias.c)
+
+**Problem.** Lex, 25 Nov, surf_thesteve save 6: "why does ramps way outside the PVS in the BSP get render in the
+skybox?" -- two dark blocks hang in the sky through the stage-3 window, and P1698's culling had not removed them. They
+are func_brush *130 (and four more big ramps on the map): its box touches more than MAX_ENT_LEAFS (32) clusters, so its
+record overflows (num_leafs -1) and VBSP_EdictInFatPVS tests the headnode -- visible when ANY leaf under the smallest
+node holding the box is. For a 4352x3584 ramp that node is half the map. From the save, none of *130's own leaves are in
+the eye's PVS (offline BSP walk). Source's client leaf system files each renderable in every leaf it touches and draws it
+only from visible leaves.
+
+**Change.** A client record that overflows keeps its box in the unused leaf slots with a marker (R_FindEntLeafs, at
+the network and CSQC entity fill sites; static entities keep the headnode answer, since their boxes ignore rotation and
+scale). The entity cull (BE_GenModelBatches, r_entpvs_source's record path; viewmodels exempt, as at the record gate)
+and CSQC checkpvs (on the link box joined with origin +/- radius x scale, the box the cull uses) split such a box along
+its longest axis until each part's record fits (8 levels, 511 queries at most; past that a part keeps the headnode
+answer) and draw the entity if any part is in the PVS. Areas stay untested for these entities, as before (Patch 257).
+Server records, the server's entity sends and every other reader are unchanged. `r_entpvs_exact 0` restores the
+headnode answer; r_voidscene_info counts the split culls and their box queries.
+
+**Verified.** Rig, the original save 6 pose (Lex deleted and re-numbered the slot; the deleted copy matches the
+screenshot's time): the two blocks drawn at r_entpvs_exact 0, gone at 1 (5 entities culled by a split box). All 35 of
+Lex's surf_thesteve save poses, on against off: only far ramps through sky windows differ (saves 5 and the original 6);
+the other pixel differences are rotating rings and dust motes that moved between the two shots; after review 1 the
+save 6 frame culls the 5 in 29 box queries. One independent review (viewmodels, static boxes, checkpvs's box: fixed).
+
+**Limits.** Frame time not measured; an unseen overflowed entity walks every part. Persistent decals, the plugin's
+detail-cell entities and r_ignoreentpvs 0 still take the headnode answer. An entity whose record fits is unchanged: a box touching a visible cluster draws even if the model's
+triangles there are hidden, as Source's would.
+
+## Patch 1822 - `!s N` on the stage a segmented run is on ends that run (game sv_timer.qc)
+
+**Problem.** Lex, 25 Nov: "!s 3 should end a segmented run if you're on one on stage 3". `!s N` on the stage you are
+already on, mid-run past the run's first stage, is a restart in place (SV_TimerWouldRestartSeg -> SV_TimerRestartSeg):
+the run and its clock survive, so a segmented run carried on.
+
+**Change.** SV_TimerChatLeg, which SV_ZoneChatCommand calls for `!s` just before the move (after the missing-destination
+refusal), voids a segmented run (FS_RunClass RC_SEGMENT) when that move would restart its stage; the move then arms a
+fresh stage-N attempt. A clean run still restarts the stage on its clock; `!r` is unchanged; the stage warp buttons
+reach it through the same command.
+
+**Verified.** Fixture with surf_thesteve's stage-2 zone moved into the start room: walk out, into stage 2, sl_save,
+sl_load ("segmented run"), `!s 2`. Control progs: "stage 2 restarted -- the run clock keeps going", still segmented.
+P1822 progs: "run cancelled (!s ends a segmented run)", then leg 2 startseg 1, class clean. A clean run, same walk,
+`!s 2`: "stage 2 restarted" with either build.
+
+## Patch 1821 - Players on the HUD: name, stage and live run time; the stage on the boards (game cl_players.qc cl_hud.qc cl_hudedit.qc cl_main.qc cl_scores.qc sv_timer.qc sv_main.qc, cfg default.cfg defaultuser.cfg)
+
+**Problem.** Lex, 25 Nov: "Better On screen display for players in the server, their time, and the stage they are on.
+I want this as a hud widget you can turn off and on via hud_edit. Just plain text names like in the leaderboard, also
+put which stage they are on on the leaderboard." No channel told a client another player's run: stats are the own
+player's, the spectate mirror the watched player's, and the only player list (the TAB board's float, P1590) had names
+and PBs, shown only while TAB was held.
+
+**Change.** Server: userinfo `*run = "state track seg segs flags value"` from a 0.25 s StartFrame walk (SV_RunKeyFrame);
+flags 1 stage run, 2 clock stopped (hold, TAS pause, stall, finish), 4 held/spectating. While the clock runs, value is
+the server time it read 0 at and clients count on with their own `time` (the mapclock key's way), otherwise the ticks;
+a key is rewritten only on a change or a drift past 0.2 s (at most once a second). Client: hud_edit element "Players"
+(hud_players, _x/_y/_size/_rows/_stage/_time/_solo), right-anchored under the map info: plain names in the colour worn,
+"stage 3/5" / "stage 3" / start / finished / spectating, m:ss.d live or the exact finish; on by default, drawn only with
+someone else on the server, never under a replay or the TAB board; the own row from the own stats. The TAB float gains
+a stage lane (dropped when squeezed beside the board, 1280x720), the Players view a STAGE column. HE_MAX/HUDE_MAX 32.
+`players_status` prints each slot's key and texts. An older server sends no key: names only.
+
+**Verified.** Build 0 warnings, qcframes clean. Linux rig, a dedicated server and two clients on surf_kitsune: A's
+"stage 1/9" clock 0:02.5 -> 0:06.4 on one publish; `!s 2` "stage 2 start" -> "stage 2"; the finish 0:10.875 as the
+server's line; the own row as the big timer; the hud_edit row, pane and switch; the float and Players view with the
+stage at 1080p, names only at 720p; installed qwprogs with the new csprogs: names only. Not run: a stage crossing inside
+a full run (the same run_t_seg the own HUD reads), bonus tracks, spectating, a lobby.
+
 ## Patch 1820 - map and zone downloads; one site menu; the admin and TAS upload pages in the site's look; admin runs explained and ~10x faster (game src/release/site, surfd/web, surfd/admin.py + templates, surfd/tasupd.py, tools/sitenav.py)
 
 **Problem.** Lex, 25 Nov: "it would be cool if people could download any map on the leaderboard with a button, also same
