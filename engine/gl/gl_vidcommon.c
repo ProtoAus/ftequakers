@@ -1644,6 +1644,7 @@ static const char *glsl_hdrs[] =
 				"uniform vec4 e_lmscale;\n"
 				"#endif\n"
 				"uniform vec4 e_lmsize;\n"	//FTESurf Patch 1275
+				"uniform float e_linearout;\n"	//FTESurf Patch 1814: 1 on an alpha-blended pass to be blended as in linear light (GLBE_LinearBlend)
 				"uniform vec3 e_origin;"
 				"uniform float e_time;"
 				"uniform vec3 e_eyepos;"
@@ -3152,6 +3153,8 @@ static void GLSlang_ProgAutoFields(program_t *prog, struct programpermu_s *pp, c
 	pp->a2cval = -1;
 	pp->lmsizeuniform = qglGetUniformLocationARB(pp->h.glsl.handle, "e_lmsize");	//FTESurf Patch 1275
 	pp->lmsizew = pp->lmsizeh = 0;
+	pp->linuniform = qglGetUniformLocationARB(pp->h.glsl.handle, "e_linearout");	//FTESurf Patch 1814
+	pp->linval = -1;
 
 	for (i = 0; shader_unif_names[i].name; i++)
 	{

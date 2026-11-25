@@ -568,6 +568,7 @@ struct programpermu_s
 	int a2cval;			//the value last written to it, -1 none
 	int lmsizeuniform;	//FTESurf Patch 1275: e_lmsize, the batch's lightmap page (w, h, 1/w, 1/h)
 	int lmsizew, lmsizeh;	//the size last written to it, 0 none
+	int linuniform, linval;	//FTESurf Patch 1814: e_linearout and the value last written to it (-1 none)
 #endif
 	unsigned int permutation;
 	unsigned int attrmask;

@@ -371,6 +371,7 @@ cvar_t r_lightstylesmooth_limit				= CVAR	("r_lightstylesmooth_limit", "2");
 cvar_t r_lightstylespeed					= CVAR	("r_lightstylespeed", "10");
 cvar_t r_lightstylescale					= CVAR	("r_lightstylescale", "1");
 cvar_t r_lightmap_scale						= CVARFD ("r_shadow_realtime_nonworld_lightmaps", "1", 0, "Scaler for lightmaps used when not using realtime world lighting. Probably broken.");
+cvar_t r_linearblend						= CVARD("r_linearblend", "1", "FTESurf Patch 1814: Source materials' alpha-blended surfaces (glass, translucent props) blend as in linear light, as Source's HDR does -- exactly over black and over white, within ~0.05 between: a bright pane over a dark room reads milky as in Source rather than see-through. 0: blend in display values.");
 cvar_t r_hdr_framebuffer					= CVARFCD("r_hdr_framebuffer", "0", CVAR_ARCHIVE, R_HDR_FramebufferFormat_Changed, "If enabled, the map will be rendered into a high-precision image framebuffer. This avoids issues with shaders that contribute more than 1 in any single pass (like overbrights). Can also be set to the name of an image format, to force rendering to that format first - interesting formats are L8, RGB565, B10G11R11F, and others.");
 cvar_t r_hdr_irisadaptation					= CVARF	("r_hdr_irisadaptation", "0", CVAR_ARCHIVE);
 cvar_t r_exposure							= CVARD	("r_exposure", "1", "FTESurf Patch 1732 (test): a fixed exposure, Source's linear tonemap scale -- lightmaps, model light, dynamic lights, scripted particles and sprites are multiplied by its 1/2.2 power (as Source's scale reaches them); the sky and classic particles are not. 1 = off. The game sets it from the map's env_tonemap_controller when vbsp_exposure is 1.");
@@ -1619,6 +1620,7 @@ void Renderer_Init(void)
 	Cvar_Register(&r_lightmap_format, GRAPHICALNICETIES);
 
 	Cvar_Register(&r_hdr_framebuffer, GRAPHICALNICETIES);
+	Cvar_Register(&r_linearblend, GRAPHICALNICETIES);
 	Cvar_Register(&r_hdr_irisadaptation, GRAPHICALNICETIES);
 	Cvar_Register(&r_exposure, GRAPHICALNICETIES);	//FTESurf Patch 1732
 	Cvar_Register(&r_autoexposure, GRAPHICALNICETIES);	//FTESurf Patch 1764

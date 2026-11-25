@@ -121,6 +121,33 @@ LIVE 24 Nov UTC: site 19:08Z (sitepage.ps1 into releases/0.1.68, read back byte 
 tasupd LIVE at cbefd439 (Lex's root upgrade, 25 Nov 00:51Z). The admin half LIVE in surfd generation gen1820 (primary
 b80a84f5, REF 281b7417; Lex's root install 05:07:55Z, swap 05:24:15-05:27:19Z, POSTFLIGHT PASS; tools/backend-pending.md).
 
+## Patch 1814 - Source glass and translucent props blend as in linear light (engine gl/gl_backend.c gl_vidcommon.c shader.h client/renderer.c; plugin hl2/glsl/vmt/lightmapped.glsl vertexlit.glsl)
+
+**Problem.** Lex, 24 Nov, save 36 (canals barn window): "Window/reflections are to reflective, and the white mark is a
+bit to visable?" -- ours shows the barn interior sharply through the pane, Momentum's pane is milky (upper pane 53 vs
+113, middle 52 vs 101). The material is plain LightmappedGeneric $translucent with a masked envmap; Source's blend is
+the ordinary SRC_ALPHA/ONE_MINUS_SRC_ALPHA (lightmappedgeneric_dx9_helper.cpp SetDefaultBlendingShadowState, alpha =
+base alpha). Forcing the pane opaque here gave Momentum's milk, so the layers matched and the blend did not: Source's
+HDR writes an sRGB target, which DX10+ hardware blends in linear light. Re-blending our own layers in linear light gave
+114 against Momentum's 107.
+
+**Change.** A program that reads the new e_linearout uniform gets 1 there on its alpha-blended passes (GLBE_LinearBlend,
+beside P1262's alpha coverage; cached per permutation; off in 2D and under r_linearblend 0). vmt/lightmapped and
+vmt/vertexlit then output the colour s' and alpha a' that make the blender's display-value mix equal linear light's
+over black and over white: g0 = srgb(a lin(s)), g1 = srgb(a lin(s) + 1 - a), a' = 1 - luma(g1 - g0), s' = g0/a' --
+within about 0.05 between (worst mid-grey behind). Hardware linear blending (an sRGB scene with GL_FRAMEBUFFER_SRGB)
+was built first and dropped: the scene is a float target holding display values, which P1785's dither needs. vmt/unlit
+is left out: func_smokevolume draws through it and P1772 matched Momentum's smoke under the old blend (the tunnel
+smoke at save 38 went opaque yellow linearly).
+
+**Verified.** Save 36: pane upper 52.8 -> 82.6 (Momentum 113.2), middle 51.7 -> 102.3 (101.1), the interior beams faint
+and the white streak blended into the haze; the wall around it identical. All 43 canals saves on/off: beyond save 36
+only glass and grilles change, 0.2-0.8% of a frame (barn windows from inside, the bars at save 17, the tower's panels);
+saves 1/11/38 differ by their moving water and smoke.
+
+**Limits.** Exact only for a black or white background, one alpha for three channels (luma). Unlit translucent
+materials, sprites and particles keep blending in display values. The scene's other blends are unchanged.
+
 ## Patch 1813 - The Strata live sun held to its baked page beside a cascade shadow: no lit strips at contact edges (plugin hl2/glsl/vmt/lightmapped.glsl transition.glsl, mod_vbsp.c)
 
 **Problem.** Lex, 25 Nov, saves 42/43 (bhop_canals, under the concrete overpass): "The fancy new shadowmap now has a

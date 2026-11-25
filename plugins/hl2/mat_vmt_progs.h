@@ -629,6 +629,19 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "if (e_alphacoverage > 0.0)\n"
 "gl_FragColor.a = min(a2c, 1.0);\n"
 "#endif\n"
+//FTESurf Patch 1814: an alpha-blended pass blended as in linear light (GLBE_LinearBlend): the colour and alpha that make
+//the blender's mix of display values linear light's exactly over black and over white (within ~0.05 between)
+"if (e_linearout > 0.5)\n"
+"{\n"
+"vec3 s = max(gl_FragColor.rgb, vec3(0.0));\n"
+"float a = clamp(gl_FragColor.a, 0.0, 1.0);\n"
+"vec3 l = a * mix(s / 12.92, pow((s + 0.055) / 1.055, vec3(2.4)), step(0.04045, s));\n"
+"vec3 l1 = l + (1.0 - a);\n"
+"vec3 g0 = mix(l * 12.92, 1.055 * pow(l, vec3(1.0/2.4)) - 0.055, step(0.0031308, l));\n"
+"vec3 g1 = mix(l1 * 12.92, 1.055 * pow(l1, vec3(1.0/2.4)) - 0.055, step(0.0031308, l1));\n"
+"float ap = clamp(1.0 - dot(g1 - g0, vec3(0.2126, 0.7152, 0.0722)), 1e-3, 1.0);\n"
+"gl_FragColor = vec4(g0 / ap, ap);\n"
+"}\n"
 "}\n"
 "#endif\n"
 },
@@ -2154,6 +2167,19 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "if (e_alphacoverage > 0.0)\n"
 "gl_FragColor.a = min(a2c, 1.0);\n"
 "#endif\n"
+//FTESurf Patch 1814: an alpha-blended pass blended as in linear light (GLBE_LinearBlend): the colour and alpha that make
+//the blender's mix of display values linear light's exactly over black and over white (within ~0.05 between)
+"if (e_linearout > 0.5)\n"
+"{\n"
+"vec3 s = max(gl_FragColor.rgb, vec3(0.0));\n"
+"float a = clamp(gl_FragColor.a, 0.0, 1.0);\n"
+"vec3 l = a * mix(s / 12.92, pow((s + 0.055) / 1.055, vec3(2.4)), step(0.04045, s));\n"
+"vec3 l1 = l + (1.0 - a);\n"
+"vec3 g0 = mix(l * 12.92, 1.055 * pow(l, vec3(1.0/2.4)) - 0.055, step(0.0031308, l));\n"
+"vec3 g1 = mix(l1 * 12.92, 1.055 * pow(l1, vec3(1.0/2.4)) - 0.055, step(0.0031308, l1));\n"
+"float ap = clamp(1.0 - dot(g1 - g0, vec3(0.2126, 0.7152, 0.0722)), 1e-3, 1.0);\n"
+"gl_FragColor = vec4(g0 / ap, ap);\n"
+"}\n"
 "}\n"
 "#endif\n"
 },

@@ -1873,6 +1873,21 @@ void GLBE_SceneMSAA_Begin(texid_t col, texid_t depth, int key)
 	MSAA_Begin(&be_msaa, GLBE_SceneMSAA_Samples(), col, depth, key, vid.fbpwidth, vid.fbpheight, false);
 #endif
 }
+//FTESurf Patch 1814: Source's HDR blends translucent surfaces in linear light (an sRGB target on DX10+ hardware); a gamma
+//blend of canals' window over the dark barn read 53 where Momentum shows 107 (a linear re-blend of the same layers: 114).
+//The scene here is a float target holding display values (P1785's dither needs it), so a program that reads e_linearout
+//rewrites its colour and alpha for its alpha-blended passes: the blend is then linear light's over black and over white.
+static void GLBE_LinearBlend(struct programpermu_s *perm, unsigned int sbits)
+{
+	extern cvar_t r_linearblend;
+	qboolean want = perm->linuniform != -1 && r_linearblend.ival && !shaderstate.force2d &&
+		(sbits & SBITS_BLEND_BITS) == (SBITS_SRCBLEND_SRC_ALPHA|SBITS_DSTBLEND_ONE_MINUS_SRC_ALPHA);
+	if (perm->linuniform != -1 && perm->linval != want)
+	{
+		qglUniform1fARB(perm->linuniform, want);
+		perm->linval = want;
+	}
+}
 void GLBE_SceneMSAA_End(void)
 {
 #ifndef GL_STATIC
@@ -5481,6 +5496,7 @@ static void BE_RenderMeshProgram(const shader_t *shader, const shaderpass_t *pas
 
 	BE_SendPassBlendDepthMask(pass->shaderbits);
 	GLBE_AlphaCoverage(permu);	//FTESurf Patch 1262: after the blend bits it reads
+	GLBE_LinearBlend(permu, pass->shaderbits);	//FTESurf Patch 1814
 
 	for (i = 0; i < pass->numMergedPasses; i++)
 	{
