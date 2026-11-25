@@ -6052,7 +6052,7 @@ void CL_LinkStaticEntities(void *pvs, int *areas)
 				VectorCopy(stat->state.origin, mins);
 				VectorCopy(stat->state.origin, maxs);
 			}
-			cl.worldmodel->funcs.FindTouchedLeafs(cl.worldmodel, &stat->ent.pvscache, mins, maxs);
+			R_FindEntLeafs(cl.worldmodel, &stat->ent.pvscache, mins, maxs);	//FTESurf Patch 1823
 		}
 		else if (clmodel->loadstate != MLS_LOADED)
 		{
@@ -6960,7 +6960,7 @@ void CL_LinkPacketEntities (void)
 				VectorAdd(model->mins, ent->origin, absmin);
 				VectorAdd(model->maxs, ent->origin, absmax);
 			}
-			cl.worldmodel->funcs.FindTouchedLeafs(cl.worldmodel, &ent->pvscache, absmin, absmax);
+			R_FindEntLeafs(cl.worldmodel, &ent->pvscache, absmin, absmax);	//FTESurf Patch 1823: keeps an overflowed record's box
 		}
 
 		cl_numvisedicts++;

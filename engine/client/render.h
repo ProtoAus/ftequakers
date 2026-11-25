@@ -418,6 +418,9 @@ void BE_GenModelBatches(struct batch_s **batches, const struct dlight_s *dl, uns
 //gl_alias.c
 void R_GAliasFlushSkinCache(qboolean final);
 void R_GAlias_DrawBatch(struct batch_s *batch);
+void R_FindEntLeafs(struct model_s *w, pvscache_t *pc, const vec3_t mins, const vec3_t maxs);	//FTESurf Patch 1823 (renderer.c)
+qboolean R_EntLeafsBox(const pvscache_t *pc, vec3_t mins, vec3_t maxs);
+qboolean R_EntPVSSplit(struct model_s *wm, const vec3_t mins, const vec3_t maxs, const qbyte *pvs, int depth);	//gl_alias.c
 void R_GAlias_GenerateBatches(entity_t *e, struct batch_s **batches);
 void R_LightArraysByte_BGR(const entity_t *entity, vecV_t *coords, byte_vec4_t *colours, int vertcount, vec3_t *normals, qboolean colormod);
 void R_LightArrays(const entity_t *entity, vecV_t *coords, avec4_t *colours, int vertcount, vec3_t *normals, float scale, qboolean colormod);

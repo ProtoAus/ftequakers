@@ -145,11 +145,33 @@ cvar_t r_ignoreentpvs						= CVARD ("r_ignoreentpvs", "0", "Disables pvs culling
 //FTESurf Patch 1698: with the sky a hole (gl_warp.c), what is drawn must be what the PVS holds, as Source's client leaf system culls.
 cvar_t r_entpvs_source = CVARD("r_entpvs_source", "1", "FTESurf Patch 1698: on a Source map, entities and persistent decals with a leaf record are culled by each view's PVS and areas even under r_ignoreentpvs 1, as Source culls every renderable; one without a record is still drawn. 0: frustum only (before Patch 1698).");
 cvar_t r_entpvs_active = CVARFD("r_entpvs_active", "0", CVAR_NOSET|CVAR_NOSAVE|CVAR_NORESET, "Set by the engine: 1 while r_entpvs_source applies to the loaded map (a Source map). CSQC culls its own polygons by the PVS when it reads 1.");
+cvar_t r_entpvs_exact = CVARD("r_entpvs_exact", "1", "FTESurf Patch 1823: under r_entpvs_source, an entity too big for its leaf record is drawn only when a leaf its box touches is in the view's PVS (the box is split until each part's record fits). 0: any visible leaf under the node holding the box draws it (before Patch 1823).");
 qboolean R_EntPVSSource(void)
 {
 	model_t *w = cl.worldmodel;
 	return r_entpvs_source.ival && w && w->loadstate == MLS_LOADED && (w->engineflags & MDLF_SOURCEBSP) &&
 		w->funcs.EdictInFatPVS && w->funcs.FindTouchedLeafs;
+}
+//FTESurf Patch 1823: a client record that overflowed to its headnode keeps its box in the unused leaf slots, so the
+//entity cull (gl_alias.c R_EntPVSSplit) can test the leaves that box touches. Server records never carry it.
+#define R_PVSBOX_MAGIC 0x50313832u
+void R_FindEntLeafs(model_t *w, pvscache_t *pc, const vec3_t mins, const vec3_t maxs)
+{
+	w->funcs.FindTouchedLeafs(w, pc, mins, maxs);
+	if (pc->num_leafs == -1 && mins && maxs)
+	{
+		memcpy(&pc->leafnums[0], mins, sizeof(vec3_t));
+		memcpy(&pc->leafnums[3], maxs, sizeof(vec3_t));
+		pc->leafnums[6] = R_PVSBOX_MAGIC;
+	}
+}
+qboolean R_EntLeafsBox(const pvscache_t *pc, vec3_t mins, vec3_t maxs)
+{
+	if (pc->num_leafs != -1 || pc->leafnums[6] != R_PVSBOX_MAGIC)
+		return false;
+	memcpy(mins, &pc->leafnums[0], sizeof(vec3_t));
+	memcpy(maxs, &pc->leafnums[3], sizeof(vec3_t));
+	return true;
 }
 
 cvar_t mod_md3flags							= CVARD  ("mod_md3flags", "1", "The flags field of md3s was never officially defined. If this is set to 1, the flags will be treated identically to mdl files. Otherwise they will be ignored. Naturally, this is required to provide rotating pickups in quake.");
@@ -1749,6 +1771,7 @@ void Renderer_Init(void)
 	Cvar_Register (&r_ignoreentpvs, "Hacky bug workarounds");
 	Cvar_Register (&r_entpvs_source, GRAPHICALNICETIES);	//FTESurf Patch 1698
 	Cvar_Register (&r_entpvs_active, GRAPHICALNICETIES);
+	Cvar_Register (&r_entpvs_exact, GRAPHICALNICETIES);
 	Cvar_Register (&r_fullbright, SCREENOPTIONS);
 	Cvar_Register (&r_drawentities, GRAPHICALNICETIES);
 	Cvar_Register (&r_drawviewmodel, GRAPHICALNICETIES);

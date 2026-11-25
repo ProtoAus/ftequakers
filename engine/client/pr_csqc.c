@@ -841,7 +841,7 @@ static qboolean CopyCSQCEdictToEntity(csqcedict_t *fte_restrict in, entity_t *ft
 					amax[i] = max(amax[i], in->v->absmax[i]);
 				}
 			}
-			cl.worldmodel->funcs.FindTouchedLeafs(cl.worldmodel, &out->pvscache, amin, amax);
+			R_FindEntLeafs(cl.worldmodel, &out->pvscache, amin, amax);	//FTESurf Patch 1823
 		}
 	}
 
@@ -1074,7 +1074,7 @@ static void QCBUILTIN PF_cs_makestatic (pubprogfuncs_t *prinst, struct globalvar
 		cl_static_entities[cl.num_statics].emit = trailkey_null;
 		cl_static_entities[cl.num_statics].mdlidx = in->v->modelindex;
 		if (cl.worldmodel && cl.worldmodel->funcs.FindTouchedLeafs)
-			cl.worldmodel->funcs.FindTouchedLeafs(cl.worldmodel, &cl_static_entities[cl.num_statics].ent.pvscache, in->v->absmin, in->v->absmax);
+			R_FindEntLeafs(cl.worldmodel, &cl_static_entities[cl.num_statics].ent.pvscache, in->v->absmin, in->v->absmax);	//FTESurf Patch 1823
 		else
 			memset(&cl_static_entities[cl.num_statics].ent.pvscache, 0, sizeof(cl_static_entities[cl.num_statics].ent.pvscache));
 		cl.num_statics++;
@@ -2996,6 +2996,11 @@ static void QCBUILTIN PF_cs_checkpvs(pubprogfuncs_t *prinst, struct globalvars_s
 	areas[0] = 1;
 	areas[1] = area;
 	G_FLOAT(OFS_RETURN) = w->funcs.EdictInFatPVS(w, &ent->pvsinfo, pvs, area > 0 ? areas : NULL);
+	{	//FTESurf Patch 1823: an overflowed record answers by the leaves its link box touches, as the entity cull does
+		extern cvar_t r_entpvs_exact;
+		if (G_FLOAT(OFS_RETURN) && ent->pvsinfo.num_leafs == -1 && r_entpvs_exact.ival && ent->v->absmin[0] <= ent->v->absmax[0])
+			G_FLOAT(OFS_RETURN) = R_EntPVSSplit(w, ent->v->absmin, ent->v->absmax, pvs, 0);
+	}
 }
 
 static void QCBUILTIN PF_R_RenderScene(pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)

@@ -3905,6 +3905,27 @@ static void R_SortModelBatches(batch_t **list, const char *what)
 	}
 }
 
+//FTESurf Patch 1823: a record that overflowed (num_leafs -1, more than MAX_ENT_LEAFS clusters or 128 leaves) was tested
+//by its headnode: drawn when ANY leaf under the smallest node holding the box was visible -- for a big ramp, half the map
+//(surf_thesteve: func_brush *130 through the sky from 10,000 units). Source's client leaf system draws a renderable from
+//the visible leaves it touches only, so split the record's box (renderer.c R_FindEntLeafs) until each half fits.
+qboolean R_EntPVSSplit(model_t *wm, const vec3_t mins, const vec3_t maxs, const qbyte *pvs, int depth)
+{
+	pvscache_t pc;
+	vec3_t lo, hi;
+	int a = 0, i;
+	wm->funcs.FindTouchedLeafs(wm, &pc, mins, maxs);
+	if (pc.num_leafs >= 0 || depth >= 8)	//256 boxes at most; past it a part keeps the headnode answer
+		return wm->funcs.EdictInFatPVS(wm, &pc, pvs, NULL);	//areas: an overflowed record never had them (mod_vbsp.c P257)
+	for (i = 1; i < 3; i++)
+		if (maxs[i] - mins[i] > maxs[a] - mins[a])
+			a = i;
+	VectorCopy(maxs, hi);
+	VectorCopy(mins, lo);
+	hi[a] = lo[a] = (mins[a] + maxs[a]) * 0.5f;
+	return R_EntPVSSplit(wm, mins, hi, pvs, depth + 1) || R_EntPVSSplit(wm, lo, maxs, pvs, depth + 1);
+}
+
 void BE_GenModelBatches(batch_t **batches, const dlight_t *dl, unsigned int bemode, const qbyte *worldpvs, const int *worldareas)
 {
 	int		i, skipfrom, skipto;
@@ -3919,7 +3940,8 @@ void BE_GenModelBatches(batch_t **batches, const dlight_t *dl, unsigned int bemo
 //	unsigned int orig_numstrisvert = cl_numstrisvert;
 	extern cvar_t r_ignoreentpvs; //legacy value is 1...
 	extern qboolean R_EntPVSSource(void);
-	extern int r_entpvs_culled, r_entpvs_norecord;
+	extern int r_entpvs_culled, r_entpvs_norecord, r_entpvs_split;
+	extern cvar_t r_entpvs_exact;
 	qboolean recordsonly = false;
 
 	if (r_ignoreentpvs.ival)
@@ -3992,7 +4014,7 @@ void BE_GenModelBatches(batch_t **batches, const dlight_t *dl, unsigned int bemo
 		r_voidvis_edicts = cl_numvisedicts - r_refdef.firstvisedict;
 		r_voidvis_brush = 0;
 		r_voidvis_dropped = 0;
-		r_entpvs_culled = r_entpvs_norecord = 0;
+		r_entpvs_culled = r_entpvs_norecord = r_entpvs_split = 0;
 		for (i=r_refdef.firstvisedict ; i<cl_numvisedicts ; i++)
 		{
 			ent = &cl_visedicts[i];
@@ -4068,6 +4090,16 @@ void BE_GenModelBatches(batch_t **batches, const dlight_t *dl, unsigned int bemo
 			if (countcensus && recordsonly)
 				r_entpvs_culled++;
 			continue;
+		}
+		if (recordsonly && ent->pvscache.num_leafs == -1 && ent->model && r_entpvs_exact.ival)
+		{	//FTESurf Patch 1823: passed by its headnode only; the leaves it touches decide
+			vec3_t mins, maxs;
+			if (R_EntLeafsBox(&ent->pvscache, mins, maxs) && !R_EntPVSSplit(cl.worldmodel, mins, maxs, worldpvs, 0))
+			{
+				if (countcensus)
+					r_entpvs_culled++, r_entpvs_split++;
+				continue;
+			}
 		}
 		if (countcensus && recordsonly && (!ent->pvscache.num_leafs || (ent->flags & (RF_WEAPONMODEL|RF_DEPTHHACK))))
 			r_entpvs_norecord++;
