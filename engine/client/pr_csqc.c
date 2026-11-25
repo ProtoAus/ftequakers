@@ -1132,6 +1132,63 @@ static void QCBUILTIN PF_R_AddEntityLighting(pubprogfuncs_t *prinst, struct glob
 	}
 }
 
+/*Lighting-only draw API for ordinary models. The affine columns transform the engine's
+  existing origin+24Z sample, not the entity. This does not specify Source's closed
+  renderer consumer point, origin/offset precedence, or dynamic-light policy. QC owns
+  helper matrices/references and chooses ONE builtin; weapons return 0 for fallback.*/
+static void PF_R_AddEntityLightingPoint(pubprogfuncs_t *prinst, struct globalvars_s *pr_globals, qboolean relative)
+{
+	csqcedict_t *in = (void*)G_EDICT(prinst, OFS_PARM0);
+	entity_t ent;
+	vec3_t point, base;
+	int i, j;
+	G_FLOAT(OFS_RETURN) = 0;
+	if (ED_ISFREE(in) || in->entnum == 0)
+	{
+		csqc_deprecated("Tried drawing a free/removed/world entity\n");
+		return;
+	}
+	for (i = 0; i < (relative ? 4 : 1); i++)
+		for (j = 0; j < 3; j++)
+			if (!isfinite(G_VECTOR(OFS_PARM1 + i*3)[j]))
+				return;
+	//V_AddAxisEntity silently drops a full list; success must mean actually submitted.
+	if (cl_numvisedicts == cl_maxvisedicts)
+		return;
+	if (!CopyCSQCEdictToEntity(in, &ent) || (ent.flags & RF_WEAPONMODEL))
+		return;
+	if (relative)
+	{
+		VectorCopy(ent.origin, base);
+		base[2] += 24;
+		for (i = 0; i < 3; i++)
+			point[i] = G_VECTOR(OFS_PARM1)[i] +
+				G_VECTOR(OFS_PARM2)[i]*base[0] +
+				G_VECTOR(OFS_PARM3)[i]*base[1] +
+				G_VECTOR(OFS_PARM4)[i]*base[2];
+	}
+	else
+		VectorCopy(G_VECTOR(OFS_PARM1), point);
+	for (i = 0; i < 3; i++)
+		if (!isfinite(point[i]))
+			return;
+	VectorCopy(point, ent.light_samplepoint);
+	ent.light_known = MODEL_LIGHT_PENDING_POINT;
+	CLQ1_AddShadow(&ent);
+	V_AddAxisEntity(&ent);
+	G_FLOAT(OFS_RETURN) = 1;
+}
+
+static void QCBUILTIN PF_R_AddEntityLightingOrigin(pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
+{
+	PF_R_AddEntityLightingPoint(prinst, pr_globals, false);
+}
+
+static void QCBUILTIN PF_R_AddEntityLightingOffset(pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
+{
+	PF_R_AddEntityLightingPoint(prinst, pr_globals, true);
+}
+
 static void QCBUILTIN PF_R_RemoveEntity(pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
 {
 	csqcedict_t *in = (void*)G_EDICT(prinst, OFS_PARM0);
@@ -7539,6 +7596,8 @@ static struct {
 	{"addentities",				PF_R_AddEntityMask,	301},				// #301 void(float mask) addentities (EXT_CSQC)
 	{"addentity",				PF_R_AddEntity,		302},					// #302 void(entity ent) addentity (EXT_CSQC)
 	{"addentity_lighting",		PF_R_AddEntityLighting,		0},
+	{"addentity_lightingorigin",	PF_R_AddEntityLightingOrigin,	0},
+	{"addentity_lightingoffset",	PF_R_AddEntityLightingOffset,	0},
 
 	{"removeentity",			PF_R_RemoveEntity,	0},
 	{"setproperty",				PF_R_SetViewFlag,	303},				// #303 float(float property, ...) setproperty (EXT_CSQC)

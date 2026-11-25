@@ -94,6 +94,9 @@ typedef enum {
 
 typedef unsigned int skinid_t;	//skin 0 is 'unused'
 
+//Only CSQC lighting-point submissions use this pending state; 0/1/2 retain their meanings.
+#define MODEL_LIGHT_PENDING_POINT 4
+
 struct dlight_s;
 typedef struct entity_s
 {
@@ -109,7 +112,7 @@ typedef struct entity_s
 	float					shaderTime;  /*timestamp, for syncing shader times to spawns*/
 	vec3_t					glowmod;     /*meant to be a multiplier for the fullbrights*/
 
-	int						light_known; /*bsp lighting has been calced*/
+	int						light_known; /*0 unknown, 1 lit, 2 fullbright, MODEL_LIGHT_PENDING_POINT deferred*/
 	vec3_t					light_avg;   /*midpoint level*/
 	vec3_t					light_range; /*avg + this = max, avg - this = min*/
 	vec3_t					light_dir;
@@ -188,6 +191,8 @@ typedef struct entity_s
 	//vertlightbytes above and for the same recycled-slot reason.  APPEND-ONLY as above; being a header
 	//change, every plugin has to be rebuilt against it.
 	vec3_t					light_cube[6];
+	//Read only while light_known == MODEL_LIGHT_PENDING_POINT; all plugins must rebuild.
+	vec3_t					light_samplepoint;
 } entity_t;
 
 #define MAX_GEOMSETS 32u

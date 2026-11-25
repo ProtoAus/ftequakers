@@ -1413,6 +1413,8 @@ typedef struct
 {
 	unsigned int seq;		//0 = empty; must match r_modellight_seq
 	double time;			//FTESurf Patch 1283: when sampled (R_ModelLightSettles)
+	qboolean alternate;		//explicit lighting-only point; never shares ordinary/moverate entries
+	vec3_t samplepoint;		//effective first sample when alternate is true
 	vec3_t origin;			//the ENTITY origin the sample was taken for (not the sample point)
 	vec3_t shadelight;
 	vec3_t ambientlight;
@@ -1476,20 +1478,23 @@ static qboolean R_ModelLightFold(const model_t *clmodel)
 }
 
 /*The world-lightmap sample, factored out so the cache-fill path and the r_modellight_cache 2
-  self-check can run byte-identical code. Pure function of e->origin (+ the world/styles/cvars
+  self-check can run byte-identical code. Pure function of the optional point or e->origin (+ the world/styles/cvars
   tracked by r_modellight_seq) -- that purity is the whole basis of the cache being exact.*/
-static void R_SampleModelLight(entity_t *e, model_t *clmodel, vec3_t shadelight, vec3_t ambientlight, vec3_t lightdir)
+static void R_SampleModelLight(entity_t *e, model_t *clmodel, const float *samplepoint, vec3_t shadelight, vec3_t ambientlight, vec3_t lightdir)
 {
 	vec3_t center;
+	float fallbackz = e->origin[2];
 	void (*lightpoint)(struct model_s *model, const vec3_t point, vec3_t res_diffuse, vec3_t res_ambient, vec3_t res_dir) =
 		R_ModelLightFold(clmodel) ? cl.worldmodel->LightPointFold : cl.worldmodel->funcs.LightPointValues;
-	#if 0 /*hexen2*/
-	VectorAvg(clmodel->mins, clmodel->maxs, center);
-	VectorAdd(e->origin, center, center);
-	#else
 	VectorCopy(e->origin, center);
 	center[2] += 24;
-	#endif
+	if (samplepoint)
+	{
+		//Exact identity keeps legacy fallback rounding: (originZ+24)-24 need not be originZ.
+		if (!VectorEquals(samplepoint, center))
+			fallbackz = samplepoint[2] - 24;
+		VectorCopy(samplepoint, center);
+	}
 	lightpoint(cl.worldmodel, center, shadelight, ambientlight, lightdir);
 	if (r_modellight_fallback.ival)
 	{	/*the +24 sample point lands inside the ceiling for roof-mounted
@@ -1503,13 +1508,13 @@ static void R_SampleModelLight(entity_t *e, model_t *clmodel, vec3_t shadelight,
 		{
 			if (ambientlight[0] || ambientlight[1] || ambientlight[2] || shadelight[0] || shadelight[1] || shadelight[2])
 				break;
-			center[2] = e->origin[2] + drop[attempt];
+			center[2] = fallbackz + drop[attempt];
 			lightpoint(cl.worldmodel, center, shadelight, ambientlight, lightdir);
 		}
 	}
 }
 
-qboolean R_CalcModelLighting(entity_t *e, model_t *clmodel)
+static qboolean R_CalcModelLightingAtPoint(entity_t *e, model_t *clmodel, const float *samplepoint)
 {
 	vec3_t lightdir;
 	int i;
@@ -1519,6 +1524,10 @@ qboolean R_CalcModelLighting(entity_t *e, model_t *clmodel)
 	vec3_t bakedmean = {0,0,0};	//nettest: this prop's mean baked colour (0-1), if it has an RGBPROPLIGHT record
 	modellightcache_t *cache = NULL;	//Patch 105: non-NULL = this entity is cacheable
 	qboolean foldlit = false;	//FTESurf Patch 1717: the sample is LightPointFold's (Source's scale and split)
+
+	//The alternate sampling API is for world models, not eye-sampled weapons.
+	if (e->flags & RF_WEAPONMODEL)
+		samplepoint = NULL;
 
 	if (e->light_known)
 		return e->light_known-1;
@@ -1637,7 +1646,10 @@ qboolean R_CalcModelLighting(entity_t *e, model_t *clmodel)
 				qboolean exact;
 				cache = &modellightcache[(unsigned int)e->keynum & (MODELLIGHTCACHE_BUCKETS-1)];
 				VectorSubtract(e->origin, cache->origin, moved);
-				exact = VectorEquals(cache->origin, e->origin) && cache->fold == R_ModelLightFold(clmodel) &&
+				//Identity fallback also depends on physical placement (fractional +24/-24 rounding).
+				exact = cache->alternate == (samplepoint != NULL) &&
+					VectorEquals(cache->origin, e->origin) &&
+					(!samplepoint || VectorEquals(cache->samplepoint, samplepoint)) && cache->fold == R_ModelLightFold(clmodel) &&
 					(!R_ModelLightSettles() || (realtime >= cache->time &&
 					 realtime - cache->time < 1 + (e->keynum & 63) * (1/64.0)));	//Patch 1283; spread, not all in one frame
 				//FTESurf Patch 1398: on a Source map (where a sample traces world lights) a model that moved keeps the
@@ -1646,7 +1658,7 @@ qboolean R_CalcModelLighting(entity_t *e, model_t *clmodel)
 				//105 flying skulls traced every frame. Another entity of the bucket with another keynum or model never
 				//borrows it (two still ones would swap samples); keynum 0 temp entities never use it. Entities sharing
 				//keynum and model (same-model tag children of one parent; FTESurf's QC attaches none) still can.
-				own = rate > 0 && e->keynum && cache->seq == r_modellight_seq && cache->keynum == e->keynum &&
+				own = !samplepoint && !cache->alternate && rate > 0 && e->keynum && cache->seq == r_modellight_seq && cache->keynum == e->keynum &&
 					cache->model == clmodel && (cl.worldmodel->engineflags & MDLF_SOURCEBSP) && realtime >= cache->time;
 				if (cache->seq == r_modellight_seq && (exact ||
 					(own && DotProduct(moved, moved) < 64*64 &&
@@ -1662,7 +1674,7 @@ qboolean R_CalcModelLighting(entity_t *e, model_t *clmodel)
 						  rounding difference -- both sides run the same code on the same
 						  inputs, so the only correct outcome is bit-identical.*/
 						vec3_t s2, a2, d2;
-						R_SampleModelLight(e, clmodel, s2, a2, d2);
+						R_SampleModelLight(e, clmodel, samplepoint, s2, a2, d2);
 						if (!VectorEquals(s2, shadelight) || !VectorEquals(a2, ambientlight) || !VectorEquals(d2, lightdir))
 							Con_Printf(CON_ERROR "r_modellight_cache: STALE for %s at %.1f %.1f %.1f\n",
 										clmodel?clmodel->name:"?", e->origin[0], e->origin[1], e->origin[2]);
@@ -1672,7 +1684,7 @@ qboolean R_CalcModelLighting(entity_t *e, model_t *clmodel)
 
 			if (!cachehit)
 			{
-				R_SampleModelLight(e, clmodel, shadelight, ambientlight, lightdir);
+				R_SampleModelLight(e, clmodel, samplepoint, shadelight, ambientlight, lightdir);
 				/*r_speeds "ModelLight Samples": props that actually re-walked the world
 				  lightmap this frame. ~0 in the good steady state; ~= visible-prop count
 				  with the cache off or when a flickering style defeats it globally; ticks
@@ -1699,6 +1711,9 @@ qboolean R_CalcModelLighting(entity_t *e, model_t *clmodel)
 						VectorCopy(lightdir, cache->dir0);
 						cache->blend = 0;
 					}
+					cache->alternate = (samplepoint != NULL);
+					if (samplepoint)
+						VectorCopy(samplepoint, cache->samplepoint);
 					VectorCopy(e->origin, cache->origin);
 					VectorCopy(shadelight, cache->shadelight);
 					VectorCopy(ambientlight, cache->ambientlight);
@@ -2021,6 +2036,17 @@ qboolean R_CalcModelLighting(entity_t *e, model_t *clmodel)
 
 	e->light_known = 1;
 	return e->light_known-1;
+}
+
+qboolean R_CalcModelLighting(entity_t *e, model_t *clmodel)
+{
+	//Only the pending state owns a valid point. Ordinary constructors need not initialize it.
+	if (e->light_known == MODEL_LIGHT_PENDING_POINT)
+	{
+		e->light_known = 0;
+		return R_CalcModelLightingAtPoint(e, clmodel, e->light_samplepoint);
+	}
+	return R_CalcModelLightingAtPoint(e, clmodel, NULL);
 }
 
 //nettest (Patch 108/110): reconstruct an entity's dominant light direction in WORLD space, pointing TOWARD
