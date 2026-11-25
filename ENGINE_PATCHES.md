@@ -1,5 +1,36 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1831 - public native-zone snapshot and explicit Shavit review proposals (QC tools/shavit_zones.py)
+
+**Problem.** Strict box conversion leaves many native rings/thin zones unrepresented; prefix-only selection
+misses catalogued maps with other stems. The owner requested complete published coverage, public downloads
+and a draft upstream contribution, and expressly confirmed source redistribution permission.
+
+**Change.** Opt-in geometry proposals retain native bytes and report exact AABB/short-height transformations,
+without relaxing strict mode or route/index/cap gates. Explicit retained public-catalogue selection records
+mode, original filename and catalogue hash without suffix aliases. Unsupported maps remain whole-map blocked.
+Public review packages preserve original attribution/terms, distinguish unchanged boxes from material timing
+changes, and never claim a new Unlicense dedication or Source hull/timing equivalence. No engine code/pin,
+live timer/style/stripper configuration, existing upstream zone or player data changes.
+
+**Verified.** 34 bounded converter tests; independent source/redirect-classification guard review; complete
+observed public manifest capture with all 1,769 native sizes/SHA256s checked and unchanged opening/closing
+zone inventories/catalogue bytes. 1,754 surf/bhop inputs yield 924surf(222strict/702geometry) and
+554bhop(340strict/214geometry) candidates, 200whole-map blockers and76existing names skipped. Another15
+other/unheld public natives remain in the full native archive only. 516missing-alias origin404 observations
+are not proof of absent embedded timers. All1,478 candidate hashes/schema/profile paths checked; ZIP members
+read back byte-identically; all107 original upstream tracked files(including81root z files) unchanged.
+
+**Published, not ranked-deployed.** Converter gamebcf7bc81; contribution50cccbad40170c8a92735ad653cea35f6283e123.
+Public prerelease https://github.com/ProtoAus/surf-zones/releases/tag/wos-zones-20261125-725567e8b6b9;
+all8assets independently downloaded anonymously HTTP200 and full-file SHA256 matched. Draft upstream
+https://github.com/wrldspawn/surf-zones/pull/1 isolates proposals from root z/; no merge or automatic adoption.
+Dataset725567e8b6b97e7563ffe4eaf4225edaca267fc2c1258d761b7fb62b9d0d74dc. Retained receipts:
+FTESurf-worktrees/shavit-publish-20261125-happy/artifacts/. Actual CS:S BSP/hull boundaries, thin-Z timing,
+ordered routes, bonuses/restarts and omitted speed/filter/physics settings remain unverified per map;
+vanilla bhop-style compatibility and upstream's sm_dumpzones/in-game gate are not claimed. See game
+tools/shavit_zones.md and lextest.md. No QC/engine build or fleet/game-updater release needed for this data task.
+
 ## Patch 1829 - native zone copies to offline Shavit Surf review candidates (QC tools/shavit_zones.py)
 
 **Problem.** Native polygon/track JSON cannot be copied directly into the Shavit Surf box/trigger JSON format;
