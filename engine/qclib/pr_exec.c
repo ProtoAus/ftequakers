@@ -690,7 +690,7 @@ ddef32_t *ED_FindLocalOrGlobal(progfuncs_t *progfuncs, const char *name, eval_t 
 	}
 
 	*val = (eval_t *)&cp->globals[def32->ofs];
-	return &def;
+	return def32; //P1838: FTE32/QTEST globals must return their actual typed definition.
 }
 
 static char *TrimString(const char *str, char *buffer, int buffersize)

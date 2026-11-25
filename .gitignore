@@ -84,3 +84,7 @@ plugins/*/installed.lst
 plugins/hl2/glsl/vmt/wateranim.glsl
 plugins/hl2/glsl/vmt/waterbudgetanim.glsl
 plugins/hl2/glsl/vmt/refractanim.glsl
+
+# P1838 isolated filesystem and typed-debug inspection test evidence.
+/rig/lobbyfast/
+/rig/p1838-debugglobal-*/

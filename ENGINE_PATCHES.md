@@ -1,5 +1,51 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1838 - faster lobby load readiness and scalable filesystem lookup
+
+**Problem.** A 1,024-bucket filename index produced long collision chains with large mounted
+libraries. Empty lobbies advertised readiness on the ordinary heartbeat cadence, while retention
+searches could run during map startup. Join admission also waited for a whole-library timer scan.
+
+**Change.** Use 262,144 filename buckets (2 MiB of bucket pointers on 64-bit) from the first rebuild.
+Keep case-insensitive bucket selection and removal consistent, including duplicate insertion,
+replacement and deletion. Add coarse phases to existing filesystem load statistics.
+
+Ordinary empty lobbies can use a one-second heartbeat (`lobby_empty_fast`); the occupied, reserved,
+custom and disabled paths retain their policy. The ordinary lobby cfg opts in. Retention is deferred
+until a successful ready heartbeat and serviced only while truly idle: one search/slot per turn,
+with iterator cleanup on invalidation and fresh metadata checks before deletion. This is NOT a
+hard millisecond budget: one search materialization can still be expensive. Ownership revocation
+closes the full-tree iterator; protected, future, malformed and unsupported data remain protected.
+Join admission resolves only the requested BSP and authoritative zone files, preserving validation,
+pool/class isolation, signed directive shape and current-file checks rather than scanning timers.
+
+A one-line debug inspector repair returns the actual FTE32/QTEST global definition instead of a
+stale 16-bit conversion object. It enables typed native state checks; cheat/write guards and normal
+simulation are unchanged. `hl2_dedicatedphy` is an experimental map-latched dedicated-only PHY-first
+candidate and remains **0 by default**. Unsupported models fall back to the old loader; no qualified
+real-model fast-path speedup or runtime enablement is claimed.
+
+**Verified.** Extracted production filesystem tests cover case folding, supplied/allocated buckets,
+duplicates, pure/depth/stand-in selection, stale guards, retirement, lock failure and incremental
+mutation, with discriminating old-size/old-unlink controls. A matched local FS-only ABBA experiment
+with a 184k-name library reduced median command-to-ready times by 21-48% over five maps; all retained
+collision/movement hashes matched. Native ARM extracted-body tests reduced the synthetic combined
+index/lookup workload from about 12.3 s to 0.40 s. That is NOT an ARM full-engine/map-load measurement.
+
+Client, dedicated and native plugin builds, all three QC VMs (zero warnings/frame-overlap failures),
+acting QC policy tests and isolated backend route controls passed. Real-engine HTTP/file-oracle
+fixtures passed owner, slow reply, non-owner, old-day data, iterator pause/resume, ownership revocation,
+connecting-client and spectator arms. The typed-global test executes the production lookup body:
+the old return fails definition identity; the repaired subject passes all four format/local/global
+paths. Independent review confirmed unchanged debug permissions and the 16-bit conversion path.
+
+**Limits / rollout.** These results distinguish local qualification from deployment. Fully spawned
+player and literal-midnight native cases, authored native-policy expiry objects and native transport
+failure arms were not reached by this fixture. No production latency, fleet-wide deployment, backend
+generation swap, native PHY fast-path qualification, release or qcbuild bump follows from these tests.
+Heartbeat load and maintenance latency need monitoring in a guarded coherent native/QC/config/backend
+cohort. `lobby_empty_fast 0` and `lobby_idle_maintenance 0` opt out; retain the matching rollback cohort.
+
 ## Patch 1837 - public website cache and rendering performance (backend/site only)
 
 **Problem.** Browser-cold leaderboard/player list observations spent 3.16/1.57 seconds in API requests;

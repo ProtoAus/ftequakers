@@ -822,10 +822,10 @@ static galiasinfo_t *PHY_MeshOut (model_t *mod, const phyctx_t *ctx, unsigned in
 
 /* Patch 888: *unwrapped (when asked for) is set only for a hull whose old indices
    wrapped -- its mover-9 mesh, or the render mesh -- and stays NULL otherwise. */
-galiasinfo_t *Mod_PHY_CollisionMesh (model_t *mod, int mode, int winding,
+static galiasinfo_t *PHY_CollisionMesh (model_t *mod, int mode, int winding,
                                      plugfsfuncs_t *phy_filefuncs,
                                      plugmodfuncs_t *phy_modfuncs,
-                                     unsigned int contents, galiasinfo_t **unwrapped)
+                                     unsigned int contents, galiasinfo_t **unwrapped, qboolean renderindependent)
 {
 	galiasinfo_t *out;
 	char          name[MAX_QPATH];
@@ -910,13 +910,14 @@ galiasinfo_t *Mod_PHY_CollisionMesh (model_t *mod, int mode, int winding,
 	file = phy_filefuncs->LoadFile(name, &filelen);
 	if (!file)
 	{
-		phy_stat_nofile++;
+		if (!renderindependent) phy_stat_nofile++;
 		return NULL;        /* no hull shipped -- the render mesh is all there is */
 	}
 
 	memset(&ctx, 0, sizeof(ctx));
 	ctx.base    = file;
 	ctx.filelen = filelen;
+	ctx.nostats = renderindependent;
 	ctx.winding = winding;	/*Patch 317; see the essay in PHY_ReadLedge*/
 
 	ok = PHY_Parse(&ctx, mod->name);
@@ -924,10 +925,25 @@ galiasinfo_t *Mod_PHY_CollisionMesh (model_t *mod, int mode, int winding,
 	if (ok)
 		ok = PHY_HullInsideModel(&ctx, mod);
 
+	// Wrapped mover-9 fallback may need the render mesh; never skip it.
+	if (renderindependent)
+	{
+		size_t v;
+		int a;
+		if (ctx.numverts > PHY_OLD_KEEP)
+			ok = false;
+		for (a = 0; a < 3; a++)
+			if (!isfinite(mod->mins[a]) || !isfinite(mod->maxs[a]) || mod->mins[a] > mod->maxs[a])
+				ok = false;
+		for (v = 0; v < ctx.storedverts; v++)
+			for (a = 0; a < 3; a++)
+				if (!isfinite(ctx.xyz[v][a]))
+					ok = false;
+	}
 	if (!ok)
 	{
 		plugfuncs->Free(file);
-		phy_stat_rejected++;
+		if (!renderindependent) phy_stat_rejected++;
 		plugfuncs->Free(ctx.xyz);
 		plugfuncs->Free(ctx.idx);
 		plugfuncs->Free(ctx.ledgestart);
@@ -967,6 +983,19 @@ galiasinfo_t *Mod_PHY_CollisionMesh (model_t *mod, int mode, int winding,
 	plugfuncs->Free(ctx.ledgestart);
 
 	return out;
+}
+
+// P1838: the probe returns the actual validated hull, not an existence hint.
+galiasinfo_t *Mod_PHY_StaticCollisionMesh(model_t *mod, int winding,
+        plugfsfuncs_t *fs, plugmodfuncs_t *mf, unsigned int contents)
+{
+	return PHY_CollisionMesh(mod, 1, winding, fs, mf, contents, NULL, true);
+}
+
+galiasinfo_t *Mod_PHY_CollisionMesh(model_t *mod, int mode, int winding,
+        plugfsfuncs_t *fs, plugmodfuncs_t *mf, unsigned int contents, galiasinfo_t **unwrapped)
+{
+	return PHY_CollisionMesh(mod, mode, winding, fs, mf, contents, unwrapped, false);
 }
 
 /*

@@ -637,6 +637,7 @@ void FS_GoldSrc_Reverify(void);	//P1656: a package was just written; forget cach
 void FS_AutoMountForMap(const char *mapname);	//ftesurf (P175): mount this map's extra asset pack, per data/mapdeps.txt
 void FS_AutoUnmountStale(void);					//ftesurf (P184): give back packs the map now loading does not want. MUST be called only once the load is committed -- see the essay above FS_AutoUnmountStale
 void FS_LoadStats_Begin(void);					//ftesurf (P180): bracket a map load and report what it cost the filesystem
+void FS_LoadStats_Phase(const char *phase);
 void FS_LoadStats_End(const char *what);		//cvar_t is not declared this early, so fs_maploadhash is extern'd at its use site
 void FS_RehashIfStale(void);					//ftesurf (P180): rebuild the name hash if it was invalidated, without polling for external changes
 void FS_Cache_Tick(void);						//ftesurf (P186): drain a little of the asset-cache harvest. Called once per client frame; does nothing unless a harvest is armed and has settled.

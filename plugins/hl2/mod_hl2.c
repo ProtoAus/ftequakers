@@ -15,6 +15,8 @@ static plugfsfuncs_t *filefuncs;
 static plugmodfuncs_t *modfuncs;
 qboolean hl2_bodyparts;	//FTESurf Patch 1440: the exe has model_t's geombase/geomcount (com_mesh.h)
 static plugfsfuncs_t *fsfuncs;
+static cvar_t *hl2_dedicatedphy;
+static qboolean hl2_dedicated;
 
 //FTESurf Build 8: the model's COLLISION shape, which is not its render mesh.
 //See mod_phy.c.  hl2_propcollision is registered by VBSP_Init in mod_vbsp.c and
@@ -24,6 +26,8 @@ galiasinfo_t *Mod_PHY_CollisionMesh (model_t *mod, int mode, int winding,
                                      plugfsfuncs_t *phy_filefuncs,
                                      plugmodfuncs_t *phy_modfuncs,
                                      unsigned int contents, galiasinfo_t **unwrapped);
+galiasinfo_t *Mod_PHY_StaticCollisionMesh(model_t *mod, int winding,
+        plugfsfuncs_t *fs, plugmodfuncs_t *mf, unsigned int contents);
 extern cvar_t *hl2_propcollision;
 extern cvar_t *hl2_phywinding;	//FTESurf Patch 317, registered by VBSP_Init beside hl2_dispwinding.
 extern cvar_t *hl2_rigidprops;	//FTESurf Patch 230, registered by VBSP_Init beside the others.
@@ -1399,7 +1403,11 @@ qboolean QDECL Mod_LoadHL2Model (model_t *mod, void *buffer, size_t fsize)
 	const char *vvdpostfixes[] = {
 		".vvd"
 	};
-	galiasinfo_t *galias;
+	galiasinfo_t *galias, *earlycollision = NULL;
+	int mode = hl2_propcollision ? hl2_propcollision->ival : 1;
+	int winding = hl2_phywinding ? hl2_phywinding->ival : 1;
+	if (mode < 0 || mode > 3) mode = 1;
+	if (winding < 0 || winding > 2) winding = 1;
 
 	if (fsize < sizeof(*ctx.header) || ctx.header->num_bones > 256 ||
 		(ctx.header->ofs_bones & 3) || !HL2_EventSpan(fsize, ctx.header->ofs_bones, ctx.header->num_bones, sizeof(hl2mdlbone_t))) return false;
@@ -1410,18 +1418,6 @@ qboolean QDECL Mod_LoadHL2Model (model_t *mod, void *buffer, size_t fsize)
 			!HL2_BoundedName(buffer, fsize, ctx.header->ofs_bones+i*sizeof(*bone), bone->name_ofs)) return false;
 	}
 
-	for (i = 0; !vtx && i < countof(vtxpostfixes); i++)
-	{
-		modfuncs->StripExtension(mod->name, base, sizeof(base));
-		Q_strncatz(base, vtxpostfixes[i], sizeof(base));
-		vtx = filefuncs->LoadFile(base, &vtxsize);
-	}
-	for (i = 0; !vvd && i < countof(vvdpostfixes); i++)
-	{
-		modfuncs->StripExtension(mod->name, base, sizeof(base));
-		Q_strncatz(base, vvdpostfixes[i], sizeof(base));
-		vvd = filefuncs->LoadFile(base, &vvdsize);
-	}
 
 	if (ctx.header->num_bones)
 	{
@@ -1547,10 +1543,44 @@ qboolean QDECL Mod_LoadHL2Model (model_t *mod, void *buffer, size_t fsize)
 			ctx.rigid?"RIGID":"skeletal", ctx.header->flags,
 			ctx.header->num_bones, ctx.header->num_bones==1?"":"s");
 
-	result  = Mod_HL2_LoadVVD(&ctx, vvd, vvdsize);
-	result &= Mod_HL2_LoadVTX(&ctx, vtx, vtxsize);
-	plugfuncs->Free(vvd);
-	plugfuncs->Free(vtx);
+	// P1838 stays opt-in until real-model collision A/B qualification. Keep the
+	// legacy bone transforms, metadata and P1812 finalization on both paths.
+	VectorCopy(ctx.header->mins, mod->mins);
+	VectorCopy(ctx.header->maxs, mod->maxs);
+	if (hl2_dedicated && hl2_dedicatedphy && hl2_dedicatedphy->ival && mode == 1 &&
+		(ctx.header->flags & HL2MDL_STATIC_PROP) && ctx.header->num_bones == 1 &&
+		!ctx.header->num_anims && !ctx.header->num_sequences &&
+		!ctx.header->num_aniblocks && !ctx.header->_336 && !ctx.weapon_animations)
+	{
+		qboolean finitepose = true;
+		for (i = 0; i < 12; i++)
+			if (!isfinite(ctx.basepose[i]) || !isfinite(ctx.bones[0].inverse[i]))
+				finitepose = false;
+		if (finitepose)
+			earlycollision = Mod_PHY_StaticCollisionMesh(mod, winding, filefuncs, modfuncs, FTECONTENTS_BODY);
+	}
+	result = true;
+	if (!earlycollision)
+	{
+		for (i = 0; !vtx && i < countof(vtxpostfixes); i++)
+		{
+			modfuncs->StripExtension(mod->name, base, sizeof(base));
+			Q_strncatz(base, vtxpostfixes[i], sizeof(base));
+			vtx = filefuncs->LoadFile(base, &vtxsize);
+		}
+		for (i = 0; !vvd && i < countof(vvdpostfixes); i++)
+		{
+			modfuncs->StripExtension(mod->name, base, sizeof(base));
+			Q_strncatz(base, vvdpostfixes[i], sizeof(base));
+			vvd = filefuncs->LoadFile(base, &vvdsize);
+		}
+		result  = Mod_HL2_LoadVVD(&ctx, vvd, vvdsize);
+		result &= Mod_HL2_LoadVTX(&ctx, vtx, vtxsize);
+		plugfuncs->Free(vvd);
+		plugfuncs->Free(vtx);
+	}
+	else
+		Con_DPrintf("MDL %s: dedicated validated PHY (render skipped)\n", mod->name);
 
 	if (ctx.header->num_bones && !mod->meshinfo)
 	{	//it has a rig... make sure we spit out a surface so we can read the bones.
@@ -1650,15 +1680,8 @@ qboolean QDECL Mod_LoadHL2Model (model_t *mod, void *buffer, size_t fsize)
 	  consumed inside PHY_ReadLedge, which runs exactly once, at model load.
 	*/
 	{
-		galiasinfo_t *collision = NULL, *unwrapped = NULL;
-		int mode = hl2_propcollision ? hl2_propcollision->ival : 1;
-		int winding = hl2_phywinding ? hl2_phywinding->ival : 1;
-
-		if (mode < 0 || mode > 3)
-			mode = 1;
-		if (winding < 0 || winding > 2)
-			winding = 1;
-		if (mode != 0)		//0 is mod_vbsp's business (no prop leaves at all)
+		galiasinfo_t *collision = earlycollision, *unwrapped = NULL;
+		if (!collision && mode != 0)		//0 is mod_vbsp's business (no prop leaves at all)
 			collision = Mod_PHY_CollisionMesh(mod, mode, winding, filefuncs, modfuncs,
 			                                  FTECONTENTS_BODY, &unwrapped);
 
@@ -1696,6 +1719,13 @@ qboolean MDL_Init(void)
 		modfuncs = NULL;
 	hl2_bodyparts = plugfuncs->GetEngineInterface(plugmodeltail1440_name, sizeof(int)) != NULL;	//P1440
 
+	hl2_dedicated = !plugfuncs->GetEngineInterface(plugimagefuncs_name, sizeof(plugimagefuncs_t));
+	{
+		plugcvarfuncs_t *cv = plugfuncs->GetEngineInterface(plugcvarfuncs_name, sizeof(*cv));
+		if (cv)
+			hl2_dedicatedphy = cv->GetNVFDG("hl2_dedicatedphy", "0", CVAR_MAPLATCH,
+				"Experimental dedicated validated-PHY-first static model loading. Default off pending collision A/B; use a fresh process for each arm.", "Source models");
+	}
 	if (modfuncs && filefuncs)
 	{
 		modfuncs->RegisterModelFormatMagic("Source model (v44)", "IDST\x2c\0\0\0",8, Mod_LoadHL2Model);

@@ -2978,6 +2978,10 @@ struct fsbucketblock
 	qbyte data[1];
 };
 static struct fsbucketblock *fs_hash_filebuckets;
+//P1838: fixed 2MiB ceiling on 64-bit; also sizes the very first rebuild.
+#define FS_HASH_BUCKETS 262144u
+static unsigned int fs_hash_rebuilds;
+static double fs_hash_rebuild_seconds;
 static qboolean fs_hash_rebuilding;	//Patch 388: FS_RebuildFSHash is filling a freshly flushed table
 
 static void FS_FlushFSHashReally(qboolean domutexes)
@@ -3087,8 +3091,8 @@ static void QDECL FS_AddFileHash(int depth, const char *fname, fsbucket_t *fileh
 			return;
 		}
 
-		//remove the old version
-		Hash_RemoveBucket(&filesystemhash, fname, &old->buck);
+		//Insertion and lookup use the insensitive chain; removal must use it too.
+		Hash_RemoveDataInsensitive(&filesystemhash, fname, old->buck.data);
 	}
 
 	if (!filehandle)
@@ -3121,6 +3125,7 @@ static void QDECL FS_AddFileHash(int depth, const char *fname, fsbucket_t *fileh
 static void FS_RebuildFSHash(qboolean domutex)
 {
 	int depth = 1;
+	double started;
 	searchpath_t	*search;
 	if (!com_fschanged)
 		return;
@@ -3129,12 +3134,13 @@ static void FS_RebuildFSHash(qboolean domutex)
 	if (domutex && !Sys_LockMutex(fs_thread_mutex))
 		return;	//amg!
 
+	started = Sys_DoubleTime();
 	if (com_fsneedreload)
 		FS_ReloadPackFilesFlags(~0);
 
 	if (!filesystemhash.numbuckets)
 	{
-		filesystemhash.numbuckets = 1024;
+		filesystemhash.numbuckets = FS_HASH_BUCKETS;
 		filesystemhash.bucket = (bucket_t**)Z_Malloc(Hash_BytesForBuckets(filesystemhash.numbuckets));
 	}
 	else
@@ -3166,6 +3172,8 @@ static void FS_RebuildFSHash(qboolean domutex)
 	com_fschanged = false;
 	com_fsneedreload = false;
 	fs_listgen++;	//also where an external change found by PollChanges lands
+	fs_hash_rebuilds++;
+	fs_hash_rebuild_seconds += Sys_DoubleTime() - started;
 
 	if (domutex)
 		Sys_UnlockMutex(fs_thread_mutex);
@@ -3223,7 +3231,7 @@ static void FS_RebuildFSHash_Update(const char *fname)
 	old = Hash_GetInsensitiveBucket(&filesystemhash, fname);
 	if (old)
 	{
-		Hash_RemoveBucket(&filesystemhash, fname, &old->buck);
+		Hash_RemoveDataInsensitive(&filesystemhash, fname, old->buck.data);
 		fs_hash_files--;
 	}
 
@@ -5755,9 +5763,9 @@ static searchpath_t *FS_AddPathHandleOrigin(searchpath_t **oldpaths, const char 
 
 		So while com_fschanged is set, that table contains dangling pointers, and
 		FS_AddFileHashUnsafe's very first act is Hash_GetInsensitiveBucket -- which walks the
-		bucket chain dereferencing ->key.string.  filesystemhash never grows past its initial
-		1024 buckets (FS_RebuildFSHash:2213), so with 232k files indexed the average chain is
-		~227 entries long and a single lookup is near-certain to reach a freed one.
+		bucket chain dereferencing ->key.string.  at the time filesystemhash had only
+		1024 buckets, so with 232k files indexed the average chain was ~227 entries long
+		and a single lookup was near-certain to reach a freed one.
 
 		Every READER of the hash already honours the flag: FS_FLocateFile:2375 will not use
 		the fast path without it, and FS_RebuildFSHash_Update returns immediately.  This
@@ -5809,19 +5817,29 @@ unsigned int FS_ListGeneration(void)
 	return fs_listgen + fs_restarts;
 }
 
+extern cvar_t fs_loadstats;
+
 //optionally purges the cache and rebuilds it
 void COM_FlushFSCache(qboolean purge, qboolean domutex)
 {
 	searchpath_t *search;
+	double started = Sys_DoubleTime(), polled;
+	double rebuild_seconds = fs_hash_rebuild_seconds;
+	unsigned int rebuilds = fs_hash_rebuilds;
+	int polls = 0;
 	if (com_fs_cache.ival && com_fs_cache.ival != 2)
 	{
 		for (search = com_searchpaths ; search ; search = search->next)
 		{
 			if (search->handle->PollChanges)
+			{
+				polls++;
 				com_fschanged |= search->handle->PollChanges(search->handle);
+			}
 		}
 	}
 
+	polled = Sys_DoubleTime();
 #ifdef FTE_TARGET_WEB
 	//web target doesn't support filesystem enumeration, so make sure the cache is kept invalid and disabled.
 	com_fschanged = true;
@@ -5832,6 +5850,11 @@ void COM_FlushFSCache(qboolean purge, qboolean domutex)
 		FS_RebuildFSHash(domutex);
 	}
 #endif
+	//Includes the early SV_Map_f flush, before the spawn-load bracket exists.
+	if (fs_loadstats.ival)
+		Con_Printf("fs: flush %.1fms | poll %.1fms (%i paths) | rehash %.1fms (%u rebuilds, %u buckets)\n",
+			(Sys_DoubleTime()-started)*1000, (polled-started)*1000, polls,
+			(fs_hash_rebuild_seconds-rebuild_seconds)*1000, fs_hash_rebuilds-rebuilds, filesystemhash.numbuckets);
 }
 
 /*
@@ -5847,13 +5870,16 @@ and com_fschanged already says whether the hashed fast path at FS_FLocateFile wa
 even eligible.  Both were right here the whole time; neither was ever printed
 outside a Con_DPrintf.  So this is a bracket, not a new mechanism.
 
-Deliberately Con_Printf and defaulted on: one line per map load, and it is the line
-that tells you whether a slow load was the filesystem or the renderer.
+Deliberately Con_Printf and defaulted on: flush and coarse phase lines expose
+early polling/rebuild work as well as the existing spawn-load total. The early
+flush precedes that total; phase lines partition it rather than add to it.
 */
 cvar_t fs_maploadhash = CVARFD("fs_maploadhash", "1", CVAR_ARCHIVE, "ftesurf: rebuild the filesystem name hash after the previous map's embedded package is dropped, so the incoming map's assets load through the hash instead of a linear scan of every mounted archive. 0 restores the old behaviour, which is only useful for measuring the difference.");
-cvar_t fs_loadstats = CVARFD("fs_loadstats", "1", CVAR_ARCHIVE, "ftesurf: print one line per map load giving the time, the number of filesystem lookups that missed the name hash, and whether the hash was valid for the load at all. A large lookup count with a stale hash means every lookup was a linear scan of every mounted archive.");
+cvar_t fs_loadstats = CVARFD("fs_loadstats", "1", CVAR_ARCHIVE, "ftesurf: print filesystem flush polling/rebuild timings, coarse map-load phase timings and a spawn-load total with hash-miss lookups and hash validity. Early flush time is outside the spawn total; phase times partition it. A stale hash means lookups scan mounted archives.");
 static int		fs_ls_finds;
-static double	fs_ls_start;
+static double	fs_ls_start, fs_ls_phase;
+static unsigned int fs_ls_rebuilds;
+static double fs_ls_rebuild_seconds;
 static qboolean	fs_ls_open;
 
 /*
@@ -5879,8 +5905,25 @@ void FS_RehashIfStale(void)
 void FS_LoadStats_Begin(void)
 {
 	fs_ls_finds = fs_finds;
-	fs_ls_start = Sys_DoubleTime();
+	fs_ls_start = fs_ls_phase = Sys_DoubleTime();
+	fs_ls_rebuilds = fs_hash_rebuilds;
+	fs_ls_rebuild_seconds = fs_hash_rebuild_seconds;
 	fs_ls_open = true;
+}
+
+void FS_LoadStats_Phase(const char *phase)
+{
+	double now;
+	if (!fs_ls_open)
+		return;
+	now = Sys_DoubleTime();
+	if (fs_loadstats.ival)
+		Con_Printf("fs: phase %s %.1fms | rehash %.1fms (%u rebuilds)\n", phase,
+			(now-fs_ls_phase)*1000, (fs_hash_rebuild_seconds-fs_ls_rebuild_seconds)*1000,
+			fs_hash_rebuilds-fs_ls_rebuilds);
+	fs_ls_phase = now;
+	fs_ls_rebuilds = fs_hash_rebuilds;
+	fs_ls_rebuild_seconds = fs_hash_rebuild_seconds;
 }
 
 void FS_LoadStats_End(const char *what)
