@@ -118,8 +118,8 @@ mutation) pass; two review rounds (round 1: the Reports badge, a mis-indented ma
 misfiles, the zoning Zones button moving between lists -- all fixed with falsifiers; round 2 clean). Game main cbefd439.
 LIVE 24 Nov UTC: site 19:08Z (sitepage.ps1 into releases/0.1.68, read back byte for byte; 0.1.69 is cut after it), board
 19:09Z (publish_board.py --commit e0905e56, cut from gen1745's source_ref c2cbe46f), reportd templates 19:09Z (HUP).
-tasupd: re-staged at cbefd439 for Lex's one root upgrade (with P1806). The admin half waits for the next surfd generation
-(tools/backend-pending.md).
+tasupd LIVE at cbefd439 (Lex's root upgrade, 25 Nov 00:51Z). The admin half LIVE in surfd generation gen1820 (primary
+b80a84f5, REF 281b7417; Lex's root install 05:07:55Z, swap 05:24:15-05:27:19Z, POSTFLIGHT PASS; tools/backend-pending.md).
 
 ## Patch 1813 - The Strata live sun held to its baked page beside a cascade shadow: no lit strips at contact edges (plugin hl2/glsl/vmt/lightmapped.glsl transition.glsl, mod_vbsp.c)
 
