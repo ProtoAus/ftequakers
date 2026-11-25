@@ -1,5 +1,29 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1837 - public website cache and rendering performance (backend/site only)
+
+**Problem.** Browser-cold leaderboard/player list observations spent 3.16/1.57 seconds in API requests;
+rendering every map also created multi-thousand-row DOM work. Zoning fetched the aggregate catalogue
+for availability, and the board downloaded the run renderer even when no run was opened.
+
+**Change.** The public maps catalogue persists a validated last-good snapshot and refreshes off the
+request path with one builder per worker. Availability projects only already-public map/have metadata,
+including canonical names for incomplete maps, without waiting for a cold library scan. Explicit
+post-fork worker priming restores optional directory/map files and picture indexes before traffic.
+Map rows expand in 100-row batches while search/sort/counts retain the full catalogue; load-more appends
+and focuses the first new row. The run renderer is lazy and disposal cannot rewrite a newer route.
+Zoning fetches history independently, debounces input and skips unchanged catalogue redraws.
+
+**Validation.** Synthetic cache controls cover expiry, cold/recycled workers, concurrency, failed
+refresh/thread/atomic save, clock rollback, public allowlists, optional-snapshot corruption and startup
+reader ownership. Frontend controls include callback-faithful failed-navigation retry, incomplete-map
+canonical names, publication/rollback, last-good offline state, keyboard focus and row retention.
+Actual Chromium fixtures reduced 2,500-map DOM from 16,391 to 792 elements and desktop list paint from
+369 ms to 81 ms; real FSRun script failure/retry/disposal controls pass. These are synthetic local
+observations, not production p95. Guarded-generation activation and live remeasurement are separate gates.
+
+No engine/QC/native build, mover/ruleset or schema change. No join-admission freshness change.
+
 ## Patch 1831 - public native-zone snapshot and explicit Shavit review proposals (QC tools/shavit_zones.py)
 
 **Problem.** Strict box conversion leaves many native rings/thin zones unrepresented; prefix-only selection
