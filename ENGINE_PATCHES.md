@@ -1,5 +1,34 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1829 - native zone copies to offline Shavit Surf review candidates (QC tools/shavit_zones.py)
+
+**Problem.** Native polygon/track JSON cannot be copied directly into the Shavit Surf box/trigger JSON format;
+a blind bounds conversion or reuse of a restart target name can change timing or bind the wrong trigger.
+
+**Change.** Standard-library offline exporter keeps bounded native inputs byte-identical, writes deterministic
+candidate arrays and an explicit loss report, and skips existing upstream map names. Strict mode refuses slants;
+enclosing boxes require an explicit approximation option. Whole-map gates cover unsupported routes, caps,
+malformed geometry and ambiguous extra tracks. No native/game/server edits or automatic publication.
+
+**Verified.** 26 bounded tests, independent review/fix/re-review acceptance, and a read-only local inventory
+pass: 1,140 selected stored files (personal editor drafts excluded), 414 candidates (114 surf/300 bhop), 63
+existing upstream names skipped, 663 refused. Native originals/copies/hashes agree. These are not complete
+Source coverage, in-engine CS:S timing certification, source-data rights or publication approval. No public
+corpus/download deployment; exact inspected target refs and manual validation steps: tools/shavit_zones.md.
+
+## Patch 1828 - player-facing source labels say CS:S (QC client/menu)
+
+**Problem.** Boards, map tiers, profiles and replay UI exposed the importer/provider label instead of the game.
+A replay info panel also concatenated its raw machine source token.
+
+**Change.** CS:S / Counter-Strike: Source display names and a display-only replay source mapper. Internal keys,
+real URLs, map names, import/storage formats and recording provenance remain unchanged. No gameplay change.
+
+**Verified.** Three label/identifier regressions and a failing pre-change control; isolated server/client/menu
+Linux builds zero warnings, final integrated client build and qcframes pass. HUD screenshot shows CS:S tier.
+Local tested CSQC/menu installed with executable/plugin/SSQC hashes unchanged. A wait-unit harness timeout is
+retained separately from the corrected passing smoke. Full UI/replay interaction, lobbies and release untested.
+
 ## Patch 1825 - $envmaptint and $envmapsaturation read Source's "{r g b}" form (plugin hl2/mat_vmt.c)
 
 **Problem.** Lex, 25 Nov, surf_thesteve save 18: the graffiti ramps lack Momentum's reflective sheen ("missing
