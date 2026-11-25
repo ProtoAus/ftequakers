@@ -37,6 +37,32 @@ LIVE 24 Nov UTC: site 19:08Z (sitepage.ps1 into releases/0.1.68, read back byte 
 tasupd: re-staged at cbefd439 for Lex's one root upgrade (with P1806). The admin half waits for the next surfd generation
 (tools/backend-pending.md).
 
+## Patch 1813 - The Strata live sun held to its baked page beside a cascade shadow: no lit strips at contact edges (plugin hl2/glsl/vmt/lightmapped.glsl transition.glsl, mod_vbsp.c)
+
+**Problem.** Lex, 25 Nov, saves 42/43 (bhop_canals, under the concrete overpass): "The fancy new shadowmap now has a
+gap" -- a thin sunlit strip along the foot of a wall and along a beam's edge, in places fully in shade. P1781 lights a
+Strata world face with the live sun times the cascade's lit fraction; at a contact edge the cascades' bias lets the sun
+through for a few texels. hl2_sunpage 0 (the bake) shows no strip: VRAD's page has no sun there.
+
+**Change.** Under live cascades the sun is multiplied by a gate from the page: clamp(bake x hl2_sungate / full sun, 0,
+1), full sun being VRAD's 0.984 N.L^1.4, so a penumbra of 1/8 of full sun or more keeps the cascade's sharp edge and only
+a luxel VRAD baked dark takes the sun out. The gate applies only where the cascade lights the pixel AND a cascade shadow
+lies within 3 or 8 texels (CascadeShadowNear: the least lit of 8 taps on each ring, in the tightest cascade holding the
+pixel): a leak is a strip beside the cascade's own shadow, while VRAD leaves some open ground unlit (save 22, the grass
+behind the half-pipe: no sun and no indirect in the bake, sunlit under the cascades) where the gate alone painted it
+black. hl2_sungate (default 8; 0 off) is a client cvar.
+
+**Verified.** Rig, every Lex canals save 1-43 with the gate off and on: saves 42/43's strips gone; leak lines along the
+barn's beams and walls (saves 6/15), a wall corner (19) and a cliff lip (13) gone; saves 22/23/24 within 0.2% of
+ungated (the bake-only gate changed 3-7% of those frames to black); the rest differ only by moving water and smoke
+(saves 1/11/38). A debug view (bake and indirect per pixel) showed the save 42 strip and save 22's patch both have
+indirect near 0, so indirect cannot tell them apart -- hence the cascade-shadow test.
+
+**Limits.** A leak wider than 8 cascade texels from its shadow stays. Where the bake has a shadow the cascades lack
+(save 41, a far building's shadow on the road) the gate does nothing unless a cascade shadow is near. The 16 taps run
+only where the bake is under 1/8 of full sun and the cascade lights the pixel. Other Strata maps' layout 2 (no page)
+are unaffected.
+
 ## Patch 1812 - Mover 17: a solid Source prop collides through its .phy pieces as brushes (engine common/pmove.h pm_source.c com_bih.c com_bih_ts.h pmovetst.c com_mesh.h plugin.c, server/sv_user.c sv_phys.c; plugin hl2/mod_vbsp.c mod_hl2.c)
 
 **Problem.** Lex, 24 Nov, bhop_canals save 5: a ramp you walk through -- the metal_panel01a pair (prop_dynamic_override

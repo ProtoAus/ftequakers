@@ -38,6 +38,7 @@
 !!cvar3f r_shadows_sunfloor=0 0 0
 !!cvar3f r_shadows_sunlm=0 0 0
 !!cvarf r_shadows_worldcast=1
+!!cvarf hl2_sungate=8
 !!cvar3f r_shadows_sundir=0 0 -1
 !!cvarf gl_overbright
 !!cvarf r_autoexposure_sky=1
@@ -228,6 +229,27 @@ varying vec2 lm1, lm2, lm3;
 #endif
 	uniform vec3 cvar_r_shadows_sunlm;		//FTESurf Patch 1781
 	uniform float cvar_r_shadows_worldcast;	//the live sun needs the world in the cascades
+	uniform float cvar_hl2_sungate;	//FTESurf Patch 1813
+#if defined(FAKESHADOWS) && defined(FAKESHADOWS_CASCADE) && FAKESHADOWS_COUNT > 1
+	//FTESurf Patch 1813: the least lit of 8 taps r texels out in the tightest cascade holding the pixel (1: no cascade shadow
+	//near). A cascade's leak at a contact edge is a thin strip beside its own shadow; VRAD's unlit luxels are not
+	float CascadeShadowNear(sampler2DShadow smap, vec3 wpos, float r)
+	{
+		for (int i = 0; i < FAKESHADOWS_SUNCELLS; i++)
+		{
+			vec4 cp = l_fakeshadowworld[i] * vec4(wpos, 1.0);
+			vec3 c = (cp.xyz/cp.w + vec3(1.0)) * 0.5;
+			float e = max(max(abs(c.x-0.5), abs(c.y-0.5)), abs(c.z-0.5));
+			if (e < 0.47 || (i == FAKESHADOWS_SUNCELLS-1 && e < 0.5))
+			{
+				vec3 sc = vec3(l_fakeshadowcell[i].xy + c.xy*l_fakeshadowcell[i].zw, c.z);
+				return min(min(min(cascsamp(-r,-r), cascsamp(r,-r)), min(cascsamp(-r,r), cascsamp(r,r))),
+					min(min(cascsamp(0.0,-r), cascsamp(0.0,r)), min(cascsamp(-r,0.0), cascsamp(r,0.0))));
+			}
+		}
+		return 1.0;
+	}
+#endif
 	uniform float cvar_gl_overbright;
 	uniform float cvar_r_autoexposure_sky;	//FTESurf Patch 1811: Source exposes the envmap with the rest of the pixel
 	vec3 lightmap_fragment()
@@ -351,7 +373,8 @@ varying vec2 lm1, lm2, lm3;
 		#endif
 			vec3 lml = max(lmv, vec3(0.0)) / shk;
 			lml = mix(lml / 12.92, pow((lml + 0.055) / 1.055, vec3(2.4)), step(0.04045, lml));
-			vec3 sun = cvar_r_shadows_sunlm * (1.0 - LMSAMPLE(s_sunvis, lm0).r);	//filtered as the lightmap is (P1275 bicubic)
+			float sunbake = 1.0 - LMSAMPLE(s_sunvis, lm0).r;	//filtered as the lightmap is (P1275 bicubic)
+			vec3 sun = cvar_r_shadows_sunlm * sunbake;
 		#ifdef FAKESHADOWS
 			sun *= clamp(shlit, 0.0, 1.0);	//a shadow takes the baked sun out where the live sun is not drawn (worldcast 0, one map)
 		#endif
@@ -375,7 +398,16 @@ varying vec2 lm1, lm2, lm3;
 			#else
 				float ndl = max(shsunt.z, 0.0);	//the unit sun on the unit normal: no tangent (degenerate on a cliff) involved
 			#endif
-				sun = mix(sun, cvar_r_shadows_sunlm * (0.984 * pow(ndl, 1.4) * clamp(shlit, 0.0, 1.0)), sunw);
+				float sunfull = 0.984 * pow(ndl, 1.4);
+				//FTESurf Patch 1813: no more than the bake allows -- where VRAD baked no sun (a wall's foot, a beam's edge) the
+				//cascades' bias let a lit strip through; a penumbra of 1/hl2_sungate of full sun keeps the cascade's edge. Only
+				//beside a cascade shadow: VRAD leaves some open ground unlit (save 22, behind the half-pipe), the cascades do not
+				float sungate = cvar_hl2_sungate > 0.0 ? clamp(sunbake * cvar_hl2_sungate / max(sunfull, 0.05), 0.0, 1.0) : 1.0;
+			#if FAKESHADOWS_COUNT > 1
+				if (sungate < 1.0 && shlit > 0.0)	//where the cascade lights it: elsewhere the gate changes nothing
+					sungate = mix(sungate, 1.0, min(CascadeShadowNear(s_shadowmap, shwpos, 3.0), CascadeShadowNear(s_shadowmap, shwpos, 8.0)));
+			#endif
+				sun = mix(sun, cvar_r_shadows_sunlm * (sunfull * clamp(shlit, 0.0, 1.0) * sungate), sunw);
 			}
 		#endif
 			lml += sun;
