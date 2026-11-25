@@ -153,7 +153,8 @@ qboolean R_EntPVSSource(void)
 		w->funcs.EdictInFatPVS && w->funcs.FindTouchedLeafs;
 }
 //FTESurf Patch 1823: a client record that overflowed to its headnode keeps its box in the unused leaf slots, so the
-//entity cull (gl_alias.c R_EntPVSSplit) can test the leaves that box touches. Server records never carry it.
+//entity cull (gl_alias.c R_EntPVSSplit) can test the leaves that box touches. Network and CSQC entities only: the
+//static entities' boxes ignore rotation and scale (their FIXMEs). Server records never carry it.
 #define R_PVSBOX_MAGIC 0x50313832u
 void R_FindEntLeafs(model_t *w, pvscache_t *pc, const vec3_t mins, const vec3_t maxs)
 {

@@ -1074,7 +1074,7 @@ static void QCBUILTIN PF_cs_makestatic (pubprogfuncs_t *prinst, struct globalvar
 		cl_static_entities[cl.num_statics].emit = trailkey_null;
 		cl_static_entities[cl.num_statics].mdlidx = in->v->modelindex;
 		if (cl.worldmodel && cl.worldmodel->funcs.FindTouchedLeafs)
-			R_FindEntLeafs(cl.worldmodel, &cl_static_entities[cl.num_statics].ent.pvscache, in->v->absmin, in->v->absmax);	//FTESurf Patch 1823
+			cl.worldmodel->funcs.FindTouchedLeafs(cl.worldmodel, &cl_static_entities[cl.num_statics].ent.pvscache, in->v->absmin, in->v->absmax);
 		else
 			memset(&cl_static_entities[cl.num_statics].ent.pvscache, 0, sizeof(cl_static_entities[cl.num_statics].ent.pvscache));
 		cl.num_statics++;
@@ -2999,7 +2999,22 @@ static void QCBUILTIN PF_cs_checkpvs(pubprogfuncs_t *prinst, struct globalvars_s
 	{	//FTESurf Patch 1823: an overflowed record answers by the leaves its link box touches, as the entity cull does
 		extern cvar_t r_entpvs_exact;
 		if (G_FLOAT(OFS_RETURN) && ent->pvsinfo.num_leafs == -1 && r_entpvs_exact.ival && ent->v->absmin[0] <= ent->v->absmax[0])
-			G_FLOAT(OFS_RETURN) = R_EntPVSSplit(w, ent->v->absmin, ent->v->absmax, pvs, 0);
+		{	//the box the cull judges it by (CopyCSQCEdictToEntity): links ignore .scale and can be stale
+			model_t *m = CSQC_GetModelForIndex(ent->v->modelindex);
+			vec3_t amin, amax;
+			VectorCopy(ent->v->absmin, amin);
+			VectorCopy(ent->v->absmax, amax);
+			if (m && m->loadstate == MLS_LOADED)
+			{
+				float r = (m->radius > 0 ? m->radius : RadiusFromBounds(m->mins, m->maxs)) * (ent->xv->scale ? fabs(ent->xv->scale) : 1);
+				for (i = 0; i < 3; i++)
+				{
+					amin[i] = min(amin[i], ent->v->origin[i] - r);
+					amax[i] = max(amax[i], ent->v->origin[i] + r);
+				}
+			}
+			G_FLOAT(OFS_RETURN) = R_EntPVSSplit(w, amin, amax, pvs, 0);
+		}
 	}
 }
 

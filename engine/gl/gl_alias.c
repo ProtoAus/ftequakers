@@ -3914,8 +3914,10 @@ qboolean R_EntPVSSplit(model_t *wm, const vec3_t mins, const vec3_t maxs, const 
 	pvscache_t pc;
 	vec3_t lo, hi;
 	int a = 0, i;
+	extern int r_entpvs_splitq;
+	r_entpvs_splitq++;
 	wm->funcs.FindTouchedLeafs(wm, &pc, mins, maxs);
-	if (pc.num_leafs >= 0 || depth >= 8)	//256 boxes at most; past it a part keeps the headnode answer
+	if (pc.num_leafs >= 0 || depth >= 8)	//511 queries at most (an unseen entity walks them all); past depth 8 a part keeps the headnode answer
 		return wm->funcs.EdictInFatPVS(wm, &pc, pvs, NULL);	//areas: an overflowed record never had them (mod_vbsp.c P257)
 	for (i = 1; i < 3; i++)
 		if (maxs[i] - mins[i] > maxs[a] - mins[a])
@@ -3940,7 +3942,7 @@ void BE_GenModelBatches(batch_t **batches, const dlight_t *dl, unsigned int bemo
 //	unsigned int orig_numstrisvert = cl_numstrisvert;
 	extern cvar_t r_ignoreentpvs; //legacy value is 1...
 	extern qboolean R_EntPVSSource(void);
-	extern int r_entpvs_culled, r_entpvs_norecord, r_entpvs_split;
+	extern int r_entpvs_culled, r_entpvs_norecord, r_entpvs_split, r_entpvs_splitq;
 	extern cvar_t r_entpvs_exact;
 	qboolean recordsonly = false;
 
@@ -4014,7 +4016,7 @@ void BE_GenModelBatches(batch_t **batches, const dlight_t *dl, unsigned int bemo
 		r_voidvis_edicts = cl_numvisedicts - r_refdef.firstvisedict;
 		r_voidvis_brush = 0;
 		r_voidvis_dropped = 0;
-		r_entpvs_culled = r_entpvs_norecord = r_entpvs_split = 0;
+		r_entpvs_culled = r_entpvs_norecord = r_entpvs_split = r_entpvs_splitq = 0;
 		for (i=r_refdef.firstvisedict ; i<cl_numvisedicts ; i++)
 		{
 			ent = &cl_visedicts[i];
@@ -4091,7 +4093,7 @@ void BE_GenModelBatches(batch_t **batches, const dlight_t *dl, unsigned int bemo
 				r_entpvs_culled++;
 			continue;
 		}
-		if (recordsonly && ent->pvscache.num_leafs == -1 && ent->model && r_entpvs_exact.ival)
+		if (recordsonly && ent->pvscache.num_leafs == -1 && ent->model && r_entpvs_exact.ival && !(ent->flags & (RF_WEAPONMODEL|RF_DEPTHHACK)))
 		{	//FTESurf Patch 1823: passed by its headnode only; the leaves it touches decide
 			vec3_t mins, maxs;
 			if (R_EntLeafsBox(&ent->pvscache, mins, maxs) && !R_EntPVSSplit(cl.worldmodel, mins, maxs, worldpvs, 0))

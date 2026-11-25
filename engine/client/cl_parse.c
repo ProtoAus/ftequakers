@@ -6127,7 +6127,7 @@ static void CL_ParseStaticProt (int baselinetype)
 		VectorCopy(es.origin, mins);
 		VectorCopy(es.origin, maxs);
 	}
-	R_FindEntLeafs(cl.worldmodel, &cl_static_entities[i].ent.pvscache, mins, maxs);	//FTESurf Patch 1823
+	cl.worldmodel->funcs.FindTouchedLeafs(cl.worldmodel, &cl_static_entities[i].ent.pvscache, mins, maxs);
 
 #ifdef RTLIGHTS
 	//and now handle any rtlight fields on it

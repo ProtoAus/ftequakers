@@ -6052,7 +6052,7 @@ void CL_LinkStaticEntities(void *pvs, int *areas)
 				VectorCopy(stat->state.origin, mins);
 				VectorCopy(stat->state.origin, maxs);
 			}
-			R_FindEntLeafs(cl.worldmodel, &stat->ent.pvscache, mins, maxs);	//FTESurf Patch 1823
+			cl.worldmodel->funcs.FindTouchedLeafs(cl.worldmodel, &stat->ent.pvscache, mins, maxs);
 		}
 		else if (clmodel->loadstate != MLS_LOADED)
 		{

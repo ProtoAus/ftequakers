@@ -2455,7 +2455,7 @@ int r_voidvis_edicts;		/*visedicts offered to the batch generator*/
 int r_voidvis_brush;		/*...of which are brush models*/
 int r_voidvis_dropped;		/*...rejected by the same primary STANDARD world-only gate*/
 int r_entpvs_culled, r_entpvs_norecord;	/*FTESurf Patch 1698: culled by their leaf record; drawn with none*/
-int r_entpvs_split;	/*FTESurf Patch 1823: of the culled, by their split box (an overflowed record)*/
+int r_entpvs_split, r_entpvs_splitq;	/*FTESurf Patch 1823: of the culled, by their split box (an overflowed record); box queries since the census reset*/
 extern cvar_t r_entpvs_source;
 
 /*
@@ -2619,8 +2619,8 @@ static void Surf_VoidSceneInfo(void)
 	Con_Printf("  eye %.3f %.3f %.3f angles %.3f %.3f %.3f\n", r_refdef.vieworg[0], r_refdef.vieworg[1], r_refdef.vieworg[2], r_refdef.viewangles[0], r_refdef.viewangles[1], r_refdef.viewangles[2]);
 	Con_Printf("  world meshes %i batches %i verts %i indexes %i shape %08x; census %i brush %i rejected %i (primary offered candidates before culling; developer 1)\n",
 		meshes, batches, verts, indexes, shape, r_voidvis_edicts, r_voidvis_brush, r_voidvis_dropped);
-	Con_Printf("  entity PVS (P1698, r_entpvs_source %i): %i culled by their leaves (%i by a split box, P1823), %i drawn with no record\n",
-		r_entpvs_source.ival, r_entpvs_culled, r_entpvs_split, r_entpvs_norecord);
+	Con_Printf("  entity PVS (P1698, r_entpvs_source %i): %i culled by their leaves (%i by a split box in %i box queries, P1823), %i drawn with no record\n",
+		r_entpvs_source.ival, r_entpvs_culled, r_entpvs_split, r_entpvs_splitq, r_entpvs_norecord);
 }
 
 //most of this is a direct copy from gl
@@ -5295,7 +5295,7 @@ TRACE(("dbg: Surf_NewMap: tp\n"));
 			VectorCopy(maxs, cl_static_entities[i].ent.origin);
 		}
 		if (cl.worldmodel && cl.worldmodel->loadstate == MLS_LOADED)
-			R_FindEntLeafs(cl.worldmodel, &cl_static_entities[i].ent.pvscache, mins, maxs);	//FTESurf Patch 1823
+			cl.worldmodel->funcs.FindTouchedLeafs(cl.worldmodel, &cl_static_entities[i].ent.pvscache, mins, maxs);
 		cl_static_entities[i].emit = trailkey_null;
 	}
 
