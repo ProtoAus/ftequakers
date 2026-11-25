@@ -105,6 +105,14 @@ retained separately from the corrected passing smoke. Full UI/replay interaction
 
 **Verified.** All three QCs built with zero warnings and qcframes passed. Acted runtime: 141 particles in 7 positive-density volumes, 5 density-zero volumes inert, zero escaped billboard bounds, six complete reference/cache/PVS/moving/re-entry snapshots. The identical-view reference and cache-only particle metadata, volume tables, full permutation/distances and filtered order were exactly equal; the float32-aware checker accepted all six and rejected seven malformed/stale controls. Current-frame negative-PVS handling passed fresh independent review. Video restart smoke passed. After latest-main integration, all three QCs again built warning-free; the shipped diagnostic fixture and seven complete runtime tables passed, including a dense visible-fog control (141 reference candidates / 50 visible-volume candidates), video restart and cold map reload. The visible fog pair was inspected without a grid/opacity change. Raw unprofiled paired samples were neutral/noisy in two static views and the moving sweep (under 1% apparent change); another hidden-volume view improved but included a high first control. Claim work avoidance, not a general FPS increase. Human fog feel remains on lextest. QC/client-only: no native, protocol, mover, ranking, Build or engine-pin change.
 
+## Patch 1827 - complete native checkpoints for verifiable segmented runs
+
+**Problem.** A retained save/load segment did not contain the complete native mover state and input boundary needed to check a run across the load. Rounded save coordinates cannot reconstruct that missing state.
+
+**Change.** A typed native snapshot API supports capture, non-mutating validation and atomic restore without importing live counters or property provenance. Supported ordinary recordings retain a closed input boundary and explicit checkpoint; replay checks the retained endpoint before continuing from that state. Held release, repeated joins and disk reload use the same contract. Missing legacy evidence remains unavailable rather than guessed; malformed present snapshots do not downgrade to legacy. Unsupported native-format/HPP admission and detector/ranking policy are unchanged.
+
+**Validation.** Native component 215 checks, structural reader 1133 checks, 44 adversarial proof cases and real 200 Hz baseline/held/two-join runs pass in isolated worktrees. Actual cold/buffered/retarget, NOCLIP practice compatibility, refused non-WALK restore/recovery and live-property preservation controls pass. Independent source reviews found no remaining blocker. Integration, matched fleet/verifier delivery and live submission are separate gates; no deployment is claimed by this entry.
+
 ## Patch 1825 - $envmaptint and $envmapsaturation read Source's "{r g b}" form (plugin hl2/mat_vmt.c)
 
 **Problem.** Lex, 25 Nov, surf_thesteve save 18: the graffiti ramps lack Momentum's reflective sheen ("missing

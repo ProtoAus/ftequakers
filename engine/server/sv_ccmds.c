@@ -4958,8 +4958,68 @@ typedef struct
 	vec3_t org, vel;
 	int    ground;
 	pmsourcestate_t st;
+	qboolean savejoin; /* P1827: proved retained snapshot, not an arbitrary reseed */
+	sv_pm_snapshot_t snapshot;
 } recsim_sess_t;
 #define RECSIM_SESS_TOL 0.0001f	/* the save state's %.4f (sv_saveloc.qc SV_SaveWriteState) */
+
+/* P1827: a snapshot is useful evidence only AFTER the retained open loop has
+ * reproduced it. Never use its native fields merely because they parse. */
+static const char *SV_RecSim_CheckSaveJoin(const recsim_sess_t *s, const float *pin)
+{
+ const sv_pm_snapshot_t *p=&s->snapshot;
+ pmsourcestate_t actual, seed=s->st;
+ int k, ground=pmove.onground ? (pmove.groundent ? 2 : 1) : 0;
+ PMSrc_SaveState(&actual);
+ if(p->v[PMS_MODEL]!=pin[1] || p->v[PMS_VERSION]!=pin[0] ||
+    p->v[PMS_PIN]!=SV_PMSnapshotPin(pin) || (float)p->v[PMS_TICK]!=movevars.ticrate)
+  return "saved physics identity differs from the retained move";
+ for(k=0;k<3;++k) {
+  if(!SV_PMSnapshotNear(pmove.origin[k],p->v[PMS_ORG+k],RECSIM_SESS_TOL) ||
+     !SV_PMSnapshotNear(pmove.velocity[k],p->v[PMS_VEL+k],RECSIM_SESS_TOL))
+   return "saved body differs from the retained endpoint";
+  if(!SV_PMSnapshotNear(pmove.player_mins[k],p->v[PMS_MINS+k],RECSIM_SESS_TOL) ||
+     !SV_PMSnapshotNear(pmove.player_maxs[k],p->v[PMS_MAXS+k],RECSIM_SESS_TOL))
+   return "saved hull differs from the retained endpoint";
+  if(!SV_PMSnapshotNear(s->org[k],p->v[PMS_ORG+k],RECSIM_SESS_TOL) ||
+     !SV_PMSnapshotNear(s->vel[k],p->v[PMS_VEL+k],RECSIM_SESS_TOL))
+   return "restored seed differs from the saved body";
+ }
+ if(!SV_PMSnapshotStateEqual(&actual,&p->state) || !(actual.msec_carry<p->v[PMS_TICK]) || pmove.jump_held!=(int)p->v[PMS_JUMP])
+  return "saved native state differs from the retained endpoint";
+ if(ground!=(int)p->v[PMS_GROUND]) return "saved ground relationship differs from the retained endpoint";
+ if(((s->ground&1)!=0) != (ground==1)) return "restored ground does not follow snapshot normalization";
+ /* Legacy seed text omits portaloffset. Its value is NOT guessed or reset: the
+  * proved full snapshot supplies it. Every field that seed DOES state must agree. */
+ VectorCopy(p->state.portaloffset,seed.portaloffset);
+ if(!SV_PMSnapshotStateEqual(&seed,&p->state) || !(s->carry>=0 && s->carry<p->v[PMS_TICK]) ||
+    !SV_PMSnapshotNear(s->carry,p->state.msec_carry,RECSIM_SESS_TOL))
+  return "restored native seed differs from the saved state";
+ {
+  float cached,ratio;
+  if(!SV_PMSnapshotGravity(p->v[PMS_GRAVITY],movevars.gravity,&cached,&ratio) ||
+     cached!=(float)p->v[PMS_ENTGRAVITY] || ratio!=movevars.entgravity ||
+     p->v[PMS_LIMIT]!=pmove.momlimit || p->v[PMS_COOL]!=pmove.momcool || p->v[PMS_SLIDE]!=pmove.momslide)
+   return "saved movement properties differ from the retained pin";
+ }
+ {
+  int water=(pmove.watertype&FTECONTENTS_SOLID) ? Q1CONTENTS_SOLID :
+            (pmove.watertype&FTECONTENTS_SKY) ? Q1CONTENTS_SKY :
+            (pmove.watertype&FTECONTENTS_LAVA) ? Q1CONTENTS_LAVA :
+            (pmove.watertype&FTECONTENTS_SLIME) ? Q1CONTENTS_SLIME :
+            (pmove.watertype&FTECONTENTS_WATER) ? Q1CONTENTS_WATER : Q1CONTENTS_EMPTY;
+  int flags=(pmove.ducked ? PMF_DUCKED : 0)|(pmove.onladder ? PMF_LADDER : 0);
+  if(p->v[PMS_WATERLEVEL]!=pmove.waterlevel || p->v[PMS_WATERTYPE]!=water || p->v[PMS_PMFLAGS]!=flags ||
+     p->v[PMS_TELEPORT]!=pmove.waterjumptime ||
+     p->v[PMS_VIEW] || p->v[PMS_VIEW+1] || !SV_PMSnapshotNear(p->v[PMS_VIEW+2],pmove.viewheight,RECSIM_SESS_TOL))
+   return "saved body outputs differ from the retained move";
+ }
+ /* Ordinary replay does not model directional gravity or a live teleport
+  * cooldown transform. Never import either as an unexplained speed source. */
+ if(p->v[PMS_GRAVDIR] || p->v[PMS_GRAVDIR+1] || p->v[PMS_GRAVDIR+2])
+  return "saved movement context is not modelled by ordinary replay";
+ return NULL;
+}
 
 static short SV_RecSim_AngleShort (float a)
 {
@@ -5454,7 +5514,7 @@ static qboolean SV_RecSim_ViewFloat(const char *s, float *out)
 }
 
 /* V12 writer-shaped resume/retry tokens authorize an epoch, never eligibility. */
-static qboolean SV_RecSim_ViewRestore(const char *line)
+static qboolean SV_RecSim_ViewRestore(const char *line, int *restoredticks)
 {
 	const char *args = SV_RecSim_RecordArgs(line, "resume");
 	char slot[64], ticks[64], tail, *end;
@@ -5473,7 +5533,24 @@ static qboolean SV_RecSim_ViewRestore(const char *line)
 	}
 	if (*ticks < '0' || *ticks > '9') return false;
 	n = strtoul(ticks, &end, 10);
-	return !*end && n <= 0x7fffffffUL;
+	if (*end || n > 0x7fffffffUL) return false;
+	if (restoredticks) *restoredticks = n;
+	return true;
+}
+
+static qboolean SV_RecSim_SessionFields(const char *args, int *sn, int *mt, float *carry, int *ticks)
+{
+ char fields[4][64],*end;
+ unsigned long n[4]={0};
+ int i;
+ if(!SV_RecSim_ViewFields(args,fields) || !SV_RecSim_ViewFloat(fields[2],carry)) return false;
+ for(i=0;i<4;++i) if(i!=2) {
+  if(fields[i][0]<'0' || fields[i][0]>'9') return false;
+  n[i]=strtoul(fields[i],&end,10);
+  if(*end || n[i]>0x7fffffffUL) return false;
+ }
+ if(!n[0]) return false;
+ *sn=n[0]; *mt=n[1]; *ticks=n[3]; return true;
 }
 
 static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify, const char *source_challenge)
@@ -5521,7 +5598,7 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify, const
 	/* Patch 349: pm_verify */
 	int           zs_ev = -1, zs_az = -1, zs_track = 0, zs_startseg = 0, zs_stagerun = 0, zs_twarp = 0;
 	qboolean      havezseed = false, haveend = false;
-	int           endticks = -1, nresume = 0, nghost = 0, nrestart = 0;
+	int           endticks = -1, nresume = 0, provedresumes = 0, nghost = 0, nrestart = 0;
 	char          hdrzsrc[32] = "", hdrzcrc[32] = "", hdrzrule[32] = "";
 	func_t        vf_step = 0;
 	/* Patch 367: v10 sessions */
@@ -5675,6 +5752,8 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify, const
 		int cses = 0, ppmt = 0, pptk = 0, crst = 0, cgho = 0, gopen = 0;
 		int cspc = 0, sopen = 0;	/* Patch 380 */
 		float ppc = 0;
+		sv_pm_snapshot_t joinsnapshot;
+		int joinphase = 0; /* 1: pause owed, 2: resume owed, 3: session owed */
 		qboolean floorwin = false, openpause = false, viewpausevalid = false;
 		p = buf; end = buf + fsz; inbody = false;
 		while (p < end)
@@ -5687,6 +5766,12 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify, const
 			clockargs = SV_RecSim_RecordArgs(ln, "clockend");
 			if (!*ln)
 				continue;
+			if (inbody && joinphase &&
+			    ((joinphase == 1 && strncmp(ln,"pause ",6)) ||
+			     (joinphase == 2 && strncmp(ln,"resume ",7) && strncmp(ln,"retry ",6)) ||
+			     (joinphase == 3 && strncmp(ln,"session ",8)) ||
+			     (joinphase == 4 && strncmp(ln,"seed ",5))) && !sesbad)
+				sesbad = "reordered savejoin/pause/restore/session evidence";
 			if (pass == 0 && strlen(ln) >= sizeof(line)-1)
 				nlong++;	/* Patch 347: truncated, and said so below */
 			if (inbody && (SV_RecSim_RecordArgs(ln, "angleop") || SV_RecSim_RecordArgs(ln, "anglecause")))
@@ -5695,6 +5780,11 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify, const
 					!AC_Record(physical, content, svc_setangle))
 				{ RECSIM_REFUSE("malformed angle operation metadata"); FS_FreeFile(buf); return; }
 				continue;
+			}
+			if (inbody && !strncmp(ln,"seed ",5)) {
+				if (joinphase == 4) joinphase = 0;
+				if (pass == 1 && cses > 0 && ses[cses-1].savejoin && ses[cses-1].seeded && !sesbad)
+					sesbad = "duplicate savejoin seed";
 			}
 			if (!inbody)
 			{
@@ -5823,7 +5913,12 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify, const
 				if (pass == 1 && cin < nin)
 				{
 					recsim_in_t *r = &ins[cin];
-					int nf = sscanf(fzargs ? fzargs : ln + 3, "%i %i %f %f %f %f %f %f %f %i %i",
+					qboolean valid = !provedresumes || fzargs ||
+						(AC_PhysicalLine(physical,physicalsize,&content) && content==strlen(ln) &&
+						 !memcmp(physical,ln,content) && SV_PMSnapshotInput(ln+3,rate));
+					int nf = 0;
+					if(!valid && !sesbad) sesbad="snapshot replay has malformed or nonfinite input metadata";
+					if(valid) nf = sscanf(fzargs ? fzargs : ln + 3, "%i %i %f %f %f %f %f %f %f %i %i",
 					           &r->pk, &r->mt, &r->carry,
 					           &r->mv[0], &r->mv[1], &r->mv[2],
 					           &r->ang[0], &r->ang[1], &r->ang[2], &r->bt, &r->fl);
@@ -6046,10 +6141,29 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify, const
 						else endviews = v[12];
 					}
 				}
-			else if ((!strncmp(ln, "resume ", 7) || !strncmp(ln, "retry ", 6)) && pass == 0)
+			else if (SV_RecSim_RecordArgs(ln, "savejoin"))
 			{
-				nresume++;
-				if ((filever == 12 || filever == 13 || filever == 14) && SV_RecSim_ViewRestore(ln))
+				const char *q = SV_RecSim_RecordArgs(ln, "savejoin");
+				char *tail;
+				unsigned long ordinal = strtoul(q, &tail, 10);
+				qboolean physicalok = AC_PhysicalLine(physical,physicalsize,&content) &&
+					content==strlen(ln) && !memcmp(physical,ln,content) && !strncmp(ln,"savejoin ",9);
+				qboolean valid = physicalok && *q >= '0' && *q <= '9' && *tail == ' ' &&
+					ordinal > 0 && ordinal == (unsigned long)cin && !openpause && !joinphase &&
+					filever >= 10 && filever <= 14 && SV_PMSnapshotParse(tail+1, &joinsnapshot) &&
+					(float)joinsnapshot.v[PMS_TICK] == rate;
+				if (!valid) { if (!sesbad) sesbad = "a malformed, unbound or nested savejoin snapshot"; }
+				else joinphase = 1;
+			}
+			else if (!strncmp(ln, "resume ", 7) || !strncmp(ln, "retry ", 6))
+			{
+				int tk = -1;
+				qboolean valid = SV_RecSim_ViewRestore(ln, &tk); /* use the validated DECIMAL value */
+				if (pass == 0) nresume++;
+				if (joinphase == 2 && valid && tk == pptk)
+				{ joinphase = 3; if (pass == 0) provedresumes++; }
+				else if (joinphase && !sesbad) sesbad = "a savejoin with an invalid or reordered restore";
+				if (pass == 0 && (filever == 12 || filever == 13 || filever == 14) && valid)
 				{
 					if (viewowner) viewbad = "a viewing window open across a restore";
 					else haveviewwall = false;
@@ -6164,6 +6278,7 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify, const
 					else if (cses && cses <= nses && !ses[cses-1].seeded)
 					{
 						recsim_sess_t *s = &ses[cses-1];
+						if (s->savejoin && cin != s->row && !sesbad) sesbad = "a savejoin seed after its first input";
 						s->seeded = true;
 						VectorCopy(so, s->org);
 						VectorCopy(sv, s->vel);
@@ -6175,7 +6290,7 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify, const
 			}
 			else if (!strncmp(ln, "pause ", 6))
 			{
-				char why[16], tail;
+				char why[16] = "", tail;
 				floorwin = true;
 				if (openpause && pass == 0 && !sesbad)
 					sesbad = "a second `pause` before its `session`";
@@ -6203,18 +6318,23 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify, const
 							Q_strncatz(pausewhys, " ", sizeof(pausewhys));
 						Q_strncatz(pausewhys, why, sizeof(pausewhys));
 					}
-					if (!sesbad && (!strcmp(why, "retry") || !strcmp(why, "load")))
+					if (!sesbad && (!strcmp(why, "retry") || !strcmp(why, "load")) && joinphase != 1)
 						sesbad = "a cold rewind (`pause retry|load`): the move before it has no stated duration";
-					else if (!sesbad && strcmp(why, "drop") && strcmp(why, "rotate") && strcmp(why, "server"))
+					else if (!sesbad && strcmp(why, "retry") && strcmp(why, "load") && strcmp(why, "drop") && strcmp(why, "rotate") && strcmp(why, "server"))
 						sesbad = "a `pause` reason this replay does not know";
+				}
+				if (joinphase == 1)
+				{
+					if (strcmp(why,"load") && strcmp(why,"retry"))
+						{ if(!sesbad) sesbad = "a savejoin with a non-load pause"; }
+					else { ppmt = joinsnapshot.v[PMS_MT]; ppc = joinsnapshot.state.msec_carry; joinphase = 2; }
 				}
 			}
 			else if (!strncmp(ln, "session ", 8))
 			{
 				int sn, smt, stk;
-				char tail;
 				float scy;
-				if (sscanf(ln+8, "%i %i %f %i %c", &sn, &smt, &scy, &stk, &tail) != 4)
+				if (!SV_RecSim_SessionFields(ln+8, &sn, &smt, &scy, &stk))
 				{
 					if (pass == 0 && !sesbad)
 						sesbad = "a malformed `session`";
@@ -6237,9 +6357,12 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify, const
 						s->row = cin;
 						s->pmt = ppmt; s->pcarry = ppc; s->pticks = pptk;
 						s->n = sn; s->mt = smt; s->carry = scy; s->ticks = stk;
+						if (joinphase == 3) { s->savejoin = true; s->snapshot = joinsnapshot; }
 					}
+					if (joinphase && joinphase != 3 && !sesbad) sesbad = "a savejoin without its ordered restore";
 					cses++;
 				}
+				joinphase = joinphase == 3 ? 4 : 0;
 				openpause = false;
 			}
 			else if (!strncmp(ln, "pm ", 3))
@@ -6303,6 +6426,7 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify, const
 			nspec = cspc;
 			if (sopen && !specbad)
 				specbad = "a spec window open at the finish";
+			if (joinphase && !sesbad) sesbad = "an unmatched savejoin snapshot";
 			if (openpause && !sesbad)
 				sesbad = "a `pause` no `session` answers (the run is still parked)";
 			if (!nin)
@@ -6350,8 +6474,12 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify, const
 	else if (!sesbad && !npause && filever == 10)
 		sesbad = "FTESURF-REC 10 with no `pause` (the header is 10 exactly when one is written)";
 	for (i = 0; !sesbad && i < nses; i++)
-		if (ses[i].row >= nin)
+	{
+		if (ses[i].row < 0 || ses[i].row >= nin)
 			sesbad = "a session with no `in` row after it";
+		else if (ses[i].savejoin && (ses[i].mt != ins[ses[i].row].mt || ses[i].carry != ins[ses[i].row].carry))
+			sesbad = "savejoin resumed clock/carry is not bound to its first input";
+	}
 	if (sesbad)
 	{
 		RECSIM_REFUSE(sesbad);
@@ -6540,8 +6668,8 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify, const
 			refuse = "not exact: no seed or no full pin (recorder before QC build 87, or engine before Patch 346)";
 		else if (!haveend || inend_mt < 0)
 			refuse = "unfinished: no `inend`/`end`";
-		else if (nresume)
-			refuse = "a save-state resume or retry";
+		else if (nresume != provedresumes)
+			refuse = "a save-state resume or retry without complete snapshot evidence";
 		else if (phasebad)
 			refuse = phasebad;
 		else if (ghostbad)
@@ -6712,6 +6840,9 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify, const
 		char   spwhy[160], spbwhy[160];
 		int    sclk_n = -1, sclk_trace = 0, sclk_pause = 0, sclk_sess = 0;
 		int    sjmp_n = -1, sjmp_row = -1;
+		int    savebad_n = -1;
+		const char *savebad = NULL;
+		const float *activepin = hdrpin;
 		float  sjmp_o = 0, sjmp_v = 0;
 		/* The mover's carried state at the top of a run: every field at its
 		   natural initial value.  A verifier gets this for free at the START of a
@@ -6811,6 +6942,7 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify, const
 			VectorClear(pmove.origin);
 			VectorClear(pmove.velocity);
 			pmcur = pecur = portcur = 0;
+			activepin = hdrpin;
 			pehave = false;
 			if (exact)
 			{	/* Patch 347: the file's own exact seed and carried state. */
@@ -6879,7 +7011,7 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify, const
 			{
 				recsim_in_t *r = &ins[i];
 				float dt;
-				int   wantticks, next_mt;
+				int   wantticks, next_mt, rowclock = 0;
 				float next_carry;
 
 				if (stopat > 0 && r->pk - ins[0].pk >= stopat)
@@ -6891,8 +7023,14 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify, const
 				while (scur < nses && ses[scur].row == i)
 				{
 					recsim_sess_t *s = &ses[scur];
-					int   clk = sbase_ticks + (s->pmt - sbase_mt);
+					int   clk = 0;
 					float dorg = 0, dvel = 0;
+					if(provedresumes) {
+						if(!SV_PMSnapshotClock(sbase_ticks,s->pmt,sbase_mt,&clk) || clk!=s->pticks || s->ticks!=s->pticks) {
+							savebad="snapshot clock continuity is invalid or out of range"; savebad_n=s->n;
+							goto recsim_replay_done;
+						}
+					} else clk=sbase_ticks+(s->pmt-sbase_mt);
 					for (k = 0; k < 3; k++)
 					{
 						if (fabs(pmove.origin[k] - s->org[k]) > dorg)
@@ -6913,10 +7051,25 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify, const
 						if (sjmp_n < 0 && s->seeded && (dorg > RECSIM_SESS_TOL || dvel > RECSIM_SESS_TOL))
 							{ sjmp_n = s->n; sjmp_row = i; sjmp_o = dorg; sjmp_v = dvel; }
 					}
+					if (s->savejoin && !mode)
+					{
+						const char *problem = SV_RecSim_CheckSaveJoin(s, activepin);
+						if (problem) {
+							if (!savebad) { savebad = problem; savebad_n = s->n; }
+							goto recsim_replay_done; /* no import of unproved native state */
+						}
+					}
 					if (s->seeded)
 					{
 						if (exact)
-							PMSrc_LoadState(&s->st);
+							PMSrc_LoadState(s->savejoin ? &s->snapshot.state : &s->st);
+						if (s->savejoin)
+						{
+							pmove.jump_held = s->snapshot.v[PMS_JUMP];
+							SV_PMSnapshotVector(&s->snapshot,PMS_MINS,pmove.player_mins);
+							SV_PMSnapshotVector(&s->snapshot,PMS_MAXS,pmove.player_maxs);
+							pmove.viewheight = s->snapshot.v[PMS_VIEW+2];
+						}
 						VectorCopy(s->org, pmove.origin);
 						VectorCopy(s->vel, pmove.velocity);
 						pmove.onground = (s->ground & 1) != 0;
@@ -6954,6 +7107,7 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify, const
 						if (pms[pmcur].row >= 0)
 						{
 							SV_PMPinApply(pms[pmcur].pin);
+							activepin = pms[pmcur].pin;
 							SV_RecSim_TraceCvars(pms[pmcur].pin);
 							pmove.player_mins[2] = 0;
 							pmove.player_maxs[2] = movevars.standheight;
@@ -7011,8 +7165,18 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify, const
 					{ next_mt = inend_mt; next_carry = inend_carry; }
 				else
 					break;
-				dt = (next_mt - r->mt) * rate + (next_carry - r->carry);
-				wantticks = next_mt - r->mt;
+				if(provedresumes) {
+					if(!SV_PMSnapshotHorizon(r->mt,r->carry,next_mt,next_carry,rate,&dt) ||
+					   !SV_PMSnapshotClock(sbase_ticks,next_mt,sbase_mt,&rowclock)) {
+						savebad="snapshot move has a backward, excessive or invalid horizon/clock"; savebad_n=scur;
+						goto recsim_replay_done;
+					}
+					wantticks=next_mt-r->mt; /* nonnegative, monotone, int domain */
+				} else {
+					dt = (next_mt - r->mt) * rate + (next_carry - r->carry);
+					wantticks = next_mt - r->mt;
+					rowclock=sbase_ticks+(next_mt-sbase_mt);
+				}
 				if (!mode)
 					ndur++;
 
@@ -7061,6 +7225,10 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify, const
 				}
 
 				PM_PlayerMove(exact ? gamespeed : 1.0f);
+				if(provedresumes && !mode && pmove.ticksrun!=(unsigned int)wantticks) {
+					savebad="snapshot move tick count differs from the native mover"; savebad_n=scur;
+					goto recsim_replay_done;
+				}
 
 				if (exact)
 				{	/* Patch 347: crossings the file says this move made, CHECKED. */
@@ -7118,7 +7286,7 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify, const
 					}
 					else if (wrp[wcur].mt > next_mt)
 						break;
-					RECSIM_SPEC_UPTO(i, wcur, sbase_ticks + (next_mt - sbase_mt), next_mt, next_carry);
+					RECSIM_SPEC_UPTO(i, wcur, rowclock, next_mt, next_carry);
 					VectorCopy(wrp[wcur].org, pmove.origin);
 					VectorCopy(wrp[wcur].vel, pmove.velocity);
 					if (exact && wrp[wcur].fl >= 0)
@@ -7168,7 +7336,7 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify, const
 				{
 					int code = SV_RecSim_Step(vf_step, vlastp, pmove.origin, pmove.player_maxs);
 					if (code == 1 && vfin_row < 0)
-						{ vfin_row = i; vfin_ticks = sbase_ticks + (next_mt - sbase_mt); }
+						{ vfin_row = i; vfin_ticks = rowclock; }
 					else if (code == 2 && vcancel_row < 0)
 						vcancel_row = i;
 					else if (code == 3 && vrearm_row < 0)
@@ -7295,7 +7463,7 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify, const
 					if (wrp[wcur].mt < 0)
 						continue;
 					/* Patch 380: `!r` releasing a hold writes `spec 0` above its warp */
-					RECSIM_SPEC_UPTO(i, wcur, sbase_ticks + (next_mt - sbase_mt), next_mt, next_carry);
+					RECSIM_SPEC_UPTO(i, wcur, rowclock, next_mt, next_carry);
 					VectorCopy(wrp[wcur].org, pmove.origin);
 					VectorCopy(wrp[wcur].vel, pmove.velocity);
 					if (exact && wrp[wcur].fl >= 0)
@@ -7313,7 +7481,7 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify, const
 				   SV_TimerTicks there: the counter after this move. */
 				for (; gcur < nghost && gho[gcur].row <= i; gcur++)
 				{
-					int tk = sbase_ticks + (next_mt - sbase_mt);
+					int tk = rowclock;
 					if (!mode && gtick_row < 0 && gho[gcur].ticks != tk)
 						{ gtick_row = i; gtick_file = gho[gcur].ticks; gtick_trace = tk; }
 					ghosting = gho[gcur].on;
@@ -7324,10 +7492,11 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify, const
 				}
 				/* Patch 380: a spec edge after this packet states the counters after this
 				   move, which the next counter-bearing line restates, and this body. */
-				RECSIM_SPEC_UPTO(i, nwarp, sbase_ticks + (next_mt - sbase_mt), next_mt, next_carry);
+				RECSIM_SPEC_UPTO(i, nwarp, rowclock, next_mt, next_carry);
 			}
 		}
 
+recsim_replay_done:
 		if (nrestart && verify)
 			Con_Printf("  restarts  %i of %i applied to the zone latches (SV_VerifyRestart)\n", nrsapplied, nrestart);
 		if (nghost && verify)
@@ -7434,7 +7603,9 @@ static void SV_RecSim_Run (const char *fname, int stopat, qboolean verify, const
 			*why = 0;
 			/* Patch 367: a session boundary is named before the divergence it causes;
 			   the clock check is counter arithmetic and needs no trajectory. */
-			if (sclk_n >= 0)
+			if (savebad)
+				Q_snprintfz(why, sizeof(why), "snapshot session %i: %s", savebad_n, savebad);
+			else if (sclk_n >= 0)
 				Q_snprintfz(why, sizeof(why), "session %i: the trace parks the clock at %i, the pause says %i, the session %i",
 				            sclk_n, sclk_trace, sclk_pause, sclk_sess);
 			else if (sjmp_n >= 0 && (!x_bad || x_first >= sjmp_row))
@@ -7504,6 +7675,13 @@ ag_unsupported_cleanup:
 	Z_Free(rst);
 	Z_Free(gho);
 	Z_Free(spc);
+}
+
+static void SV_PMSnapshotTest_f(void)
+{
+ unsigned int checks, failures;
+ failures=SV_PMSnapshotTest(&checks);
+ Con_Printf("ordinary save snapshot codec: %u checks, %u failures (component only)\n",checks,failures);
 }
 
 static void SV_HeldCoverageTest_f(void)
@@ -8007,6 +8185,7 @@ void SV_InitOperatorCommands (void)
 	                "game's recorded ticks against this mover (tools/momstep.py).  Measures only.");
 
 	//FTESurf Patch 349
+	Cmd_AddCommandD("pm_snapshot_test", SV_PMSnapshotTest_f, "P1827: complete-save snapshot codec component falsifiers; not run acceptance.");
 	Cmd_AddCommandD("pm_verify", SV_RecVerify_f,
 	                "FTESurf: pm_verify <file.rec>.  Replays a finished FTESURF-REC 9 or 10 "
 	                "recording exactly on this map and asks the timer's own zone "

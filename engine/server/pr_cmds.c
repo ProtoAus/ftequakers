@@ -11638,6 +11638,20 @@ static void QCBUILTIN PF_bank_gravity_source(pubprogfuncs_t *prinst, struct glob
 		G_INT(OFS_PARM2), G_FLOAT(OFS_PARM3));
 }
 
+/* P1827: trusted server VM only. CHECK is non-mutating; APPLY is a gameplay
+ * restore, not a verifier grant. No console/client-writable transport. */
+static void QCBUILTIN PF_pm_snapshot(pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
+{
+ char out[SV_PMSNAPSHOT_TEXT];
+ float operation;
+ G_INT(OFS_RETURN)=0;
+ if(prinst!=svprogfuncs || prinst->callargc!=3) return;
+ operation=G_FLOAT(OFS_PARM2);
+ if(!(operation>=0 && operation<=2 && floorf(operation)==operation)) return;
+ if(SV_PMSnapshot(G_EDICT(prinst,OFS_PARM0),PR_GetString(prinst,G_INT(OFS_PARM1)),(int)operation,out,sizeof(out)))
+  RETURN_TSTRING(out);
+}
+
 // P1061: bounded VM-only handles, not a string/file checkpoint parser.
 static void QCBUILTIN PF_tas_rewind(pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
 {
@@ -11732,6 +11746,7 @@ static BuiltinList_t BuiltinList[] = {				//nq	qw		h2		ebfs
 	{"tas_rollout_batch", PF_tas_rollout_batch, 0, 0, 0, 0, D("float(entity player, float *rows, float ticks, float *out, float count, float *params, float aimgain, vector aimface)", "FTESurf Patch 1467: count tas_rollout candidates of ticks rows each (rows count*ticks*7 floats, out count*ticks*13) from the same paused TAS body, on sv_tas_threads worker threads. params: 5 floats a candidate -- its aim point x y z and aimlead, and on return the ticks it ran (tas_rollout's value). aimgain 0: no aim; aimface '0 0 0': no face. A candidate a worker cannot finish (a model to load, a portal) runs on the main thread, as do all where threads cannot run. Returns how many workers ran, or tas_rollout's negative reason.")},
 	{"tas_rollout", PF_tas_rollout, 0, 0, 0, 0, D("float(entity player, float *rows, float ticks, float *out, optional vector aim, optional float aimgain, optional vector aimface, optional float aimlead)", "P1443: what ticks rows of tas_tape words (fwd side up, pitch yaw roll, buttons; 7 floats a row) would do from the paused TAS body, nothing kept but the buffers (P1449 FOLLOW/PITCHV/AIM row bits 256/512/1024 write their computed words back; aim, aimgain, aimface and P1466's aimlead, 0..0.9 of the distance set back along the face, 0.5 unset, steer AIM rows; P1466 row bit 2048 adds a wall clipped on any tick as out[7] bit 2, and like the others is cleared from each row that runs): 13 floats a tick (origin, velocity, onground, ducked, contact kind, contact normal, the first entity per-command QC could act on, negated when before the tick). Returns the ticks run, or a negative reason it cannot start.")},
 	{"tas_tape", PF_tas_tape, 0, 0, 0, 0, D("float(entity player, float op, float a, float b, vector moves, vector angles, float buttons)", "TAS-only movement authoring: cancel0, validate1, preflight2, begin3, put4, arm5, status6, plan-cap8, plan-set9, controller-set10(mode,turn amount). No transport/world restore or human eligibility.")},
+	{"pm_snapshot", PF_pm_snapshot, 0, 0, 0, 0, D("string(entity player, string data, float operation)", "Complete native ordinary-save snapshot: GET0, non-mutating CHECK1, atomic APPLY2. No world/counter rollback or verification grant.")},
 	{"tas_rewind", PF_tas_rewind, 0, 0, 0, 0, D("float(entity player, float slot, float token, float op)", "Bounded native movement checkpoints: TAS capture0/probe1/apply2; loopback-only live-base capture3 at slot4000. Apply still requires paused TAS. Transient map/connection-bound handles; no world/counter or human-proof restore.")},
 	{"bank_gravity_source", PF_bank_gravity_source, 0, 0, 0, 0, D("void(entity player, entity source, int attempt, float bad)", "Server VM runtime gravity provenance. No entity fields, file persistence or evidence transport.")},
 	{"fixme",			PF_Fixme,			0,		0,		0,		0,	D("void()", "Some builtin that should never be called. Ends the game with some weird message.")},

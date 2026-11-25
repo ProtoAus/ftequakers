@@ -1520,6 +1520,7 @@ int SV_PMPinParse(const char *text, float *v);
 void SV_PMPinApply(const float *v);
 void SV_PMPinFill(float *v);
 qboolean SV_PMStateParse(const char *text, pmsourcestate_t *st);
+#include "sv_pm_snapshot.h" /* P1827: complete ordinary-save native state */
 qboolean SV_PMStateHasLand(const char *text);	//Patch 882
 qboolean SV_PMStateHasWater(const char *text);	//Patch 916
 unsigned int SV_PhysentDigest(void);
