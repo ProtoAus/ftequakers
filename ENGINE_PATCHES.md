@@ -15,6 +15,24 @@ into all three as before.
 cubemap sheen with the normal map through it, close to Lex's Momentum shot of the same ramp. The bump was already drawn
 (normalmap in the shader); it reads as flat without the reflection.
 
+## Patch 1824 - broad relief patterns for missing-texture colours (plugin hl2 mat_vmt.c mod_vbsp.c glsl/vmt/vertexlit.glsl; game gfx/misspattern)
+
+**Problem.** Missing Source images draw as flat average colours, losing surface detail and speed cues.
+
+**Change.** Seven original periodic 256px grey detail/normal pairs: brick, grass, concrete, wood, metal, glass,
+cracks. Pick by material/base-image/surfaceprop keywords, approximately retain the existing tint. World brush
+faces map in their own plane at 256 world units per tile, independent of texinfo scale/shear; displacements
+retain base-face mapping and may stretch with deformation. Normal maps use the radiosity basis (relief needs
+directional baked/live lighting). Models use object-space projected detail only, not normal maps.
+`hl2_missingpattern 0`, tint off, or either pattern file absent preserves the prior fallback on the next map
+load. Cutouts, unlit and mixed installed transitions are not patterned. Game release globs include all 14 PNGs.
+
+**Verified.** Linux HL2 plugin build; deterministic PNG regeneration; real C helpers pass selection/off/either-
+file-absent controls and 500 sloped/scaled/sheared plane projections plus a degenerate guard. Current-source
+matched on/off runtime smoke passes on surf_bikini_bottom. Recovery evidence: lexlist-20261125-e0/artifacts/
+p1824-resume-worker.md; current-main integration and local installation: misspat-20261125-happy/artifacts/.
+No Windows build, release/archive, speed-readability acceptance or performance measurement.
+
 ## Patch 1823 - An entity too big for its leaf record is culled by the leaves it touches (engine client/renderer.c cl_ents.c cl_parse.c r_surf.c pr_csqc.c render.h, gl/gl_alias.c)
 
 **Problem.** Lex, 25 Nov, surf_thesteve save 6: "why does ramps way outside the PVS in the BSP get render in the

@@ -100,6 +100,12 @@
 varying vec2 tex_c;
 varying vec3 norm;
 varying vec4 light;	//.a: FTESurf Patch 1780, Strata's baked direct sun share (the .vhv alpha), 0 without
+#ifdef MISSPAT
+	//FTESurf Patch 1824: a missing image's relief detail (mat_vmt.c VMT_MissPatternSet), projected down the model's own
+	//axes at MISSPAT tiles per unit -- its UVs were laid out for the absent texture, at any scale. Weighted by the
+	//triangle's own normal: a Propper box's smoothed corner normals blend in the projections edge-on to its faces (streaks).
+	varying vec3 mp_pos;
+#endif
 #ifdef VC
 	uniform vec3 cvar_r_shadows_vhvsun;	//FTESurf Patch 1780: linear sun per unit of it, set by the game on a cascade map
 #endif
@@ -197,6 +203,9 @@ uniform float cvar_r_autoexposure_sky;	//FTESurf Patch 1811: Source exposes the 
 		#endif
 	#endif
 		norm = n = normalize(n);
+	#ifdef MISSPAT
+		mp_pos = w * float(MISSPAT);
+	#endif
 		s = normalize(s);
 		t = normalize(t);
 		light.rgba = vec4(e_light_ambient, 1.0);
@@ -317,7 +326,14 @@ uniform float cvar_r_autoexposure_sky;	//FTESurf Patch 1811: Source exposes the 
 	#if defined(INSTANCED) && defined(BUMPCUBE) && defined(BUMP)
 		instcube();
 	#endif
+	#ifdef MISSPAT
+		vec3 mp_w = cross(dFdx(mp_pos), dFdy(mp_pos));
+		mp_w = pow(abs(normalize(dot(mp_w, mp_w) > 1e-20 ? mp_w : norm)), vec3(4.0));
+		mp_w /= dot(mp_w, vec3(1.0));
+		vec4 diffuse_f = mp_w.x*texture2D(s_diffuse, mp_pos.zy) + mp_w.y*texture2D(s_diffuse, mp_pos.xz) + mp_w.z*texture2D(s_diffuse, mp_pos.xy);
+	#else
 		vec4 diffuse_f = texture2D(s_diffuse, tex_c);
+	#endif
 		diffuse_f.rgb *= vec3(COLOR);
 
 #ifdef MASKLT

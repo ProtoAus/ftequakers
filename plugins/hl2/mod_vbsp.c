@@ -182,6 +182,7 @@ qboolean Mat_VMT_Unshipped(const char *name);
 static cvar_t *hl2_bottommaterial;
 static cvar_t *hl2_missinggrid;	//FTESurf Patch 780
 cvar_t *hl2_missingtint;	//FTESurf Patch 1191; Patch 1548: mat_vmt.c reads it too
+cvar_t *hl2_missingpattern, *hl2_missingpattern_size;	//FTESurf Patch 1824, mat_vmt.c reads the first
 static cvar_t *hl2_lt_blend, *hl2_lt_illumpos;	//FTESurf Patch 780, read by VBSP_LeafAmbientCube / VBSP_PropSamplePoint
 cvar_t *hl2_skinfallback;		//FTESurf Patch 234: read by Mod_LoadHL2Model in mod_hl2.c, registered here with the rest
 extern cvar_t *hl2_dither_alpha, *hl2_bumpmap, *hl2_envmap;	//FTESurf Build 13, all owned by mat_vmt.c
@@ -550,6 +551,7 @@ typedef struct vbspinfo_s
 		qboolean bumped;	//FTESurf Patch 268 D1: SURF_BUMPLIGHT -- VRAD wrote NUM_BUMP_VECTS+1 = 4 luxel sets per lightstyle for this face
 		float missingtile;	//FTESurf Patch 780: material did not resolve; world units per checker tile (0 = texinfo scale)
 		vec3_t reflect;		//FTESurf Patch 1191: dtexdata reflectivity (linear albedo VBSP read from the VTF); -1 = none or 0x0 texdata
+		float misspattern;	//FTESurf Patch 1824: the material is a missing texture's relief pattern; world units per tile (0 = texinfo scale)
 	} *texinfo;
 
 	qbyte			*leafflags;			//FTESurf Patch 880: dleaf_t's flags (LEAF_FLAGS_SKY 0x01, SKY2D 0x04), [numleafs]
@@ -5321,6 +5323,33 @@ static float VBSP_MissingTC(float raw, const float *vecs, float tile)
 	return len ? (raw - vecs[3]) / (len * tile) : 0;
 }
 
+//FTESurf Patch 1824: texinfo coordinates (s, t) back to the point of the face's plane they name, as world units along VRAD's
+//bump basis there (s projected into the plane; at right angles to it on t's side, VRAD's handedness rule), in tiles: no stretch
+//at any slope, the normal map in the deluxemap's frame, the offset dropped so tiles sit on the world grid. A displacement's
+//(s, t) are its base face's, so it stretches as its own texture would in Source.
+static void VBSP_PatternTC(msurface_t *surf, float s, float t, float tile, vec2_t out)
+{
+	const float *n = surf->plane->normal, *sv = surf->texinfo->vecs[0], *tv = surf->texinfo->vecs[1];
+	float sx, ty, a;
+	vec3_t x, y;
+	VectorMA(sv, -DotProduct(sv, n), n, x);
+	sx = sqrt(DotProduct(x, x));	//not VectorNormalize: this file's returns 1/length
+	if (sx > 1e-6)
+		VectorScale(x, 1/sx, x);
+	CrossProduct(n, x, y);
+	if (DotProduct(y, tv) < 0)
+		VectorNegate(y, y);
+	ty = DotProduct(y, tv);
+	if (!(sx > 1e-6 && ty > 1e-6))
+	{	//a texinfo axis along the normal, or s along t: nothing to measure with
+		out[0] = out[1] = 0;
+		return;
+	}
+	a = (s - sv[3] - surf->plane->dist*DotProduct(n, sv)) / sx;
+	out[0] = a / tile;
+	out[1] = (t - tv[3] - surf->plane->dist*DotProduct(n, tv) - a*DotProduct(x, tv)) / (ty * tile);
+}
+
 //FTESurf Patch 1023: a face vertex's normal is VRAD's (Mod_LoadVertNormalIndices: one index per
 //vertex, faces in lump order), so smoothing groups smooth envmap, specular and the bumped
 //lightmap basis across faceted brushes as Source draws them (bhop_ceaseless's tube was flat facets).
@@ -5374,7 +5403,9 @@ static void VBSP_BuildSurfMesh(model_t *mod, msurface_t *surf, builddata_t *bd)
 			VectorCopy (d->xyz[i], mesh->xyz_array[i]);
 
 			//st
-			if (vtexinfo->missingtile > 0)
+			if (vtexinfo->misspattern > 0)
+				VBSP_PatternTC(surf, dv->st[0], dv->st[1], vtexinfo->misspattern, mesh->st_array[i]);
+			else if (vtexinfo->missingtile > 0)
 			{
 				mesh->st_array[i][0] = VBSP_MissingTC(dv->st[0], surf->texinfo->vecs[0], vtexinfo->missingtile);
 				mesh->st_array[i][1] = VBSP_MissingTC(dv->st[1], surf->texinfo->vecs[1], vtexinfo->missingtile);
@@ -5490,7 +5521,9 @@ static void VBSP_BuildSurfMesh(model_t *mod, msurface_t *surf, builddata_t *bd)
 
 		VectorCopy (vec, mesh->xyz_array[i]);
 
-		if (vtexinfo->missingtile > 0)
+		if (vtexinfo->misspattern > 0)
+			VBSP_PatternTC(surf, s, t, vtexinfo->misspattern, mesh->st_array[i]);
+		else if (vtexinfo->missingtile > 0)
 		{
 			mesh->st_array[i][0] = VBSP_MissingTC(s, surf->texinfo->vecs[0], vtexinfo->missingtile);
 			mesh->st_array[i][1] = VBSP_MissingTC(t, surf->texinfo->vecs[1], vtexinfo->missingtile);
@@ -7253,13 +7286,28 @@ static void VBSP_GenerateMaterials(void *ctx, void *data, size_t a, size_t b)
 			float grid = hl2_missinggrid ? hl2_missinggrid->value : 32;
 			qboolean tint = !hl2_missingtint || hl2_missingtint->ival;
 			qbyte *miss = (grid > 0 || tint) && mod->numtextures ? plugfuncs->Malloc(mod->numtextures) : NULL;
-			size_t t;
+			size_t t, npat = 0;
 			for (t = 0; miss && t < (size_t)mod->numtextures; t++)
 			{
 				miss[t] = VBSP_DiffuseMissing(mod->textures[t]);
 				if (miss[t] && tint && VBSP_MissingTint(mod, t))
 					miss[t] = 0;
 			}
+			for (t = 0; t < (size_t)mod->numtexinfo; t++)
+			{	//FTESurf Patch 1824: mat_vmt.c drew this missing texture as a relief pattern (VMT_MissPatternImage)
+				texture_t *tx = mod->texinfo[t].texture;
+				shader_t *psh = tx ? tx->shader : NULL;
+				image_t *pb = psh && psh->defaulttextures ? psh->defaulttextures->base : NULL;
+				prv->texinfo[t].misspattern = 0;
+				if (pb && pb->ident && !Q_strncasecmp(pb->ident, "gfx/misspattern/", 16) && !(mod->texinfo[t].flags & TI_WARP))
+				{
+					prv->texinfo[t].misspattern = hl2_missingpattern_size ? bound(16, hl2_missingpattern_size->value, 4096) : 256;
+					npat++;
+				}
+			}
+			if (npat)
+				Con_DPrintf("%s: %u texinfos map a relief pattern in their plane, %g units a tile\n", mod->name, (unsigned)npat,
+					hl2_missingpattern_size ? bound(16, hl2_missingpattern_size->value, 4096) : 256);
 			for (t = 0; t < (size_t)mod->numtexinfo; t++)
 			{
 				size_t k;
@@ -15842,6 +15890,8 @@ qboolean VBSP_Init(void)
 		hl2_bottommaterial = cvarfuncs->GetNVFDG("hl2_bottommaterial", "1", CVAR_SHADERSYSTEM, "FTESurf Patch 233: a water material's $bottommaterial -- the underside of the water -- when the map names one and does not ship it.\n0: leave it unresolved, which is what every build before P233 did; the underside draws with the default wall shader and the map reports a missing material.\n1: draw it as the water material that names it (default). surf_aesthetic's water/clear_beneath is 325 faces and surf_demise's water_tar_beneath 7; neither exists in any pack, in either spelling.", MAPOPTIONS);
 		hl2_missingtint = cvarfuncs->GetNVFDG("hl2_missingtint", "1", 0, "FTESurf Patch 1191: a world face whose material has no VMT (or one that would not parse) draws one flat colour: the map's own record of that texture's average colour (dtexdata reflectivity), lit by the lightmap, as Momentum draws a map whose game is not installed.\n0: the missing checker (hl2_missinggrid). FTESurf Patch 1548: also a VMT whose image is missing (the map's colour, else scripts/matcolours.txt), a model material the index lists, and water (a see-through plane of its fog colour). Takes effect for materials loaded after the change (the next map load).", MAPOPTIONS);
 		hl2_missinggrid = cvarfuncs->GetNVFDG("hl2_missinggrid", "32", 0, "FTESurf Patch 780: the size, in world units, of one square of the missing-texture checker on a world face whose material did not resolve.\n0: scale it like the texture it stands in for, which is what every build before P780 did (a 1024 texture at 0.25 drew 128-unit squares).\n32 (default): one square per 32 units -- Hammer's grid -- whatever the face's texture scale. Takes effect on the next map load.", MAPOPTIONS);
+		hl2_missingpattern = cvarfuncs->GetNVFDG("hl2_missingpattern", "1", 0, "FTESurf Patch 1824: a lit surface that draws a missing texture's flat colour (hl2_missingtint) also gets a relief pattern for it -- bricks, concrete, wood, metal, glass, grass, or large cracks for anything else, picked from the material's name or $surfaceprop (gfx/misspattern/) -- at hl2_missingpattern_size world units a tile: on a world face in its own plane, so a ramp at any angle shows it unstretched, with a normal map the bumped lightmap lights; on a model down its own axes, detail only. The average colour stays the same.\n0: the flat colour alone, exactly as before. Takes effect at the next map load.", MAPOPTIONS);
+		hl2_missingpattern_size = cvarfuncs->GetNVFDG("hl2_missingpattern_size", "256", 0, "FTESurf Patch 1824: world units across one tile of the missing-texture relief pattern (hl2_missingpattern); the pattern's blocks and planks are a quarter to a half of it. Takes effect at the next map load.", MAPOPTIONS);
 		hl2_skinfallback = cvarfuncs->GetNVFDG("hl2_skinfallback", "1", CVAR_SHADERSYSTEM, "FTESurf Patch 234: what a model does when one of its skins names a material that was never shipped.\n0: nothing -- that skin draws with the default wall shader, and the map reports a missing material.\n1: use another skin of the same slot that did resolve (default). surf_demise ships three of its four bone skins and one of its two fir-branch skins; no prop on the map selects the missing ones, so this silences two reports and changes nothing on screen.", MAPOPTIONS);
 		hl2_translucent = cvarfuncs->GetNVFDG("hl2_translucent", "1", CVAR_SHADERSYSTEM, "$translucent world materials (windows, grates, railings).\n0: draw them OPAQUE -- they keep their texture and lightmap but stop being sorted, which is what they actually cost on a map with a lot of glazing.\n1: as the material author wrote them (default).", MAPOPTIONS);
 		hl2_decallit = cvarfuncs->GetNVFDG("hl2_decallit", "1", CVAR_SHADERSYSTEM, "FTESurf Patch 236: how a LightmappedGeneric material that also sets $decal is lit -- graffiti, stains, ivy, and every other decal painted straight onto a world brush face.\n0: route it to the model shader on the strength of $decal alone, which is what every build before P236 did. It costs the surface its lightmap, and (since P232 hands that shader two permutations it does not declare) its whole program: the material then draws as a flat opaque rectangle of whatever the artist left in the transparent texels. This is only here to reproduce that on demand.\n1: keep the lightmapped shader the material asked to be (default). 18 of bhop_futile's 68 world textures are decals; 224 maps also place infodecal.", MAPOPTIONS);

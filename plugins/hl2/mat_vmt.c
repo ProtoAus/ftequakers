@@ -694,6 +694,7 @@ games fs_addons mounts, sorted: "<path> <RRGGBB sRGB> <flags> [<tint RRGGBB>]". 
 the checker everywhere.
 */
 extern cvar_t *hl2_missingtint;
+extern cvar_t *hl2_missingpattern, *hl2_missingpattern_size;	//FTESurf Patch 1824
 static plugfsfuncs_t *fsfuncs;		//defined with the other interfaces below (a tentative definition)
 #define VMT_MAPCOL_SIZE 8192		//a power of two; a map's world textures stay well under half
 enum {VMTC_EMPTY, VMTC_COLOUR, VMTC_NONE, VMTC_WATER};
@@ -904,6 +905,69 @@ static int VMT_FallbackColour(const char *name, const char *tex, float *rgb, cha
 		return VMTC_COLOUR;
 	}
 	return VMTC_EMPTY;
+}
+
+/*
+FTESurf Patch 1824: a relief pattern for a missing texture's flat colour on the world -- gfx/misspattern/<name>_d.png, a grey
+detail of mean VMT_MISSPAT_MEAN that the colour is divided by (so its average stays), and <name>_n.png, its normal map
+(tools/p1824_misspatterns.py in the mod repository). mod_vbsp.c maps them in each face's plane (VBSP_PatternTC). Picked by the
+first keyword, in table order, found in the material's path, then its base texture's, then its $surfaceprop; a leading '^'
+wants a word start ("template" is not a plate). Anything else cracks.
+*/
+#define VMT_MISSPAT_MEAN (200/255.0)
+static const char *vmt_misspatnames[] = {"glass", "brick", "wood", "metal", "grass", "concrete", "cracks"};
+static const struct {const char *key; int pat;} vmt_misspatkeys[] =
+{
+	{"glass", 0}, {"window", 0},
+	{"brick", 1}, {"masonry", 1}, {"cinder", 1},
+	{"wood", 2}, {"plank", 2}, {"crate", 2}, {"timber", 2}, {"bark", 2},
+	{"metal", 3}, {"steel", 3}, {"^iron", 3}, {"^plate", 3}, {"^pipe", 3}, {"^rust", 3}, {"alumin", 3}, {"chrome", 3},
+	{"^grate", 3}, {"chainlink", 3}, {"copper", 3}, {"brass", 3}, {"girder", 3},
+	{"grass", 4}, {"dirt", 4}, {"^ground", 4}, {"moss", 4}, {"^mud", 4}, {"soil", 4}, {"^turf", 4}, {"lawn", 4},
+	{"hedge", 4}, {"^leaf", 4}, {"leaves", 4}, {"foliage", 4}, {"^sand", 4}, {"gravel", 4},
+	{"concrete", 5}, {"cement", 5}, {"plaster", 5}, {"stone", 5}, {"^rock", 5}, {"asphalt", 5}, {"^tile", 5},
+	{"marble", 5}, {"granite", 5}, {"cliff", 5}, {"pavement", 5}, {"stucco", 5},
+};
+
+static int VMT_MissPatternMatch(const char *in)
+{
+	char s[MAX_QPATH];
+	const char *k, *w, *f;
+	size_t i, n;
+	for (n = 0; in && in[n] && n + 1 < sizeof(s); n++)
+		s[n] = (in[n] >= 'A' && in[n] <= 'Z') ? in[n] + ('a'-'A') : in[n];
+	s[n] = 0;
+	for (i = 0; i < countof(vmt_misspatkeys); i++)
+	{
+		k = vmt_misspatkeys[i].key;
+		w = k + (*k == '^');
+		for (f = strstr(s, w); f; f = strstr(f + 1, w))
+			if (w == k || f == s || !(f[-1] >= 'a' && f[-1] <= 'z'))
+				return vmt_misspatkeys[i].pat;
+	}
+	return -1;
+}
+
+static const char *VMT_MissPatternImage(int pat, char kind)
+{
+	static char img[2][64];
+	char *o = img[kind == 'n'];
+	Q_snprintfz(o, sizeof(img[0]), "gfx/misspattern/%s_%c.png", vmt_misspatnames[pat], kind);
+	return o;
+}
+
+//The pattern for a material, or -1: hl2_missingpattern 0, or the pattern's files are not installed (so it stays flat).
+static int VMT_MissPatternPick(const char *name, const char *tex, const char *surfaceprop)
+{
+	int p;
+	if (!hl2_missingpattern || !hl2_missingpattern->ival)
+		return -1;
+	if ((p = VMT_MissPatternMatch(name)) < 0 && (p = VMT_MissPatternMatch(tex)) < 0 && (p = VMT_MissPatternMatch(surfaceprop)) < 0)
+		p = countof(vmt_misspatnames) - 1;
+	if (!fsfuncs->LocateFile(VMT_MissPatternImage(p, 'd'), FSLF_IFFOUND, NULL) ||
+	    !fsfuncs->LocateFile(VMT_MissPatternImage(p, 'n'), FSLF_IFFOUND, NULL))
+		return -1;
+	return p;
 }
 
 /*
@@ -1411,6 +1475,8 @@ typedef struct
 	} prox[VMT_MAXPROX];
 	int numprox;
 	int proxoverflow;
+	char surfaceprop[32];	//FTESurf Patch 1824, for VMT_MissPatternPick
+	char misspat;		//FTESurf Patch 1824: 1 + the relief pattern a missing image draws (VMT_MissPatternSet), 0 none
 } vmtstate_t;
 
 //The proxy operations this understands.  Everything else is parsed for its
@@ -2545,7 +2611,7 @@ static char *VMT_ParseBlock(const char *fname, vmtstate_t *st, char *line)
 		else if (!Q_strcasecmp(key, "$basetexturetransform2"))
 			;
 		else if (!Q_strcasecmp(key, "$surfaceprop"))
-			;
+			Q_strlcpy(st->surfaceprop, value, sizeof(st->surfaceprop));
 
 		else if (!Q_strcasecmp(key, "$ignorez"))
 			st->ignorez = !!atoi(value);
@@ -3117,11 +3183,30 @@ static qboolean VMT_OwnImageExists(const char *name)
 	return fsfuncs->LocateFile(va("dds/materials/%s.dds", name), FSLF_IFFOUND, NULL);	//image.c's dds/ tree
 }
 
+//A coloured LightmappedGeneric or VertexlitGeneric takes pattern p: VMT_BaseImage becomes its detail, and on the world the
+//lightmapped arm's normalmap its normal map. Its own normal map, ssbump, triplanar and normal-alpha mask go with the image they
+//belonged to; a model keeps none (its tangents follow its UVs, not vertexlit.glsl's #MISSPAT projection).
+static void VMT_MissPatternSet(vmtstate_t *st, const char *name, int p)
+{
+	float c[3], k = VMT_LinearColourClass(st->type) ? pow(VMT_MISSPAT_MEAN, 2.2) : VMT_MISSPAT_MEAN;
+	if (!VMT_ParseColour(st->color2, c))
+		c[0] = c[1] = c[2] = 1;
+	Q_snprintfz(st->color2, sizeof(st->color2), "[%f %f %f]", c[0]/k, c[1]/k, c[2]/k);
+	st->misspat = p + 1;
+	st->ssbump = 0;
+	st->envfromnorm = 0;
+	st->seamless_set = false;
+	*st->normalmap = 0;
+	Con_DPrintf("%s: relief pattern %s\n", name, vmt_misspatnames[p]);
+}
+
 //FTESurf Patch 1039: the base texture as a shader image name -- $whiteimage when the material has
 //none (Source binds TEXTURE_WHITE, so $color/$color2 alone give a flat colour).
 static const char *VMT_BaseImage(const vmtstate_t *st)
 {
 	static char img[MAX_QPATH+16];
+	if (st->misspat)
+		return VMT_MissPatternImage(st->misspat - 1, 'd');	//FTESurf Patch 1824
 	if (st->nobasetex)
 		return "$whiteimage";
 	Q_snprintfz(img, sizeof(img), "%s%s.vtf", strcmp(st->tex[0].name, "materials/")?"materials/":"", st->tex[0].name);
@@ -3274,6 +3359,7 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 		float rgb[3], tint[3], c[3];
 		char flags[16];
 		qboolean world;
+		int p;
 		const char *cval = *st->color2 ? st->color2 : st->color;
 		if (VMT_FallbackColour(shortname, st->tex[0].name, rgb, flags, sizeof(flags), tint, &world) == VMTC_COLOUR)
 		{
@@ -3288,6 +3374,17 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 				Q_snprintfz(st->color2, sizeof(st->color2), "[%f %f %f]", rgb[0]*c[0], rgb[1]*c[1], rgb[2]*c[2]);
 				st->selfillum = 0;	//its mask was the missing image's alpha; $whiteimage's is 1 everywhere
 				st->envfrombase = 0;
+				//FTESurf Patch 1824: a relief pattern -- not on a cut-out (foliage, fences: its shape was the missing alpha)
+				//nor a see-through model (clouds, smoke cards); a window keeps one. A transition's blend needs an installed
+				//second layer (which the pattern's coordinates would rescale); without one it is a lightmapped material.
+				if (!st->alphatest && !(st->translucent && Q_strcasecmp(st->type, "LightmappedGeneric") && Q_strcasecmp(st->type, "WorldVertexTransition")) &&
+				    (p = VMT_MissPatternPick(shortname, st->tex[0].name, st->surfaceprop)) >= 0)
+				{
+					if (!Q_strcasecmp(st->type, "WorldVertexTransition") && (!*st->tex[1].name || !VMT_OwnImageExists(st->tex[1].name)))
+						Q_strlcpy(st->type, "LightmappedGeneric", sizeof(st->type));
+					if ((!Q_strcasecmp(st->type, "LightmappedGeneric") && !st->modelmaterial) || !Q_strcasecmp(st->type, "VertexlitGeneric"))
+						VMT_MissPatternSet(st, shortname, p);
+				}
 				if (st->alphatest)
 				{
 					st->alphatest = false;
@@ -5373,6 +5470,12 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 
 
 		Q_strlcatfz(script, &offset, sizeof(script),	"\tdiffusemap \"%s\"\n", VMT_BaseImage(st));
+		if (st->misspat)
+		{	//FTESurf Patch 1824
+			char t[32];
+			Q_snprintfz(t, sizeof(t), "#MISSPAT=%f", 1.0 / (hl2_missingpattern_size ? bound(16, hl2_missingpattern_size->value, 4096) : 256));
+			Q_strlcat(progargs, t, sizeof(progargs));
+		}
 
 		if (*st->normalmap) {
 			Q_strlcatfz(script, &offset, sizeof(script),	"\tnormalmap \"%s%s.vtf\"\n", strcmp(st->normalmap, "materials/")?"materials/":"", st->normalmap);
@@ -5438,7 +5541,12 @@ static void Shader_GenerateFromVMT(parsestate_t *ps, vmtstate_t *st, const char 
 
 		Q_strlcatfz(script, &offset, sizeof(script),	"\tdiffusemap \"%s\"\n", VMT_BaseImage(st));
 
-		if (*st->normalmap)
+		if (st->misspat)
+		{	//FTESurf Patch 1824
+			if (!hl2_bumpmap || hl2_bumpmap->ival)
+				Q_strlcatfz(script, &offset, sizeof(script),	"\tnormalmap \"%s\"\n", VMT_MissPatternImage(st->misspat - 1, 'n'));
+		}
+		else if (*st->normalmap)
 			Q_strlcatfz(script, &offset, sizeof(script),	"\tnormalmap \"%s%s.vtf\"\n", strcmp(st->normalmap, "materials/")?"materials/":"", st->normalmap);
 	}
 	else if (!Q_strcasecmp(st->type, "LightmappedReflective"))
@@ -6319,7 +6427,7 @@ static qboolean Shader_LoadVMT(parsestate_t *ps, const char *filename, void (*Lo
 			float rgb[3], tint[3];
 			char flags[16], key[MAX_QPATH];
 			qboolean world;
-			int found = VMT_FallbackColour(vmtname, NULL, rgb, flags, sizeof(flags), tint, &world);
+			int found = VMT_FallbackColour(vmtname, NULL, rgb, flags, sizeof(flags), tint, &world), pat = -1;
 			VMT_ColourKey(vmtname, key, sizeof(key));
 			if (found != VMTC_EMPTY && (VMT_OwnImageExists(key) || (!world && Q_strncasecmp(key, "models/", 7))))
 				found = VMTC_EMPTY;
@@ -6335,8 +6443,12 @@ static qboolean Shader_LoadVMT(parsestate_t *ps, const char *filename, void (*Lo
 				Shader_GenerateFromVMT(ps, &st, vmtname, LoadMaterialString);
 				return true;
 			}
+			//FTESurf Patch 1824: a relief pattern, lit and not cut out (on a model, not see-through either: see the VMT path);
+			//one the map coloured itself is VBSP_MissingTint's unless it takes one
+			if (found == VMTC_COLOUR && !strpbrk(flags, "esda") && (world || !strpbrk(flags, "utr")))
+				pat = VMT_MissPatternPick(vmtname, NULL, NULL);
 			if (found == VMTC_COLOUR &&
-			    !strchr(flags, 'w') && !(world && !*flags))
+			    !strchr(flags, 'w') && !(world && !*flags && pat < 0))
 			{
 				memset(&st, 0, sizeof(st));
 				Q_strlcpy(st.type, world ? "LightmappedGeneric" : (strchr(flags, 'u') ? "UnlitGeneric" : "VertexLitGeneric"), sizeof(st.type));
@@ -6356,6 +6468,8 @@ static qboolean Shader_LoadVMT(parsestate_t *ps, const char *filename, void (*Lo
 					st.translucent = 1;
 					st.alphaval = 0.5;
 				}
+				if (pat >= 0)
+					VMT_MissPatternSet(&st, vmtname, pat);
 				Con_DPrintf("%s: no VMT; drawing %s from the colour index\n", vmtname, st.nodraw ? "nothing" : st.color2);
 				Shader_GenerateFromVMT(ps, &st, vmtname, LoadMaterialString);
 				return true;
