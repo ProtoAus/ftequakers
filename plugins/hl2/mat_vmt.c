@@ -1528,6 +1528,19 @@ static void VMT_ParseVec3(const char *value, float *out, int count)
 	}
 }
 
+//FTESurf Patch 1825: a colour vector -- "[r g b]", "{r g b}" (0-255) or one number for all three, as Source's
+//material vars read a scalar into a vector.
+static void VMT_ParseTint(const char *value, float *out)
+{
+	const char *s = value;
+	while (*s == ' ' || *s == '\t' || *s == '"')
+		s++;
+	if (*s == '[' || *s == '{')
+		VMT_ParseVec3(s, out, 3);
+	else
+		out[0] = out[1] = out[2] = atof(s);
+}
+
 /*
 FTESurf Patch 250: IS THIS A REAL SOURCE SHADER PARAMETER?
 
@@ -2711,39 +2724,17 @@ static char *VMT_ParseBlock(const char *fname, vmtstate_t *st, char *line)
 			st->envmapcontrast_set = true;
 		}
 		else if (!Q_strcasecmp(key, "$envmaptint"))
-		{
-			char tok[64];
-			char *tintline;
-			tintline = cmdfuncs->ParsePunctuation(value, "[", tok, sizeof(tok), 0);
-
-			if (!strcmp(tok, "[")) {
-				tintline = cmdfuncs->ParseToken(tintline, tok, sizeof(tok), 0);
-				st->envmaptint_r = strtof(tok, NULL);
-				tintline = cmdfuncs->ParseToken(tintline, tok, sizeof(tok), 0);
-				st->envmaptint_g = strtof(tok, NULL);
-				tintline = cmdfuncs->ParsePunctuation(tintline, "]", tok, sizeof(tok), 0);
-				st->envmaptint_b = strtof(tok, NULL);
-			} else {
-				st->envmaptint_r = st->envmaptint_g = st->envmaptint_b = atof(value);
-			}
+		{	//FTESurf Patch 1825: "{69 69 69}" (0-255) too -- read as atof("{...") = 0, it zeroed the reflection
+			float v[3];
+			VMT_ParseTint(value, v);
+			st->envmaptint_r = v[0]; st->envmaptint_g = v[1]; st->envmaptint_b = v[2];
 			st->envmaptint_set = 1;		//Patch 237: "was it written", not "is it non-zero"
 		}
 		else if (!Q_strcasecmp(key, "$envmapsaturation"))
 		{
-			char tok[64];
-			char *tintline;
-			tintline = cmdfuncs->ParsePunctuation(value, "[", tok, sizeof(tok), 0);
-
-			if (!strcmp(tok, "[")) {
-				tintline = cmdfuncs->ParseToken(tintline, tok, sizeof(tok), 0);
-				st->envmapsat_r = strtof(tok, NULL);
-				tintline = cmdfuncs->ParseToken(tintline, tok, sizeof(tok), 0);
-				st->envmapsat_g = strtof(tok, NULL);
-				tintline = cmdfuncs->ParsePunctuation(tintline, "]", tok, sizeof(tok), 0);
-				st->envmapsat_b = strtof(tok, NULL);
-			} else {
-				st->envmapsat_r = st->envmapsat_g = st->envmapsat_b = atof(value);
-			}
+			float v[3];
+			VMT_ParseTint(value, v);
+			st->envmapsat_r = v[0]; st->envmapsat_g = v[1]; st->envmapsat_b = v[2];
 			st->envmapsat_set = 1;		//Patch 237: ditto -- $envmapsaturation 0 is a real request
 		}
 		else if (!Q_strcasecmp(key, "$basealphaenvmapmask"))
