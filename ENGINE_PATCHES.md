@@ -1,5 +1,13 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1853 - Startup ignores downloaded quake.rc/config files; file search skips bad patterns
+
+**Problem.** A server can list `quake.rc` (or `hexen.rc`, `q3config.cfg`, `config.cfg`) in its precache; the download lands in `<gamedir>/downloads/`, an addon mount. `CL_ExecInitialConfigs` counted that copy, took the Quake branch on every later launch and skipped `cfg/default.cfg` and the player's own settings (`ftesurf.cfg`): engine defaults, uploads back to defaults. A downloaded `config.cfg` alone also skipped `ftesurf.cfg`. Separately, `FS_EnumerateFilesEachSys` handed a pattern that `FS_GetCleanPath` rejected (NULL) or emptied straight to `Sys_EnumerateFiles`, which can crash on a bad search pattern.
+
+**Change.** Startup picks its config layout only from non-addon copies (`CL_StartupConfigDepth`: the exec path's ignore-pure lookup, refusing `SPF_ADDON` like exec already does), for `default.cfg`, `quake.rc`, `hexen.rc`, `q3config.cfg` and `cfg/default.cfg`. When `config.cfg` exists only in an addon, the manifest's own settings file (`MAINCONFIG`, World of Surf's `ftesurf.cfg`) is executed directly. A local `autoexec.cfg` now runs when either default (root or `cfg/`) is local: World of Surf ships only `cfg/default.cfg`, so a player's own `autoexec.cfg` starts running (it did not before); an addon or download `autoexec.cfg` still never runs. Native file enumeration skips rejected and empty patterns like the package path does; valid patterns and a callback's early stop are unchanged. QUAKETC and dedicated-server startup are unchanged.
+
+**Verified.** `tools/test_startup_files.py` (14 synthetic games, headless client, exact exec order): original 8 pass / 6 fail (every planted-download case), patched 14 pass, including local Quake/Hexen/Q3 layouts, a packaged `quake.rc`, named settings and the three autoexec cases. On a copy of World of Surf's real `default.fmf` + `cfg/` with a planted `downloads/quake.rc`, the installed client ran neither `ftesurf.cfg` nor anything else; the patched client ran `ftesurf.cfg` (and `autoexec.cfg`) with and without the plant. `tools/test_fs_enumeration.py`: original passes NULL/empty patterns to the OS call, patched 4/4. Linux and Win64 clients link with no new warnings in the changed files. Native Windows startup not yet run.
+
 ## Patch 1852 - Draw replacement water when its VMT include is missing
 
 **Problem.** The `surf_utopia` pools showed the missing-texture checkerboard with replacement on. The BSP supplied water patch VMTs, but their base include was absent; the parser reported a found-but-unparsed material, bypassing the missing-water fallback.

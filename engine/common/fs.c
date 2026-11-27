@@ -4908,8 +4908,9 @@ static int FS_EnumerateFilesEachSys (const char *syspath, char *matches, int (*f
 		else
 			match = FS_GetCleanPath(matches, true, cleanpath, sizeof(cleanpath));
 
-		if (!Sys_EnumerateFiles(syspath, match, func, parm, spath))
-			return false;
+		if (match && *match)
+			if (!Sys_EnumerateFiles(syspath, match, func, parm, spath))
+				return false;
 	}
 	return true;
 }

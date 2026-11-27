@@ -8317,6 +8317,19 @@ void CL_ArgumentOverrides(void)
 		Cvar_ForceSet(Cvar_FindVar("forceqmenu"), "1");
 }
 
+#ifndef QUAKETC
+static int CL_StartupConfigDepth(const char *name)
+{
+	flocation_t loc;
+	int depth = FS_FLocateFile(name, FSLF_DEEPONFAILURE|FSLF_DONTREFERENCE|FSLF_IGNOREPURE, &loc);
+
+	// Match exec's initial lookup and its refusal to run scripts from addon mounts.
+	if (!loc.search || (loc.search->flags & SPF_ADDON))
+		return FDEPTH_MISSING;
+	return depth;
+}
+#endif
+
 //note that this does NOT include commandline.
 void CL_ExecInitialConfigs(char *resetcommand, qboolean fullvidrestart)
 {
@@ -8347,8 +8360,8 @@ void CL_ExecInitialConfigs(char *resetcommand, qboolean fullvidrestart)
 	Cbuf_AddText("register_bestweapon reset\n", RESTRICT_LOCAL);
 #endif
 
-	def = COM_FDepthFile("default.cfg", true);	//q2/q3/tc
 #ifdef QUAKETC
+	def = COM_FDepthFile("default.cfg", true);	//q2/q3/tc
 	Cbuf_AddText ("exec default.cfg\n", RESTRICT_LOCAL);
 	if (COM_FDepthFile ("config.cfg", true) <= def)
 		Cbuf_AddText ("exec config.cfg\n", RESTRICT_LOCAL);
@@ -8356,8 +8369,9 @@ void CL_ExecInitialConfigs(char *resetcommand, qboolean fullvidrestart)
 		Cbuf_AddText ("exec autoexec.cfg\n", RESTRICT_LOCAL);
 #else
 	//who should we imitate?
-	qrc = COM_FDepthFile("quake.rc", true);	//q1
-	hrc = COM_FDepthFile("hexen.rc", true);	//h2
+	def = CL_StartupConfigDepth("default.cfg");	//q2/q3
+	qrc = CL_StartupConfigDepth("quake.rc");	//q1
+	hrc = CL_StartupConfigDepth("hexen.rc");	//h2
 
 	if (qrc <= def && qrc <= hrc && qrc!=FDEPTH_MISSING)
 	{
@@ -8372,12 +8386,12 @@ void CL_ExecInitialConfigs(char *resetcommand, qboolean fullvidrestart)
 	else
 	{	//they didn't give us an rc file!
 //		int cfg = COM_FDepthFile ("config.cfg", true);
-		int q3cfg = COM_FDepthFile ("q3config.cfg", true);
+		int q3cfg = CL_StartupConfigDepth("q3config.cfg");
+		int cfgdef = CL_StartupConfigDepth("cfg/default.cfg");
 	//	Cbuf_AddText ("bind ` toggleconsole\n", RESTRICT_LOCAL);	//in case default.cfg does not exist. :(
 		//quakers: prefer <gamedir>/cfg/default.cfg so the mod can keep every config in one folder.
-		//Falls back to the root name when absent, so stock games and a cfg-less install boot
-		//exactly as before. Same COM_FileSize idiom the dedicated server already uses below.
-		if (COM_FileSize("cfg/default.cfg") != -1)
+		//Fall back to the root name when there is no local cfg/default.cfg.
+		if (cfgdef != FDEPTH_MISSING)
 			Cbuf_AddText ("exec cfg/default.cfg\n", RESTRICT_LOCAL);
 		else
 			Cbuf_AddText ("exec default.cfg\n", RESTRICT_LOCAL);
@@ -8385,7 +8399,14 @@ void CL_ExecInitialConfigs(char *resetcommand, qboolean fullvidrestart)
 			Cbuf_AddText ("exec q3config.cfg\n", RESTRICT_LOCAL);
 		else if (!FS_FileIsAddonOnly("config.cfg"))	//nettest: skip a foreign config.cfg from a fs_load addon (mounted game)
 			Cbuf_AddText ("exec config.cfg\n", RESTRICT_LOCAL);
-		if (def!=FDEPTH_MISSING && !FS_FileIsAddonOnly("autoexec.cfg"))	//nettest: ditto — don't run a mounted game's autoexec.cfg
+		else if (*fs_manifest->mainconfig && Q_strcasecmp(fs_manifest->mainconfig, "config.cfg") &&
+			Q_strcasecmp(fs_manifest->mainconfig, "q3config.cfg"))
+		{
+			char quoted[MAX_OSPATH * 2 + 3];
+			// The normal config.cfg exec would also load these named settings.
+			Cbuf_AddText(va("exec %s\n", COM_QuotedString(fs_manifest->mainconfig, quoted, sizeof(quoted), false)), RESTRICT_LOCAL);
+		}
+		if ((def != FDEPTH_MISSING || cfgdef != FDEPTH_MISSING) && !FS_FileIsAddonOnly("autoexec.cfg"))
 			Cbuf_AddText ("exec autoexec.cfg\n", RESTRICT_LOCAL);
 	}
 #endif
