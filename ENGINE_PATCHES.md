@@ -1,5 +1,13 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1857 - Review-only season strafe flag (tool, timer and admin panel; no engine code)
+
+**Problem.** strafestats' strafe-quality step (the 280 u/s discontinuity) cannot judge one run: a full-power optimiser sits about 2.5 standard deviations from honest on a single run. Averaged over a season it separates (18 and 28 Nov measurements), but nothing computed it routinely or showed it to a reviewer.
+
+**Change.** `tools/seasonflag.py` measures each lobby recording once (honest, and with StrafePro v2 at max power added above its gate as the margin control), caches by path, size and mtime, keys players by receipt signing key (else owner name) and writes a report atomically: for each player with at least 20 measurable runs, the season mean's z against the other qualifying players, the z an always-on optimiser would have, and a review flag at z >= 3.0. A daily proto user timer (`tools/ftesurf-seasonflag.{service,timer}`, not crontab) writes it to the surfd data dir; the admin's Top 10 page gains a read-only "Season strafe flag" card (`/admin/api/seasonflag`, bounded and validated; missing, oversized or malformed reads "unavailable", never an empty clean list). Nothing is accused, ranked or hidden. One player with several keys shows as several rows.
+
+**Verified.** On the Pi's 7,358 recordings (read-only) the tool reproduces the hand measurement exactly: 523 measurable runs, 41 players, 8 qualifying, honest max |z| 2.37, always-on min z 3.15, none flagged; a cached rerun takes 0.4 s and 26 MB. `tools/test_seasonflag.py` 8/8 (honest pool unflagged, an always-on player alone flagged, half-time lower, under-20 never compared, two players no z, atomic write); `surfd/test_admin_seasonflag.py` 4/4; all admin tests pass. The card was rendered headlessly with the real report. The admin half rides the next surfd generation.
+
 ## Patch 1855 - Similarity turn counts and review-truth fixes (backend only)
 
 **Problem.** The similarity reader computed a turning (yaw) agreement that separates replays (1.0) from honest pairs (max 0.41), but nothing stored it, so a reviewer never saw it. The run admin page explained the current verdict only when that attempt was among the 200 newest shown, so a long history hid it. The authenticated current-file check could report "matches" after its own deadline, or when the file name was atomically replaced during the read. A collector whose support could not load reported nothing, which looked like an idle collector with full coverage. The bounded reader decoded a capture through a full text copy and built each movement stream several times per comparison.
