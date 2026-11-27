@@ -1,5 +1,13 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1846 - Compact transparent tournament standings (game QC only)
+
+**Problem.** The tournament banner and standings made a nearly screen-wide dark panel over the run timer. Long map and player names could cross the right-aligned clocks.
+
+**Change.** The in-play overlay stays inside the left third, capped at 288 virtual units, and moves below the measured run timer when their bounds meet. Fit names to the space left after drawing the time, and truncate long text with an ellipsis instead of widening the HUD. Use text shadows in place of the dark plates. Centre announcements and tournament timing, ranking and F6 controls are unchanged.
+
+**Verified.** Zero warnings for all three QC VMs and the qcframes gate passed. In a Linux GL fixture, the baseline crossed the 640x480 timer crop and darkened the gaps; the candidate stopped at x=207, preserved the timer crop byte-for-byte (centre and left anchors), and left the gaps unchanged. A 1278x692 frame passed the same centre-clock and transparency checks. Centre countdown drew in all arms. Not a live multiplayer test; no native pin or QC Build change.
+
 ## Patch 1845 - scoped mapper access and tournament beta badges (QC and backend)
 
 **Problem.** F8 map uploads were granted out of band, beta competitors received
