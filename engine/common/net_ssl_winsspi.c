@@ -294,6 +294,8 @@ static neterr_t SSPI_TryFlushCryptOut(sslfile_t *f)
 		memmove(f->outcrypt.data, f->outcrypt.data + sent, f->outcrypt.avail - sent);
 		f->outcrypt.avail -= sent;
 	}
+	else if (sent < 0)
+		return NETERR_DISCONNECTED;
 	return NETERR_SENT;
 }
 
@@ -401,7 +403,8 @@ static neterr_t SSPI_Encode(sslfile_t *f)
 
 	if (f->outcrypt.avail)
 	{
-		SSPI_TryFlushCryptOut(f);
+		if (SSPI_TryFlushCryptOut(f) == NETERR_DISCONNECTED)
+			return NETERR_DISCONNECTED;
 		if (f->outcrypt.avail)
 			return NETERR_CLOGGED;	//don't flood too much
 	}
@@ -1232,10 +1235,17 @@ static int QDECL SSPI_WriteBytes (struct vfsfile_s *file, const void *buffer, in
 {
 	sslfile_t *f = (sslfile_t *)file;
 
-	//don't endlessly accept data faster than we can push it out.
-	//we'll buffer a little, but don't go overboard
+	if (!f->stream)
+		return VFS_ERROR_EOF;
+
+	// Keep draining ciphertext while backpressured: HTTP writes the whole request before reading.
 	if (f->outcrypt.avail > 8192)
-		return 0;
+	{
+		if (SSPI_TryFlushCryptOut(f) == NETERR_DISCONNECTED)
+			return VFS_ERROR_EOF;
+		if (f->outcrypt.avail > 8192)
+			return VFS_ERROR_TRYLATER;
+	}
 
 	bytestowrite = SSPI_CopyIntoBuffer(&f->outraw, buffer, bytestowrite, false);
 
@@ -1244,12 +1254,10 @@ static int QDECL SSPI_WriteBytes (struct vfsfile_s *file, const void *buffer, in
 		SSPI_CheckNewInCrypt(f);	//make sure its ticking over
 		SSPI_Handshake(f);
 	}
-	else
-	{
-		SSPI_Encode(f);
-	}
+	else if (SSPI_Encode(f) == NETERR_DISCONNECTED)
+		return VFS_ERROR_EOF;
 
-	return bytestowrite;
+	return f->stream ? bytestowrite : VFS_ERROR_EOF;
 }
 static qboolean QDECL SSPI_Seek (struct vfsfile_s *file, qofs_t pos)
 {

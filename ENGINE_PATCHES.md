@@ -1,5 +1,13 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1854 - Windows HTTPS uploads keep sending when the TLS buffer fills
+
+**Problem.** On Windows (Schannel), `SSPI_WriteBytes` returned 0 once more than 8 KB of encrypted data was waiting, without pushing any of it to the socket. The HTTP client writes the whole request before it reads, so nothing else drained the buffer: a large upload (a run view over HTTPS, P1704) stopped mid-body until the server timed it out. A write to a closed connection was also reported as "try later", so the upload's retry never started.
+
+**Change.** While above the 8 KB mark, the writer flushes pending ciphertext first and accepts more only after it drains; the intake cap is unchanged. A socket error while flushing (a negative write; a would-block still returns 0) and a missing stream now return `VFS_ERROR_EOF`, which HTTP maps to status 903, and the existing receipt code retries 900+. No queue, consent, evidence-selection or ranking change. Linux (GnuTLS) is untouched.
+
+**Verified.** `tools/test_winsspi_backpressure.py` drives the production Schannel write/encode path through a bounded fake sink: the original code fails the short-write recovery and all three closed-connection cases, the patched code passes all five (uninterrupted, short write, closed while throttled, closed at the mark, closed before the first record), each body delivered exactly once in order. The changed file compiles and links into a full Win64 client (`make FTE_TARGET=win64 m-rel`; same pre-existing diagnostics). Not yet observed on native Windows over real TLS, and not an attribution of the 21 Nov 408.
+
 ## Patch 1853 - Startup ignores downloaded quake.rc/config files; file search skips bad patterns
 
 **Problem.** A server can list `quake.rc` (or `hexen.rc`, `q3config.cfg`, `config.cfg`) in its precache; the download lands in `<gamedir>/downloads/`, an addon mount. `CL_ExecInitialConfigs` counted that copy, took the Quake branch on every later launch and skipped `cfg/default.cfg` and the player's own settings (`ftesurf.cfg`): engine defaults, uploads back to defaults. A downloaded `config.cfg` alone also skipped `ftesurf.cfg`. Separately, `FS_EnumerateFilesEachSys` handed a pattern that `FS_GetCleanPath` rejected (NULL) or emptied straight to `Sys_EnumerateFiles`, which can crash on a bad search pattern.
