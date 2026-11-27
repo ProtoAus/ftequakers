@@ -1,5 +1,13 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1855 - Similarity turn counts and review-truth fixes (backend only)
+
+**Problem.** The similarity reader computed a turning (yaw) agreement that separates replays (1.0) from honest pairs (max 0.41), but nothing stored it, so a reviewer never saw it. The run admin page explained the current verdict only when that attempt was among the 200 newest shown, so a long history hid it. The authenticated current-file check could report "matches" after its own deadline, or when the file name was atomically replaced during the read. A collector whose support could not load reported nothing, which looked like an idle collector with full coverage. The bounded reader decoded a capture through a full text copy and built each movement stream several times per comparison.
+
+**Change.** `recsim.compare_paths` returns optional `yaw` agree/turning counts over its existing alignment, only at equal positive tick rates; unreadable yaw is missing, never zero. The collector stores validated counts in two new nullable `sims` columns for new source-bound comparisons only (no backfill, no requeue; older readers, writers and rows stay "unavailable"). The authenticated run page shows them; public endpoints are unchanged. The admin explanation picks the current verdict independently of the display window; the current-file check abstains past its deadline or when the name no longer names the opened file; a missing collector reports "coverage not measured". The bounded reader decodes incrementally and builds each stream once. The runtime package pins `heldmeta.py` with the other paired readers and preflights the exact bytes it installs. No capture, scoring, threshold, ranking or enforcement change.
+
+**Verified.** Focused suites 61 + 3 + 14 + parsing pass; similarity collector bank 324 + standalone; 79 admin tests; public board checks. Reader allocation on a fixed 3.16 MB synthetic input: traced peak 40.6 MB -> 3.3 MB, two stream builds instead of 20, identical comparison results over 250 reference alignments. `test_noev`'s two-thread migration flake (BACKLOG) appears on pristine main too. Not deployed: rides the next surfd generation. From TrueTiger's reviewtruth/simyaw/simmem candidates.
+
 ## Patch 1854 - Windows HTTPS uploads keep sending when the TLS buffer fills
 
 **Problem.** On Windows (Schannel), `SSPI_WriteBytes` returned 0 once more than 8 KB of encrypted data was waiting, without pushing any of it to the socket. The HTTP client writes the whole request before it reads, so nothing else drained the buffer: a large upload (a run view over HTTPS, P1704) stopped mid-body until the server timed it out. A write to a closed connection was also reported as "try later", so the upload's retry never started.
