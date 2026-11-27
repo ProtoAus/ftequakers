@@ -1,5 +1,13 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1847 - Optional second keyboard turn speed
+
+**Problem.** The two keyboard turn directions shared one yaw speed, so a player could not bind a second speed directly.
+
+**Change.** Add native `+left2` and `+right2` commands and the archived `cl_yawspeed2`. The alternate pair takes priority over the original pair when active; releasing it restores any still-held original turn. Rates do not stack. Both pairs share the existing yaw clamp, mirroring, speed modifier and strafe behavior. World of Surf defaults both speeds to 60 degrees/s, leaves bindings unchanged, and recognizes the alternate binds in its key display and spectate cleanup.
+
+**Verified.** Linux client build and all three QuakeC VMs pass (zero QC warnings). On a synthetic local map, the native client measured both directions at 60 and 120 degrees/s, alternate priority for same and opposite directions, primary resumption, 1.5x speed, mirrored yaw, the existing 900 degrees/s clamp, no yaw during strafe, and no stale yaw after releasing a masked tap. An archive-only config save kept the alternate speed and both bindings. No platform key-event, Windows runtime, or live multiplayer acceptance.
+
 ## Patch 1846 - Compact transparent tournament standings (game QC only)
 
 **Problem.** The tournament banner and standings made a nearly screen-wide dark panel over the run timer. Long map and player names could cross the right-aligned clocks.

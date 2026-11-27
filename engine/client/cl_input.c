@@ -146,7 +146,7 @@ state bit 2 is edge triggered on the down to up transition
 
 kbutton_t	in_mlook, in_strafe, in_speed;
 static kbutton_t	in_klook;
-static kbutton_t	in_left, in_right, in_forward, in_back;
+static kbutton_t	in_left, in_right, in_left2, in_right2, in_forward, in_back;
 static kbutton_t	in_lookup, in_lookdown, in_moveleft, in_moveright;
 static kbutton_t	in_use, in_jump, in_attack;
 static kbutton_t	in_rollleft, in_rollright, in_up, in_down;
@@ -1069,6 +1069,10 @@ static void IN_LeftDown(void) {KeyDown(&in_left, &in_right);}
 static void IN_LeftUp(void) {KeyUp(&in_left);}
 static void IN_RightDown(void) {KeyDown(&in_right, &in_left);}
 static void IN_RightUp(void) {KeyUp(&in_right);}
+static void IN_Left2Down(void) {KeyDown(&in_left2, &in_right2);}
+static void IN_Left2Up(void) {KeyUp(&in_left2);}
+static void IN_Right2Down(void) {KeyDown(&in_right2, &in_left2);}
+static void IN_Right2Up(void) {KeyUp(&in_right2);}
 static void IN_ForwardDown(void) {KeyDown(&in_forward, &in_back);}
 static void IN_ForwardUp(void) {KeyUp(&in_forward);}
 static void IN_BackDown(void) {KeyDown(&in_back, &in_forward);}
@@ -1211,6 +1215,8 @@ void IN_WriteButtons(vfsfile_t *f, qboolean all)
 		{&in_klook,		"klook"},
 		{&in_left,		"left"},
 		{&in_right,		"right"},
+		{&in_left2,		"left2"},
+		{&in_right2,		"right2"},
 		{&in_forward,	"forward"},
 		{&in_back,		"back"},
 		{&in_lookup,	"lookup"},
@@ -1371,6 +1377,8 @@ void CL_ProxyMenuHooks(void)
 
 	CL_ProxyMenuHook("say proxy:menu left\n", &in_left);
 	CL_ProxyMenuHook("say proxy:menu right\n", &in_right);
+	CL_ProxyMenuHook("say proxy:menu left\n", &in_left2);
+	CL_ProxyMenuHook("say proxy:menu right\n", &in_right2);
 
 	CL_ProxyMenuHook("say proxy:menu left\n", &in_moveleft);
 	CL_ProxyMenuHook("say proxy:menu right\n", &in_moveright);
@@ -1396,6 +1404,7 @@ cvar_t	cl_movespeedkey = CVAR("cl_movespeedkey","2.0");
 cvar_t	in_speedbutton	= CVARFD("in_speedbutton", "0", CVAR_ARCHIVE, "Make +speed also set usercmd button bit 7 (QC's .button8), so server-side movement code can see the run/walk key. Off by default because it collides with +button8 for mods that use it.");
 
 cvar_t	cl_yawspeed = CVAR("cl_yawspeed","140");
+static cvar_t cl_yawspeed2 = CVARFD("cl_yawspeed2", "140", CVAR_ARCHIVE, "Turn speed in degrees per second for +left2 and +right2. The second pair takes priority while in use; the two speeds do not add.");
 cvar_t	cl_pitchspeed = CVAR("cl_pitchspeed","150");
 
 cvar_t	cl_anglespeedkey = CVAR("cl_anglespeedkey","1.5");
@@ -1517,6 +1526,20 @@ void CL_ClearPendingCommands(void)
 			cl_pendingcmd[seat].angles[i] = ((int)(cl.playerview[seat].viewangles[i]*65536.0/360)&65535);
 	}
 }
+// Sample both pairs so a masked tap does not replay when the second pair is released.
+static qboolean CL_TurnKeys(int pnum, qboolean strafe, float *left, float *right)
+{
+	float left2 = CL_KeyState(&in_left2, pnum, strafe);
+	float right2 = CL_KeyState(&in_right2, pnum, strafe);
+	*right = CL_KeyState(&in_right, pnum, strafe);
+	*left = CL_KeyState(&in_left, pnum, strafe);
+	if (!left2 && !right2)
+		return false;
+	*left = left2;
+	*right = right2;
+	return true;
+}
+
 /*
 ================
 CL_AdjustAngles
@@ -1553,14 +1576,16 @@ void CL_AdjustAngles (int pnum, double frametime)
 
 	if (!(in_strafe.state[pnum] & 1))
 	{
-		quant = cl_yawspeed.value*speed;
+		float left, right;
+		qboolean secondary = CL_TurnKeys(pnum, false, &left, &right);
+		quant = (secondary ? cl_yawspeed2.value : cl_yawspeed.value)*speed;
 		if ((cl.fpd & FPD_LIMIT_YAW) || !ruleset_allow_frj.ival)
 			quant = bound(-900, quant, 900);
 		quant *= frametime;
 		if (r_xflip.ival)
 			quant *= -1;
-		cl.playerview[pnum].viewanglechange[YAW] -= quant * CL_KeyState (&in_right, pnum, false);
-		cl.playerview[pnum].viewanglechange[YAW] += quant * CL_KeyState (&in_left, pnum, false);
+		cl.playerview[pnum].viewanglechange[YAW] -= quant * right;
+		cl.playerview[pnum].viewanglechange[YAW] += quant * left;
 	}
 	if (in_klook.state[pnum] & 1)
 	{
@@ -1638,7 +1663,11 @@ static void CL_BaseMove (vec3_t moves, int pnum)
 	}
 	moves[1] = sidespeed * (CL_KeyState (&in_moveright, pnum, true) - CL_KeyState (&in_moveleft, pnum, true)) * (in_xflip.ival?-1:1);
 	if (in_strafe.state[pnum] & 1)
-		moves[1] += sidespeed * (CL_KeyState (&in_right, pnum, true) - CL_KeyState (&in_left, pnum, true)) * (in_xflip.ival?-1:1);
+	{
+		float left, right;
+		CL_TurnKeys(pnum, true, &left, &right);
+		moves[1] += sidespeed * (right - left) * (in_xflip.ival?-1:1);
+	}
 	moves[2] = upspeed * (CL_KeyState (&in_up, pnum, true) - CL_KeyState (&in_down, pnum, true));
 
 	moves[0] *= scale;
@@ -3831,6 +3860,7 @@ CL_InitInput
 */
 void CL_InitInput (void)
 {
+	extern char cl_inputgroup[];
 	static char pcmd[MAX_SPLITS][3][6];
 	unsigned int sp, i;
 #define inputnetworkcvargroup "client networking options"
@@ -3870,6 +3900,7 @@ void CL_InitInput (void)
 	Cvar_Register (&cl_prydoncursor, inputnetworkcvargroup);
 	Cvar_Register (&cl_instantrotate, inputnetworkcvargroup);
 	Cvar_Register (&cl_forceseat, inputnetworkcvargroup);
+	Cvar_Register (&cl_yawspeed2, cl_inputgroup);
 
 	for (sp = 0; sp < MAX_SPLITS; sp++)
 	{
@@ -3897,6 +3928,10 @@ void CL_InitInput (void)
 	Cmd_AddCommand ("-left",		IN_LeftUp);
 	Cmd_AddCommand ("+right",		IN_RightDown);
 	Cmd_AddCommand ("-right",		IN_RightUp);
+	Cmd_AddCommandD("+left2",		IN_Left2Down, "Turn left at cl_yawspeed2 (an alternative to +left).");
+	Cmd_AddCommand ("-left2",		IN_Left2Up);
+	Cmd_AddCommandD("+right2",		IN_Right2Down, "Turn right at cl_yawspeed2 (an alternative to +right).");
+	Cmd_AddCommand ("-right2",		IN_Right2Up);
 	Cmd_AddCommand ("+forward",		IN_ForwardDown);
 	Cmd_AddCommand ("-forward",		IN_ForwardUp);
 	Cmd_AddCommand ("+back",		IN_BackDown);
