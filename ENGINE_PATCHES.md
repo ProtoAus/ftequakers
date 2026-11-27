@@ -1,5 +1,27 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1845 - scoped mapper access and tournament beta badges (QC and backend)
+
+**Problem.** F8 map uploads were granted out of band, beta competitors received
+no distinct recognition, and the accounts table put every inventory action on
+every row. Title profiles could also read an unset consent mirror.
+
+**Change.** The Mapper Admin grant authorizes only map uploads, checked against
+the linked Steam account at signed begin and before publication. Existing legacy
+upload roles still work. Tournament Tester recognizes the accepted live competitor
+roster, including DNFs, with a one-time backfill from the recorded Beta journal.
+Account inventory has one grouped Manage dialog; the title and in-game profiles
+share wrapping badge chips. Title profiles read the menu's real consent record.
+The legacy role mask and game message prefix are unchanged. No engine code,
+engine pin, or QC Build bump.
+
+**Verified.** Local inventory, signed map upload, tournament, social, playstats and
+public board regressions pass. Chromium exercised actual grants, removals and
+items on the fixture admin API. All three QC VMs compiled with zero warnings;
+640x480 and 1280x720 native GL fixture profiles showed both new chips versus the
+same legacy-only payload and preserved the old chips. These are not production
+account or upload checks.
+
 ## Patch 1843 - preserve shading on unbumped props with invalid tangents
 
 **Problem.** Some unbumped Source models have zero or normal-parallel imported
