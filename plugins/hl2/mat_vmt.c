@@ -875,7 +875,13 @@ static int VMT_FallbackColour(const char *name, const char *tex, float *rgb, cha
 		*world = true;
 		if (vmt_mapcol[i].state == VMTC_WATER)
 		{	//its reflectivity is its ripple normal map's; the colour is its fog (the index's 'w' line)
-			if (VMT_IndexColour(key, c, flags, flagsize, tint) && strchr(flags, 'w'))
+			qboolean fog = VMT_IndexColour(key, c, flags, flagsize, tint) && strchr(flags, 'w');
+			if (!fog && tex && *tex)
+			{
+				VMT_ColourKey(tex, key, sizeof(key));
+				fog = VMT_IndexColour(key, c, flags, flagsize, tint) && strchr(flags, 'w');
+			}
+			if (fog)
 				rgb[0] = c[0]/255.0f, rgb[1] = c[1]/255.0f, rgb[2] = c[2]/255.0f;
 			else
 				rgb[0] = 0.06f, rgb[1] = 0.11f, rgb[2] = 0.15f;	//VMT_FogColorString's default
@@ -1430,6 +1436,7 @@ typedef struct
 	possibly be asking for the right thing.
 	*/
 	char filefound;
+	char missinginclude[MAX_QPATH];	//the absent leaf of a failed include chain, not a parse error
 	char nobasetex;	//FTESurf Patch 190: the material named no $basetexture and there is nothing sane to guess at
 	char basedefaulted;	//FTESurf Patch 859: tex[0] is the material's own name, not a texture the VMT named
 	char envauthored;	//FTESurf Patch 859: the VMT named an $envmap (hl2_envmap 0 clears st->envmap)
@@ -6096,6 +6103,8 @@ static qboolean VMT_ReadVMT(const char *fname, vmtstate_t *st)
 		plugfuncs->Free(file);
 		return !!line;
 	}
+	if (st->filefound)
+		VMT_ColourKey(fname, st->missinginclude, sizeof(st->missinginclude));
 	return false;
 }
 // Base-less brush emissive materials use Source's default 32-unit mapping
@@ -6422,12 +6431,16 @@ static qboolean Shader_LoadVMT(parsestate_t *ps, const char *filename, void (*Lo
 		plane of its fog. Only world textures and models/: a particle script registers its texture by
 		name expecting no material (p_script.c), and an image under the material's own name still wins.
 		*/
-		if (missing)
+		if (missing || *st.missinginclude)
 		{
 			float rgb[3], tint[3];
 			char flags[16], key[MAX_QPATH];
 			qboolean world;
-			int found = VMT_FallbackColour(vmtname, NULL, rgb, flags, sizeof(flags), tint, &world), pat = -1;
+			int found = VMT_FallbackColour(vmtname, st.missinginclude, rgb, flags, sizeof(flags), tint, &world), pat = -1;
+			// A packed water patch may include an unmounted game's VMT. Only the BSP's
+			// water classification makes it safe to synthesize this found-but-unparsed face.
+			if (!missing && found != VMTC_WATER)
+				return false;
 			VMT_ColourKey(vmtname, key, sizeof(key));
 			if (found != VMTC_EMPTY && (VMT_OwnImageExists(key) || (!world && Q_strncasecmp(key, "models/", 7))))
 				found = VMTC_EMPTY;
@@ -6439,7 +6452,7 @@ static qboolean Shader_LoadVMT(parsestate_t *ps, const char *filename, void (*Lo
 				st.translucent = 1;
 				st.alphaval = 0.6;
 				Q_snprintfz(st.color2, sizeof(st.color2), "[%f %f %f]", rgb[0], rgb[1], rgb[2]);
-				Con_DPrintf("%s: no VMT; drawing water %s\n", vmtname, st.color2);
+				Con_DPrintf("%s: %s; drawing water %s\n", vmtname, missing ? "no VMT" : "missing VMT include", st.color2);
 				Shader_GenerateFromVMT(ps, &st, vmtname, LoadMaterialString);
 				return true;
 			}

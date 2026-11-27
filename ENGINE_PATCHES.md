@@ -1,5 +1,13 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1852 - Draw replacement water when its VMT include is missing
+
+**Problem.** The `surf_utopia` pools showed the missing-texture checkerboard with replacement on. The BSP supplied water patch VMTs, but their base include was absent; the parser reported a found-but-unparsed material, bypassing the missing-water fallback.
+
+**Change.** Remember the missing include separately from a syntax error. For BSP-classified water only, use the existing translucent fallback and look up the missing base material's fog colour when the patch name has no indexed fog. Keep the missing-asset diagnostics and respect `hl2_missingtint`; do not substitute for a VMT that loads.
+
+**Verified.** Matched Linux llvmpipe runs at the start pool showed checkerboard on baseline, translucent water on the fix, and checkerboard with replacement off. A supplied synthetic base VMT prevented fallback on both plugins. The native HL2 plugin built with no new warnings. Client renderer only; no release or fleet deployment.
+
 ## Patch 1851 - Post-finish map reset and disconnect actions (QC only)
 
 **Problem.** The reset op used the last latched stage even after a terminal finish. Leaving a server was only exposed through the native console command.
