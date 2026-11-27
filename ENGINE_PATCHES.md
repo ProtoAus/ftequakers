@@ -1,5 +1,13 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1851 - Post-finish map reset and disconnect actions (QC only)
+
+**Problem.** The reset op used the last latched stage even after a terminal finish. Leaving a server was only exposed through the native console command.
+
+**Change.** Resolve reset as map start when the timer finished and is not handing off to the next stage. Use that rule for both predicted move preparation and server execution, without a stage-local saved start or stage-only timer request. The client consumes the exact public chat command `!disconnect` locally; the shared menu header offers the same action to the left of Lobbies only on a live connection.
+
+**Verified.** All three QC targets built without warnings and passed the frame gate. In an isolated two-stage loopback fixture the original build reset to stage 2 after finishing; both the candidate's predicted reset and its string-command fallback returned to map start and preserved the mid-run stage 2 reset. Console `say` and a real chat-draft Enter disconnected without forwarding `!disconnect`; `!disconnect later` still sent chat. At 640x480 in Linux software GL, the red action rendered left of Lobbies, a pointer click disconnected, and the action was absent before connecting and after leaving.
+
 ## Patch 1850 - Tournament buzzer beaters and map selection (QC and backend)
 
 **Problem.** Draft cards reserved most of the metadata line for the picker or banner even when their name was short. The round timer cut off unfinished attempts, and a CS:S variant could enter the draft when its existing Momentum counterpart failed the tier/qualification filter.
