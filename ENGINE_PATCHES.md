@@ -1,5 +1,13 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1850 - Tournament buzzer beaters and map selection (QC and backend)
+
+**Problem.** Draft cards reserved most of the metadata line for the picker or banner even when their name was short. The round timer cut off unfinished attempts, and a CS:S variant could enter the draft when its existing Momentum counterpart failed the tier/qualification filter.
+
+**Change.** The draft gives measured tier and stage text priority. Hosts can toggle default-on buzzer beaters and save a local default for new rooms. The owning server lets clean main runs started before expiry finish for up to two extra minutes; it settles when none remain or a strict majority of connected competitors (at least two votes in a duel) agree to skip. Normal finish submission is unchanged. Select new map pools from Momentum provenance before applying tier and qualification; only use CS:S where there is no published Momentum counterpart. Existing frozen drafts retain exact-build pin checks. Ship the compatible backend before the matching menu/server; no engine pin, schema or QC Build change.
+
+**Verified.** All three QC VMs build with zero warnings. The native menu fixture passed 44 checks (including full metadata for picks/bans with short/long names and preference routing); native server passed 45 checks (including restart/restore rejection, cap and vote quorum). 110 focused backend tests passed, including normal ranked submission on a reserved node and catalogue/source controls. These are isolated checks, not live player, renderer, or deployment acceptance.
+
 ## Patch 1847 - Optional second keyboard turn speed
 
 **Problem.** The two keyboard turn directions shared one yaw speed, so a player could not bind a second speed directly.
