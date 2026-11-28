@@ -2570,6 +2570,8 @@ void R_GAlias_GenerateBatches(entity_t *e, batch_t **batches)
 	shadersort_t sort;
 	float lod;
 	qboolean sizecullable;	//nettest Patch 100
+	image_t *envmap = NULL;	//FTESurf Patch 1884: one nearest-cubemap search per entity, not one per surface
+	qboolean envmapknown = false;
 
 	texnums_t *skin;
 
@@ -2756,7 +2758,14 @@ void R_GAlias_GenerateBatches(entity_t *e, batch_t **batches)
 			b->buildmeshes = R_GAlias_DrawBatch;
 			b->ent = e;
 			// Viewmodel origin is camera-local (usually zero), not a map position.
-			b->envmap = Mod_CubemapForOrigin(cl.worldmodel, (e->flags & RF_WEAPONMODEL)?r_refdef.vieworg:e->origin);
+			//FTESurf Patch 1884: Mod_CubemapForOrigin walks every env_cubemap in the map, and it ran for each surface of
+			//each entity in every pass (the views, the 3D sky, each sun cascade); its answer depends on the origin alone
+			if (!envmapknown)
+			{
+				envmap = Mod_CubemapForOrigin(cl.worldmodel, (e->flags & RF_WEAPONMODEL)?r_refdef.vieworg:e->origin);
+				envmapknown = true;
+			}
+			b->envmap = envmap;
 #if defined(Q3BSPS) || defined(RFBSPS)
 			b->fog = Mod_FogForOrigin(cl.worldmodel, (e->flags & RF_WEAPONMODEL)?r_refdef.vieworg:e->origin);
 #endif
