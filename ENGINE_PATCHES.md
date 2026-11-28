@@ -1,5 +1,13 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1890 - Menu highlights follow the pointer; the sky-room sun respects vbsp_skyroom (client QC, game a3fe5d49)
+
+**Problem.** fteqcc binds `=` tighter than `&&`, so three assignments stored their first operand. `hot = live && sui_is_hovered(id)` in cl_gamemode.qc (Movement mode rows) and cl_gfx.qc (Gfx_Chip) stored `live`: every live row and chip drew hovered all the time and hovering changed nothing. `sky = vbsp_skyroom_have && cvar("vbsp_skyroom")` in cl_sun.qc stored the map flag, so with the sky room turned off the sun's visibility trace still went through the sky room and undrawn scenery there could hide the sun.
+
+**Change.** The three right-hand sides are parenthesised. A statement scan of the game's src/ (single- and multi-line assignments) finds no other unwrapped `&&`/`||` assignment; AGENT_NOTES' list of older ones was stale (all wrapped earlier) and now says so.
+
+**Verified.** 0 warnings. A/B in an isolated software-EGL fixture on surf_pantheon_css with main's progs, only csprogs swapped: with the pointer parked, control and fix differ by 9585 px in Movement-mode rows 2-7 and 4201 px in the Graphics chips; hovering rows 2 and 3 changes 0 px on the control and about 1750 px (that row only) on the fix; the current row is unchanged; the Render-scale chip highlights alone under the pointer, with its tooltip. The sun fix is not exercised in a live map: it needs a spot where sky-room scenery blocks the sun (bhop_canals, surf_lt_unicorn and surf_sodacity have both a sky_camera and an env_sun).
+
 ## Patch 1870 - Uploaded TAS runs on the TAS board can be watched in game (backend only, game 9b5d96fe)
 
 **Problem.** Lex, 28 Nov: clicking Rounin's surf_sandtrap2 TAS record (an upload through tasupd, filed on the TAS board by tasindex since P1806) did nothing watchable. tasindex filed upload rows with rep 0 because surfd served no tasupd file, so the client's row click (cl_scores.qc Scores_OnlineHandOff) stopped at "no recording was kept".
