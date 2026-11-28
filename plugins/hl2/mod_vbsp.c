@@ -96,6 +96,7 @@ static cvar_t *hl2_clipflags;	//FTESurf Patch 831
 static cvar_t *hl2_visdebug;	//Opt-in area/leaf-walk statistics, not visibility behavior.
 static cvar_t *hl2_pvscache;	//FTESurf Patch 273: memoise the headnode descent
 static cvar_t *hl2_pvsmemo;		//FTESurf Patch 1261: keep each level's prop and displacement PVS verdicts
+static cvar_t *hl2_propcand;	//FTESurf Patch 1889: the eye's slack for a view's static-prop candidate list (0 = walk all)
 static cvar_t *hl2_displacement_scale;
 static cvar_t *hl2_favour_ldr;
 static cvar_t *hl2_lumpretire;	//FTESurf Patch 298
@@ -495,6 +496,7 @@ typedef struct vbspinfo_s
 		qbyte *memo;
 		const qbyte *memovis;
 		int memocluster[2], memoarea, memoflood, memonoareas;
+		unsigned int memogen;	//FTESurf Patch 1889: counts the memo's resets, so a prop candidate list knows its answers stand
 	} vcache[R_MAX_RECURSE];
 
 	/*
@@ -716,10 +718,9 @@ typedef struct vbspinfo_s
 		qbyte	*vc;
 		unsigned int vcverts;
 		float	vcgain;
-		//FTESurf Patch 257: why this prop did or did not reach the scene on the
-		//last frame that drew props.  One of PROPV_*, for `prop_census`.
-		qbyte	lastverdict;
-		//...and, when that was PROPV_PVS, which half of the test said no.
+		//FTESurf Patch 257: why this prop did or did not reach the scene on the last frame that drew props is
+		//prv->propverdict[] (Patch 1889: out of this record, so a frame does not touch every prop to reset it);
+		//when that was PROPV_PVS, which half of the test said no.
 		qbyte	lastpvswhy;
 		//Distinct real areas its query box spanned, when it went through
 		//VBSP_FindTouchedLeafs.  >2 means pvscache's two slots could not hold them.
@@ -762,6 +763,20 @@ typedef struct vbspinfo_s
 	qboolean	lightwarm_done;		//FTESurf Patch 1364: this load's prop-lighting warm is over
 	qbyte		**vpsolid;			//FTESurf Patch 1713: per submodel, a copy of the vcollide solid Source sweeps boxes
 	size_t		*vplen;				//against (VBSP_VPhysSolids), for the submodel loop; freed after it
+
+	//FTESurf Patch 1889: per view level, the static props its view can still draw while its PVS memo stands and its
+	//eye stays within hl2_propcand of where the list was made (VBSP_PropCandidate); the others are not read at all.
+	struct vbsp_propcand_s
+	{
+		unsigned int	*idx, n;
+		qbyte			*verdict;		//per prop: the verdict a prop off the list is reported with; on it, PROPV_UNVISITED
+		unsigned int	nverdict[8];	//those verdicts counted (PROPV_MAX)
+		vec3_t			org;
+		float			margin, reach, propdist;
+		unsigned int	memogen;
+		qboolean		cascademap, valid;
+	} propcand[R_MAX_RECURSE];
+	qbyte			*propverdict;	//FTESurf Patch 1889: each prop's PROPV_* on the last frame that drew props (was staticprop_s.lastverdict)
 } vbspinfo_t;
 
 /*
@@ -10392,12 +10407,9 @@ static qboolean VBSP_CascadeMap (void)
 {
 	return vbsp_r_shadows_sunfloor && vbsp_r_shadows_sunfloor->vec4[0] + vbsp_r_shadows_sunfloor->vec4[1] + vbsp_r_shadows_sunfloor->vec4[2] > 0;
 }
-static qboolean VBSP_ShadowCasterInReach (const entity_t *e, float radius)
+//FTESurf Patch 1889: the reach before a caster's own radius is added; false when no caster is in reach at all
+static qboolean VBSP_ShadowReachBase (float *base)
 {
-	vec3_t d;
-	float reach;
-	if (e->flags & RF_NOSHADOW)
-		return false;
 	if (!vbsp_r_shadows)
 	{	//the engine's own (renderer.c, gl_shadow.c): a NULL default only finds
 		vbsp_r_shadows = cvarfuncs->GetNVFDG("r_shadows", NULL, 0, NULL, NULL);
@@ -10410,9 +10422,20 @@ static qboolean VBSP_ShadowCasterInReach (const entity_t *e, float radius)
 	if (!vbsp_r_shadows || vbsp_r_shadows->ival != 2 || !vbsp_r_shadows_distance)
 		return false;
 	if (vbsp_r_shadows_cascades && vbsp_r_shadows_cascades->ival > 1 && vbsp_r_shadows_cascade_dist && !(vbsp_r_shadows_slots && vbsp_r_shadows_slots->ival > 1))
-		reach = vbsp_r_shadows_cascade_dist->value + radius;
+		*base = vbsp_r_shadows_cascade_dist->value;
 	else
-		reach = vbsp_r_shadows_distance->value * (4.0f/3) + radius;
+		*base = vbsp_r_shadows_distance->value * (4.0f/3);
+	return true;
+}
+static qboolean VBSP_ShadowCasterInReach (const entity_t *e, float radius)
+{
+	vec3_t d;
+	float reach;
+	if (e->flags & RF_NOSHADOW)
+		return false;
+	if (!VBSP_ShadowReachBase(&reach))
+		return false;
+	reach += radius;
 	VectorSubtract(e->origin, refdef->vieworg, d);
 	return DotProduct(d, d) < reach * reach;
 }
@@ -11410,6 +11433,7 @@ static qbyte *VBSP_PVSMemo(model_t *mod, int area, const int clusters[2], const 
 		prv->vcache[lvl].memoflood != prv->floodvalid || prv->vcache[lvl].memonoareas != !!map_noareas->value)
 	{
 		memset(prv->vcache[lvl].memo, 0, n);
+		prv->vcache[lvl].memogen++;	//FTESurf Patch 1889
 		prv->vcache[lvl].memovis = surfvis;
 		prv->vcache[lvl].memocluster[0] = clusters[0];
 		prv->vcache[lvl].memocluster[1] = clusters[1];
@@ -11447,6 +11471,39 @@ static qboolean VBSP_PVSMemoTest(qbyte *memo, size_t idx, model_t *mod, const un
 	if (memo)
 		memo[idx] = 1 + vbsp_pvs_why;
 	return vis;
+}
+
+/*
+FTESurf Patch 1889: may prop i be drawn (or cast) from some eye within `margin` of `org`, under this view's PVS memo?
+False only when the prop loop would reject it for every such eye -- past its fade distance (or hl2_propdist), or loaded,
+out of the view's PVS and out of the sun shadow's reach -- so a list of the trues, kept while the memo and the cvars
+behind these tests stand, draws exactly what the whole walk draws. Asks the memo, as the loop does after it (same
+answer). A prop whose model is not up, or whose leaves are not yet derived, stays on the list: the loop requests its
+model and derives them. Distances get a unit of slack against float rounding.
+*/
+static qboolean VBSP_PropCandidate(model_t *mod, struct staticprop_s *sent, size_t i, qbyte *memo, const qbyte *surfvis,
+	const int *areas, const vec3_t org, float margin, qboolean reachon, float reachbase, float propdist)
+{
+	entity_t *src = &sent->ent;
+	vec3_t disp;
+	float dist, r;
+	VectorSubtract(org, src->origin, disp);
+	dist = VectorLength(disp);
+	if (sent->fademaxdist > 0)
+	{
+		if (dist > sent->fademaxdist + margin + 1)
+			return false;
+	}
+	else if (propdist > 0 && dist > propdist + margin + 1)
+		return false;
+	if (!src->model || src->model->loadstate != MLS_LOADED || src->pvscache.num_leafs == -2)
+		return true;
+	if (VBSP_PVSMemoTest(memo, i, mod, sent->numpvsclusters ? sent->pvsclusters : NULL, sent->numpvsclusters, &src->pvscache, surfvis, areas))
+		return true;
+	if (!reachon || (src->flags & RF_NOSHADOW))
+		return false;	//out of its PVS, and no shadow pass would take it
+	r = reachbase + src->model->radius * (src->scale > 0 ? src->scale : 1);
+	return !(dist > fabs(r) + margin + 1);
 }
 
 //FTESurf Patch 1364: one static prop's exact lighting solve (was inline in VBSP_PrepareFrame's prop loop).
@@ -11951,6 +12008,10 @@ static void VBSP_PrepareFrame(model_t *mod, refdef_t *r_refdef, int area, int cl
 		qboolean shadowonly;	//FTESurf Patch 1766
 		size_t i;
 		vec3_t disp;
+		struct vbsp_propcand_s *cand;	//FTESurf Patch 1889
+		qboolean candbuild, reachon;
+		size_t candn, ci;
+		float reachbase, propdist;
 
 		/*
 		FTESurf Patch 152 -- the prop-lighting census, and WHY IT IS HERE.
@@ -12178,6 +12239,52 @@ static void VBSP_PrepareFrame(model_t *mod, refdef_t *r_refdef, int area, int cl
 		if (!prv->lightwarm_done && hl2_lt_prewarm && hl2_lt_prewarm->value > 0)
 			VBSP_PropLightWarm(mod, prv, r_refdef);
 
+		/*
+		FTESurf Patch 1889: walk this level's candidate list instead of every prop while the list stands -- the
+		same PVS memo (its reset count), the eye within hl2_propcand of where it was made, and the same fade and
+		shadow-reach settings. Otherwise walk them all, and when the memo is usable make the list on the way.
+		bhop_canals: 3126 props; its 3D sky view draws <= 15 and the main view <= 257.
+		*/
+		cand = NULL;
+		candbuild = false;
+		candn = prv->numstaticprops;
+		{
+			int lvl = (refdef->recurse < 0) ? 0 : (refdef->recurse >= R_MAX_RECURSE ? R_MAX_RECURSE-1 : refdef->recurse);
+			float margin = hl2_propcand ? hl2_propcand->value : 0;
+			if (!prv->propverdict)
+				prv->propverdict = plugfuncs->GMalloc(&mod->memgroup, prv->numstaticprops);
+			reachon = VBSP_ShadowReachBase(&reachbase) && VBSP_CascadeMap();
+			if (!reachon)
+				reachbase = 0;
+			propdist = (hl2_propdist && hl2_propdist->value > 0) ? hl2_propdist->value : 0;
+			if (margin > 0 && memo && surfvis && !unvisedareas)
+			{
+				cand = &prv->propcand[lvl];
+				VectorSubtract(refdef->vieworg, cand->org, disp);
+				if (cand->valid && cand->memogen == prv->vcache[lvl].memogen && cand->margin == margin &&
+					cand->cascademap == reachon && cand->reach == reachbase && cand->propdist == propdist &&
+					DotProduct(disp, disp) < margin*margin)
+					candn = cand->n;
+				else
+				{
+					if (!cand->idx)
+					{
+						cand->idx = plugfuncs->GMalloc(&mod->memgroup, sizeof(*cand->idx) * prv->numstaticprops);
+						cand->verdict = plugfuncs->GMalloc(&mod->memgroup, prv->numstaticprops);
+					}
+					candbuild = true;
+					cand->valid = false;
+					cand->n = 0;
+					cand->memogen = prv->vcache[lvl].memogen;
+					cand->margin = margin;
+					cand->cascademap = reachon;
+					cand->reach = reachbase;
+					cand->propdist = propdist;
+					VectorCopy(refdef->vieworg, cand->org);
+				}
+			}
+		}
+
 		//FTESurf Patch 257: reset the per-frame accounting.  Every prop starts
 		//"not visited" so that an early return out of this loop is visible as
 		//itself rather than silently reading as culled.
@@ -12191,23 +12298,35 @@ static void VBSP_PrepareFrame(model_t *mod, refdef_t *r_refdef, int area, int cl
 			}
 			vbsp_propstat.mod = mod;
 			vbsp_propstat.total = prv->numstaticprops;
-			for (v = 0; v < PROPV_MAX; v++)
-				vbsp_propstat.n[v] = 0;
-			vbsp_propstat.n[PROPV_UNVISITED] = prv->numstaticprops;
 			vbsp_propstat.vcdrawn = vbsp_propstat.vcdeclined = 0;	//FTESurf Patch 259
-			for (i = 0; i < prv->numstaticprops; i++)
-				prv->staticprops[i].lastverdict = PROPV_UNVISITED;
+			if (cand && !candbuild)
+			{	//Patch 1889: the props off the list keep the verdict they had when it was made
+				for (v = 0; v < PROPV_MAX; v++)
+					vbsp_propstat.n[v] = cand->nverdict[v];
+				vbsp_propstat.n[PROPV_UNVISITED] = cand->n;
+				memcpy(prv->propverdict, cand->verdict, prv->numstaticprops);
+			}
+			else
+			{
+				for (v = 0; v < PROPV_MAX; v++)
+					vbsp_propstat.n[v] = 0;
+				vbsp_propstat.n[PROPV_UNVISITED] = prv->numstaticprops;
+				memset(prv->propverdict, PROPV_UNVISITED, prv->numstaticprops);
+			}
 		}
 #define PROP_VERDICT(v) do { \
 			vbsp_propstat.n[PROPV_UNVISITED]--; \
 			vbsp_propstat.n[v]++; \
-			sent->lastverdict = (v); \
+			prv->propverdict[i] = (v); \
 		} while(0)
 
-		for (i = 0; i < prv->numstaticprops; i++)
+		for (ci = 0; ci < candn; ci++)
 		{
+			i = (cand && !candbuild) ? cand->idx[ci] : ci;
 			sent = &prv->staticprops[i];
 			src = &sent->ent;
+			if (candbuild && VBSP_PropCandidate(mod, sent, i, memo, surfvis, areas, cand->org, cand->margin, reachon, reachbase, propdist))
+				cand->idx[cand->n++] = i;
 
 			//Patch 990: only a positive FadeMaxDist fades (vbsp staticprop.cpp:650 m_FadesOut); VBSP++ writes
 			//-1 for "never", and bhop_ceaseless's 27 gates were culled at every distance.
@@ -12391,6 +12510,19 @@ static void VBSP_PrepareFrame(model_t *mod, refdef_t *r_refdef, int area, int cl
 			PROP_VERDICT(PROPV_DRAWN);
 		}
 #undef PROP_VERDICT
+		if (candbuild)
+		{	//Patch 1889: the whole walk finished (an early return leaves the list unmade), so it stands
+			unsigned int v;
+			memcpy(cand->verdict, prv->propverdict, prv->numstaticprops);
+			for (ci = 0; ci < cand->n; ci++)
+				cand->verdict[cand->idx[ci]] = PROPV_UNVISITED;
+			for (v = 0; v < PROPV_MAX; v++)
+				cand->nverdict[v] = 0;
+			for (i = 0; i < prv->numstaticprops; i++)
+				if (cand->verdict[i] < PROPV_MAX && cand->verdict[i] != PROPV_UNVISITED)
+					cand->nverdict[cand->verdict[i]]++;
+			cand->valid = true;
+		}
 	}
 
 	//FTESurf Patch 1038: detail props, under the props' RDF_NOENTS rule.
@@ -15331,6 +15463,11 @@ static void VBSP_PropCensus_f(void)
 					   "         from a bounding box at first draw; %u of those ended up on the weaker\n"
 					   "         headnode test there.  Their PVS cull uses the lump's own clusters (P1235).\n",
 					   vbsp_propstat.leafoverflow, vbsp_propstat.headnodetested);
+		for (v = 0; v < R_MAX_RECURSE; v++)	//FTESurf Patch 1889
+			if (prv->propcand[v].valid)
+				Con_Printf("  %6u on view level %u's candidate list (hl2_propcand %g; made at %.0f %.0f %.0f)\n",
+					prv->propcand[v].n, v, prv->propcand[v].margin,
+					prv->propcand[v].org[0], prv->propcand[v].org[1], prv->propcand[v].org[2]);
 		if (prv->lit_foreign)	//FTESurf Patch 1096
 			Con_Printf("  %6u bake(s) dropped at first light: made for another model (checksum)\n",
 					   (unsigned)prv->lit_foreign);
@@ -15383,6 +15520,7 @@ static void VBSP_PropCensus_f(void)
 		entity_t *src = &sent->ent;
 		const char *nm = src->model ? src->model->name : "(no model)";
 		qboolean hit;
+		qbyte verdict = prv->propverdict ? prv->propverdict[i] : PROPV_UNVISITED;	//FTESurf Patch 1889
 
 		if (byindex)
 			hit = (i == (unsigned int)atoi(arg));
@@ -15399,9 +15537,9 @@ static void VBSP_PropCensus_f(void)
 		shown++;
 		Con_Printf("prop %u: %s\n", i, nm);
 		Con_Printf("    verdict last frame : %s%s%s\n",
-			(sent->lastverdict < PROPV_MAX) ? vbsp_propverdict[sent->lastverdict] : "?",
-			(sent->lastverdict == PROPV_PVS) ? " -- rejected by the " : "",
-			(sent->lastverdict == PROPV_PVS && sent->lastpvswhy < VBSP_PVSWHY_MAX)
+			(verdict < PROPV_MAX) ? vbsp_propverdict[verdict] : "?",
+			(verdict == PROPV_PVS) ? " -- rejected by the " : "",
+			(verdict == PROPV_PVS && sent->lastpvswhy < VBSP_PVSWHY_MAX)
 				? vbsp_pvswhy_name[sent->lastpvswhy] : "");
 		Con_Printf("    origin             : %.1f %.1f %.1f\n",
 			src->origin[0], src->origin[1], src->origin[2]);
@@ -15623,6 +15761,7 @@ qboolean VBSP_Init(void)
 		hl2_visdebug = cvarfuncs->GetNVFDG("hl2_visdebug", "0", 0, "Print Source area visibility and 300-frame leaf-walk statistics (also requires developer). Does not change visibility.", MAPOPTIONS);
 		hl2_novis = cvarfuncs->GetNVFDG("r_novis", "0", 0, "Draw every leaf, ignoring the PVS. Diagnostic: makes a vis problem visible by removing vis.", MAPOPTIONS);
 		hl2_clipflags = cvarfuncs->GetNVFDG("hl2_clipflags", "1", 0, "FTESurf Patch 831: the world walk stops testing a frustum plane below a node wholly in front of it. 0 tests every plane at every node (the A/B).", MAPOPTIONS);
+		hl2_propcand = cvarfuncs->GetNVFDG("hl2_propcand", "256", 0, "FTESurf Patch 1889: each view level keeps the list of static props it could draw while its PVS memo (hl2_pvsmemo) stands and its eye stays within this many units of where the list was made; the frames between walk only that list. Exact: a prop is left off only when its fade distance, the PVS and the sun shadow's reach rule it out for any eye in that ball. 0 walks every prop every frame (the A/B).", MAPOPTIONS);
 		hl2_pvsmemo = cvarfuncs->GetNVFDG("hl2_pvsmemo", "1", 0, "FTESurf Patch 1261: keep each view level's static-prop and displacement PVS verdicts while its clusters, area and area connections are unchanged, instead of testing every one each frame. 0 tests every frame (the A/B).", MAPOPTIONS);
 		hl2_pvscache = cvarfuncs->GetNVFDG("hl2_pvscache", "1", 0, "FTESurf (P273): reuse the answer to the whole-tree entity-visibility descent when the same node is asked about the same PVS. Exact, not approximate -- the test is a pure function of those two. Measured on surf_tensor2 it was 98% of the listen server's per-frame cost. 0 restores the old recompute-every-time behaviour, so a suspected culling bug is a one-command A/B.", MAPOPTIONS);
 		hl2_lumpretire = cvarfuncs->GetNVFDG("hl2_lumpretire", "1", CVAR_MAPLATCH, "FTESurf (P298): skip LZMA-decompressing the BSP lumps nothing in this configuration will read -- both lightmaps on a dedicated server, and the unused half of the LDR/HDR pair when drawing. Map load on this engine is single-threaded LZMA and almost nothing else, so this is most of it: 334 MB of the 350 MB surf_affliction expands is lightmap. 0 restores the old decompress-everything behaviour, which makes the whole patch a one-command A/B.", MAPOPTIONS);
