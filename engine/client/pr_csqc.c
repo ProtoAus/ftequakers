@@ -2311,6 +2311,339 @@ static void QCBUILTIN PF_cs_unproject (pubprogfuncs_t *prinst, struct globalvars
 
 #include "pr_csqc_lines.inc"	//FTESurf Patch 645: the run lines' strip, natively
 
+/*FTESurf Patch 1886: float(vector start, vector end) skysegment -- the game's sprite sky test (cl_sprites.qc
+  Sprite_SkyTest) asks whether the first thing a trace from the eye to a sprite hits is a sky/ face; on bhop_canals those
+  traces were 0.37 ms of csprogs a frame.  A trace's first hit can only be a sky face if the segment meets a brush that
+  has one, so this answers 0 (no world brush with a sky/ side has a box the segment meets: the trace's answer is "not
+  sky" without tracing), 1 (one might: trace), or -1 (no answer here: no brush collision tree, or too many sky-sided
+  brush entities).  The boxes are the brushes' own, in a small tree built when the world's collision tree changes; an
+  inline brush model with a sky/ side (bhop_canals' *12, a func_water_analog) moves with its entity, so each frame the
+  boxes of the csqc entities that are solid with one of those models are tested too.*/
+#if defined(Q2BSPS) || defined(Q3BSPS)
+typedef struct
+{
+	float mins[3], maxs[3];
+	int first, count;	//count > 0: a leaf of boxes [first, first+count); else children first, first+1
+} csskynode_t;
+static struct
+{
+	model_t *model;
+	void *cnodes;
+	int state;			//0 unbuilt, 1 usable, -1 refused
+	float (*box)[6];
+	const q2cbrush_t **brush;	//each box's brush: a box the segment meets is then tested on the brush's planes
+	int nboxes, maxboxes;
+	const q2cbrush_t **subbrush;	//the sky-sided inline models' sky-sided brushes, in model space
+	int nsubbrush, maxsubbrush, subfirst[33];
+	csskynode_t *node;
+	int nnodes;
+	unsigned int asked, clear;	//skysegment_info
+	const char *why;			//the reason it refused
+	model_t *sub[32];			//inline models with a sky/ side
+	int nsub;
+	float ent[64][6];			//this frame's solid csqc entities with one of them
+	float entorg[64][3];		//and where their model sits (unturned ones; entsub -1 = turned: box only)
+	int entsub[64];
+	int nent, entframe;
+} cs_sky;
+static qboolean CS_SkyBrushHasSky(const q2cbrush_t *b)
+{
+	int i;
+	for (i = 0; i < b->numsides; i++)
+		if (b->brushside[i].surface && !Q_strncasecmp(b->brushside[i].surface->c.name, "sky/", 4))
+			return true;
+	return false;
+}
+static void CS_SkyBrushCB(void *ctx, const q2cbrush_t *b)
+{
+	if (!CS_SkyBrushHasSky(b))
+		return;
+	if (cs_sky.nboxes == cs_sky.maxboxes)
+	{
+		cs_sky.maxboxes = cs_sky.maxboxes ? cs_sky.maxboxes * 2 : 256;
+		cs_sky.box = BZ_Realloc(cs_sky.box, sizeof(*cs_sky.box) * cs_sky.maxboxes);
+		cs_sky.brush = BZ_Realloc((void*)cs_sky.brush, sizeof(*cs_sky.brush) * cs_sky.maxboxes);
+	}
+	cs_sky.brush[cs_sky.nboxes] = b;
+	VectorCopy(b->absmins, cs_sky.box[cs_sky.nboxes]);
+	VectorCopy(b->absmaxs, cs_sky.box[cs_sky.nboxes]+3);
+	cs_sky.nboxes++;
+}
+static void CS_SkySubSkyCB(void *ctx, const q2cbrush_t *b)
+{
+	if (!CS_SkyBrushHasSky(b))
+		return;
+	*(qboolean*)ctx = true;
+	if (cs_sky.nsubbrush == cs_sky.maxsubbrush)
+	{
+		cs_sky.maxsubbrush = cs_sky.maxsubbrush ? cs_sky.maxsubbrush * 2 : 64;
+		cs_sky.subbrush = BZ_Realloc((void*)cs_sky.subbrush, sizeof(*cs_sky.subbrush) * cs_sky.maxsubbrush);
+	}
+	cs_sky.subbrush[cs_sky.nsubbrush++] = b;
+}
+//the segment start + t*dir, t in [0,1], against a brush's planes; only ever errs towards "meets" (a false "misses"
+//would skip a trace that hits sky)
+static qboolean CS_SkySegmentBrush(const q2cbrush_t *b, const vec3_t start, const vec3_t dir)
+{
+	float enter = 0, leave = 1, d1, d2, f;
+	int i;
+	for (i = 0; i < b->numsides; i++)
+	{
+		const mplane_t *pl = b->brushside[i].plane;
+		if (!pl)
+			return true;
+		d1 = DotProduct(start, pl->normal) - pl->dist;
+		d2 = d1 + DotProduct(dir, pl->normal);
+		if (d1 > 0.25f && d2 > 0.25f)
+			return false;	//wholly in front of one of its planes: outside the brush
+		if (d1 <= 0 && d2 <= 0)
+			continue;
+		f = d1 / (d1 - d2);
+		if (d1 > d2)
+		{	//entering through this plane
+			if (f - 0.001f > enter)
+				enter = f - 0.001f;
+		}
+		else if (f + 0.001f < leave)
+			leave = f + 0.001f;
+		if (enter > leave)
+			return false;
+	}
+	return true;
+}
+static int CS_SkyBoxCmpAxis;
+typedef struct {float box[6]; const q2cbrush_t *brush;} csskysort_t;
+static int CS_SkyBoxCmp(const void *a, const void *b)
+{
+	float ca = ((const csskysort_t*)a)->box[CS_SkyBoxCmpAxis] + ((const csskysort_t*)a)->box[CS_SkyBoxCmpAxis+3];
+	float cb = ((const csskysort_t*)b)->box[CS_SkyBoxCmpAxis] + ((const csskysort_t*)b)->box[CS_SkyBoxCmpAxis+3];
+	return (ca > cb) - (ca < cb);
+}
+static int CS_SkyBuild_r(int first, int count)
+{
+	int n = cs_sky.nnodes++, i, k, axis = 0;
+	csskynode_t *nd = &cs_sky.node[n];
+	VectorCopy(cs_sky.box[first], nd->mins);
+	VectorCopy(cs_sky.box[first]+3, nd->maxs);
+	for (i = first+1; i < first+count; i++)
+		for (k = 0; k < 3; k++)
+		{
+			nd->mins[k] = min(nd->mins[k], cs_sky.box[i][k]);
+			nd->maxs[k] = max(nd->maxs[k], cs_sky.box[i][k+3]);
+		}
+	if (count <= 4)
+	{
+		nd->first = first;
+		nd->count = count;
+		return n;
+	}
+	for (k = 1; k < 3; k++)
+		if (nd->maxs[k] - nd->mins[k] > nd->maxs[axis] - nd->mins[axis])
+			axis = k;
+	CS_SkyBoxCmpAxis = axis;
+	{	//sort boxes and their brushes together
+		csskysort_t *tmp = BZ_Malloc(sizeof(*tmp) * count);
+		for (i = 0; i < count; i++)
+		{
+			memcpy(tmp[i].box, cs_sky.box[first+i], sizeof(tmp[i].box));
+			tmp[i].brush = cs_sky.brush[first+i];
+		}
+		qsort(tmp, count, sizeof(*tmp), CS_SkyBoxCmp);
+		for (i = 0; i < count; i++)
+		{
+			memcpy(cs_sky.box[first+i], tmp[i].box, sizeof(tmp[i].box));
+			cs_sky.brush[first+i] = tmp[i].brush;
+		}
+		BZ_Free(tmp);
+	}
+	nd->count = 0;
+	nd->first = cs_sky.nnodes;	//the two children are made next, in order
+	cs_sky.nnodes += 2;
+	{
+		int l = cs_sky.nnodes - 2, half = count / 2;
+		int c0 = CS_SkyBuild_r(first, half), c1 = CS_SkyBuild_r(first + half, count - half);
+		//CS_SkyBuild_r returns its own index; keep the children adjacent by copying them into the reserved pair
+		cs_sky.node[l] = cs_sky.node[c0];
+		cs_sky.node[l+1] = cs_sky.node[c1];
+	}
+	return n;
+}
+static void CS_SkyRebuild(model_t *wm)
+{
+	int i;
+	qboolean subsky = false;
+	vec3_t mins, maxs;
+	cs_sky.model = wm;
+	cs_sky.cnodes = wm ? wm->cnodes : NULL;
+	cs_sky.nboxes = cs_sky.nnodes = 0;
+	cs_sky.state = -1;
+	cs_sky.why = "no world";
+	if (!wm || wm->loadstate != MLS_LOADED)
+		return;
+	cs_sky.why = "no brush collision tree";
+	if (!wm->cnodes)
+		return;
+	cs_sky.why = "not a brush world";
+	if (wm->fromgame != fg_quake2 && wm->fromgame != fg_quake3 && !(wm->engineflags & MDLF_SOURCEBSP))
+		return;
+	cs_sky.nsub = 0;
+	cs_sky.nsubbrush = 0;
+	cs_sky.entframe = -1;
+	for (i = 1; i < MAX_PRECACHE_MODELS; i++)
+	{	//an inline model's brushes move with its entity: those with a sky/ side are tested where their entities are
+		model_t *m = cl.model_precache[i];
+		int was = cs_sky.nsubbrush;
+		subsky = false;
+		if (m && *m->name == '*' && m->loadstate == MLS_LOADED && m->cnodes && m->cnodes != wm->cnodes)
+			BIH_EnumBrushes(m, m->mins, m->maxs, CS_SkySubSkyCB, &subsky);
+		if (!subsky)
+			continue;
+		cs_sky.why = "too many sky-sided brush entities";
+		if (cs_sky.nsub == countof(cs_sky.sub))
+			return;
+		cs_sky.subfirst[cs_sky.nsub] = was;
+		cs_sky.sub[cs_sky.nsub++] = m;
+	}
+	cs_sky.subfirst[cs_sky.nsub] = cs_sky.nsubbrush;
+	cs_sky.why = NULL;
+	VectorSet(mins, -1e9, -1e9, -1e9);
+	VectorSet(maxs, 1e9, 1e9, 1e9);
+	BIH_EnumBrushes(wm, mins, maxs, CS_SkyBrushCB, NULL);
+	cs_sky.state = 1;
+	if (!cs_sky.nboxes)
+		return;
+	cs_sky.node = BZ_Realloc(cs_sky.node, sizeof(*cs_sky.node) * cs_sky.nboxes * 3);	//a binary tree with leaves of 1-4
+	CS_SkyBuild_r(0, cs_sky.nboxes);
+}
+static qboolean CS_SkySegmentBox(const float *mins, const float *maxs, const vec3_t start, const vec3_t dir)
+{	//slab test on t in [0,1], touching counts
+	float t0 = 0, t1 = 1, a, b;
+	int k;
+	for (k = 0; k < 3; k++)
+	{
+		if (dir[k] == 0)
+		{
+			if (start[k] < mins[k] || start[k] > maxs[k])
+				return false;
+			continue;
+		}
+		a = (mins[k] - start[k]) / dir[k];
+		b = (maxs[k] - start[k]) / dir[k];
+		if (a > b) { float t = a; a = b; b = t; }
+		if (a > t0) t0 = a;
+		if (b < t1) t1 = b;
+		if (t0 > t1)
+			return false;
+	}
+	return true;
+}
+static qboolean CS_SkySegment_r(int n, const vec3_t start, const vec3_t dir)
+{
+	const csskynode_t *nd = &cs_sky.node[n];
+	int i;
+	if (!CS_SkySegmentBox(nd->mins, nd->maxs, start, dir))
+		return false;
+	if (nd->count)
+	{
+		for (i = nd->first; i < nd->first + nd->count; i++)
+			if (CS_SkySegmentBox(cs_sky.box[i], cs_sky.box[i]+3, start, dir) && CS_SkySegmentBrush(cs_sky.brush[i], start, dir))
+				return true;
+		return false;
+	}
+	return CS_SkySegment_r(nd->first, start, dir) || CS_SkySegment_r(nd->first+1, start, dir);
+}
+#endif
+static void QCBUILTIN PF_cs_skysegment(pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
+{
+#if defined(Q2BSPS) || defined(Q3BSPS)
+	float *start = G_VECTOR(OFS_PARM0), *end = G_VECTOR(OFS_PARM1);
+	vec3_t dir, s0;
+	model_t *wm = cl.worldmodel;
+	if (!wm || cs_sky.model != wm || cs_sky.cnodes != wm->cnodes)
+		CS_SkyRebuild(wm);
+	if (cs_sky.state < 0)
+	{
+		G_FLOAT(OFS_RETURN) = -1;
+		return;
+	}
+	cs_sky.asked++;
+	VectorCopy(start, s0);
+	VectorSubtract(end, start, dir);
+	if (cs_sky.nsub && cs_sky.entframe != host_framecount)
+	{	//this frame's solid csqc entities wearing a sky-sided inline model
+		int i, k;
+		cs_sky.nent = 0;
+		cs_sky.entframe = host_framecount;
+		for (i = 1; i < *prinst->parms->num_edicts; i++)
+		{
+			csqcedict_t *e = (csqcedict_t*)EDICT_NUM_PB(prinst, i);
+			model_t *m;
+			if (ED_ISFREE(e) || e->v->solid == SOLID_NOT)
+				continue;
+			m = CSQC_GetModelForIndex(e->v->modelindex);
+			for (k = 0; k < cs_sky.nsub && m != cs_sky.sub[k]; k++)
+				;
+			if (k == cs_sky.nsub)
+				continue;
+			if (cs_sky.nent == countof(cs_sky.ent))
+			{
+				cs_sky.nent = -1;	//too many to say this frame: trace
+				break;
+			}
+			VectorCopy(e->v->absmin, cs_sky.ent[cs_sky.nent]);
+			VectorCopy(e->v->absmax, cs_sky.ent[cs_sky.nent]+3);
+			VectorCopy(e->v->origin, cs_sky.entorg[cs_sky.nent]);
+			cs_sky.entsub[cs_sky.nent] = (e->v->angles[0] || e->v->angles[1] || e->v->angles[2]) ? -1 : k;
+			cs_sky.nent++;
+		}
+	}
+	if (cs_sky.nsub && cs_sky.nent)
+	{
+		int k;
+		qboolean hit = cs_sky.nent < 0;
+		for (k = 0; k < cs_sky.nent && !hit; k++)
+		{
+			if (!CS_SkySegmentBox(cs_sky.ent[k], cs_sky.ent[k]+3, s0, dir))
+				continue;
+			if (cs_sky.entsub[k] < 0)
+				hit = true;	//turned: its box is all this says
+			else
+			{	//unturned: the model's sky-sided brushes, in its space
+				int j, sm = cs_sky.entsub[k];
+				vec3_t ls;
+				VectorSubtract(s0, cs_sky.entorg[k], ls);
+				for (j = cs_sky.subfirst[sm]; j < cs_sky.subfirst[sm+1] && !hit; j++)
+					hit = CS_SkySegmentBrush(cs_sky.subbrush[j], ls, dir);
+			}
+		}
+		if (hit)
+		{
+			G_FLOAT(OFS_RETURN) = 1;
+			return;
+		}
+	}
+	if (!cs_sky.nboxes || !CS_SkySegment_r(0, s0, dir))
+	{
+		cs_sky.clear++;
+		G_FLOAT(OFS_RETURN) = 0;
+	}
+	else
+		G_FLOAT(OFS_RETURN) = 1;
+#else
+	G_FLOAT(OFS_RETURN) = -1;
+#endif
+}
+static void CS_SkySegmentInfo_f(void)
+{
+#if defined(Q2BSPS) || defined(Q3BSPS)
+	Con_Printf("skysegment_info: %s%s%s, %i sky-sided brush boxes, %i sky-sided brush models (%i solid entities last frame), %u asked, %u answered clear (%.1f%%)\n",
+		cs_sky.state > 0 ? "answering" : cs_sky.state < 0 ? "refused: " : "not built", cs_sky.state < 0 && cs_sky.why ? cs_sky.why : "",
+		cs_sky.state < 0 && cs_sky.why && *cs_sky.why == '*' ? " has a sky/ side" : "",
+		cs_sky.nboxes, cs_sky.nsub, cs_sky.nent, cs_sky.asked, cs_sky.clear, cs_sky.asked ? 100.0 * cs_sky.clear / cs_sky.asked : 0.0);
+	cs_sky.asked = cs_sky.clear = 0;
+#endif
+}
+
 //clear scene, and set up the default stuff.
 static void QCBUILTIN PF_R_ClearScene (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
 {
@@ -7660,6 +7993,7 @@ static struct {
 	{"ui_native_plot_rows",	PF_ui_native_plot_rows,		0},
 	{"ui_native_plot_commit",	PF_ui_native_plot_commit,	0},
 	{"ui_native_plot_view",	PF_ui_native_plot_view,		0},
+	{"skysegment",			PF_cs_skysegment,		0},	//FTESurf Patch 1886
 	{"lines_width",			PF_cs_lines_width,		0},	//FTESurf Patch 645, pr_csqc_lines.inc
 	{"lines_segment",		PF_cs_lines_segment,	0},
 	{"lines_strip2d",		PF_cs_lines_strip2d,	0},
@@ -9502,6 +9836,7 @@ void CSQC_RegisterCvarsAndThings(void)
 {
 	Cmd_AddCommand("coredump_csqc", CSQC_CoreDump);
 	Cmd_AddCommandD("predangle_dump", CSQC_PredAngDump_f, "Prints and clears the cl_predict_angledebug log (FTESurf Patch 396).");
+	Cmd_AddCommandD("skysegment_info", CS_SkySegmentInfo_f, "FTESurf Patch 1886: the skysegment builtin's state and how many of its answers since the last call settled a sprite sky test without a trace.");
 	Cmd_AddCommand ("extensionlist_csqc", PR_CSExtensionList_f);
 	Cmd_AddCommandD("cl_cmd", CSQC_GameCommand_f, "Calls the csqc's GameCommand function");
 	Cmd_AddCommand("breakpoint_csqc", CSQC_Breakpoint_f);
