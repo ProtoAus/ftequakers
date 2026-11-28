@@ -1119,7 +1119,18 @@ static const void *Mod_HL2_GetExternalBlock(hl2parsecontext_t *ctx, const void *
 
 		if (!ctx->ani)
 		{
-			vfsfile_t *f = filefuncs->OpenVFS((const char *)ctx->header + ctx->header->ofs_aniname, "rb", FS_GAME);
+			const char *aniname;
+			char scoped[MAX_QPATH];
+			vfsfile_t *f;
+			if (!Q_strncasecmp(ctx->mod->name, "models/ftesurf/legacy/", sizeof("models/ftesurf/legacy/")-1))
+			{
+				// These two admitted pistols have ANI files beside their MDL. Keep
+				// the ANI scoped too; the embedded path points at the global VFS.
+				Q_snprintfz(scoped, sizeof(scoped), "%.*s.ani", (int)strlen(ctx->mod->name)-4, ctx->mod->name);
+				aniname = scoped;
+			}
+			else aniname = (const char *)ctx->header + ctx->header->ofs_aniname;
+			f = filefuncs->OpenVFS(aniname, "rb", FS_GAME);
 			if (f)
 			{
 				size_t sz = f->GetLen(f);
@@ -1443,6 +1454,8 @@ qboolean QDECL Mod_LoadHL2Model (model_t *mod, void *buffer, size_t fsize)
 		Mod_HL2_IncludeWeaponAnimations(&ctx, fsize);
 		if (!strcmp(mod->name, "models/weapons/v_knife.mdl") || !strcmp(mod->name, "models/weapons/v_knife_gg.mdl"))
 			if (!ctx.weapon_animations) return false;
+		// A scoped Legacy gun without its frame clips would draw in its rest pose: refuse it so CSQC keeps CS:S.
+		if (!Q_strncasecmp(mod->name, "models/ftesurf/legacy/", 22) && !ctx.weapon_animations) return false;
 		if (ctx.header->num_anims && !ctx.weapon_animations)
 		{
 			galiasanimation_t *a;
@@ -1465,7 +1478,15 @@ qboolean QDECL Mod_LoadHL2Model (model_t *mod, void *buffer, size_t fsize)
 				Q_strlcpy(a->name, (const char*)in + in->name_ofs, sizeof(a->name));
 
 				for (p = 0; p < a->numposes; p++)
-					Mod_HL2_ReadPose(&ctx, in, p, (matrix3x4*)a->boneofs+p*ctx.header->num_bones, ctx.header->num_bones, (const hl2mdlbone_t*)((const qbyte*)ctx.header + ctx.header->ofs_bones));
+				{
+					matrix3x4 *out = (matrix3x4*)a->boneofs+p*ctx.header->num_bones;
+					// CS:GO frame animations (0x40) are not RLE pose chains; mod_hl2_weapon.h
+					// decodes the ones viewmodels use. Never walk them here (P1861's bone-72 reads).
+					if (in->loop & 0x40)
+						memcpy(out, ctx.baserelpose, sizeof(*out)*ctx.header->num_bones);
+					else
+						Mod_HL2_ReadPose(&ctx, in, p, out, ctx.header->num_bones, (const hl2mdlbone_t*)((const qbyte*)ctx.header + ctx.header->ofs_bones));
+				}
 				a++;
 			}
 			ctx.num_animations = a-ctx.ofs_animations;
@@ -1576,6 +1597,16 @@ qboolean QDECL Mod_LoadHL2Model (model_t *mod, void *buffer, size_t fsize)
 		}
 		result  = Mod_HL2_LoadVVD(&ctx, vvd, vvdsize);
 		result &= Mod_HL2_LoadVTX(&ctx, vtx, vtxsize);
+		if (!Q_strncasecmp(mod->name, "models/ftesurf/legacy/", sizeof("models/ftesurf/legacy/")-1))
+		{
+			galiasinfo_t *surface = mod->meshinfo;
+			unsigned int indices = 0;
+			for (; surface; surface = surface->nextsurf) indices += surface->numindexes;
+			Con_DPrintf("%s: Legacy mesh %s, %u verts, %u indices\n", mod->name, result ? "ready" : "unavailable", ctx.numverts, indices);
+			// Never advertise this visual-only model as loaded using the generic
+			// animation-only fallback: CSQC needs to restore the CSS model instead.
+			if (!result || !indices) { plugfuncs->Free(vvd); plugfuncs->Free(vtx); return false; }
+		}
 		plugfuncs->Free(vvd);
 		plugfuncs->Free(vtx);
 	}

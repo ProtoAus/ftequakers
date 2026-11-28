@@ -1369,7 +1369,7 @@ restart:
 	}
 }
 static cvar_t v_csgo_viewmodel_fov = CVARFD("r_viewmodel_fov_csgo", "70", CVAR_ARCHIVE,
-	"Viewmodel-only FOV for mounted Legacy knives/arms; 0 inherits r_viewmodel_fov. Does not change aim/world FOV.");
+	"Viewmodel-only FOV for mounted Legacy knives/arms/pistols; 0 inherits r_viewmodel_fov. Does not change aim/world FOV.");
 static qboolean V_HasLegacyViewmodel(void)
 {
 	int i;
@@ -1379,7 +1379,8 @@ static qboolean V_HasLegacyViewmodel(void)
 		if (!(cl_visedicts[i].flags & RF_WEAPONMODEL) || !cl_visedicts[i].model)
 			continue;
 		name = cl_visedicts[i].model->name;
-		if ((!Q_strncasecmp(name, "models/weapons/v_knife_", 23) &&
+		if (!Q_strncasecmp(name, "models/ftesurf/legacy/", sizeof("models/ftesurf/legacy/")-1) ||
+			(!Q_strncasecmp(name, "models/weapons/v_knife_", 23) &&
 			 Q_strcasecmp(name, "models/weapons/v_knife_t.mdl")) ||
 			!Q_strcasecmp(name, "models/weapons/v_knife.mdl") ||
 			!Q_strncasecmp(name, "models/weapons/v_models/arms/", 28) ||

@@ -273,7 +273,10 @@ float fs_accessed_time;	//timestamp of read (does not include flocates, which sh
 //reordering/rebuilding the searchpaths.  Empty => today's plain highest-priority behaviour.
 char fs_preferhint[MAX_OSPATH];
 static char fs_knife_assets_path[MAX_OSPATH];
+static char fs_css_weapon_assets_path[MAX_OSPATH];
 #ifndef SERVERONLY
+static cvar_t fs_legacy_viewmodels = CVARFD("fs_legacy_viewmodels", "0", CVAR_NOSET|CVAR_NOSAVE|CVAR_NOTFROMSERVER, "Installed CS:GO Legacy viewmodel aliases ready (local session only).");
+static cvar_t fs_css_weapon_assets = CVARFD("fs_css_weapon_assets", "0", CVAR_NOSET|CVAR_NOSAVE|CVAR_NOTFROMSERVER, "Installed Counter-Strike: Source viewmodel mount: 0 not requested, 1 mounted, -1 unavailable. Session only.");
 static const char fs_knife_texture_alias[] = "materials/ftesurf/knife_legacy_t.vtf";
 static cvar_t fs_knife_texture = CVARFD("fs_knife_texture", "0", CVAR_NOSET|CVAR_NOSAVE|CVAR_NOTFROMSERVER, "Engine-maintained readiness of the private installed Legacy Original-knife texture. No caller path or downloaded asset.");
 #endif
@@ -387,6 +390,7 @@ void COM_CheckRegistered (void);
 void Mods_FlushModList(void);
 static void FS_ReloadPackFilesFlags(unsigned int reloadflags);
 static void FS_RemountAddons(unsigned int loadstuff);	//nettest (P8): fs_load on-demand addon games
+static void FS_SessionMounts_Forget(void);				//ftesurf (P1862): the session-only viewmodel packs are about to close
 static void FS_AutoMount_Forget(void);					//ftesurf (P184): drop the automount bookkeeping; the searchpaths it names are about to stop existing
 static void FS_Cache_Note(const char *fname, searchpath_t *sp);	//ftesurf (P186): record a file the asset cache should copy. Called from FS_FLocateFile, so it is declared here and defined next to the rest of the cache, far below.
 static void FS_Cache_Forget(void);						//ftesurf (P186): abandon an in-flight harvest; the searchpaths it was reading from are about to stop existing
@@ -3288,6 +3292,9 @@ static int FS_FLocateFilePurpose(const char *filename, unsigned int lflags, floc
 	unsigned int found = FF_NOTFOUND;
 	const char *preferhint = fs_preferhint;
 	qboolean knife_texture = false;
+#ifndef SERVERONLY
+	char legacyasset[MAX_OSPATH];
+#endif
 
 	if (!loc)
 		loc = &allownoloc;
@@ -3320,6 +3327,59 @@ static int FS_FLocateFilePurpose(const char *filename, unsigned int lflags, floc
 	}
 
 #ifndef SERVERONLY
+	// Scoped Legacy reads have disjoint cache names. They never use a loose
+	// file, map pak, CSS model, or replacement if the installed stock VPK misses.
+	{
+		static const char matprefix[] = "materials/ftesurf/legacy/";
+		static const char mdlprefix[] = "models/ftesurf/legacy/";
+		static const char cssprefix[] = "models/ftesurf/css/";
+		qboolean mat = !Q_strncasecmp(filename, matprefix, sizeof(matprefix)-1);
+		qboolean css = !Q_strncasecmp(filename, cssprefix, sizeof(cssprefix)-1);
+		if (mat || css || !Q_strncasecmp(filename, mdlprefix, sizeof(mdlprefix)-1))
+		{
+			const char *member = filename + (mat ? sizeof(matprefix)-1 : css ? sizeof(cssprefix)-1 : sizeof(mdlprefix)-1);
+			const char *root = css ? fs_css_weapon_assets_path : fs_knife_assets_path;
+			char package[MAX_OSPATH];
+			if (!*root || fs_puremode >= 2)
+				goto fail;
+			if (mat)
+			{
+				if (Q_strcasecmp(COM_GetFileExtension(member, NULL), ".vtf") ||
+				    (Q_strncasecmp(member, "customization/", 14) && Q_strncasecmp(member, "v_models/", 9)))
+					goto fail;
+				Q_snprintfz(legacyasset, sizeof(legacyasset), "materials/models/weapons/%s", member);
+			}
+			else
+			{
+				const char *ext;
+				if (!css && !Q_strncasecmp(member, "v_pist_223.", 11)) ext = member + 10;
+				else if (!css && !Q_strncasecmp(member, "v_snip_ssg08.", 13)) ext = member + 12;
+				else if (!Q_strncasecmp(member, "v_pist_glock18.", 15)) ext = member + 14;
+				else goto fail;
+				if (Q_strcasecmp(ext, ".mdl") && Q_strcasecmp(ext, ".ani") &&
+				    Q_strcasecmp(ext, ".dx90.vtx") && Q_strcasecmp(ext, ".vvd"))
+					goto fail;
+				Q_snprintfz(legacyasset, sizeof(legacyasset), "models/weapons/%s", member);
+			}
+			Q_snprintfz(package, sizeof(package), "%s/%s", root, css ? "cstrike_pak_dir.vpk" : "pak01_dir.vpk");
+			for (search = com_searchpaths; search; search = search->next)
+			{
+				if ((search->flags & (SPF_TEMPORARY|SPF_UNTRUSTED)) || Q_strcasecmp(search->logicalpath, package))
+					continue;
+				fs_finds++;
+				found = search->handle->FindFile(search->handle, loc, legacyasset, NULL);
+				if (found == FF_FOUND)
+				{
+					loc->search = search;
+					lflags |= FSLF_UNCACHED; // Never harvest an alias into the map cache.
+					filename = legacyasset;
+				}
+				else found = FF_NOTFOUND;
+				break;
+			}
+			goto fail;
+		}
+	}
 	// One fixed read-only alias: never let CSS's same-named diffuse win this lookup.
 	if (!strcmp(filename, fs_knife_texture_alias))
 	{
@@ -7378,6 +7438,7 @@ static void FS_ReloadPackFilesFlags(unsigned int reloadflags)
 		Z_Free(oldpaths);
 		oldpaths = next;
 	}
+	FS_SessionMounts_Forget();	//never re-added by a rebuild; CSQC asks again when it needs them
 
 
 	i = orderkey;
@@ -11622,19 +11683,30 @@ static char fs_automounted[FS_MAXAUTOMOUNT][MAX_OSPATH];	//ftesurf (P183): resol
 static int fs_numautomounted;
 static char fs_automountwant[FS_MAXAUTOMOUNT][MAX_OSPATH];	//ftesurf (P184): what the map now loading asked for
 static int fs_numautomountwant;
-// One fixed client asset request may retain its pack for this FS session.
+// Fixed client asset requests may retain their packs for this FS session.
 static double fs_knife_assets_retry;
+#ifndef SERVERONLY
+static double fs_css_weapon_assets_retry;
+#endif
 static void FS_GoldSrc_Forget(void);
+static void FS_SessionMounts_Forget(void)
+{
+	fs_knife_assets_path[0] = 0;
+	fs_knife_assets_retry = 0;
+	fs_css_weapon_assets_path[0] = 0;
+#ifndef SERVERONLY
+	fs_css_weapon_assets_retry = 0;
+	Cvar_ForceSet(&fs_css_weapon_assets, "0");
+	Cvar_ForceSet(&fs_legacy_viewmodels, "0");
+	Cvar_ForceSet(&fs_knife_texture, "0");
+#endif
+}
 static void FS_AutoMount_Forget(void)	//ftesurf (P184): forward-declared at the top of the file, called from FS_FreePaths
 {
 	FS_GoldSrc_Forget();	//P1656
 	fs_numautomounted = 0;
 	fs_numautomountwant = 0;
-	fs_knife_assets_path[0] = 0;
-	fs_knife_assets_retry = 0;
-#ifndef SERVERONLY
-	Cvar_ForceSet(&fs_knife_texture, "0");
-#endif
+	FS_SessionMounts_Forget();
 }
 static qboolean FS_Addon_IsMounted(const char *syspath)
 {
@@ -12755,7 +12827,8 @@ void FS_AutoUnmountStale(void)
 			continue;
 		}
 
-		if (!Q_strcasecmp(fs_automounted[i], fs_knife_assets_path) || FS_Addon_IsListed(fs_automounted[i]))
+		if (!Q_strcasecmp(fs_automounted[i], fs_knife_assets_path) ||
+			!Q_strcasecmp(fs_automounted[i], fs_css_weapon_assets_path) || FS_Addon_IsListed(fs_automounted[i]))
 		{	//Requested viewmodel assets or a listed pack belong to the session now.
 			Con_DPrintf("fs_automount: \"%s\" is retained by this session, leaving it mounted\n", fs_automounted[i]);
 			memmove(fs_automounted[i], fs_automounted[i+1], (fs_numautomounted-i-1)*sizeof(fs_automounted[0]));
@@ -13471,6 +13544,7 @@ static void FS_KnifeMount_f(void)
 	fs_knife_assets_retry = now + 30;
 	if (!FS_Addon_ResolveEx(spec, path, sizeof(path), true))
 	{
+		Cvar_ForceSet(&fs_legacy_viewmodels, "-1");	//CSQC stops asking on its own
 		Con_Printf("fs_knife_mount: installed CS:GO Legacy content not found\n");
 		return;
 	}
@@ -13481,12 +13555,61 @@ static void FS_KnifeMount_f(void)
 	{
 		Q_strncpyz(fs_knife_assets_path, path, sizeof(fs_knife_assets_path));
 		Cvar_ForceSet(&fs_knife_texture, FS_FLocateFile(fs_knife_texture_alias, FSLF_IFFOUND, NULL) ? "1" : "0");
+		Cvar_ForceSet(&fs_legacy_viewmodels, FS_FLocateFile("materials/ftesurf/legacy/customization/paints/anodized_multi/smoke2.vtf", FSLF_IFFOUND, NULL) ? "1" : "-1");
 		fs_knife_assets_retry = now + 1;
 	}
+	else
+		Cvar_ForceSet(&fs_legacy_viewmodels, "-1");
 	if (fs_thread_mutex)
 		Sys_UnlockMutex(fs_thread_mutex);
 	if (mounted)
 		Con_Printf("fs_knife_mount: Legacy assets ready (session only, low priority)\n");
+}
+
+// CSQC cannot use fs_load: that accepts arbitrary paths and saves them. This
+// request is fixed to installed Steam CS:S, doesn't pull in _downloads, and
+// does not purge models or change search order. Already loaded maps stay put.
+static void FS_CSSWeaponMount_f(void)
+{
+	static const char spec[] = "steam:Counter-Strike Source/cstrike";
+	char path[MAX_OSPATH];
+	qboolean mounted = false, nosiblings;
+	double now;
+
+	if (Cmd_Argc() != 1)
+	{
+		Con_Printf("fs_css_weapon_mount: takes no arguments\n");
+		return;
+	}
+	if (fs_puremode >= 2)
+	{	//the alias refuses pure servers anyway; say so instead of "not found"
+		Cvar_ForceSet(&fs_css_weapon_assets, "-1");
+		Con_Printf("fs_css_weapon_mount: not available on a pure server\n");
+		return;
+	}
+	if (*fs_css_weapon_assets_path && FS_FLocateFile("models/ftesurf/css/v_pist_glock18.mdl", FSLF_IFFOUND, NULL))
+		return;
+	now = Sys_DoubleTime();
+	if (Cmd_IsInsecure() && now < fs_css_weapon_assets_retry)
+		return;
+	fs_css_weapon_assets_retry = now + 30;
+	if (FS_Addon_ResolveEx(spec, path, sizeof(path), true))
+	{
+		if (fs_thread_mutex && !Sys_LockMutex(fs_thread_mutex))
+			return;
+		nosiblings = fs_addon_nosiblings;
+		fs_addon_nosiblings = true;
+		mounted = FS_Addon_Mount(spec, ~0u);
+		fs_addon_nosiblings = nosiblings;
+		if (mounted)
+			Q_strncpyz(fs_css_weapon_assets_path, path, sizeof(fs_css_weapon_assets_path));
+		if (fs_thread_mutex)
+			Sys_UnlockMutex(fs_thread_mutex);
+	}
+	mounted = mounted && FS_FLocateFile("models/ftesurf/css/v_pist_glock18.mdl", FSLF_IFFOUND, NULL);
+	Cvar_ForceSet(&fs_css_weapon_assets, mounted ? "1" : "-1");
+	Con_Printf(mounted ? "fs_css_weapon_mount: CS:S assets ready (session only)\n" :
+		"fs_css_weapon_mount: installed Counter-Strike: Source assets not found\n");
 }
 #endif
 
@@ -13850,6 +13973,9 @@ void COM_InitFilesystem (void)
 #ifndef SERVERONLY
 	Cmd_AddCommandD("fs_knife_mount", FS_KnifeMount_f, "Request the one installed CS:GO Legacy pack for local viewmodels this session. No paths/arguments; no mount-list write.");
 	Cvar_Register(&fs_knife_texture, "Filesystem");
+	Cvar_Register(&fs_legacy_viewmodels, "Filesystem");
+	Cmd_AddCommandD("fs_css_weapon_mount", FS_CSSWeaponMount_f, "Request the installed Steam CS:S asset pack for this session. No paths/arguments, downloads, or saved mounts.");
+	Cvar_Register(&fs_css_weapon_assets, "Filesystem");
 #endif
 	Cmd_AddCommandD("fs_unload",  FS_Unload_f,  "nettest: remove a game added with fs_load and rebuild the searchpaths.");
 	Cmd_AddCommandD("fs_loadlist",FS_LoadList_f,"nettest: list the games added with fs_load.");
