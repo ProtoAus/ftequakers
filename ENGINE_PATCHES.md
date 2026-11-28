@@ -1,5 +1,13 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1856 - Angle check stops falsely faulting remote lobby players (reader only, game 0211b974)
+
+**Problem.** The one-frame and sweep angle rules join each move to the screen by the .view tick label, which a remote client stamps late. Live 28 Nov, 17 of 232 fleet runs with sidecars carried an angle FAULT that the P1613 command rule contradicts (95-100% of their moves matched to their own command's frames, 0.00-0.02% off the drawn path).
+
+**Change.** `tools/reccheck.py`: for a client whose median command delay is >= ANG_CMD_REMOTE (2 ticks), where the one-frame or sweep rule would fault, a disagreement on a move lying on its own command's drawn path (a contiguous own-path group) is excused, only when that turns the run's angle FAULT into none (the command rule does not fault, every faulting clock rule clears, no other validation fault). Any excusal keeps `angle_rule` below tight, so rcptcheck stores BLIND, never OK. A run that faults anyway stores today's figures and text unchanged; runs without command numbers are untouched.
+
+**Verified.** Fleet (Pi, read-only, 232 receipts): 17 FAULT -> BLIND, 0 new faults, the 2 historical OK runs stay OK. Differential fuzz up to 20,000 seeds: no new OK, no new FAULT; FAULT -> BLIND only with excusals. Local corpus (390 pairs): one honest remote run FAULT -> BLIND. test_reccheck 1234/0, test_rcptcheck 827/0. Seven independent review rounds (attack and predicate lenses); rounds 1-4 blocking and redesigned (the first design, a command-rule overrule, was withdrawn), rounds 5-7 non-blocking with their findings fixed. Owner go 28 Nov. Known price: a client forging the command column on a remote-looking connection gets BLIND rather than FAULT for lies inside its own drawn path, no better than today's reader already allows by other means. Rides the reader-pin generation.
+
 ## Patch 1859 - Similarity collector re-measures reader-dependent skips (backend + reader, game f3af055e)
 
 **Problem.** Live 28 Nov, 15,237 of 15,873 stored similarity pairs were `unmodelled`/`malformed` skips made by the installed reader, which predates REC 12/14 move rows (P1671). The collector never re-compares a stored pair, so installing the newer reader would have left every one of them a skip for good.
