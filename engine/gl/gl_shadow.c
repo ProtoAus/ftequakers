@@ -3987,6 +3987,31 @@ static void Sh_CascadeEpilogue(dlight_t *l, const vec3_t sundir, int txsize)
 	Sh_OrthoAlignToFrustum(l, txsize);
 	BE_SelectDLight(l, vec3_origin, l->axis, LSHADER_SMAP|LSHADER_ORTHO);
 }
+/*FTESurf Patch 1883: the main view's far sun cascades take turns.
+  All four cascades were drawn every frame, the outer ones holding nearly all of the world they cast (bhop_canals: radii
+  148/444/1333/4000).  Now the inner half is drawn every frame and the outer half one a frame in turn, each keeping the
+  depth and the slot matrix it was drawn with until its next turn -- a matched pair, so the static world shadows exactly
+  as it did; only a caster that moves more than the second cascade's radius from the eye updates every other frame
+  (85 times a second at 170 fps).  A setting they use changing, anything else drawn into the atlas (a portal's
+  cascades, r_shadows_capturecascades 0), or the eye moving r_shadows_cascadestagger_move of a cascade's radius since
+  it was drawn draws it (or all) again at once.*/
+static cvar_t r_shadows_cascadestagger = CVARD("r_shadows_cascadestagger", "1", "FTESurf Patch 1883: 1 = the outer half of the main view's sun cascades are drawn one a frame in turn (each every other frame at 4 cascades), keeping their depth and matrix between; the inner half every frame. 0 = every cascade every frame, as before Patch 1883.");
+static cvar_t r_shadows_cascadestagger_move = CVARD("r_shadows_cascadestagger_move", "0.25", "FTESurf Patch 1883: the share of a kept sun cascade's radius the eye may move before it is drawn again out of turn.");
+static struct
+{
+	qboolean valid;
+	model_t *model;
+	unsigned int world;
+	int cascades, txsize;
+	uploadfmt_t fmt;
+	float outer, ratio, distance, bias;
+	vec3_t sundir;
+	qboolean worldcast, nothrowfade;
+	vec3_t eye[SH_MAX_CASCADES];
+	unsigned int turn;
+	fakeshadowstate_t st;
+} sh_maincascades;
+
 //FTESurf Patch 1880: atlas = the shadowmap the cascades are drawn into (2 the views', 3 the 3D sky room's kept one); false
 //when none were drawn (the caller's slot state is then the single map's)
 static qboolean Sh_GenerateCascadeAtlas(dlight_t *l, int cascades, int txsize, int atlas)
@@ -4009,6 +4034,8 @@ static qboolean Sh_GenerateCascadeAtlas(dlight_t *l, int cascades, int txsize, i
 	float outer, ratio;
 	static int dbgframe;
 	qboolean dbg = r_shadows_cascade_debug.ival && ((dbgframe++ % 60) == 0);
+	unsigned int due, all;	//FTESurf Patch 1883
+	qboolean keep;
 
 	Sh_CascadeCellRect(0, cascades, txsize, &cx, &cy, &csize);
 	if (csize - 2*inset < 64)
@@ -4020,6 +4047,35 @@ static qboolean Sh_GenerateCascadeAtlas(dlight_t *l, int cascades, int txsize, i
 	outer = max(64.0f, r_shadows_cascade_dist.value);	/*radius of the OUTERMOST (last) cascade*/
 	ratio = bound(1.5f, r_shadows_cascade_ratio.value, 8.0f);	/*each inner cascade is 1/ratio the next one out*/
 
+	//FTESurf Patch 1883: which cascades this frame draws (bit s); the main view may keep its outer half's
+	all = (1u<<cascades)-1;
+	due = all;
+	keep = atlas == 2 && !r_refdef.recurse && r_shadows_cascadestagger.ival && cascades > 2;
+	if (atlas == 2 && !keep)
+		sh_maincascades.valid = false;	//whatever else draws into the views' atlas spoils the cells the main view kept
+	if (keep && sh_maincascades.valid && sh_maincascades.model == cl.worldmodel && sh_maincascades.world == sh_skycascadesworld &&
+		sh_maincascades.cascades == cascades && sh_maincascades.txsize == txsize && sh_maincascades.fmt == fmt &&
+		sh_maincascades.outer == outer && sh_maincascades.ratio == ratio && sh_maincascades.distance == r_shadows_distance.value &&
+		sh_maincascades.bias == r_shadows_bias.value && VectorCompare(sh_maincascades.sundir, sundir) &&
+		sh_maincascades.worldcast == worldcast && sh_maincascades.nothrowfade == nothrowfade &&
+		GLBE_ShadowAtlasKept(atlas, txsize, txsize, fmt))
+	{
+		int far = cascades/2, turn = sh_maincascades.turn++ % (cascades - far);
+		float mv = max(0, r_shadows_cascadestagger_move.value);
+		due = 0;
+		for (s = 0; s < cascades; s++)
+		{
+			float radius = max(16.0f, outer / (float)pow(ratio, (double)(cascades-1-s)));
+			vec3_t d;
+			VectorSubtract(r_origin, sh_maincascades.eye[s], d);
+			if (s < far || s - far == turn || DotProduct(d, d) > radius*radius*mv*mv)
+				due |= 1u<<s;
+		}
+		GLBE_RestoreFakeShadowState(&sh_maincascades.st, atlas);	//the kept cells' matrices
+	}
+	if (keep)
+		sh_maincascades.valid = false;	//until this draw completes
+
 	memcpy(oprojs, r_refdef.m_projection_std,  sizeof(oprojs));
 	memcpy(oprojv, r_refdef.m_projection_view, sizeof(oprojv));
 	memcpy(oview,  r_refdef.m_view,            sizeof(oview));
@@ -4028,7 +4084,7 @@ static qboolean Sh_GenerateCascadeAtlas(dlight_t *l, int cascades, int txsize, i
 	oldcolourmask   = r_refdef.colourmask;
 	oldexternalview = r_refdef.externalview;
 
-	if (!GLBE_BeginShadowMap(atlas, txsize, txsize, fmt, &restorefbo))
+	if (!GLBE_BeginShadowMapEx(atlas, txsize, txsize, fmt, &restorefbo, due == all))
 		{ GLBE_SetFakeShadowCount(1); return false; }
 
 	sh_cascade_batch = !COM_CheckParm("-nosuncascadebatch");
@@ -4046,10 +4102,16 @@ static qboolean Sh_GenerateCascadeAtlas(dlight_t *l, int cascades, int txsize, i
 	{
 		float radius;
 
+		if (!(due & (1u<<s)))
+			continue;	//FTESurf Patch 1883: kept, with its matrix
 		Sh_CascadeCellRect(s, cascades, txsize, &cx, &cy, &csize);
 		smsize = csize - 2*inset;
 		if (smsize < 16)
 			continue;
+		if (due != all)
+			GLBE_ClearShadowCell(cx, txsize - (cy + csize), csize, csize);	//this cell only, its border included
+		if (keep)
+			VectorCopy(r_origin, sh_maincascades.eye[s]);
 
 		//concentric radius: the last cascade is `outer`, each inner one 1/ratio of the next.  So cascade
 		//s has radius outer / ratio^(cascades-1-s) -- geometric from a tight near box to the full reach.
@@ -4114,6 +4176,23 @@ static qboolean Sh_GenerateCascadeAtlas(dlight_t *l, int cascades, int txsize, i
 		GLBE_ClearFakeShadowSlot(s, cell);
 	}
 	GLBE_SetFakeShadowCount(cascades);
+	if (keep)
+	{	//FTESurf Patch 1883
+		sh_maincascades.model = cl.worldmodel;
+		sh_maincascades.world = sh_skycascadesworld;
+		sh_maincascades.cascades = cascades;
+		sh_maincascades.txsize = txsize;
+		sh_maincascades.fmt = fmt;
+		sh_maincascades.outer = outer;
+		sh_maincascades.ratio = ratio;
+		sh_maincascades.distance = r_shadows_distance.value;
+		sh_maincascades.bias = r_shadows_bias.value;
+		VectorCopy(sundir, sh_maincascades.sundir);
+		sh_maincascades.worldcast = worldcast;
+		sh_maincascades.nothrowfade = nothrowfade;
+		GLBE_SaveFakeShadowState(&sh_maincascades.st);
+		sh_maincascades.valid = true;
+	}
 
 	memcpy(r_refdef.m_view,            oview,  sizeof(r_refdef.m_view));
 	memcpy(r_refdef.m_projection_std,  oprojs, sizeof(r_refdef.m_projection_std));
@@ -7237,6 +7316,8 @@ void Sh_RegisterCvars(void)
 	Cvar_Register (&r_shadows_skyroomrate,				REALTIMELIGHTING);	//FTESurf Patch 1880
 	Cvar_Register (&r_shadows_skyroommove,				REALTIMELIGHTING);	//FTESurf Patch 1880
 	Cvar_Register (&r_shadows_capturecascades,			REALTIMELIGHTING);	//FTESurf Patch 1882
+	Cvar_Register (&r_shadows_cascadestagger,			REALTIMELIGHTING);	//FTESurf Patch 1883
+	Cvar_Register (&r_shadows_cascadestagger_move,		REALTIMELIGHTING);	//FTESurf Patch 1883
 	Cvar_Register (&r_shadows_worldcull,				REALTIMELIGHTING);
 	Cvar_Register (&r_shadows_caster_sunvis,			REALTIMELIGHTING);
 	Cvar_Register (&r_shadows_throwdirection,			REALTIMELIGHTING);

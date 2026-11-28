@@ -1018,6 +1018,8 @@ void GLBE_SceneMSAA_ReadEnd(void);
 #endif
 
 qboolean GLBE_BeginShadowMap(int id, int w, int h, uploadfmt_t encoding, int *restorefbo);
+qboolean GLBE_BeginShadowMapEx(int id, int w, int h, uploadfmt_t encoding, int *restorefbo, qboolean clear);	//FTESurf Patch 1883
+void GLBE_ClearShadowCell(int x, int y, int w, int h);	//FTESurf Patch 1883: GL bottom-origin pixels of the bound shadow map
 void GLBE_EndShadowMap(int restorefbo);
 void GLBE_SetupForShadowMap(dlight_t *dl, int texwidth, int texheight, float shadowscale);
 

@@ -1504,7 +1504,23 @@ void GLBE_UseShadowAtlas(int id)
 }
 
 int GLBE_BeginRenderBuffer_DepthOnly(texid_t depthtexture);
+qboolean GLBE_BeginShadowMapEx(int id, int w, int h, uploadfmt_t encoding, int *restorefbo, qboolean clear);
 qboolean GLBE_BeginShadowMap(int id, int w, int h, uploadfmt_t encoding, int *restorefbo)
+{
+	return GLBE_BeginShadowMapEx(id, w, h, encoding, restorefbo, true);
+}
+//FTESurf Patch 1883: clear one cell of the bound shadow map (GL's bottom-origin pixels), the rest kept
+void GLBE_ClearShadowCell(int x, int y, int w, int h)
+{
+	qglEnable(GL_SCISSOR_TEST);
+	qglScissor(x, y, w, h);
+	GL_ForceDepthWritable();
+	qglClear(GL_DEPTH_BUFFER_BIT);
+	qglDisable(GL_SCISSOR_TEST);
+	BE_Scissor(NULL);	//the backend's own idea of the scissor again
+}
+//FTESurf Patch 1883: clear = false keeps what the map holds (the caller clears the cells it draws again)
+qboolean GLBE_BeginShadowMapEx(int id, int w, int h, uploadfmt_t encoding, int *restorefbo, qboolean clear)
 {
 	if (!gl_config.ext_framebuffer_objects)
 		return false;
@@ -1593,7 +1609,8 @@ qboolean GLBE_BeginShadowMap(int id, int w, int h, uploadfmt_t encoding, int *re
 	BE_Scissor(NULL);
 	qglViewport(0, 0, w, h);
 	GL_ForceDepthWritable();
-	qglClear (GL_DEPTH_BUFFER_BIT);
+	if (clear)
+		qglClear (GL_DEPTH_BUFFER_BIT);
 #ifdef SHADOWDBG_COLOURNOTDEPTH
 	qglColorMask(TRUE,TRUE,TRUE,TRUE);
 	qglClearColor(1,1,1,1);
