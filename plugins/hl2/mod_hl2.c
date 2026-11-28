@@ -1119,7 +1119,18 @@ static const void *Mod_HL2_GetExternalBlock(hl2parsecontext_t *ctx, const void *
 
 		if (!ctx->ani)
 		{
-			vfsfile_t *f = filefuncs->OpenVFS((const char *)ctx->header + ctx->header->ofs_aniname, "rb", FS_GAME);
+			const char *aniname;
+			char scoped[MAX_QPATH];
+			vfsfile_t *f;
+			if (!strncmp(ctx->mod->name, "models/ftesurf/legacy/", sizeof("models/ftesurf/legacy/")-1))
+			{
+				// These two admitted pistols have ANI files beside their MDL. Keep
+				// the ANI scoped too; the embedded path points at the global VFS.
+				Q_snprintfz(scoped, sizeof(scoped), "%.*s.ani", (int)strlen(ctx->mod->name)-4, ctx->mod->name);
+				aniname = scoped;
+			}
+			else aniname = (const char *)ctx->header + ctx->header->ofs_aniname;
+			f = filefuncs->OpenVFS(aniname, "rb", FS_GAME);
 			if (f)
 			{
 				size_t sz = f->GetLen(f);
@@ -1576,6 +1587,16 @@ qboolean QDECL Mod_LoadHL2Model (model_t *mod, void *buffer, size_t fsize)
 		}
 		result  = Mod_HL2_LoadVVD(&ctx, vvd, vvdsize);
 		result &= Mod_HL2_LoadVTX(&ctx, vtx, vtxsize);
+		if (!strncmp(mod->name, "models/ftesurf/legacy/", sizeof("models/ftesurf/legacy/")-1))
+		{
+			galiasinfo_t *surface = mod->meshinfo;
+			unsigned int indices = 0;
+			for (; surface; surface = surface->nextsurf) indices += surface->numindexes;
+			Con_DPrintf("%s: Legacy mesh %s, %u verts, %u indices\n", mod->name, result ? "ready" : "unavailable", ctx.numverts, indices);
+			// Never advertise this visual-only model as loaded using the generic
+			// animation-only fallback: CSQC needs to restore the CSS model instead.
+			if (!result || !indices) { plugfuncs->Free(vvd); plugfuncs->Free(vtx); return false; }
+		}
 		plugfuncs->Free(vvd);
 		plugfuncs->Free(vtx);
 	}
