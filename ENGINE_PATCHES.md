@@ -1,5 +1,13 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1858 - Similarity collector resumes a budget-limited source rotation (backend only)
+
+**Problem.** Live 28 Nov the collector's source cursor sat at the newest run. Each pass wrapped to id 0 and judged 653 complete runs before the oldest incomplete one, about 1.24M SQLite steps against the 1M pass budget, so the read was abandoned on every pass ("sims SQL read limit reached" on 251 of the last 300 sweeps) and 65 runs stayed incomplete for 4-23 days. Fleet coverage otherwise 99.6% of 15,933 same-leg pairs.
+
+**Change.** Source selection reads candidate run ids 8 at a time and judges only those per read (starting at the batch's first id, so stretches of non-run rows are walked once). When a pass stops short -- read limit, deadline, time budget, or a caller that stops before admitting the row found -- it commits the source cursor past the runs it found ineligible; a rotation that fits writes nothing. One batch must fit the budget: about 26 VM steps a peer, so maps under ~4,500 runs (largest live: 94).
+
+**Verified.** On a snapshot of the live database the parent stays at cursor 87429 for 8 passes; P1858 reaches run 44365 on pass 3. `surfd/test_simcheck_rotation_resume.py` 6/6 (starvation, a fitting rotation writes nothing, the cursor never passes an eligible run across 40 budgets, deadline between reads, deadline after the finding read, a 60,000-row evidence stretch); the parent fails 5 of them (all but the fitting rotation), and each review-round arm fails on the commit before its fix. All simcheck suites pass; a reviewer's 150-database fuzz found no skipped work and full liveness. Reviewed (rounds 1-2). Rides the next surfd generation.
+
 ## Patch 1857 - Review-only season strafe flag (tool, timer and admin panel; no engine code)
 
 **Problem.** strafestats' strafe-quality step (the 280 u/s discontinuity) cannot judge one run: a full-power optimiser sits about 2.5 standard deviations from honest on a single run. Averaged over a season it separates (18 and 28 Nov measurements), but nothing computed it routinely or showed it to a reviewer.
