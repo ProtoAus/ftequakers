@@ -193,7 +193,9 @@ static void Mod_HL2_IncludeWeaponAnimations(hl2parsecontext_t *ctx, size_t paren
 	galiasanimation_t *animations;
 	char normalized[MAX_QPATH];
 	qboolean loaded = false;
-	qboolean inlinepose = (!strcmp(ctx->mod->name, "models/weapons/v_knife.mdl") ||
+	// P1862: the scoped Legacy guns (fs.c alias) carry their own frame animations and .ani.
+	qboolean scoped = !Q_strncasecmp(ctx->mod->name, "models/ftesurf/legacy/", 22);
+	qboolean inlinepose = (scoped || !strcmp(ctx->mod->name, "models/weapons/v_knife.mdl") ||
 		!strcmp(ctx->mod->name, "models/weapons/v_knife_gg.mdl"));
 
 	if (ctx->header->version != 49 || !ctx->header->num_bones || ctx->num_animations) return;
@@ -224,7 +226,13 @@ static void Mod_HL2_IncludeWeaponAnimations(hl2parsecontext_t *ctx, size_t paren
 	{
 		path = HL2_BoundedName(data, size, 0, h->ofs_aniname);
 		failure = "external animation file";
-		if (!HL2_WeaponPath(path, normalized, sizeof(normalized), ".ani")) goto done;
+		if (scoped)
+		{	// the embedded name is the global VFS path; read the alias beside the MDL instead
+			size_t length = strlen(ctx->mod->name);
+			if (length < 5 || length+1 > sizeof(normalized)) goto done;
+			Q_snprintfz(normalized, sizeof(normalized), "%.*s.ani", (int)length-4, ctx->mod->name);
+		}
+		else if (!HL2_WeaponPath(path, normalized, sizeof(normalized), ".ani")) goto done;
 		ani = HL2_WeaponFile(normalized, 64*1024*1024, &anisize);
 		if (!ani) goto done;
 	}
@@ -299,7 +307,7 @@ static void Mod_HL2_IncludeWeaponAnimations(hl2parsecontext_t *ctx, size_t paren
 	loaded = true;
 	Con_DPrintf("%s: imported %u named-bone animations\n", ctx->mod->name, (unsigned int)count);
 done:
-	if (!loaded) Con_Printf("%s: unsupported or invalid knife animations (%s)\n", ctx->mod->name, failure);
+	if (!loaded) Con_Printf("%s: unsupported or invalid Legacy animations (%s)\n", ctx->mod->name, failure);
 	plugfuncs->Free(pose); plugfuncs->Free(ani);
 	if (data != parent) plugfuncs->Free(data);
 }

@@ -3353,6 +3353,7 @@ static int FS_FLocateFilePurpose(const char *filename, unsigned int lflags, floc
 			{
 				const char *ext;
 				if (!css && !Q_strncasecmp(member, "v_pist_223.", 11)) ext = member + 10;
+				else if (!css && !Q_strncasecmp(member, "v_snip_ssg08.", 13)) ext = member + 12;
 				else if (!Q_strncasecmp(member, "v_pist_glock18.", 15)) ext = member + 14;
 				else goto fail;
 				if (Q_strcasecmp(ext, ".mdl") && Q_strcasecmp(ext, ".ani") &&

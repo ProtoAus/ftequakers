@@ -1476,7 +1476,15 @@ qboolean QDECL Mod_LoadHL2Model (model_t *mod, void *buffer, size_t fsize)
 				Q_strlcpy(a->name, (const char*)in + in->name_ofs, sizeof(a->name));
 
 				for (p = 0; p < a->numposes; p++)
-					Mod_HL2_ReadPose(&ctx, in, p, (matrix3x4*)a->boneofs+p*ctx.header->num_bones, ctx.header->num_bones, (const hl2mdlbone_t*)((const qbyte*)ctx.header + ctx.header->ofs_bones));
+				{
+					matrix3x4 *out = (matrix3x4*)a->boneofs+p*ctx.header->num_bones;
+					// CS:GO frame animations (0x40) are not RLE pose chains; mod_hl2_weapon.h
+					// decodes the ones viewmodels use. Never walk them here (P1861's bone-72 reads).
+					if (in->loop & 0x40)
+						memcpy(out, ctx.baserelpose, sizeof(*out)*ctx.header->num_bones);
+					else
+						Mod_HL2_ReadPose(&ctx, in, p, out, ctx.header->num_bones, (const hl2mdlbone_t*)((const qbyte*)ctx.header + ctx.header->ofs_bones));
+				}
 				a++;
 			}
 			ctx.num_animations = a-ctx.ofs_animations;
