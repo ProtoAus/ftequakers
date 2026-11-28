@@ -8,6 +8,14 @@
 
 **Verified.** ASan client + plugin built from this commit alone, main's own progs, `surf_pantheon_css`, Butterfly, knife menu rows 34-49 (software EGL, isolated basedir): with the guard reverted, the first row (Glove Anarchist) gives an ASan heap-buffer-overflow WRITE in `Mod_HL2_ReadPose` and the client aborts; with it, all 16 rows load and draw normally posed hands, no sanitizer report, clean exit. The same pair on the held weapon-workshop branch (13 more faction rigs, 9 glove kits) also faults without the guard and passes with it. The Linux release plugin and a Win64 cross-build (`fteplug_hl2_x64.dll`, mingw-w64) compile with no warning in `mod_hl2.c`. Not run on Windows or a desktop GPU.
 
+## Patch 1864 - Lobby writes under a sweep's held write lock answer clearly; run submits and tournament results wait longer (backend only, game 053cb323)
+
+**Problem.** 28 Nov 04:50:25Z and 06:05:24Z a lobby heartbeat and two tournament game writes got HTTP 500 "database is locked" (BEGIN IMMEDIATE past connect()'s 5 s busy wait) while a sweep pass held the write lock; a 'storage' reply during a live match marks it broken and aborts it.
+
+**Change.** `surfd/surfd.py`, `surfd/tournaments.py`: db_locked() classifies busy by sqlite result code (SQLITE_LOCKED stays 500: a same-connection conflict is a code fault); heartbeat answers 503 + Retry-After 2 at once (it repeats); /api/run waits up to RUN_BUSY_MS 10 s (a lobby never resends a run) and run_db_done() restores the normal wait after its main commit; /api/tournaments/game waits up to TOUR_BUSY_MS 8 s; locks log a warning, not a traceback.
+
+**Verified.** surfd/test_db_busy.py 10/10 (8 fail on the parent; each reviewer revert fails its own test); test_surfd, test_tournaments, test_social, test_admin pass; test_ranked's one ban-routes check and test_board's intermittent migration race fail the same on the parent. Two review rounds (control flow/availability), both non-blocking. Known limit (measured): during a long lock 12 heartbeats x 5 s fill the 4 request threads and reads stall on parent and P1864 alike, and the lobby's TQ_HTTP_WAIT counts queue time, so the 8 s wait helps only while the queue is short; the larger lever is shorter sweep lock holds. Rides the next surfd generation.
+
 ## Patch 1863 - No save while a native load is still opening; a load of a save cut there is cancelled (server QC, game 5d783c21)
 
 **Problem.** 27 Nov: 15 segmented lobby runs of one player faulted in reccheck ("savejoin requires a new session before movement" / "session at N, its pause at N-1"). Cause, found by review and reproduced in a real game: a save taken after a native (snapshot) load but before that load's session opened (P1827 keeps the restored epoch unopened until the save-lock is released and a move is admitted) cuts its recording prefix inside the load's open pause; loading it later writes a bare `resume` there.
