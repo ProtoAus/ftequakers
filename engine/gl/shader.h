@@ -1037,6 +1037,17 @@ void GLBE_ClearFakeShadowSlot(int slot, const vec4_t cell);		//neutral matrix: p
 void GLBE_SetFakeShadowSlotInfo(int slot, const vec4_t info);	//nettest: per-slot metadata (l_fakeshadowinfo) -- x = sun-suppression factor for perspective lamp cells
 texid_t GLBE_GetFakeShadowAtlasTexture(void);					//nettest: the atlas depth texture (r_shadows_propshadows_showatlas debug view)
 void GLBE_FlushProjection(void);								//P114b: invalidate the cached render projection so the next per-cell depth pass re-reads r_refdef.m_projection_std
+typedef struct
+{	//FTESurf Patch 1880: the receivers' sun-cascade slot state, kept with the atlas it was drawn into (gl_shadow.c: the 3D sky room's)
+	float matrix[MAX_FAKESHADOW_SLOTS][16];
+	vec4_t cell[MAX_FAKESHADOW_SLOTS];
+	vec4_t info[MAX_FAKESHADOW_SLOTS];
+	int count;
+} fakeshadowstate_t;
+void GLBE_SaveFakeShadowState(fakeshadowstate_t *st);
+void GLBE_RestoreFakeShadowState(const fakeshadowstate_t *st, int atlas);
+qboolean GLBE_ShadowAtlasKept(int id, int w, int h, uploadfmt_t encoding);
+void GLBE_UseShadowAtlas(int id);
 
 qboolean GLVID_ApplyGammaRamps (unsigned int size, unsigned short *ramps);	//called when gamma ramps need to be reapplied
 qboolean GLVID_Init (rendererstate_t *info, unsigned char *palette);		//the platform-specific function to init gl state

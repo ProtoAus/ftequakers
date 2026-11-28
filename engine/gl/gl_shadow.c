@@ -2538,6 +2538,7 @@ static qboolean sh_fakecell_active;
 static int sh_fakecell_x, sh_fakecell_y;
 
 static void Sh_DrawSunWorldChunks(dlight_t *l);	//FTESurf Patch 1765
+extern int r_skyroomlevel;	//gl_warp.c, FTESurf Patch 1018: the recursion level the 3D sky room draws at, else -1
 static qboolean sh_drawsunworld;
 static qboolean sh_cascade_batch;
 static void Sh_GenShadowFace(dlight_t *l, vec3_t axis[3], int lighttype, shadowmesh_t *smesh, int face, int smsize, int txsize, float proj[16], const qbyte *lightpvs)
@@ -3734,6 +3735,7 @@ static sunbatch_t *sh_sunbatches;	//per cl.worldmodel shadowbatch, refilled for 
 static unsigned int sh_numsunbatches;
 static mesh_t **sh_sunrun;
 static unsigned int sh_sunrunmax;
+static unsigned int sh_skycascadesworld;	//FTESurf Patch 1880: bumped whenever the world's shadow data is freed
 static void Sh_SunWorldMeshFree(void)
 {
 	unsigned int i;
@@ -3753,6 +3755,7 @@ static void Sh_SunWorldMeshFree(void)
 	sh_sunworldmodel = NULL;
 	sh_sunworldsurfaces = NULL;
 	sh_sunworldbuilt = false;
+	sh_skycascadesworld++;	//FTESurf Patch 1880: the sky room's kept cascades were drawn from the world being freed
 }
 typedef struct
 {
@@ -3963,7 +3966,30 @@ static void Sh_DrawSunWorldChunks(dlight_t *l)
 	}
 }
 
-static void Sh_GenerateCascadeAtlas(dlight_t *l, int cascades, int txsize)
+static uploadfmt_t Sh_ShadowDepthFormat(void)
+{
+	if (r_shadow_shadowmapping_depthbits.ival >= 32 && sh_config.texfmt[PTI_DEPTH32])
+		return PTI_DEPTH32;
+	if (r_shadow_shadowmapping_depthbits.ival >= 24 && sh_config.texfmt[PTI_DEPTH24])
+		return PTI_DEPTH24;
+	if (r_shadow_shadowmapping_depthbits.ival >= 24 && sh_config.texfmt[PTI_DEPTH24_8])
+		return PTI_DEPTH24_8;
+	return PTI_DEPTH16;
+}
+//leave a sane sun slot selected for the forward pass (matches the direction atlas epilogue).
+static void Sh_CascadeEpilogue(dlight_t *l, const vec3_t sundir, int txsize)
+{
+	l->radius = r_shadows_distance.value;
+	VectorCopy(sundir, l->axis[0]);
+	VectorNormalize(l->axis[0]);
+	VectorVectors(l->axis[0], l->axis[1], l->axis[2]);
+	VectorNegate(l->axis[1], l->axis[1]);
+	Sh_OrthoAlignToFrustum(l, txsize);
+	BE_SelectDLight(l, vec3_origin, l->axis, LSHADER_SMAP|LSHADER_ORTHO);
+}
+//FTESurf Patch 1880: atlas = the shadowmap the cascades are drawn into (2 the views', 3 the 3D sky room's kept one); false
+//when none were drawn (the caller's slot state is then the single map's)
+static qboolean Sh_GenerateCascadeAtlas(dlight_t *l, int cascades, int txsize, int atlas)
 {
 	qboolean nothrowfade = (r_shadows_sunfloor.vec4[0] + r_shadows_sunfloor.vec4[1] + r_shadows_sunfloor.vec4[2] > 0);
 	//FTESurf Patch 1765: the world casts only on a cascade map (r_shadows_sunfloor: Strata's env_cascade_light), whose
@@ -3986,16 +4012,9 @@ static void Sh_GenerateCascadeAtlas(dlight_t *l, int cascades, int txsize)
 
 	Sh_CascadeCellRect(0, cascades, txsize, &cx, &cy, &csize);
 	if (csize - 2*inset < 64)
-		{ GLBE_SetFakeShadowCount(1); return; }	/*r_shadows_res too small to subdivide*/
+		{ GLBE_SetFakeShadowCount(1); return false; }	/*r_shadows_res too small to subdivide*/
 
-	if (r_shadow_shadowmapping_depthbits.ival >= 32 && sh_config.texfmt[PTI_DEPTH32])
-		fmt = PTI_DEPTH32;
-	else if (r_shadow_shadowmapping_depthbits.ival >= 24 && sh_config.texfmt[PTI_DEPTH24])
-		fmt = PTI_DEPTH24;
-	else if (r_shadow_shadowmapping_depthbits.ival >= 24 && sh_config.texfmt[PTI_DEPTH24_8])
-		fmt = PTI_DEPTH24_8;
-	else
-		fmt = PTI_DEPTH16;
+	fmt = Sh_ShadowDepthFormat();
 
 	VectorCopy(l->axis[0], sundir);	/*the throw direction the caller set up; every cascade uses it*/
 	outer = max(64.0f, r_shadows_cascade_dist.value);	/*radius of the OUTERMOST (last) cascade*/
@@ -4009,8 +4028,8 @@ static void Sh_GenerateCascadeAtlas(dlight_t *l, int cascades, int txsize)
 	oldcolourmask   = r_refdef.colourmask;
 	oldexternalview = r_refdef.externalview;
 
-	if (!GLBE_BeginShadowMap(2, txsize, txsize, fmt, &restorefbo))
-		{ GLBE_SetFakeShadowCount(1); return; }
+	if (!GLBE_BeginShadowMap(atlas, txsize, txsize, fmt, &restorefbo))
+		{ GLBE_SetFakeShadowCount(1); return false; }
 
 	sh_cascade_batch = !COM_CheckParm("-nosuncascadebatch");
 	r_refdef.externalview = true;	//never any viewmodels
@@ -4108,14 +4127,87 @@ static void Sh_GenerateCascadeAtlas(dlight_t *l, int cascades, int txsize)
 	GLBE_EndShadowMap(restorefbo);
 	GL_ViewportUpdate();
 
-	//leave a sane sun slot selected for the forward pass (matches the direction atlas epilogue).
-	l->radius = r_shadows_distance.value;
-	VectorCopy(sundir, l->axis[0]);
-	VectorNormalize(l->axis[0]);
-	VectorVectors(l->axis[0], l->axis[1], l->axis[2]);
-	VectorNegate(l->axis[1], l->axis[1]);
-	Sh_OrthoAlignToFrustum(l, txsize);
-	BE_SelectDLight(l, vec3_origin, l->axis, LSHADER_SMAP|LSHADER_ORTHO);
+	Sh_CascadeEpilogue(l, sundir, txsize);
+	return true;
+}
+
+/*FTESurf Patch 1880: the 3D sky room's sun cascades, kept between frames.
+  GLBE_DrawWorld runs Sh_GenerateFakeShadows for every view it draws, and the sky room's view is drawn first, from inside
+  the main view's sky batches: it drew four cascades around the sky camera every frame, then the main view drew its own
+  four over them (r_speeds: 8 shadow-map sides a frame at r_shadows_cascades 4 on bhop_canals).  The sky room is static
+  geometry and its camera moves at 1/scale of the eye's speed, so it now keeps its cascades in an atlas of its own
+  (shadowmap 3) together with the slot matrices they were drawn with, and draws them again only when they could differ:
+  a setting they depend on changed, its camera moved r_shadows_skyroommove of the nearest cascade's radius, or
+  1/r_shadows_skyroomrate seconds passed (for anything that moves in a sky room).  Depth and matrices stay a matched pair,
+  so a kept cascade shadows exactly as it did the frame it was drawn; between redraws only the nested boxes' centre lags
+  the sky camera by at most that fraction of the nearest one.*/
+static cvar_t r_shadows_skyroomrate = CVARD("r_shadows_skyroomrate", "10", "FTESurf Patch 1880: on a Source map with sun cascades, how many times a second at most the 3D sky room's own cascades are drawn again (they are kept, with their matrices, in an atlas of their own between); they are also drawn again when a setting they use changes or the sky camera moves r_shadows_skyroommove of the nearest cascade's radius. 0: every frame, as before Patch 1880 (the sky room then draws into the views' atlas).");
+static cvar_t r_shadows_skyroommove = CVARD("r_shadows_skyroommove", "0.125", "FTESurf Patch 1880: the share of the 3D sky room's nearest sun cascade radius its camera may move before its kept cascades are drawn again.");
+static struct
+{
+	qboolean valid;
+	model_t *model;
+	unsigned int world;
+	int cascades, txsize;
+	uploadfmt_t fmt;
+	float outer, ratio, distance, bias;
+	vec3_t sundir;
+	qboolean worldcast, nothrowfade;
+	vec3_t eye;
+	double time;
+	unsigned int draws, kept;	//r_shadows_cascade_debug
+	fakeshadowstate_t st;
+} sh_skycascades;
+static void Sh_SkyroomCascades(dlight_t *l, int cascades, int txsize)
+{
+	qboolean nothrowfade = (r_shadows_sunfloor.vec4[0] + r_shadows_sunfloor.vec4[1] + r_shadows_sunfloor.vec4[2] > 0);
+	qboolean worldcast = nothrowfade && Sh_SunWorldMesh();
+	float outer = max(64.0f, r_shadows_cascade_dist.value);
+	float ratio = bound(1.5f, r_shadows_cascade_ratio.value, 8.0f);
+	float nearest = max(16.0f, outer / (float)pow(ratio, (double)(cascades-1)));
+	uploadfmt_t fmt = Sh_ShadowDepthFormat();
+	vec3_t sundir, d;
+	int cx, cy, csize;
+	VectorCopy(l->axis[0], sundir);
+	VectorSubtract(r_origin, sh_skycascades.eye, d);
+	if (sh_skycascades.valid && sh_skycascades.model == cl.worldmodel && sh_skycascades.world == sh_skycascadesworld && sh_skycascades.cascades == cascades &&
+		sh_skycascades.txsize == txsize && sh_skycascades.fmt == fmt && sh_skycascades.outer == outer &&
+		sh_skycascades.ratio == ratio && sh_skycascades.distance == r_shadows_distance.value &&
+		sh_skycascades.bias == r_shadows_bias.value && VectorCompare(sh_skycascades.sundir, sundir) &&
+		sh_skycascades.worldcast == worldcast && sh_skycascades.nothrowfade == nothrowfade &&
+		realtime >= sh_skycascades.time && realtime - sh_skycascades.time < 1.0 / r_shadows_skyroomrate.value &&
+		DotProduct(d, d) <= nearest*nearest * r_shadows_skyroommove.value*r_shadows_skyroommove.value &&
+		GLBE_ShadowAtlasKept(3, txsize, txsize, fmt))
+	{	//as the draw below leaves it: the receivers' slots and atlas, the shadow-map scale, and the sun selected
+		Sh_CascadeCellRect(0, cascades, txsize, &cx, &cy, &csize);
+		GLBE_RestoreFakeShadowState(&sh_skycascades.st, 3);
+		GLBE_SetupForShadowMap(l, txsize, txsize, (csize-2*16)/(float)txsize);
+		Sh_CascadeEpilogue(l, sundir, txsize);
+		sh_skycascades.kept++;
+		return;
+	}
+	sh_skycascades.valid = false;
+	if (!Sh_GenerateCascadeAtlas(l, cascades, txsize, 3))
+		return;
+	sh_skycascades.model = cl.worldmodel;
+	sh_skycascades.world = sh_skycascadesworld;
+	sh_skycascades.cascades = cascades;
+	sh_skycascades.txsize = txsize;
+	sh_skycascades.fmt = fmt;
+	sh_skycascades.outer = outer;
+	sh_skycascades.ratio = ratio;
+	sh_skycascades.distance = r_shadows_distance.value;
+	sh_skycascades.bias = r_shadows_bias.value;
+	VectorCopy(sundir, sh_skycascades.sundir);
+	sh_skycascades.worldcast = worldcast;
+	sh_skycascades.nothrowfade = nothrowfade;
+	VectorCopy(r_origin, sh_skycascades.eye);
+	sh_skycascades.time = realtime;
+	GLBE_SaveFakeShadowState(&sh_skycascades.st);
+	sh_skycascades.valid = true;
+	if (r_shadows_cascade_debug.ival)
+		Con_Printf("^5sky room cascades drawn (%u draws, %u kept since the last)\n", ++sh_skycascades.draws, sh_skycascades.kept);
+	sh_skycascades.kept = 0;
 }
 #endif
 
@@ -5442,6 +5534,8 @@ void Sh_GenerateFakeShadows(void)	//generates shadowmaps and selects the dlight,
 	qboolean srccascades = false;	//FTESurf Patch 1762
 
 	GLBE_ClearFakeShadowLive();	//Patch 1762: no cascades until the cascade pass below draws them this frame
+	if (!(r_skyroomlevel >= 0 && r_refdef.recurse == r_skyroomlevel))
+		GLBE_UseShadowAtlas(2);	//FTESurf Patch 1880: not the sky room's kept atlas, whatever drew last
 	if (*r_shadows_throwdirection.string)
 		VectorCopy(r_shadows_throwdirection.vec4, l->axis[0]);
 	else
@@ -5559,7 +5653,10 @@ void Sh_GenerateFakeShadows(void)	//generates shadowmaps and selects the dlight,
 			int csize = max(smsize, bound(256, r_shadows_cascade_res.ival, 8192));
 			if (sh_config.texture2d_maxsize && csize > (int)sh_config.texture2d_maxsize)
 				csize = sh_config.texture2d_maxsize;	//the GPU's limit (a 2048-only card keeps working)
-			Sh_GenerateCascadeAtlas(l, cascades, csize);
+			if (r_skyroomlevel >= 0 && r_refdef.recurse == r_skyroomlevel && r_shadows_skyroomrate.value > 0)
+				Sh_SkyroomCascades(l, cascades, csize);	//FTESurf Patch 1880: kept between frames
+			else
+				Sh_GenerateCascadeAtlas(l, cascades, csize, 2);
 			fs_sunpass = false;
 			return;
 		}
@@ -7096,6 +7193,8 @@ void Sh_RegisterCvars(void)
 	Cvar_Register (&r_shadows_worldcast,				REALTIMELIGHTING);	//FTESurf Patch 1765
 	Cvar_Register (&r_shadows_propselfshadow,			REALTIMELIGHTING);
 	Cvar_Register (&r_shadows_cascade_res,				REALTIMELIGHTING);
+	Cvar_Register (&r_shadows_skyroomrate,				REALTIMELIGHTING);	//FTESurf Patch 1880
+	Cvar_Register (&r_shadows_skyroommove,				REALTIMELIGHTING);	//FTESurf Patch 1880
 	Cvar_Register (&r_shadows_worldcull,				REALTIMELIGHTING);
 	Cvar_Register (&r_shadows_caster_sunvis,			REALTIMELIGHTING);
 	Cvar_Register (&r_shadows_throwdirection,			REALTIMELIGHTING);

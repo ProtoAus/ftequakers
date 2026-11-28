@@ -134,7 +134,7 @@ int r_cubelight_used;
 int r_cubelight_gated;
 
 #ifdef GLQUAKE
-static texid_t shadowmap[3];
+static texid_t shadowmap[4];	//FTESurf Patch 1880: [3] = the 3D sky room's sun cascades, kept between frames
 static int shadow_fbo_id;
 static int shadow_fbo_depth_num;
 #endif
@@ -1471,6 +1471,37 @@ void GLBE_SetFakeShadowSlotInfo(int slot, const vec4_t info)
 	Vector4Copy(info, shaderstate.fakeshadowinfo[slot]);
 }
 //---------------------------------------------------------------------------------------------------
+//FTESurf Patch 1880: the 3D sky room keeps its sun cascades between frames in an atlas of its own (shadowmap[3]); these
+//copy the receivers' slot state out and back with it.  GLBE_SelectEntity/BE_SelectDLight clear lastuniform, and so does a
+//restore, so no program keeps the other atlas's matrices.
+void GLBE_SaveFakeShadowState(fakeshadowstate_t *st)
+{
+	memcpy(st->matrix, shaderstate.fakeshadowmatrix, sizeof(st->matrix));
+	memcpy(st->cell, shaderstate.fakeshadowcell, sizeof(st->cell));
+	memcpy(st->info, shaderstate.fakeshadowinfo, sizeof(st->info));
+	st->count = shaderstate.fakeshadowcount;
+}
+void GLBE_RestoreFakeShadowState(const fakeshadowstate_t *st, int atlas)
+{
+	memcpy(shaderstate.fakeshadowmatrix, st->matrix, sizeof(st->matrix));
+	memcpy(shaderstate.fakeshadowcell, st->cell, sizeof(st->cell));
+	memcpy(shaderstate.fakeshadowinfo, st->info, sizeof(st->info));
+	shaderstate.fakeshadowcount = st->count;
+	GLBE_UseShadowAtlas(atlas);
+	shaderstate.lastuniform = 0;
+}
+//whether that atlas still exists as it was made (a renderer restart or a resize destroys it)
+qboolean GLBE_ShadowAtlasKept(int id, int w, int h, uploadfmt_t encoding)
+{
+	if ((unsigned)id >= countof(shadowmap) || !TEXVALID(shadowmap[id]))
+		return false;
+	return shadowmap[id]->width == w && shadowmap[id]->height == h && shadowmap[id]->format == encoding && shadowmap[id]->status == TEX_LOADED;
+}
+void GLBE_UseShadowAtlas(int id)
+{
+	if ((unsigned)id < countof(shadowmap) && TEXVALID(shadowmap[id]) && shadowmap[id]->status == TEX_LOADED)
+		shaderstate.curshadowmap = shadowmap[id];
+}
 
 int GLBE_BeginRenderBuffer_DepthOnly(texid_t depthtexture);
 qboolean GLBE_BeginShadowMap(int id, int w, int h, uploadfmt_t encoding, int *restorefbo)
