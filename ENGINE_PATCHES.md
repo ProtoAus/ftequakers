@@ -1,5 +1,170 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1892 - BrightZenith's bhop_canals bundle: shader warm list, batched cascade depth, a leaner collision walk (engine + client QC, game 13104413)
+
+**Problem.** BrightZenith's hitch audit of bhop_canals (an AI bot measuring fps averages and 0.1% lows): late shader compiles on first sight, one depth draw per world batch in every sun cascade, and the collision walk's trace cache and bounds clip on the hot path of every trace.
+
+**Change.** (1) glsl/mapwarm/bhop_canals.txt (game): a 47-row, versioned, loose per-map list the map-ready warm-up compiles first; it only prioritises existing GL programs, never loads one it names or a package override. (2) gl_shadow.c: adjacent world shadow batches on the same static VBO whose depth-only draws are interchangeable (GLBE_CascadeDepthRun: the stock depth program, no deforms, offsets or masks, the same cull) go out as one multi-draw; -nosuncascadebatch = before. (3) com_bih.c: the trace cache picks its slot from a cheaper hash (the whole key still decides a hit); the node walk rejects both children at once when an inherited axis misses (the same inclusive test the per-child BIH_BoundsIntersect made), and on x86-64 SSE2 builds without FMA clips the move box with packed single floats in the scalar code's exact operation order (minps/maxps keep the macros' tie and NaN choice). (4) cl_watch.qc: the replay chrome's title and paused clock strings are built when they change, not every frame.
+
+**Verified.** Reviewed (two independent reads + mine): traces bit-identical by construction. pm_dettest on 9 maps and pm_verify of the cached recorded runs on the lobby engine's commit (7b08b0476, server build) and this branch, same content: all 2942 output lines identical (load timings aside) -- pm_dettest hashes on 9 maps, 82 pm_verify verdicts (2 full PASS re-sims, ahop_coast 25934 ticks), and 10 of Lex's bhop_canals saves through pm_recsim, every one an EXACT REPLAY on both. Its canals timing rides in P1880's (the measurements stack on it).
+
+## Patch 1891 - An overflowed entity box's split parts are remembered
+
+**Problem.** P1823 culls an entity whose leaf record overflowed by splitting its box until each part's record fits:
+up to 511 tree walks for an entity out of sight, redone for every view of every frame. On a still bhop_canals frame
+VBSP_BoxLeafnums_r + VBSP_FindTouchedLeafs were ~5% of the main thread.
+
+**Change.** gl_alias.c R_EntPVSSplit: the parts a box splits into, with their leaf records, are kept in a 128-entry
+table by the box's exact bits and the world (flushed by Surf_NewMap); a test asks only the view's PVS of them. The
+same parts or'd: the same answer. r_entpvs_splitcache 0 = before.
+
+**Verified.** In the same screenshot A/B as P1889 (both toggled together); the walks are gone from the profile.
+
+## Patch 1889 - Each view walks only the static props it can still draw
+
+**Problem.** VBSP_PrepareFrame walked every static prop for every view of every frame: bhop_canals has 3126, of which
+its 3D sky view draws at most 15 and the main view at most 257 (prop_census at 3 route poses). Each prop record holds
+a whole entity_t, so the walk strode ~3 MB of memory twice a frame: VBSP_PrepareFrame was 5-6% of the main thread.
+
+**Change.** Per view level, a list of the props that view may draw (or cast from) while its PVS memo (P1261) stands
+and its eye stays within hl2_propcand (256) of where the list was made. A prop is left off only when the walk would
+reject it for every eye in that ball: past its fade distance (or hl2_propdist) by more than the margin, or loaded, out
+of the view's PVS and farther than the sun shadow's reach plus the margin. The list is remade with the memo (a reset
+counter), on any change of the fade / shadow-reach settings, or when the eye leaves the ball; the frame that remakes it
+walks every prop as before. The per-prop verdict moves into a byte array so a frame no longer touches every record to
+reset it. hl2_propcand 0 = before.
+
+**Verified.** prop_census verdict counts identical to the previous build at 7 checks (3 poses, sky room on and off,
+shadows on and off); lists 31-334 props (main) and 15 (3D sky). Screenshots hl2_propcand 256 vs 0 at 7 poses identical
+(one pose differs on 63 px by at most 4 levels in the sky band, which tracks shot time, not the setting). Main-thread
+profile: VBSP_PrepareFrame 5-6% -> 2%.
+
+**Review.** prop_census: a prop off a list keeps the verdict it had when the list was made (the right one can change between FADED and PVS as the eye moves inside the margin); only drawn counts are per frame.
+
+**Timing (P1889 + P1891 over P1880-P1888, 1x route, all effects).** Adjacent clean A/B pairs +11.6% and +6.3% avg fps (185.1 -> 206.5, 208.5 -> 221.6); 1% low 90.1/91.7 -> 94.2/98.3, 0.1% low 71.8/69.5 -> 73.6/79.2.
+
+## Patch 1888 - Nearest-cubemap answers remembered by origin
+
+Mod_CubemapForOrigin: a 1024-entry table keyed by the origin's exact bits, the model and its cubemap array/count
+remembers the winning cubemap (checked against that cubemap's origin) and returns its current image.
+
+**Review.** The table is cleared in Surf_NewMap.
+
+## Patch 1887 - The water capture scan reads a batch's own fields before its shader
+
+GLBE_WaterCandidate read every world batch's shader flags (the world's lists hold every batch; unseen ones have no
+meshes this view) before its mesh count: 2.5% of a canals main thread. Same answer, cheap fields first.
+
+## Patch 1886 - skysegment: a pre-test for the sprite sky traces (engine + client QC, game 8cfad3e3)
+
+**Problem.** cl_sprites.qc Sprite_SkyTest traces eye -> sprite and asks whether the first hit is a sky/ face: 0.37 ms of
+csprogs a frame on bhop_canals' route (its ray budget is spent whenever the eye moves).
+
+**Change.** Engine builtin `float skysegment(vector start, vector end)`: 0 when no brush with a sky/ side meets the
+segment (the trace's answer is then "not sky"), 1 when one might, -1 when it cannot say. World brushes with a sky/ side
+(BIH_EnumBrushes, brush pairs included; canals 500) in a small box tree, tested by box then by the brush's planes (only
+erring towards "meets"); inline models with a sky/ side (canals 28, func_water_analog among them) where this frame's
+solid csqc entities wearing them are (unturned: brushes in model space; turned: box). skysegment_info. Game: asked
+first (checkbuiltin; vbsp_sprite_skypre 0 = always trace).
+
+**Verified.** 48-54% of sky tests answered without a trace; Sprite_SkyTest 0.96 -> 0.66 s self over the same 18 s
+segment; screenshots with it on and off, every verdict re-taken after a far seek, identical at six poses.
+
+**Review.** The cache is forgotten in Surf_NewMap (a world reloaded into the same model_t with its tree at the same address kept the old load's brush pointers), and the box tests grow by the plane test's 0.25 slack so a graze never reads as a miss.
+
+## Patch 1885 - The main view's sun cascades keep the world's shadow depth
+
+**Problem.** Nothing in the world moves, but every cascade drew it again every frame (about 55-65% of the remaining
+shadow cost on bhop_canals after P1883; the rest is props and players).
+
+**Change.** A cascade box only moves by whole texels (Sh_OrthoAlignToPoint snaps to the cascade's lattice), so the
+world's depth in a cell is the last frame's shifted by whole texels. Each cascade past r_shadows_staticworld_first (1)
+draws the world once into a kept map (shadowmap 4+s) r_shadows_staticworld (192) texels larger on every side; per frame
+its cell is cleared, the window under the box copied in (glCopyImageSubData; loaded on GL 4.3 / ARB_copy_image) and only
+entities drawn over it. The box keeps the anchor's depth centre along the sun, so depth values are the kept map's, and
+the slot matrix is built from that centre. Drawn again when the window would leave the kept map, the eye has moved a
+quarter of the depth range along the sun, a setting changes, the world reloads, or r_shadows_staticworld_age (5 s)
+passes -- at most one cascade a frame (the others draw their world into the cell that frame). 0 = before.
+
+**Verified.** Paused screenshots on vs off at 6 poses identical but for <=115 px (max 12 levels: depth quantisation at
+the kept depth centre); after a 0.12 s move (a non-centred window) identical at 3 poses; a fixed-step moving capture
+on vs off differs less than two runs with it on (median 1433 vs 12690 px).
+
+**Review.** A failed atlas setup after the pre-pass restores the view the pre-pass changed; a failed kept-map setup clears r_shadow_orthodepth. Receivers choose their cascade partly by depth, so the kept depth centre may now drift only r_shadows_staticworld_drift (0.0625, was a fixed 0.25) of the depth range along the sun before the kept map is drawn again. Screenshots on vs off afterwards: identical at 3 of 7 poses, <= 17 px (max 12 levels) at the others.
+
+## Patch 1884 - One nearest-cubemap search per entity per pass
+
+R_GAlias_GenerateBatches called Mod_CubemapForOrigin (every env_cubemap: ~143 on bhop_canals) for each surface of each
+entity in every pass (views, 3D sky, each cascade); now once per entity, when its first batch is made. Exact.
+
+## Patch 1883 - The main view's far sun cascades take turns
+
+**Problem.** All four sun cascades were drawn every frame; the outer two (bhop_canals radii 1333/4000 of 148/444/1333/4000)
+hold nearly all of the world and props they cast. Shadows were the largest single cost with every effect on (r_shadows
+2 -> 0 saved 1.8-2.4 ms a frame at paused route poses), split between world depth (generate) and re-walking the entity
+lists once per cascade (entity draw, 0.25-0.76 ms).
+
+**Change.** gl_shadow.c Sh_GenerateCascadeAtlas: for the main view (recurse 0, the views' atlas) the inner half of the
+cascades is drawn every frame and the outer half one a frame in turn; a cascade not drawn keeps its depth and the slot
+matrix it was drawn with (sh_maincascades, GLBE_Save/RestoreFakeShadowState), so the static world shadows exactly as
+before and only casters beyond the second cascade update every other frame. GLBE_BeginShadowMapEx(clear false) +
+GLBE_ClearShadowCell clear just the cells drawn. Drawn again at once on any setting it uses, a world reload, anything
+else drawing into the atlas (a portal, r_shadows_capturecascades 0), or the eye moving r_shadows_cascadestagger_move
+(0.25) of the cascade's radius. r_shadows_cascadestagger 0 = before.
+
+**Verified.** bhop_canals, 4 cascades: 3 shadow-map sides a frame (8 before P1880, 4 after it). A fixed-step capture
+(capturefixed, 30 fps, 43 frames) of a moving replay clip with r_shadows_cascadestagger 1 vs 0: differences only on
+swaying grass and the sun glare (time phase); none at shadow edges. Route timing: see P1880.
+
+**Review.** The outer-half index was a variable named `far`, which <windows.h> defines away: the mingw build broke (now `nfar`). The single-map fake path also drops the kept cells.
+
+## Patch 1882 - A water capture shades with the sun cascades its view drew this frame
+
+**Problem.** A reflection or refraction capture is a whole R_RenderScene and reached Sh_GenerateFakeShadows, drawing all
+the cascades again around its own eye (two more sets on a frame with both captures; r_capturerate 60 at 170 fps = one
+frame in three) into the atlas the main view had drawn, so the main view's batches after the water sampled the capture's
+cascades.
+
+**Change.** The main view saves its slot state after its cascade pass (sh_viewcascades); a direct capture (recurse 1,
+capturekind >= 1) restores it instead of drawing. A refraction's eye is the view's own; a reflection shows the world above
+the water around the real eye, which the view's concentric cascades are centred on (its own were centred under the
+water). r_shadows_capturecascades 0 = before.
+
+**Verified.** Built and run on bhop_canals (captures are rare on its route); route timing with the set below.
+
+**Review.** Anything else drawing into the views' atlas (a portal's or capture's own cascades, the single-map sun) now also drops the saved slot state when a recursed view drew it (Sh_FakeAtlasSpoiled), so a later capture cannot pair the main view's matrices with a portal's depth.
+
+## Patch 1881 - The sun's nine visibility rays at 60 a second each (client QC, game 78b56113)
+
+cl_sun.qc Sun_Draw traced all nine 32768-unit rays (+ nine through the 3D sky) every frame the eye moved; now round-robin
+at nine per 1/60 s (each answer at most 1/60 s old, under the 50 ms fade); first look / 3D sky toggle / 64-unit jump
+traces all nine; a still eye finishes the nine (P1804's answer exactly). Sun_Draw and Sprite_SkyTest compare
+trace_surfacename with strncasecmp (no strtolower tempstring per ray). csprogs profile moving: Sun_Draw 0.34 -> 0.12 ms.
+
+## Patch 1880 - The 3D sky room keeps its sun cascades between frames
+
+**Problem.** GLBE_DrawWorld runs Sh_GenerateFakeShadows for every view; the sky room's view is drawn first, from the main
+view's sky batches, so it drew four cascades around the sky camera every frame and the main view then drew its own four
+(r_speeds: 8 shadow-map sides a frame at r_shadows_cascades 4 on bhop_canals; 3D sky view 861-1166 draw calls, 0.7-0.85
+ms CPU).
+
+**Change.** The sky room's cascades live in shadowmap[3] with their slot matrices and are drawn again only when a setting
+they use changes, the world reloads, the sky camera moves r_shadows_skyroommove (0.125) of the nearest cascade's radius,
+or 1/r_shadows_skyroomrate (10) s passes. Other views select the views' atlas again (GLBE_UseShadowAtlas).
+r_shadows_skyroomrate 0 = before.
+
+**Verified.** Paused 33.96 s: 8 -> 4 sides, 3D sky draws 861 -> 85, sky CPU 0.68 -> 0.42 ms, frame 7.54 -> 7.09 ms.
+Overlay-free screenshots at 6 route poses identical outside same-mode animation noise. Paused toggles: -0.50/-0.27 ms
+(6 s / 34 s).
+
+Route timing for the set (P1880-P1884 engine + P1881 QC, over origin/main + BrightZenith's canals bundle), every effect
+on (hl2_water 2, hl2_refract 1, r_bloom 1, r_shadows 2, Lex's saved graphics), Linux RTX 2080 SUPER 1280x720 4xMSAA,
+alternated A-B-B-A, warm caches:
+  replay 4x (whole route): A 145/152 avg, 71/74 1%, 48/54 0.1%  ->  B 171 avg, 82 1%, 62 0.1%
+  replay 1x clean route:   A 163.4/177.7 avg, 77.6/93.4 1%, 56.9/80.3 0.1%, 38.8/71.5 0.01%
+                           B 207.6/204.1 avg, 104.8/101.4 1%, 90.5/80.8 0.1%, 74.6/63.5 0.01%
+  -> mean 171 -> 206 avg (+21%), 1% +21%, 0.1% +25%.
+
 ## Patch 1890 - Menu highlights follow the pointer; the sky-room sun respects vbsp_skyroom (client QC, game a3fe5d49)
 
 **Problem.** fteqcc binds `=` tighter than `&&`, so three assignments stored their first operand. `hot = live && sui_is_hovered(id)` in cl_gamemode.qc (Movement mode rows) and cl_gfx.qc (Gfx_Chip) stored `live`: every live row and chip drew hovered all the time and hovering changed nothing. `sky = vbsp_skyroom_have && cvar("vbsp_skyroom")` in cl_sun.qc stored the map flag, so with the sky room turned off the sun's visibility trace still went through the sky room and undrawn scenery there could hide the sun.
