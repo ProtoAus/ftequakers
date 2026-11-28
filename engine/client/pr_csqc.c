@@ -2578,13 +2578,24 @@ static void QCBUILTIN PF_cs_skysegment(pubprogfuncs_t *prinst, struct globalvars
 		{
 			csqcedict_t *e = (csqcedict_t*)EDICT_NUM_PB(prinst, i);
 			model_t *m;
+			int mi;
 			if (ED_ISFREE(e) || e->v->solid == SOLID_NOT)
 				continue;
-			m = CSQC_GetModelForIndex(e->v->modelindex);
+			mi = e->v->modelindex;	//never CSQC_GetModelForIndex: that loads a csqc-precached model on first ask, mid-frame
+			if (mi > 0 && mi < MAX_PRECACHE_MODELS)
+				m = cl.model_precache[mi];
+			else if (mi < 0 && mi > -MAX_CSMODELS)
+				m = cl.model_csqcprecache[-mi];
+			else
+				continue;
 			for (k = 0; k < cs_sky.nsub && m != cs_sky.sub[k]; k++)
 				;
+			if (k == cs_sky.nsub && !m && mi < 0 && *cl.model_csqcname[-mi] == '*')
+				k = 0;	//a csqc-set inline model not loaded yet: its box counts, conservatively (a turned one's would too)
 			if (k == cs_sky.nsub)
 				continue;
+			if (!m)
+				k = -1;
 			if (cs_sky.nent == countof(cs_sky.ent))
 			{
 				cs_sky.nent = -1;	//too many to say this frame: trace
@@ -2593,7 +2604,7 @@ static void QCBUILTIN PF_cs_skysegment(pubprogfuncs_t *prinst, struct globalvars
 			VectorCopy(e->v->absmin, cs_sky.ent[cs_sky.nent]);
 			VectorCopy(e->v->absmax, cs_sky.ent[cs_sky.nent]+3);
 			VectorCopy(e->v->origin, cs_sky.entorg[cs_sky.nent]);
-			cs_sky.entsub[cs_sky.nent] = (e->v->angles[0] || e->v->angles[1] || e->v->angles[2]) ? -1 : k;
+			cs_sky.entsub[cs_sky.nent] = (k < 0 || e->v->angles[0] || e->v->angles[1] || e->v->angles[2]) ? -1 : k;
 			cs_sky.nent++;
 		}
 	}
