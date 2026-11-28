@@ -2515,6 +2515,8 @@ static void CS_SkyRebuild(model_t *wm)
 	cs_sky.node = BZ_Realloc(cs_sky.node, sizeof(*cs_sky.node) * cs_sky.nboxes * 3);	//a binary tree with leaves of 1-4
 	CS_SkyBuild_r(0, cs_sky.nboxes);
 }
+#define CS_SKYBOXSLACK 0.25f	//review: boxes grow by the brush-plane test's slack, so a graze the trace's own plane maths
+							//rounds to a touch is never a slab-maths miss (it may only err towards "meets")
 static qboolean CS_SkySegmentBox(const float *mins, const float *maxs, const vec3_t start, const vec3_t dir)
 {	//slab test on t in [0,1], touching counts
 	float t0 = 0, t1 = 1, a, b;
@@ -2523,12 +2525,12 @@ static qboolean CS_SkySegmentBox(const float *mins, const float *maxs, const vec
 	{
 		if (dir[k] == 0)
 		{
-			if (start[k] < mins[k] || start[k] > maxs[k])
+			if (start[k] < mins[k] - CS_SKYBOXSLACK || start[k] > maxs[k] + CS_SKYBOXSLACK)
 				return false;
 			continue;
 		}
-		a = (mins[k] - start[k]) / dir[k];
-		b = (maxs[k] - start[k]) / dir[k];
+		a = (mins[k] - CS_SKYBOXSLACK - start[k]) / dir[k];
+		b = (maxs[k] + CS_SKYBOXSLACK - start[k]) / dir[k];
 		if (a > b) { float t = a; a = b; b = t; }
 		if (a > t0) t0 = a;
 		if (b < t1) t1 = b;
@@ -2553,6 +2555,18 @@ static qboolean CS_SkySegment_r(int n, const vec3_t start, const vec3_t dir)
 	return CS_SkySegment_r(nd->first, start, dir) || CS_SkySegment_r(nd->first+1, start, dir);
 }
 #endif
+//review: a new world (Surf_NewMap) forgets the sky boxes -- a world reloaded into the same model_t, its tree at the
+//same address, would otherwise keep the old load's brush and inline-model pointers
+void CS_SkySegmentFlush(void)
+{
+#if defined(Q2BSPS) || defined(Q3BSPS)
+	cs_sky.model = NULL;
+	cs_sky.cnodes = NULL;
+	cs_sky.state = 0;
+	cs_sky.nsub = cs_sky.nent = 0;
+	cs_sky.entframe = -1;
+#endif
+}
 static void QCBUILTIN PF_cs_skysegment(pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
 {
 #if defined(Q2BSPS) || defined(Q3BSPS)

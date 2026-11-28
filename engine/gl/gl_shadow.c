@@ -13,6 +13,9 @@ model meshes are interpolated multiple times per frame
 #include "../vk/vkrenderer.h"
 #endif
 #include "glquake.h"
+#ifdef GLQUAKE
+static void Sh_FakeAtlasSpoiled(void);	//FTESurf Patch 1882/1883 (review)
+#endif
 #include "shader.h"
 
 #ifdef D3D9QUAKE
@@ -2798,7 +2801,13 @@ qboolean Sh_GenShadowMap (dlight_t *l, int lighttype, vec3_t axis[3], qbyte *lvi
 		twidth = theight = txsize;
 
 		if (lighttype & LSHADER_FAKESHADOWS)
+		{
 			smapidx = 2;
+#ifdef GLQUAKE
+			if (qrenderer == QR_OPENGL)
+				Sh_FakeAtlasSpoiled();	//review: the cascade passes' kept cells and saved slot state are gone
+#endif
+		}
 		else
 			smapidx = 1;
 	}
@@ -4022,10 +4031,11 @@ static struct
   frame's box is copied in (glCopyImageSubData), and only the entities -- props, players, movers -- are drawn over it.
   The box keeps the anchor's depth centre (its component along the sun), so the depth values are the kept map's exactly;
   the slot matrix is built from that same centre.  Drawn again when the window would leave the kept map, the eye has moved
-  a quarter of the depth range along the sun, a setting it uses changes, the world reloads, or r_shadows_staticworld_age
+  r_shadows_staticworld_drift of the depth range along the sun, a setting it uses changes, the world reloads, or r_shadows_staticworld_age
   seconds pass; at most one cascade a frame (the others draw their world into the cell as before that frame).*/
 static cvar_t r_shadows_staticworld = CVARD("r_shadows_staticworld", "192", "FTESurf Patch 1885: on a Source map with sun cascades, each cascade past r_shadows_staticworld_first keeps the world's shadow depth in a map this many texels larger on every side, and per frame copies the part under its box and draws only entities over it (the world is redrawn only when the box nears the kept map's edge). 0 = the world is drawn into every cascade every frame, as before Patch 1885. Needs GL 4.3 / ARB_copy_image.");
 static cvar_t r_shadows_staticworld_first = CVARD("r_shadows_staticworld_first", "1", "FTESurf Patch 1885: the first sun cascade (0 = the nearest) that keeps its world depth; nearer ones move too many texels a frame to gain.");
+static cvar_t r_shadows_staticworld_drift = CVARD("r_shadows_staticworld_drift", "0.0625", "FTESurf Patch 1885 (review): how far, as a fraction of a cascade's depth range, the eye may move along the sun before its kept world depth is drawn again. The kept map keeps its own depth centre and receivers pick their cascade partly by depth, so this bounds how far that choice can shift (0.0625: 1/32 of the cascade test's range).");
 static cvar_t r_shadows_staticworld_age = CVARD("r_shadows_staticworld_age", "5", "FTESurf Patch 1885: seconds a cascade's kept world depth may be used before it is drawn again regardless (0 = no limit).");
 typedef struct
 {
@@ -4099,7 +4109,7 @@ static qboolean Sh_GenerateCascadeAtlas(dlight_t *l, int cascades, int txsize, i
 	due = all;
 	keep = atlas == 2 && !r_refdef.recurse && r_shadows_cascadestagger.ival && cascades > 2;
 	if (atlas == 2 && !keep)
-		sh_maincascades.valid = false;	//whatever else draws into the views' atlas spoils the cells the main view kept
+		Sh_FakeAtlasSpoiled();	//whatever else draws into the views' atlas spoils the cells the main view kept
 	if (keep && sh_maincascades.valid && sh_maincascades.model == cl.worldmodel && sh_maincascades.world == sh_skycascadesworld &&
 		sh_maincascades.cascades == cascades && sh_maincascades.txsize == txsize && sh_maincascades.fmt == fmt &&
 		sh_maincascades.outer == outer && sh_maincascades.ratio == ratio && sh_maincascades.distance == r_shadows_distance.value &&
@@ -4107,7 +4117,7 @@ static qboolean Sh_GenerateCascadeAtlas(dlight_t *l, int cascades, int txsize, i
 		sh_maincascades.worldcast == worldcast && sh_maincascades.nothrowfade == nothrowfade &&
 		GLBE_ShadowAtlasKept(atlas, txsize, txsize, fmt))
 	{
-		int far = cascades/2, turn = sh_maincascades.turn++ % (cascades - far);
+		int nfar = cascades/2, turn = sh_maincascades.turn++ % (cascades - nfar);	//(not `far`: <windows.h> defines it away)
 		float mv = max(0, r_shadows_cascadestagger_move.value);
 		due = 0;
 		for (s = 0; s < cascades; s++)
@@ -4115,7 +4125,7 @@ static qboolean Sh_GenerateCascadeAtlas(dlight_t *l, int cascades, int txsize, i
 			float radius = max(16.0f, outer / (float)pow(ratio, (double)(cascades-1-s)));
 			vec3_t d;
 			VectorSubtract(r_origin, sh_maincascades.eye[s], d);
-			if (s < far || s - far == turn || DotProduct(d, d) > radius*radius*mv*mv)
+			if (s < nfar || s - nfar == turn || DotProduct(d, d) > radius*radius*mv*mv)
 				due |= 1u<<s;
 		}
 		GLBE_RestoreFakeShadowState(&sh_maincascades.st, atlas);	//the kept cells' matrices
@@ -4172,7 +4182,7 @@ static qboolean Sh_GenerateCascadeAtlas(dlight_t *l, int cascades, int txsize, i
 				GLBE_ShadowAtlasKept(4+s, size, size, fmt))
 			{	//this frame's box at the anchor's depth centre; is its window inside the kept map, on whole texels?
 				VectorSubtract(w->anchor, org, d);
-				if (fabs(DotProduct(d, l->axis[0])) <= odepth * 0.25f)
+				if (fabs(DotProduct(d, l->axis[0])) <= odepth * bound(0, r_shadows_staticworld_drift.value, 0.25f))
 				{
 					VectorMA(org, DotProduct(d, l->axis[0]), l->axis[0], org);
 					Sh_CascadeClip(l, w->anchor, radius * size / (float)sm, odepth, org, clip);
@@ -4201,7 +4211,10 @@ static qboolean Sh_GenerateCascadeAtlas(dlight_t *l, int cascades, int txsize, i
 				memcpy(r_refdef.m_projection_std, cproj, sizeof(cproj));
 				memcpy(r_refdef.m_projection_view, cproj, sizeof(cproj));
 				if (!GLBE_BeginShadowMap(4+s, size, size, fmt, &rfbo))
+				{
+					r_shadow_orthodepth = 0;	//review: as after a drawn one
 					continue;
+				}
 				if (BE_SelectDLight(l, vec3_origin, l->axis, LSHADER_SMAP|LSHADER_ORTHO))
 				{
 					GLBE_FlushProjection();
@@ -4242,7 +4255,19 @@ static qboolean Sh_GenerateCascadeAtlas(dlight_t *l, int cascades, int txsize, i
 	}
 
 	if (!GLBE_BeginShadowMapEx(atlas, txsize, txsize, fmt, &restorefbo, due == all))
-		{ GLBE_SetFakeShadowCount(1); return false; }
+	{	//review: Patch 1885's pre-pass may have drawn a kept map (view, projection, viewport, cull flip, colour mask, frustum)
+		memcpy(r_refdef.m_view,            oview,  sizeof(r_refdef.m_view));
+		memcpy(r_refdef.m_projection_std,  oprojs, sizeof(r_refdef.m_projection_std));
+		memcpy(r_refdef.m_projection_view, oprojv, sizeof(r_refdef.m_projection_view));
+		r_refdef.pxrect       = oprect;
+		r_refdef.flipcull     = oldflip;
+		r_refdef.colourmask   = oldcolourmask;
+		r_refdef.externalview = oldexternalview;
+		R_SetFrustum(r_refdef.m_projection_std, r_refdef.m_view);
+		GL_ViewportUpdate();
+		GLBE_SetFakeShadowCount(1);
+		return false;
+	}
 	r_refdef.externalview = true;	//never any viewmodels
 	GLBE_SetupForShadowMap(l, txsize, txsize, (csize-2*inset)/(float)txsize);
 
@@ -4465,6 +4490,15 @@ static struct
 	uploadfmt_t fmt;
 	fakeshadowstate_t st;
 } sh_viewcascades;
+//review: something other than the main view's own cascade pass drew into the views' atlas (shadowmap 2): a portal's or
+//capture's cascades, the single-map sun. The main view's kept outer cells (P1883) are gone, and so is the slot state its
+//captures would restore (P1882) when the drawer is a recursed view -- the main view's own pass sets that state again.
+static void Sh_FakeAtlasSpoiled(void)
+{
+	sh_maincascades.valid = false;
+	if (r_refdef.recurse)
+		sh_viewcascades.valid = false;
+}
 static qboolean Sh_ViewCascadesReuse(dlight_t *l, int cascades, int txsize)
 {
 	int cx, cy, csize;
@@ -7481,6 +7515,7 @@ void Sh_RegisterCvars(void)
 	Cvar_Register (&r_shadows_staticworld,				REALTIMELIGHTING);	//FTESurf Patch 1885
 	Cvar_Register (&r_shadows_staticworld_first,		REALTIMELIGHTING);	//FTESurf Patch 1885
 	Cvar_Register (&r_shadows_staticworld_age,			REALTIMELIGHTING);	//FTESurf Patch 1885
+	Cvar_Register (&r_shadows_staticworld_drift,		REALTIMELIGHTING);	//FTESurf Patch 1885 (review)
 	Cvar_Register (&r_shadows_worldcull,				REALTIMELIGHTING);
 	Cvar_Register (&r_shadows_caster_sunvis,			REALTIMELIGHTING);
 	Cvar_Register (&r_shadows_throwdirection,			REALTIMELIGHTING);

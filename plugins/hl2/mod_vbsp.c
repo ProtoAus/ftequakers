@@ -15465,7 +15465,7 @@ static void VBSP_PropCensus_f(void)
 					   vbsp_propstat.leafoverflow, vbsp_propstat.headnodetested);
 		for (v = 0; v < R_MAX_RECURSE; v++)	//FTESurf Patch 1889
 			if (prv->propcand[v].valid)
-				Con_Printf("  %6u on view level %u's candidate list (hl2_propcand %g; made at %.0f %.0f %.0f)\n",
+				Con_Printf("  %6u on view level %u's candidate list (hl2_propcand %g; made at %.0f %.0f %.0f; props off it keep the verdict they had then)\n",
 					prv->propcand[v].n, v, prv->propcand[v].margin,
 					prv->propcand[v].org[0], prv->propcand[v].org[1], prv->propcand[v].org[2]);
 		if (prv->lit_foreign)	//FTESurf Patch 1096

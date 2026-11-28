@@ -5173,8 +5173,16 @@ void Surf_NewMap (model_t *worldmodel)
 	int		i;
 	extern cvar_t r_lightmap_bicubic_world;
 	extern void R_EntPVSSplitFlush(void);
+	extern void Mod_CubemapMemoFlush(void);
+#ifdef CSQC_DAT
+	extern void CS_SkySegmentFlush(void);
+#endif
 
 	R_EntPVSSplitFlush();	//FTESurf Patch 1891: another world's boxes
+	Mod_CubemapMemoFlush();	//FTESurf Patch 1888 (review): another world's cubemaps
+#ifdef CSQC_DAT
+	CS_SkySegmentFlush();	//FTESurf Patch 1886 (review): another world's sky brushes
+#endif
 	cl.worldmodel = worldmodel;
 	if (worldmodel && (worldmodel->engineflags & MDLF_SOURCEBSP))	//FTESurf Patch 1275: the vmt shaders follow this world's atlas
 		Cvar_ForceSet(&r_lightmap_bicubic_world, (worldmodel->engineflags & MDLF_LMPADDED) ? "1" : "0");

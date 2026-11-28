@@ -3964,6 +3964,10 @@ static struct
 	int best;			//-1 none
 	vec3_t bestorg;		//that cubemap's origin when it won
 } mod_cubememo[MOD_CUBEMEMO];
+void Mod_CubemapMemoFlush(void)
+{	//review: Surf_NewMap -- a reloaded map whose cubemap array lands at the same address with the same count keeps no answers
+	memset(mod_cubememo, 0, sizeof(mod_cubememo));
+}
 image_t *Mod_CubemapForOrigin(model_t *wmodel, vec3_t org)
 {
 	int i, best = -1;
