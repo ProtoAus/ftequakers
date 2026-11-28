@@ -3949,15 +3949,43 @@ static void Mod_BSPX_Injest_f(void)
 	}
 }
 
+/*FTESurf Patch 1888: the answer for an origin, remembered. Every entity batch of every pass (the views, the 3D sky,
+  each sun cascade) asked, walking every env_cubemap (bhop_canals: ~143), and nearly all of them are static props
+  asking from the same origin each time. A small table keyed by the origin's exact bits, the model and its cubemaps
+  (array and count) remembers which cubemap won, checked against that cubemap's own origin (a reloaded map reusing
+  the array's address cannot answer for another), and hands back its current image; anything else walks as before.*/
+#define MOD_CUBEMEMO 1024
+static struct
+{
+	model_t *model;
+	menvmap_t *envmaps;
+	int numenvmaps;
+	vec3_t org;
+	int best;			//-1 none
+	vec3_t bestorg;		//that cubemap's origin when it won
+} mod_cubememo[MOD_CUBEMEMO];
 image_t *Mod_CubemapForOrigin(model_t *wmodel, vec3_t org)
 {
-	int i;
+	int i, best = -1;
 	menvmap_t       *e;
 	float bestdist = FLT_MAX, dist;
-	image_t *ret = NULL;
 	vec3_t move;
+	unsigned int h, bits[3];
 	if (!wmodel || wmodel->loadstate != MLS_LOADED)
 		return NULL;
+	memcpy(bits, org, sizeof(bits));
+	h = (bits[0] * 73856093u ^ bits[1] * 19349663u ^ bits[2] * 83492791u);
+	h = (h ^ (h >> 15)) & (MOD_CUBEMEMO-1);
+	if (mod_cubememo[h].model == wmodel && mod_cubememo[h].envmaps == wmodel->envmaps && mod_cubememo[h].numenvmaps == wmodel->numenvmaps &&
+		!memcmp(mod_cubememo[h].org, org, sizeof(vec3_t)))
+	{
+		best = mod_cubememo[h].best;
+		if (best < 0)
+			return NULL;
+		if (best < wmodel->numenvmaps && !memcmp(wmodel->envmaps[best].origin, mod_cubememo[h].bestorg, sizeof(vec3_t)))
+			return wmodel->envmaps[best].image;
+		best = -1;
+	}
 	for ( i=0 , e=wmodel->envmaps ; i<wmodel->numenvmaps ; i++, e++)
 	{
 		VectorSubtract(org, e->origin, move);
@@ -3965,10 +3993,17 @@ image_t *Mod_CubemapForOrigin(model_t *wmodel, vec3_t org)
 		if (bestdist > dist)
 		{
 			bestdist = dist;
-			ret = e->image;
+			best = i;
 		}
 	}
-	return ret;
+	mod_cubememo[h].model = wmodel;
+	mod_cubememo[h].envmaps = wmodel->envmaps;
+	mod_cubememo[h].numenvmaps = wmodel->numenvmaps;
+	memcpy(mod_cubememo[h].org, org, sizeof(vec3_t));
+	mod_cubememo[h].best = best;
+	if (best >= 0)
+		VectorCopy(wmodel->envmaps[best].origin, mod_cubememo[h].bestorg);
+	return best >= 0 ? wmodel->envmaps[best].image : NULL;
 }
 
 void Mod_BSPX_Init(void)

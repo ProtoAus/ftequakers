@@ -7436,10 +7436,13 @@ static qboolean GLBE_WaterSameBatch(const batch_t *a, const batch_t *b)
 //a world water batch whose meshes are already this view's (entity batches build theirs at submit, and
 //their PVS is their own); ripple shaders render their own target after the captures
 static qboolean GLBE_WaterCandidate(batch_t *b)
-{
-	shader_t *s = b->shader;
-	return s && !(s->flags & (SHADER_NODRAW|SHADER_HASPORTAL|SHADER_HASRIPPLEMAP)) && (s->flags & (SHADER_HASREFLECT|SHADER_HASREFRACT)) &&
-		b->ent == &r_worldentity && !b->buildmeshes && b->mesh && b->meshes > b->firstmesh;
+{	//FTESurf Patch 1887: the batch's own fields first -- the world's lists hold every world batch (unseen ones with no
+	//meshes this view), and reading each one's shader for its flags was 2.5% of a bhop_canals frame
+	shader_t *s;
+	if (!b->mesh || b->meshes <= b->firstmesh || b->buildmeshes || b->ent != &r_worldentity)
+		return false;
+	s = b->shader;
+	return s && !(s->flags & (SHADER_NODRAW|SHADER_HASPORTAL|SHADER_HASRIPPLEMAP)) && (s->flags & (SHADER_HASREFLECT|SHADER_HASREFRACT));
 }
 //level water seen from the eye's side: above, a top below the eye; in water, an underside above it.
 //Mod_VBSP's walk emits a water's underside whenever the eye is below its plane, in water or not. Source's
