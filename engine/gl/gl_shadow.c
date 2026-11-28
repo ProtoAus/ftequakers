@@ -4209,6 +4209,37 @@ static void Sh_SkyroomCascades(dlight_t *l, int cascades, int txsize)
 		Con_Printf("^5sky room cascades drawn (%u draws, %u kept since the last)\n", ++sh_skycascades.draws, sh_skycascades.kept);
 	sh_skycascades.kept = 0;
 }
+
+/*FTESurf Patch 1882: a water capture shades with the cascades its view has just drawn.
+  A reflection or refraction capture is a whole R_RenderScene, so it reached Sh_GenerateFakeShadows too and drew all
+  the cascades again around its own eye -- two more sets on every frame with both captures (r_capturerate 60 at 170 fps:
+  one frame in three), into the atlas the main view had already drawn, so the main view's batches after the water
+  sampled the capture's cascades.  A refraction's eye is the view's own: its cascades were the view's, drawn again.  A
+  reflection's eye is the view's mirrored under the plane, but what it shows is the world above the water around the
+  real eye, which the view's concentric cascades are centred on; its own were centred under the water.  The view's
+  slots and atlas are restored instead, so both shade from the cascades the view drew this frame.*/
+static cvar_t r_shadows_capturecascades = CVARD("r_shadows_capturecascades", "1", "FTESurf Patch 1882: 1 = a water reflection or refraction capture of the main view shades with the sun cascades that view drew this frame (its eye or its mirror image; the cascades cover the same world). 0 = each capture draws all the cascades again around its own eye, into the view's atlas, as before Patch 1882.");
+static struct
+{
+	qboolean valid;		//drawn by this frame's main view: cleared when the next one starts
+	int cascades, txsize;
+	uploadfmt_t fmt;
+	fakeshadowstate_t st;
+} sh_viewcascades;
+static qboolean Sh_ViewCascadesReuse(dlight_t *l, int cascades, int txsize)
+{
+	int cx, cy, csize;
+	vec3_t sundir;
+	if (!sh_viewcascades.valid || r_refdef.recurse != 1 || sh_viewcascades.cascades != cascades || sh_viewcascades.txsize != txsize ||
+		!GLBE_ShadowAtlasKept(2, txsize, txsize, sh_viewcascades.fmt))
+		return false;
+	VectorCopy(l->axis[0], sundir);
+	Sh_CascadeCellRect(0, cascades, txsize, &cx, &cy, &csize);
+	GLBE_RestoreFakeShadowState(&sh_viewcascades.st, 2);
+	GLBE_SetupForShadowMap(l, txsize, txsize, (csize-2*16)/(float)txsize);
+	Sh_CascadeEpilogue(l, sundir, txsize);
+	return true;
+}
 #endif
 
 //nettest Phase-1: map-light table (lamp POSITIONS for the perspective prop shadows) ================
@@ -5534,6 +5565,8 @@ void Sh_GenerateFakeShadows(void)	//generates shadowmaps and selects the dlight,
 	qboolean srccascades = false;	//FTESurf Patch 1762
 
 	GLBE_ClearFakeShadowLive();	//Patch 1762: no cascades until the cascade pass below draws them this frame
+	if (!r_refdef.recurse)
+		sh_viewcascades.valid = false;	//FTESurf Patch 1882: a new frame's view; its captures wait for its cascades
 	if (!(r_skyroomlevel >= 0 && r_refdef.recurse == r_skyroomlevel))
 		GLBE_UseShadowAtlas(2);	//FTESurf Patch 1880: not the sky room's kept atlas, whatever drew last
 	if (*r_shadows_throwdirection.string)
@@ -5655,8 +5688,16 @@ void Sh_GenerateFakeShadows(void)	//generates shadowmaps and selects the dlight,
 				csize = sh_config.texture2d_maxsize;	//the GPU's limit (a 2048-only card keeps working)
 			if (r_skyroomlevel >= 0 && r_refdef.recurse == r_skyroomlevel && r_shadows_skyroomrate.value > 0)
 				Sh_SkyroomCascades(l, cascades, csize);	//FTESurf Patch 1880: kept between frames
-			else
-				Sh_GenerateCascadeAtlas(l, cascades, csize, 2);
+			else if (r_refdef.recurse && r_refdef.capturekind >= 1 && r_shadows_capturecascades.ival && Sh_ViewCascadesReuse(l, cascades, csize))
+				;	//FTESurf Patch 1882: a water capture, shaded with its view's
+			else if (Sh_GenerateCascadeAtlas(l, cascades, csize, 2) && !r_refdef.recurse)
+			{	//FTESurf Patch 1882: the main view's, for its captures
+				sh_viewcascades.cascades = cascades;
+				sh_viewcascades.txsize = csize;
+				sh_viewcascades.fmt = Sh_ShadowDepthFormat();
+				GLBE_SaveFakeShadowState(&sh_viewcascades.st);
+				sh_viewcascades.valid = true;
+			}
 			fs_sunpass = false;
 			return;
 		}
@@ -7195,6 +7236,7 @@ void Sh_RegisterCvars(void)
 	Cvar_Register (&r_shadows_cascade_res,				REALTIMELIGHTING);
 	Cvar_Register (&r_shadows_skyroomrate,				REALTIMELIGHTING);	//FTESurf Patch 1880
 	Cvar_Register (&r_shadows_skyroommove,				REALTIMELIGHTING);	//FTESurf Patch 1880
+	Cvar_Register (&r_shadows_capturecascades,			REALTIMELIGHTING);	//FTESurf Patch 1882
 	Cvar_Register (&r_shadows_worldcull,				REALTIMELIGHTING);
 	Cvar_Register (&r_shadows_caster_sunvis,			REALTIMELIGHTING);
 	Cvar_Register (&r_shadows_throwdirection,			REALTIMELIGHTING);
