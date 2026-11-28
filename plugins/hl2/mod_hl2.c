@@ -1454,6 +1454,8 @@ qboolean QDECL Mod_LoadHL2Model (model_t *mod, void *buffer, size_t fsize)
 		Mod_HL2_IncludeWeaponAnimations(&ctx, fsize);
 		if (!strcmp(mod->name, "models/weapons/v_knife.mdl") || !strcmp(mod->name, "models/weapons/v_knife_gg.mdl"))
 			if (!ctx.weapon_animations) return false;
+		// A scoped Legacy gun without its frame clips would draw in its rest pose: refuse it so CSQC keeps CS:S.
+		if (!Q_strncasecmp(mod->name, "models/ftesurf/legacy/", 22) && !ctx.weapon_animations) return false;
 		if (ctx.header->num_anims && !ctx.weapon_animations)
 		{
 			galiasanimation_t *a;
