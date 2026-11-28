@@ -134,7 +134,7 @@ int r_cubelight_used;
 int r_cubelight_gated;
 
 #ifdef GLQUAKE
-static texid_t shadowmap[4];	//FTESurf Patch 1880: [3] = the 3D sky room's sun cascades, kept between frames
+static texid_t shadowmap[4+4];	//FTESurf Patch 1880: [3] = the 3D sky room's sun cascades, kept between frames; Patch 1885: [4..7] = each cascade's kept world depth
 static int shadow_fbo_id;
 static int shadow_fbo_depth_num;
 #endif
@@ -1496,6 +1496,27 @@ qboolean GLBE_ShadowAtlasKept(int id, int w, int h, uploadfmt_t encoding)
 	if ((unsigned)id >= countof(shadowmap) || !TEXVALID(shadowmap[id]))
 		return false;
 	return shadowmap[id]->width == w && shadowmap[id]->height == h && shadowmap[id]->format == encoding && shadowmap[id]->status == TEX_LOADED;
+}
+//FTESurf Patch 1885: copy a rectangle of one shadow map into another (GL bottom-origin pixels), as stored -- the sun
+//cascades' kept world depth into this frame's cell. Same format both sides (both made by GLBE_BeginShadowMap).
+qboolean GLBE_CanCopyShadow(void)
+{
+	extern void (APIENTRY *qglCopyImageSubData)(GLuint, GLenum, GLint, GLint, GLint, GLint, GLuint, GLenum, GLint, GLint, GLint, GLint, GLsizei, GLsizei, GLsizei);
+	return qglCopyImageSubData != NULL;
+}
+qboolean GLBE_CopyShadowRect(int srcid, int sx, int sy, int dstid, int dx, int dy, int w, int h)
+{
+	extern void (APIENTRY *qglCopyImageSubData)(GLuint, GLenum, GLint, GLint, GLint, GLint, GLuint, GLenum, GLint, GLint, GLint, GLint, GLsizei, GLsizei, GLsizei);
+	texid_t s, d;
+	if (!qglCopyImageSubData || (unsigned)srcid >= countof(shadowmap) || (unsigned)dstid >= countof(shadowmap))
+		return false;
+	s = shadowmap[srcid];
+	d = shadowmap[dstid];
+	if (!TEXVALID(s) || !TEXVALID(d) || s->format != d->format || sx < 0 || sy < 0 || dx < 0 || dy < 0 ||
+		sx + w > s->width || sy + h > s->height || dx + w > d->width || dy + h > d->height)
+		return false;
+	qglCopyImageSubData(s->num, GL_TEXTURE_2D, 0, sx, sy, 0, d->num, GL_TEXTURE_2D, 0, dx, dy, 0, w, h, 1);
+	return true;
 }
 void GLBE_UseShadowAtlas(int id)
 {

@@ -92,6 +92,7 @@ void (APIENTRY *qglDeleteRenderbuffersEXT)(GLsizei n, const GLuint* ids);
 void (APIENTRY *qglFramebufferTexture2DEXT)(GLenum target, GLenum attachmentPoint, GLenum textureTarget, GLuint textureId, GLint  level);
 void (APIENTRY *qglBlitFramebufferEXT)(GLint sx0, GLint sy0, GLint sx1, GLint sy1, GLint dx0, GLint dy0, GLint dx1, GLint dy1, GLbitfield mask, GLenum filter);	//FTESurf Patch 1237: gl3 / EXT_framebuffer_blit, may be NULL
 void (APIENTRY *qglRenderbufferStorageMultisampleEXT)(GLenum target, GLsizei samples, GLenum internalformat, GLsizei width, GLsizei height);	//FTESurf Patch 1260: may be NULL
+void (APIENTRY *qglCopyImageSubData)(GLuint srcName, GLenum srcTarget, GLint srcLevel, GLint srcX, GLint srcY, GLint srcZ, GLuint dstName, GLenum dstTarget, GLint dstLevel, GLint dstX, GLint dstY, GLint dstZ, GLsizei w, GLsizei h, GLsizei d);	//FTESurf Patch 1885: gl4.3 / ARB_copy_image, may be NULL
 FTEPFNGLVERTEXATTRIBPOINTERPROC			qglVertexAttribPointer;
 FTEPFNGLVERTEXATTRIB4FPROC				qglVertexAttrib4f;
 FTEPFNGLGETVERTEXATTRIBIVPROC			qglGetVertexAttribiv;
@@ -729,6 +730,7 @@ static qboolean GL_CheckExtensions (void *(*getglfunction) (char *name))
 	qglFramebufferTexture2DEXT	= NULL;
 	qglBlitFramebufferEXT		= NULL;
 	qglRenderbufferStorageMultisampleEXT = NULL;
+	qglCopyImageSubData			= NULL;	//FTESurf Patch 1885
 
 #endif
 
@@ -1308,6 +1310,8 @@ static qboolean GL_CheckExtensions (void *(*getglfunction) (char *name))
 			qglBlitFramebufferEXT	= (void *)getglext("glBlitFramebuffer");	//FTESurf Patch 1237: not in gles2
 			qglRenderbufferStorageMultisampleEXT = (void *)getglext("glRenderbufferStorageMultisample");	//FTESurf Patch 1260
 		}
+		if (!gl_config_gles && (gl_config.glversion >= 4.3 || GL_CheckExtension("GL_ARB_copy_image")))
+			qglCopyImageSubData		= (void *)getglext("glCopyImageSubData");	//FTESurf Patch 1885: the sun cascades' kept world depth
 
 		gl_config.arb_framebuffer_srgb = GL_CheckExtension("GL_ARB_framebuffer_sRGB");
 	}
@@ -3424,6 +3428,7 @@ void GL_ForgetPointers(void)
 	qglFramebufferTexture2DEXT	= NULL;
 	qglBlitFramebufferEXT		= NULL;
 	qglRenderbufferStorageMultisampleEXT = NULL;
+	qglCopyImageSubData			= NULL;	//FTESurf Patch 1885
 #endif
 
 	//no GL_EXT_stencil_two_side

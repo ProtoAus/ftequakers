@@ -1050,6 +1050,8 @@ void GLBE_SaveFakeShadowState(fakeshadowstate_t *st);
 void GLBE_RestoreFakeShadowState(const fakeshadowstate_t *st, int atlas);
 qboolean GLBE_ShadowAtlasKept(int id, int w, int h, uploadfmt_t encoding);
 void GLBE_UseShadowAtlas(int id);
+qboolean GLBE_CanCopyShadow(void);	//FTESurf Patch 1885
+qboolean GLBE_CopyShadowRect(int srcid, int sx, int sy, int dstid, int dx, int dy, int w, int h);	//FTESurf Patch 1885
 
 qboolean GLVID_ApplyGammaRamps (unsigned int size, unsigned short *ramps);	//called when gamma ramps need to be reapplied
 qboolean GLVID_Init (rendererstate_t *info, unsigned char *palette);		//the platform-specific function to init gl state
