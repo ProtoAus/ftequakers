@@ -1122,7 +1122,7 @@ static const void *Mod_HL2_GetExternalBlock(hl2parsecontext_t *ctx, const void *
 			const char *aniname;
 			char scoped[MAX_QPATH];
 			vfsfile_t *f;
-			if (!strncmp(ctx->mod->name, "models/ftesurf/legacy/", sizeof("models/ftesurf/legacy/")-1))
+			if (!Q_strncasecmp(ctx->mod->name, "models/ftesurf/legacy/", sizeof("models/ftesurf/legacy/")-1))
 			{
 				// These two admitted pistols have ANI files beside their MDL. Keep
 				// the ANI scoped too; the embedded path points at the global VFS.
@@ -1587,7 +1587,7 @@ qboolean QDECL Mod_LoadHL2Model (model_t *mod, void *buffer, size_t fsize)
 		}
 		result  = Mod_HL2_LoadVVD(&ctx, vvd, vvdsize);
 		result &= Mod_HL2_LoadVTX(&ctx, vtx, vtxsize);
-		if (!strncmp(mod->name, "models/ftesurf/legacy/", sizeof("models/ftesurf/legacy/")-1))
+		if (!Q_strncasecmp(mod->name, "models/ftesurf/legacy/", sizeof("models/ftesurf/legacy/")-1))
 		{
 			galiasinfo_t *surface = mod->meshinfo;
 			unsigned int indices = 0;

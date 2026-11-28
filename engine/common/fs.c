@@ -390,6 +390,7 @@ void COM_CheckRegistered (void);
 void Mods_FlushModList(void);
 static void FS_ReloadPackFilesFlags(unsigned int reloadflags);
 static void FS_RemountAddons(unsigned int loadstuff);	//nettest (P8): fs_load on-demand addon games
+static void FS_SessionMounts_Forget(void);				//ftesurf (P1862): the session-only viewmodel packs are about to close
 static void FS_AutoMount_Forget(void);					//ftesurf (P184): drop the automount bookkeeping; the searchpaths it names are about to stop existing
 static void FS_Cache_Note(const char *fname, searchpath_t *sp);	//ftesurf (P186): record a file the asset cache should copy. Called from FS_FLocateFile, so it is declared here and defined next to the rest of the cache, far below.
 static void FS_Cache_Forget(void);						//ftesurf (P186): abandon an in-flight harvest; the searchpaths it was reading from are about to stop existing
@@ -7436,6 +7437,7 @@ static void FS_ReloadPackFilesFlags(unsigned int reloadflags)
 		Z_Free(oldpaths);
 		oldpaths = next;
 	}
+	FS_SessionMounts_Forget();	//never re-added by a rebuild; CSQC asks again when it needs them
 
 
 	i = orderkey;
@@ -11686,11 +11688,8 @@ static double fs_knife_assets_retry;
 static double fs_css_weapon_assets_retry;
 #endif
 static void FS_GoldSrc_Forget(void);
-static void FS_AutoMount_Forget(void)	//ftesurf (P184): forward-declared at the top of the file, called from FS_FreePaths
+static void FS_SessionMounts_Forget(void)
 {
-	FS_GoldSrc_Forget();	//P1656
-	fs_numautomounted = 0;
-	fs_numautomountwant = 0;
 	fs_knife_assets_path[0] = 0;
 	fs_knife_assets_retry = 0;
 	fs_css_weapon_assets_path[0] = 0;
@@ -11700,6 +11699,13 @@ static void FS_AutoMount_Forget(void)	//ftesurf (P184): forward-declared at the 
 	Cvar_ForceSet(&fs_legacy_viewmodels, "0");
 	Cvar_ForceSet(&fs_knife_texture, "0");
 #endif
+}
+static void FS_AutoMount_Forget(void)	//ftesurf (P184): forward-declared at the top of the file, called from FS_FreePaths
+{
+	FS_GoldSrc_Forget();	//P1656
+	fs_numautomounted = 0;
+	fs_numautomountwant = 0;
+	FS_SessionMounts_Forget();
 }
 static qboolean FS_Addon_IsMounted(const char *syspath)
 {
@@ -13537,6 +13543,7 @@ static void FS_KnifeMount_f(void)
 	fs_knife_assets_retry = now + 30;
 	if (!FS_Addon_ResolveEx(spec, path, sizeof(path), true))
 	{
+		Cvar_ForceSet(&fs_legacy_viewmodels, "-1");	//CSQC stops asking on its own
 		Con_Printf("fs_knife_mount: installed CS:GO Legacy content not found\n");
 		return;
 	}
@@ -13547,9 +13554,11 @@ static void FS_KnifeMount_f(void)
 	{
 		Q_strncpyz(fs_knife_assets_path, path, sizeof(fs_knife_assets_path));
 		Cvar_ForceSet(&fs_knife_texture, FS_FLocateFile(fs_knife_texture_alias, FSLF_IFFOUND, NULL) ? "1" : "0");
-		Cvar_ForceSet(&fs_legacy_viewmodels, FS_FLocateFile("materials/ftesurf/legacy/customization/paints/anodized_multi/smoke2.vtf", FSLF_IFFOUND, NULL) ? "1" : "0");
+		Cvar_ForceSet(&fs_legacy_viewmodels, FS_FLocateFile("materials/ftesurf/legacy/customization/paints/anodized_multi/smoke2.vtf", FSLF_IFFOUND, NULL) ? "1" : "-1");
 		fs_knife_assets_retry = now + 1;
 	}
+	else
+		Cvar_ForceSet(&fs_legacy_viewmodels, "-1");
 	if (fs_thread_mutex)
 		Sys_UnlockMutex(fs_thread_mutex);
 	if (mounted)
@@ -13569,6 +13578,12 @@ static void FS_CSSWeaponMount_f(void)
 	if (Cmd_Argc() != 1)
 	{
 		Con_Printf("fs_css_weapon_mount: takes no arguments\n");
+		return;
+	}
+	if (fs_puremode >= 2)
+	{	//the alias refuses pure servers anyway; say so instead of "not found"
+		Cvar_ForceSet(&fs_css_weapon_assets, "-1");
+		Con_Printf("fs_css_weapon_mount: not available on a pure server\n");
 		return;
 	}
 	if (*fs_css_weapon_assets_path && FS_FLocateFile("models/ftesurf/css/v_pist_glock18.mdl", FSLF_IFFOUND, NULL))
