@@ -1167,9 +1167,9 @@ static void Mod_HL2_ReadPose(hl2parsecontext_t *ctx, const hl2mdlanim_t *anim, i
 
 	memcpy(out, ctx->baserelpose, sizeof(*out)*numbones);
 	pose = Mod_HL2_GetExternalBlock(ctx, anim, poseofs.externalblock, poseofs.ofs_pose);
-	if (!pose || pose->bone==255)
-		return;
-	for (;;)
+	// Source only consumes an entry whose bone exists; CS:GO Legacy glove rigs end
+	// their chains with bone 72 of 48 (P1861). Stop there instead of writing past out.
+	for (; pose && pose->bone != 255 && pose->bone < numbones; )
 	{
 		data = pose->data;
 

@@ -1,5 +1,13 @@
 # Engine patches (fteqw `fteqw64.exe`)
 
+## Patch 1861 - CS:GO gloves and arms no longer corrupt memory when they load
+
+**Problem.** `Mod_HL2_ReadPose` (hl2 plugin) wrote every entry of an animation's pose chain to `out[pose->bone]`, checking only that the FIRST entry was not bone 255. CS:GO Legacy glove and hand rigs end their chains with an entry for a bone the model does not have: a read-only walk of the installed `pak01_dir.vpk` found 17 of the knife catalogue's 106 Legacy MDLs (every glove family, bare/ghost hands, `t_arms_phoenix`, `v_glove_anarchist`) carrying bone 72 in a 48-bone rig, and `v_knife`/`v_knife_gg` ending 37 sections each past their 38 bones. Each such entry wrote one 48-byte matrix about 1.1 KB past the pose buffer. Picking any Legacy glove row in the knife menu reaches it; the damage shows later, if at all, as a glibc `malloc(): invalid next size` abort.
+
+**Change.** The loop stops at the first entry whose bone is 255 or `>= numbones`; the remaining bones keep the base pose. Source's decoder walks bones `0..numbones-1` and consumes an entry only when its bone matches, so it never reads such an entry either. Every out-of-range entry in the installed pack sits at the tail of an ascending chain, so no drawn pose changes.
+
+**Verified.** ASan client + plugin built from this commit alone, main's own progs, `surf_pantheon_css`, Butterfly, knife menu rows 34-49 (software EGL, isolated basedir): with the guard reverted, the first row (Glove Anarchist) gives an ASan heap-buffer-overflow WRITE in `Mod_HL2_ReadPose` and the client aborts; with it, all 16 rows load and draw normally posed hands, no sanitizer report, clean exit. The same pair on the held weapon-workshop branch (13 more faction rigs, 9 glove kits) also faults without the guard and passes with it. The Linux release plugin and a Win64 cross-build (`fteplug_hl2_x64.dll`, mingw-w64) compile with no warning in `mod_hl2.c`. Not run on Windows or a desktop GPU.
+
 ## Patch 1856 - Angle check stops falsely faulting remote lobby players (reader only, game 0211b974)
 
 **Problem.** The one-frame and sweep angle rules join each move to the screen by the .view tick label, which a remote client stamps late. Live 28 Nov, 17 of 232 fleet runs with sidecars carried an angle FAULT that the P1613 command rule contradicts (95-100% of their moves matched to their own command's frames, 0.00-0.02% off the drawn path).
