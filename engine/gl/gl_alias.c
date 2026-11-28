@@ -3944,12 +3944,107 @@ static void R_SortModelBatches(batch_t **list, const char *what)
 //by its headnode: drawn when ANY leaf under the smallest node holding the box was visible -- for a big ramp, half the map
 //(surf_thesteve: func_brush *130 through the sky from 10,000 units). Source's client leaf system draws a renderable from
 //the visible leaves it touches only, so split the record's box (renderer.c R_FindEntLeafs) until each half fits.
+/*
+FTESurf Patch 1891: the parts a box splits into, remembered by the box's exact bits and the world. The world does
+not change, so a box always splits into the same parts with the same leaf records; only the view's PVS differs
+between tests, and the answer is still "any part's record in the PVS" (the order the parts are asked in cannot
+change an or). Every view of every frame re-split each overflowed entity box: up to 511 tree walks for one that
+is out of sight (bhop_canals, standing still: VBSP_BoxLeafnums_r + FindTouchedLeafs ~5% of the main thread).
+*/
+extern cvar_t r_entpvs_splitcache;
+typedef struct
+{
+	model_t *wm;
+	vec3_t mins, maxs;
+	pvscache_t *parts;
+	unsigned int nparts, maxparts;
+	unsigned int used;		//r_entpvssplit_seq when last asked, to pick which of a pair to replace
+} entpvssplit_t;
+#define R_ENTPVSSPLIT_SLOTS 128		//a power of two; probed in pairs
+static entpvssplit_t r_entpvssplit[R_ENTPVSSPLIT_SLOTS];
+static unsigned int r_entpvssplit_seq;
+void R_EntPVSSplitFlush(void)
+{	//Surf_NewMap: another world's boxes
+	int i;
+	for (i = 0; i < R_ENTPVSSPLIT_SLOTS; i++)
+		r_entpvssplit[i].wm = NULL;
+}
+static void R_EntPVSSplitParts(entpvssplit_t *e, const vec3_t mins, const vec3_t maxs, int depth)
+{	//R_EntPVSSplit's recursion, keeping the parts it would test instead of testing them
+	pvscache_t pc;
+	vec3_t lo, hi;
+	int a = 0, i;
+	e->wm->funcs.FindTouchedLeafs(e->wm, &pc, mins, maxs);
+	if (pc.num_leafs >= 0 || depth >= 8)
+	{
+		if (e->nparts == e->maxparts)
+		{
+			e->maxparts = e->maxparts ? e->maxparts * 2 : 8;
+			e->parts = BZ_Realloc(e->parts, sizeof(*e->parts) * e->maxparts);
+		}
+		e->parts[e->nparts++] = pc;
+		return;
+	}
+	for (i = 1; i < 3; i++)
+		if (maxs[i] - mins[i] > maxs[a] - mins[a])
+			a = i;
+	VectorCopy(maxs, hi);
+	VectorCopy(mins, lo);
+	hi[a] = lo[a] = (mins[a] + maxs[a]) * 0.5f;
+	R_EntPVSSplitParts(e, mins, hi, depth + 1);
+	R_EntPVSSplitParts(e, lo, maxs, depth + 1);
+}
+static entpvssplit_t *R_EntPVSSplitFind(model_t *wm, const vec3_t mins, const vec3_t maxs)
+{
+	unsigned int h = 2166136261u, k, b[6];
+	entpvssplit_t *e, *x;
+	memcpy(b, mins, sizeof(vec3_t));
+	memcpy(b+3, maxs, sizeof(vec3_t));
+	for (k = 0; k < 6; k++)
+		h = (h ^ b[k]) * 16777619u;
+	h ^= (unsigned int)(size_t)wm;
+	h = (h ^ (h >> 15)) & (R_ENTPVSSPLIT_SLOTS - 2);
+	r_entpvssplit_seq++;
+	for (k = 0; k < 2; k++)
+	{
+		e = &r_entpvssplit[h + k];
+		if (e->wm == wm && !memcmp(e->mins, mins, sizeof(vec3_t)) && !memcmp(e->maxs, maxs, sizeof(vec3_t)))
+		{
+			e->used = r_entpvssplit_seq;
+			return e;
+		}
+	}
+	e = &r_entpvssplit[h];
+	x = &r_entpvssplit[h + 1];
+	if (e->wm && (!x->wm || x->used < e->used))
+		e = x;	//the empty one, else the one asked for least recently
+	e->wm = wm;
+	VectorCopy(mins, e->mins);
+	VectorCopy(maxs, e->maxs);
+	e->nparts = 0;
+	e->used = r_entpvssplit_seq;
+	R_EntPVSSplitParts(e, mins, maxs, 0);
+	return e;
+}
+
 qboolean R_EntPVSSplit(model_t *wm, const vec3_t mins, const vec3_t maxs, const qbyte *pvs, int depth)
 {
 	pvscache_t pc;
 	vec3_t lo, hi;
 	int a = 0, i;
 	extern int r_entpvs_splitq;
+	if (!depth && r_entpvs_splitcache.ival)
+	{	//Patch 1891
+		entpvssplit_t *e = R_EntPVSSplitFind(wm, mins, maxs);
+		unsigned int p;
+		for (p = 0; p < e->nparts; p++)
+		{
+			r_entpvs_splitq++;
+			if (wm->funcs.EdictInFatPVS(wm, &e->parts[p], pvs, NULL))
+				return true;
+		}
+		return false;
+	}
 	r_entpvs_splitq++;
 	wm->funcs.FindTouchedLeafs(wm, &pc, mins, maxs);
 	if (pc.num_leafs >= 0 || depth >= 8)	//511 queries at most (an unseen entity walks them all); past depth 8 a part keeps the headnode answer

@@ -145,6 +145,7 @@ cvar_t r_ignoreentpvs						= CVARD ("r_ignoreentpvs", "0", "Disables pvs culling
 //FTESurf Patch 1698: with the sky a hole (gl_warp.c), what is drawn must be what the PVS holds, as Source's client leaf system culls.
 cvar_t r_entpvs_source = CVARD("r_entpvs_source", "1", "FTESurf Patch 1698: on a Source map, entities and persistent decals with a leaf record are culled by each view's PVS and areas even under r_ignoreentpvs 1, as Source culls every renderable; one without a record is still drawn. 0: frustum only (before Patch 1698).");
 cvar_t r_entpvs_active = CVARFD("r_entpvs_active", "0", CVAR_NOSET|CVAR_NOSAVE|CVAR_NORESET, "Set by the engine: 1 while r_entpvs_source applies to the loaded map (a Source map). CSQC culls its own polygons by the PVS when it reads 1.");
+cvar_t r_entpvs_splitcache = CVARD("r_entpvs_splitcache", "1", "FTESurf Patch 1891: remember the parts an overflowed entity box splits into (r_entpvs_exact), by the box, so later views and frames test only the view's PVS against them. Exact. 0 splits the box again for every test (before Patch 1891).");
 cvar_t r_entpvs_exact = CVARD("r_entpvs_exact", "1", "FTESurf Patch 1823: under r_entpvs_source, an entity too big for its leaf record is drawn only when a leaf its box touches is in the view's PVS (the box is split until each part's record fits). 0: any visible leaf under the node holding the box draws it (before Patch 1823).");
 qboolean R_EntPVSSource(void)
 {
@@ -1775,6 +1776,7 @@ void Renderer_Init(void)
 	Cvar_Register (&r_entpvs_source, GRAPHICALNICETIES);	//FTESurf Patch 1698
 	Cvar_Register (&r_entpvs_active, GRAPHICALNICETIES);
 	Cvar_Register (&r_entpvs_exact, GRAPHICALNICETIES);
+	Cvar_Register (&r_entpvs_splitcache, GRAPHICALNICETIES);
 	Cvar_Register (&r_fullbright, SCREENOPTIONS);
 	Cvar_Register (&r_drawentities, GRAPHICALNICETIES);
 	Cvar_Register (&r_drawviewmodel, GRAPHICALNICETIES);

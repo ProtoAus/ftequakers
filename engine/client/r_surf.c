@@ -5163,6 +5163,7 @@ Surf_NewMap
 */
 void Surf_NewMap (model_t *worldmodel)
 {
+
 	char namebuf[MAX_QPATH];
 	extern cvar_t host_mapname;
 #ifdef BEF_PUSHDEPTH
@@ -5171,7 +5172,9 @@ void Surf_NewMap (model_t *worldmodel)
 #endif
 	int		i;
 	extern cvar_t r_lightmap_bicubic_world;
+	extern void R_EntPVSSplitFlush(void);
 
+	R_EntPVSSplitFlush();	//FTESurf Patch 1891: another world's boxes
 	cl.worldmodel = worldmodel;
 	if (worldmodel && (worldmodel->engineflags & MDLF_SOURCEBSP))	//FTESurf Patch 1275: the vmt shaders follow this world's atlas
 		Cvar_ForceSet(&r_lightmap_bicubic_world, (worldmodel->engineflags & MDLF_LMPADDED) ? "1" : "0");
