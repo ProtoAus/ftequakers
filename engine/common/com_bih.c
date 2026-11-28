@@ -1353,6 +1353,47 @@ static void BIH_TestBoxInPatch (struct bihtrace_s *fte_restrict tr, q2cbrush_t *
 #endif
 
 
+// Use packed binary32 only in builds where the scalar multiply and add do not fuse.
+#if defined(BIH_USEBIH) && defined(__x86_64__) && defined(__SSE2__) && !defined(__FMA__) && !defined(__FMA4__) && !defined(__FAST_MATH__)
+#include <emmintrin.h>
+#define BIH_SIMD_CLIP
+static inline __m128 BIH_WalkLoad3(const vec3_t v)
+{
+	return _mm_setr_ps(v[0], v[1], v[2], v[0]);
+}
+static inline void BIH_WalkClip3(const struct bihtrace_s *tr, const struct bihbox_s *move, float nearfrac, float farfrac, struct bihbox_s *out)
+{
+	const __m128 start = BIH_WalkLoad3(tr->startpos), dir = BIH_WalkLoad3(tr->totalmove);
+	const __m128 expand = BIH_WalkLoad3(tr->expand);
+	const __m128 nearpt = _mm_add_ps(start, _mm_mul_ps(_mm_set1_ps(nearfrac), dir));
+	const __m128 farpt = _mm_add_ps(start, _mm_mul_ps(_mm_set1_ps(farfrac), dir));
+	// Select the second operand on ties or unordered inputs, just like the original comparisons.
+	const __m128 lo = _mm_max_ps(BIH_WalkLoad3(move->min), _mm_sub_ps(_mm_min_ps(farpt, nearpt), expand));
+	const __m128 hi = _mm_min_ps(BIH_WalkLoad3(move->max), _mm_add_ps(_mm_max_ps(nearpt, farpt), expand));
+	memcpy(out->min, &lo, sizeof(vec3_t));
+	memcpy(out->max, &hi, sizeof(vec3_t));
+}
+#endif
+#ifdef BIH_USEBIH
+static inline void BIH_WalkClip(const struct bihtrace_s *tr, const struct bihbox_s *move, float nearfrac, float farfrac, struct bihbox_s *out)
+{
+#ifdef BIH_SIMD_CLIP
+	BIH_WalkClip3(tr, move, nearfrac, farfrac, out);
+#else
+	unsigned int a, s;
+	vec3_t points[2];
+	VectorMA(tr->startpos, nearfrac, tr->totalmove, points[0]);
+	VectorMA(tr->startpos, farfrac, tr->totalmove, points[1]);
+	for (a = 0; a < 3; a++)
+	{
+		s = points[0][a] > points[1][a];
+		out->min[a] = max(move->min[a], points[s][a] - tr->expand[a]);
+		out->max[a] = min(move->max[a], points[!s][a] + tr->expand[a]);
+	}
+#endif
+}
+#endif
+
 static void BIH_RecursiveTrace (struct bihtrace_s *fte_restrict tr, const struct bihnode_s *fte_restrict node, const struct bihbox_s *fte_restrict movesubbounds, const struct bihbox_s *fte_restrict nodebox)
 {
 	//if the tree were 1d, we wouldn't need to be so careful with the bounds, but if the trace is long then we want to avoid hitting all surfaces within that entire-map-encompassing move aabb
@@ -1515,8 +1556,18 @@ static void BIH_RecursiveTrace (struct bihtrace_s *fte_restrict tr, const struct
 			struct bihbox_s bounds;
 			struct bihbox_s newbounds;
 			float distnear, distfar, nearfrac, farfrac, min, max;
-			unsigned int axis = node->type-BIH_X, child, a, s;
-			vec3_t points[2];
+			unsigned int axis = node->type-BIH_X, child;
+			if (tr->totalmove[axis])
+			{
+				// Both children inherit the same bounds on the other two axes. On a
+				// moving axis, a miss on either inherited axis rejects both children.
+				// Keep <= and >= to match the original inclusive overlap test.
+				const unsigned int a1 = axis == 0 ? 1 : 0;
+				const unsigned int a2 = axis == 2 ? 1 : 2;
+				if (!(movesubbounds->min[a1] <= nodebox->max[a1] && movesubbounds->max[a1] >= nodebox->min[a1] &&
+					  movesubbounds->min[a2] <= nodebox->max[a2] && movesubbounds->max[a2] >= nodebox->min[a2]))
+					return;
+			}
 
 			if (!tr->totalmove[axis])
 			{	//doesn't move with respect to this axis. don't allow infinities.
@@ -1541,28 +1592,16 @@ static void BIH_RecursiveTrace (struct bihtrace_s *fte_restrict tr, const struct
 					bounds.min[axis] = node->bihnode.cmin[child] - tr->expand[axis];
 					bounds.max[axis] = node->bihnode.cmax[child] + tr->expand[axis];	//expand the bounds according to the player's size
 
-					if (!BIH_BoundsIntersect(movesubbounds->min, movesubbounds->max, bounds.min, bounds.max))
+					if (!(movesubbounds->min[axis] <= bounds.max[axis] && movesubbounds->max[axis] >= bounds.min[axis]))
 						continue;
-//					if (movesubbounds->max[axis] < bounds.min[axis])
-//						continue;	//(clipped) move bounds is outside this child
-//					if (bounds.max[axis] < movesubbounds->min[axis])
-//						continue;	//(clipped) move bounds is outside this child
 
 					distnear = bounds.max[axis] - tr->startpos[axis];
 					nearfrac = distnear/tr->totalmove[axis];
 					if (nearfrac <= tr->trace.truefraction)
 					{
-						VectorMA(tr->startpos, nearfrac, tr->totalmove, points[0]);	//clip the new movebounds (this is more to clip the other axis too)
 						distfar = bounds.min[axis] - tr->startpos[axis];
 						farfrac = distfar/tr->totalmove[axis];
-						VectorMA(tr->startpos, farfrac, tr->totalmove, points[1]);	//clip the new movebounds (this is more to clip the other axis too)
-
-						for (a = 0; a < 3; a++)
-						{
-							s = points[0][a] > points[1][a];
-							newbounds.min[a] = max(movesubbounds->min[a], points[s][a] - tr->expand[a]);
-							newbounds.max[a] = min(movesubbounds->max[a], points[!s][a] + tr->expand[a]);
-						}
+						BIH_WalkClip(tr, movesubbounds, nearfrac, farfrac, &newbounds);
 						BIH_RecursiveTrace(tr, node+node->bihnode.firstchild+child, &newbounds, &bounds);
 					}
 				}
@@ -1575,28 +1614,16 @@ static void BIH_RecursiveTrace (struct bihtrace_s *fte_restrict tr, const struct
 					bounds.min[axis] = node->bihnode.cmin[child] - tr->expand[axis];
 					bounds.max[axis] = node->bihnode.cmax[child] + tr->expand[axis];	//expand the bounds according to the player's size
 
-					if (!BIH_BoundsIntersect(movesubbounds->min, movesubbounds->max, bounds.min, bounds.max))
+					if (!(movesubbounds->min[axis] <= bounds.max[axis] && movesubbounds->max[axis] >= bounds.min[axis]))
 						continue;
-//					if (movesubbounds->max[axis] < bounds.min[axis])
-//						continue;	//(clipped) move bounds is outside this child
-//					if (bounds.max[axis] < movesubbounds->min[axis])
-//						continue;	//(clipped) move bounds is outside this child
 
 					distnear = bounds.min[axis] - tr->startpos[axis];
 					nearfrac = distnear/tr->totalmove[axis];
 					if (nearfrac <= tr->trace.truefraction)
 					{
-						VectorMA(tr->startpos, nearfrac, tr->totalmove, points[0]);	//clip the new movebounds (this is more to clip the other axis too)
 						distfar = bounds.max[axis] - tr->startpos[axis];
 						farfrac = distfar/tr->totalmove[axis];
-						VectorMA(tr->startpos, farfrac, tr->totalmove, points[1]);	//clip the new movebounds (this is more to clip the other axis too)
-
-						for (a = 0; a < 3; a++)
-						{
-							s = points[0][a] > points[1][a];
-							newbounds.min[a] = max(movesubbounds->min[a], points[s][a] - tr->expand[a]);
-							newbounds.max[a] = min(movesubbounds->max[a], points[!s][a] + tr->expand[a]);
-						}
+						BIH_WalkClip(tr, movesubbounds, nearfrac, farfrac, &newbounds);
 						BIH_RecursiveTrace(tr, node+node->bihnode.firstchild+child, &newbounds, &bounds);
 					}
 				}
@@ -1952,7 +1979,7 @@ static qboolean BIH_Trace(model_t *model, int forcehullnum, const framestate_t *
 		if (bih_vphys && m && m->vphysalt && !VectorEquals(mins, maxs) && m->type != mod_alias)
 			m = m->vphysalt;	//Patch 1713: likewise
 	}
-	unsigned int h, k, i, w;
+	unsigned int h, i, p[6];
 	qboolean hit;
 
 	if (!bih_tracecache.ival || pm_dispprobe.ival || bih_probe_readers || !m || !m->cnodes || m->terrain || !Sys_IsMainThread())
@@ -1978,11 +2005,13 @@ static qboolean BIH_Trace(model_t *model, int forcehullnum, const framestate_t *
 	}
 	VectorCopy(m->mins, key.v+21);
 	VectorCopy(m->maxs, key.v+24);
-	for (h = 2166136261u, k = 0; k < sizeof(key); k += sizeof(w))
-	{
-		memcpy(&w, (const qbyte*)&key + k, sizeof(w));	//not an unsigned int* over the struct: strict aliasing
-		h = (h ^ w) * 16777619u;
-	}
+	// The hash only chooses a slot. Model identity and endpoint bits vary across rays;
+	// the whole-key comparison below still decides whether the stored trace is valid.
+	memcpy(p, key.v, sizeof(p));
+	h = (unsigned int)((uintptr_t)m >> 4) ^ (p[0]*2246822519u + p[3]*3266489917u)
+		^ (p[1]*668265263u + p[4]*374761393u) ^ (p[2]*2654435761u + p[5]*1597334677u);
+	h ^= h >> 16;
+	h *= 2246822519u;
 	i = (h ^ (h >> 15)) & (BIH_TRACECACHE-1);
 	if (bih_tracecache_e[i].valid && !memcmp(&bih_tracecache_e[i].key, &key, sizeof(key)))
 	{

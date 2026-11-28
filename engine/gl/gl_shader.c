@@ -100,15 +100,16 @@ cvar_t r_glsl_warm = CVARFD("r_glsl_warm", "1", CVAR_ARCHIVE, "FTESurf Patch 127
 cvar_t r_mapready_budget = CVARFD("r_mapready_budget", "6", CVAR_ARCHIVE, "Soft seconds (0..10) for registered models/images and remembered active GLSL permutations at activation, then every permutation of the small programs (Patch 1574), then where fog can be drawn the other fog variant of the listed ones (Patch 1578). A single upload/driver compile cannot be preempted. Expiry is incomplete, NOT server timer admission; see r_mapready_info. (FTESurf Patch 1442: 6, was 2; the window stays responsive meanwhile.)");
 static struct
 {
-	qboolean observing, warming, invalidated, budgethit, overflow;
+	qboolean observing, warming, invalidated, budgethit, overflow, trace;
 	int programs, eligible, available, compiled, failed, pending, unavailable;
+	int priority, prioritymissing, priorityavailable, prioritycompiled, priorityfailed, prioritypending;
 	int whole, wholeeligible, wholeavailable, wholecompiled, wholefailed, wholepending;	//FTESurf Patch 1574: small programs warmed whole, after the list
 	int fogged, fog, fogeligible, fogavailable, fogcompiled, fogfailed, fogpending;	//FTESurf Patch 1578: fog variants where fog can be drawn, last
 	int models, modelpending, modelfailed, modelunrequested;
 	int images, imagepending, imagefailed, imageunrequested;
 	unsigned int latecompiles, latefailed, lateimages, lateimagefailed;
 	int otherpending;	//FTESurf Patch 1501: requested models outside the precache lists (static props), still loading
-	double seconds, lateseconds, lateimageseconds;
+	double seconds, lateseconds, lateimageseconds, epoch;
 	char lastprogram[MAX_QPATH], lastimage[MAX_QPATH];
 	unsigned int lastperm;
 	const char *state;
@@ -116,11 +117,17 @@ static struct
 
 static void MapReady_Compiled(program_t *prog, unsigned int perm, double start, qboolean failed)
 {
+	double now;
 	if (!mapready.observing || mapready.warming)
 		return;
+	now = Sys_DoubleTime();
 	mapready.latecompiles++;
 	mapready.latefailed += failed;
-	mapready.lateseconds += Sys_DoubleTime() - start;
+	mapready.lateseconds += now - start;
+	if (mapready.trace)
+		Con_Printf("mapready trace: late %u start %.6f ms %.3f perm %x failed %u %s\n", mapready.latecompiles,
+			start - mapready.epoch, 1000 * (now - start), perm, (unsigned)failed,
+			prog->name ? prog->name : "<unnamed>");
 	Q_strncpyz(mapready.lastprogram, prog->name ? prog->name : "<unnamed>", sizeof(mapready.lastprogram));
 	mapready.lastperm = perm;
 }
@@ -3048,6 +3055,7 @@ static void Shader_LoadGeneric(sgeneric_t *g, int qrtype)
 	char *h;
 
 	g->failed = true;
+	g->prog.stockglsldepth = false;
 
 	TRACE(("Loading program %s...\n", g->name));
 
@@ -3137,6 +3145,7 @@ static void Shader_LoadGeneric(sgeneric_t *g, int qrtype)
 
 					if (g->failed)
 						continue;
+					g->prog.stockglsldepth = progs == sbuiltins && qrtype == QR_OPENGL && !strcmp(g->name, "depthonly");
 
 					return;
 				}
@@ -5850,6 +5859,10 @@ void R_MapReadyInfo_f(void)
 		mapready.seconds, mapready.budgethit, mapready.overflow);
 	Con_Printf("mapready: programs %i unavailable %i eligible %i available %i compiled %i failed %i pending %i\n",
 		mapready.programs, mapready.unavailable, mapready.eligible, mapready.available, mapready.compiled, mapready.failed, mapready.pending);
+	if (mapready.priority)
+		Con_Printf("mapready: map priority %i missing %i available %i compiled %i failed %i pending %i\n",
+			mapready.priority, mapready.prioritymissing, mapready.priorityavailable, mapready.prioritycompiled,
+			mapready.priorityfailed, mapready.prioritypending);
 	Con_Printf("mapready: whole programs %i eligible %i available %i compiled %i failed %i pending %i\n", mapready.whole,	//Patch 1574
 		mapready.wholeeligible, mapready.wholeavailable, mapready.wholecompiled, mapready.wholefailed, mapready.wholepending);
 	Con_Printf("mapready: fog variants fogged %i programs %i eligible %i available %i compiled %i failed %i pending %i\n",	//Patch 1578
@@ -5869,6 +5882,8 @@ void R_MapReadyInfo_f(void)
 		GLBE_CaptureTargets_Info();	//FTESurf Patch 1575
 	}
 #endif
+	if (mapready.trace)
+		Con_Printf("mapready trace: now %.6f\n", Sys_DoubleTime() - mapready.epoch);
 	Con_Printf("mapready: closure excludes future registrations, render targets other than the main view's water captures, audio, driver first-draw and route coverage; NOT timer admission\n");
 }
 
@@ -5907,6 +5922,116 @@ static void MapReady_WarmPerm(program_t *prog, unsigned int p, unsigned int *see
 		MAPREADY_COUNT(compiled);
 }
 #undef MAPREADY_COUNT
+// The versioned, loose per-map list only prioritizes work on existing GL
+// programs. Never load a program named by the list or use package overrides.
+// The general sweeps still get time from the same existing soft deadline.
+#define MAPREADY_PRIORITY_ENTRIES 64
+#define MAPREADY_PRIORITY_BYTES (32*1024)
+static program_t *MapReady_PriorityLookup(program_t **programs, unsigned int count, const char *name, unsigned int p)
+{
+	program_t *match = NULL, *prog;
+	unsigned int i;
+	for (i = 0; i < count; i++)
+	{
+		prog = programs[i];
+		if (prog == match || !prog->name || !prog->permu[0] || (p & ~prog->supportedpermutations) || strcmp(prog->name, name))
+			continue;
+		if (match)
+			return NULL; // inline programs can share a name without sharing their source
+		match = prog;
+	}
+	return match;
+}
+static qboolean MapReady_PriorityTry(program_t *prog, unsigned int p)
+{
+	struct programpermu_s *variant;
+	MapReady_KeepAlive();
+	variant = Shader_LoadPermutation(prog, p);
+	if (!variant)
+		return false; // leave the empty slot so the ordinary path can retry
+	prog->permu[p] = variant;
+	return true;
+}
+static void MapReady_Priority(program_t **programs, unsigned int count, double deadline)
+{
+	struct { unsigned int perm; const char *name; } tried[MAPREADY_PRIORITY_ENTRIES];
+	char stem[MAX_QPATH], path[MAX_QPATH+32], header[128], *buf, *line, *nl, *name, *end;
+	unsigned int i, p;
+	unsigned long value;
+	qofs_t len;
+	vfsfile_t *f;
+	program_t *prog;
+	double now = Sys_DoubleTime();
+	if (!cl.worldmodel || now >= deadline)
+		return;
+	COM_FileBase(cl.worldmodel->name, stem, sizeof(stem));
+	if (!*stem || strspn(stem, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-") != strlen(stem))
+		return;
+	Q_snprintfz(path, sizeof(path), "maps/%s.bsp", stem);
+	if (strcmp(path, cl.worldmodel->name))
+		return; // avoid same-stem entries for a model or BSP in another directory
+	Q_snprintfz(path, sizeof(path), "glsl/mapwarm/%s.txt", stem);
+	f = FS_OpenVFS(path, "rb", FS_GAMEONLY);
+	if (!f)
+		return;
+	len = VFS_GETLEN(f);
+	if (len <= 0 || len > MAPREADY_PRIORITY_BYTES)
+	{
+		VFS_CLOSE(f);
+		return;
+	}
+	buf = BZ_Malloc(len + 1);
+	if (VFS_READ(f, buf, len) != (int)len || memchr(buf, 0, len))
+	{
+		VFS_CLOSE(f);
+		BZ_Free(buf);
+		return;
+	}
+	VFS_CLOSE(f);
+	buf[len] = 0;
+	GLSLWarm_Header(header, sizeof(header));
+	deadline = now + (deadline - now) * 0.6;
+	for (line = buf; mapready.priority < MAPREADY_PRIORITY_ENTRIES && (nl = strchr(line, '\n')); line = nl)
+	{
+		if (nl > line && nl[-1] == '\r') nl[-1] = 0;
+		*nl++ = 0;
+		if (line == buf)
+		{
+			if (strcmp(line, header)) break;
+			continue;
+		}
+		if (!isxdigit((unsigned char)*line))
+			continue;
+		value = strtoul(line, &end, 16);
+		if (*end != ' ' || !end[1] || !value || value >= PERMUTATIONS)
+			continue;
+		p = value;
+		name = end + 1;
+		for (i = 0; i < (unsigned int)mapready.priority; i++)
+			if (tried[i].perm == p && !strcmp(tried[i].name, name))
+				break;
+		if (i < (unsigned int)mapready.priority)
+			continue;
+		tried[i].perm = p;
+		tried[i].name = name;
+		mapready.priority++;
+		prog = MapReady_PriorityLookup(programs, count, name, p);
+		if (!prog)
+			mapready.prioritymissing++;
+		else if (prog->permu[p])
+		{
+			if (prog->permu[p] == prog->permu[0]) mapready.priorityfailed++;
+			else mapready.priorityavailable++;
+		}
+		else if (Sys_DoubleTime() >= deadline)
+			mapready.prioritypending++;
+		else if (MapReady_PriorityTry(prog, p))
+			mapready.prioritycompiled++;
+		else
+			mapready.priorityfailed++;
+	}
+	BZ_Free(buf);
+}
 //FTESurf Patch 1578: whether this map can draw PERMUTATION_FOG (one site, gl_backend.c). A Source world always can: its
 //fog controllers switch on later (SetFogController; 26 maps start on a disabled one) and its water fogs the view without
 //one (gl_rmain.c's fallback). Otherwise any fog now; non-zero, as the renderer tests (a negative linear end still fogs).
@@ -5934,6 +6059,8 @@ void GLSLWarm_MapActive(void)
 	double start = Sys_DoubleTime();
 	double deadline = start + bound(0, r_mapready_budget.value, 10);
 	memset(&mapready, 0, sizeof(mapready));
+	mapready.trace = !!COM_CheckParm("-mapreadytrace");
+	mapready.epoch = start;
 	mapready.state = "incomplete";
 	mapready.warming = true;
 	MapReady_Resources();
@@ -5970,6 +6097,7 @@ void GLSLWarm_MapActive(void)
 					break;
 			}
 			qsort(programs, count, sizeof(*programs), MapReady_ComparePrograms);
+			MapReady_Priority(programs, count, deadline);
 			if (!glslwarm_mem)	//no list: nothing known to close over; set after the walk above, which stops at overflow
 				mapready.overflow = true;
 			for (i = 0; i < (unsigned int)count; i++)
@@ -6036,6 +6164,18 @@ void GLSLWarm_MapActive(void)
 				for (perm = 1; w && perm < PERMUTATIONS; perm++)
 					if (w->bits[perm >> 5] & (1u << (perm & 31)))
 						MapReady_WarmPerm(prog, (perm & sp) ^ PERMUTATION_FOG, seen, deadline, 2);
+			}
+			// Diagnostic only, after the compile passes so printing cannot spend
+			// the budget that selected the ready permutations.
+			if (mapready.trace)
+			{
+				for (i = 0; i < (unsigned int)count; i++)
+				{
+					prog = programs[i];
+					if ((i && prog == programs[i-1]) || !prog->name)
+						continue;
+					Con_Printf("mapready trace: active %x %s\n", prog->supportedpermutations, prog->name);
+				}
 			}
 		}
 		free(programs);

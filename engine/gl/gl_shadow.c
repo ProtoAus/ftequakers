@@ -2539,6 +2539,7 @@ static int sh_fakecell_x, sh_fakecell_y;
 
 static void Sh_DrawSunWorldChunks(dlight_t *l);	//FTESurf Patch 1765
 static qboolean sh_drawsunworld;
+static qboolean sh_cascade_batch;
 static void Sh_GenShadowFace(dlight_t *l, vec3_t axis[3], int lighttype, shadowmesh_t *smesh, int face, int smsize, int txsize, float proj[16], const qbyte *lightpvs)
 {
 	vec3_t t1,t2,t3;
@@ -3731,6 +3732,8 @@ typedef struct
 } sunbatch_t;
 static sunbatch_t *sh_sunbatches;	//per cl.worldmodel shadowbatch, refilled for each cascade
 static unsigned int sh_numsunbatches;
+static mesh_t **sh_sunrun;
+static unsigned int sh_sunrunmax;
 static void Sh_SunWorldMeshFree(void)
 {
 	unsigned int i;
@@ -3739,6 +3742,9 @@ static void Sh_SunWorldMeshFree(void)
 	Z_Free(sh_sunbatches);
 	sh_sunbatches = NULL;
 	sh_numsunbatches = 0;
+	BZ_Free(sh_sunrun);
+	sh_sunrun = NULL;
+	sh_sunrunmax = 0;
 	BZ_Free(sh_sunchunks);
 	sh_sunchunks = NULL;
 	sh_numsunchunks = 0;
@@ -3858,6 +3864,7 @@ static void Sh_DrawSunWorldChunks(dlight_t *l)
 	unsigned int i, j, b, ofl = r_refdef.flipcull, dbgsurfs = 0, dbgbatches = 0;
 	float d1 = DotProduct(l->origin, l->axis[1]), d2 = DotProduct(l->origin, l->axis[2]), d0 = DotProduct(l->origin, l->axis[0]);
 	float far0 = d0 + r_shadow_orthodepth, r = l->radius;
+
 	if (!sh_sunworldbuilt || wm != sh_sunworldmodel || sh_numsunbatches != (unsigned int)wm->numshadowbatches || !wm->shadowbatches)
 		return;
 	for (b = 0; b < sh_numsunbatches; b++)
@@ -3900,15 +3907,52 @@ static void Sh_DrawSunWorldChunks(dlight_t *l)
 	}
 	if (r_shadows_worldcull.ival == 1)
 		r_refdef.flipcull ^= SHADER_CULL_FLIP;
-	for (b = 0; b < sh_numsunbatches; b++)	//(worldcull 2: both faces, BEF_FORCETWOSIDED below)
+	for (b = 0; b < sh_numsunbatches; b++)
 	{
-		texture_t *tex;
-		if (!sh_sunbatches[b].count)
+		texture_t *tex = wm->shadowbatches[b].tex;
+		vbo_t *vbo = wm->shadowbatches[b].vbo;
+		const unsigned int flags = r_shadows_worldcull.ival == 2 ? BEF_FORCETWOSIDED : 0;
+		sunbatch_t *sb = &sh_sunbatches[b];
+		unsigned int k, total, head = b;
+		if (!sb->count || !tex || !tex->shader || !vbo)
 			continue;
-		tex = wm->shadowbatches[b].tex;
-		if (!tex || !tex->shader || !wm->shadowbatches[b].vbo)
-			continue;
-		BE_DrawMesh_List(tex->shader, sh_sunbatches[b].count, sh_sunbatches[b].meshes, wm->shadowbatches[b].vbo, NULL, r_shadows_worldcull.ival == 2 ? BEF_FORCETWOSIDED : 0);
+		total = sb->count;
+		if (sh_cascade_batch)
+		{
+			for (k = b+1; k < sh_numsunbatches; k++)
+			{
+				texture_t *other = wm->shadowbatches[k].tex;
+				sunbatch_t *tail = &sh_sunbatches[k];
+				if (!tail->count || !other || !other->shader || !wm->shadowbatches[k].vbo)
+					continue; // no draw, can't interrupt a compatible run
+				if (wm->shadowbatches[k].vbo != vbo || !GLBE_CascadeDepthRun(tex->shader, other->shader, vbo, flags))
+					break;
+				total += tail->count;
+			}
+			b = k - 1;
+		}
+		if (total == sb->count)
+			BE_DrawMesh_List(tex->shader, sb->count, sb->meshes, vbo, NULL, flags);
+		else
+		{
+			// One reusable buffer, not one retained allocation per possible run head.
+			unsigned int offset = 0;
+			if (total > sh_sunrunmax)
+			{
+				sh_sunrunmax = total;
+				sh_sunrun = BZ_Realloc(sh_sunrun, sizeof(*sh_sunrun) * sh_sunrunmax);
+			}
+			for (k = head; k <= b; k++)
+			{
+				sunbatch_t *tail = &sh_sunbatches[k];
+				texture_t *other = wm->shadowbatches[k].tex;
+				if (!tail->count || !other || !other->shader || !wm->shadowbatches[k].vbo)
+					continue;
+				memcpy(sh_sunrun + offset, tail->meshes, sizeof(*sh_sunrun) * tail->count);
+				offset += tail->count;
+			}
+			BE_DrawMesh_List(tex->shader, total, sh_sunrun, vbo, NULL, flags);
+		}
 		dbgbatches++;
 	}
 	r_refdef.flipcull = ofl;
@@ -3968,6 +4012,7 @@ static void Sh_GenerateCascadeAtlas(dlight_t *l, int cascades, int txsize)
 	if (!GLBE_BeginShadowMap(2, txsize, txsize, fmt, &restorefbo))
 		{ GLBE_SetFakeShadowCount(1); return; }
 
+	sh_cascade_batch = !COM_CheckParm("-nosuncascadebatch");
 	r_refdef.externalview = true;	//never any viewmodels
 	GLBE_SetupForShadowMap(l, txsize, txsize, (csize-2*inset)/(float)txsize);
 

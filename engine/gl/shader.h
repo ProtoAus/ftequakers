@@ -587,6 +587,7 @@ typedef struct programshared_s
 	unsigned geom:1;			//has a geometry shader
 	unsigned rayquery:1;		//needs a top-level acceleration structure.
 	unsigned warned:1;			//one of the permutations of this shader has already been warned about. don't warn about all of them because that's potentially spammy.
+	unsigned stockglsldepth:1;	// actual engine-embedded, unmodified GL depthonly program; refreshed on reload
 	unsigned short numsamplers;	//shader system can strip any passes above this
 	unsigned int defaulttextures;	//diffuse etc
 
@@ -980,6 +981,7 @@ void GLBE_Init(void);
 void GLBE_Shutdown(void);
 void GLBE_SelectMode(backendmode_t mode);
 void GLBE_DrawMesh_List(shader_t *shader, int nummeshes, mesh_t **mesh, vbo_t *vbo, texnums_t *texnums, unsigned int beflags);
+qboolean GLBE_CascadeDepthRun(const shader_t *first, const shader_t *next, const vbo_t *vbo, unsigned int flags);
 void GLBE_DrawMesh_Single(shader_t *shader, mesh_t *meshchain, vbo_t *vbo, unsigned int beflags);
 void GLBE_SubmitBatch(batch_t *batch);
 batch_t *GLBE_GetTempBatch(void);

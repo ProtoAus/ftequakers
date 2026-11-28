@@ -1445,6 +1445,7 @@ texid_t GLBE_GetFakeShadowAtlasTexture(void)
 	return shadowmap[2];
 }
 
+
 //An unused slot must not keep LAST frame's matrix, or receivers would project into a cell that now holds
 //a different direction's depth.  Identity with a huge z translation puts every fragment past the far
 //plane, so the shader's `fd < 1.0` box test rejects the slot outright and it costs no taps.
@@ -7052,6 +7053,32 @@ void GLBE_DrawMesh_List(shader_t *shader, int nummeshes, mesh_t **meshlist, vbo_
 		DrawMeshes();
 	}
 }
+// Only use this equivalence for static VBOs and the actual renderer-owned
+// depth-only program. Masked, remapped or biased materials stay on their
+// original path. A run requires the same VBO and cull state as its first draw.
+qboolean GLBE_CascadeDepthRun(const shader_t *first, const shader_t *next, const vbo_t *vbo, unsigned int flags)
+{
+	const shader_t *sh = shaderstate.depthonlyshader;
+	const unsigned int cull = SHADER_CULL_FRONT | SHADER_CULL_BACK;
+	if (shaderstate.mode != BEM_DEPTHONLY || !qglMultiDrawElements || !r_multidraw.ival || !sh || !sh->prog ||
+		!sh->prog->stockglsldepth || sh->prog->defaulttextures || sh->prog->calcgens ||
+		sh->prog->numsamplers || sh->prog->geom || sh->prog->tess || sh->passes[0].numMergedPasses > 1 ||
+		!sh->prog->permu[0] || sh->prog->permu[0]->h.glsl.usetesselation ||
+		!vbo || !vbo->coord.gl.vbo || !vbo->indicies.gl.vbo || vbo->numbones || vbo->coord2.gl.addr ||
+		!first || !next || first->remapto != first || next->remapto != next ||
+		first->bemoverrides[bemoverride_depthonly] || next->bemoverrides[bemoverride_depthonly] ||
+		first->numdeforms || next->numdeforms || first->wireframe != next->wireframe ||
+		first->polyoffset.factor || first->polyoffset.unit || first->depthpush ||
+		next->polyoffset.factor || next->polyoffset.unit || next->depthpush ||
+		((first->flags | next->flags) & SHADER_NODRAW) ||
+		(!(flags & BEF_FORCETWOSIDED) && ((first->flags ^ next->flags) & cull)))
+		return false;
+	// Match the stock program's exact draw-time selection for this static run.
+	if (sh->prog->permu[0]->factorsuniform != -1 || sh->prog->permu[0]->lmsizeuniform != -1)
+		return false;
+	return !(sh->prog->supportedpermutations & ~(PERMUTATION_SKELETAL | PERMUTATION_FRAMEBLEND));
+}
+
 void GLBE_DrawMesh_Single(shader_t *shader, mesh_t *mesh, vbo_t *vbo, unsigned int beflags)
 {
 	shader->next = NULL;
